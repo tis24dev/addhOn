@@ -6,6 +6,6 @@
   "documentation": "https://github.com/telard-pixel/haier_hon",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/telard-pixel/haier_hon/issues",
-  "requirements": [],
-  "version": "1.0.0"
+  "requirements": ["pyhon==0.17.5"],
+  "version": "1.0.2"
 }
