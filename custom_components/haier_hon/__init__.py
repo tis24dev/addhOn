@@ -12,15 +12,15 @@ PLATFORMS = ["climate", "sensor"]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configura l'integrazione Haier hOn partendo da un Config Entry."""
-    # Supponiamo che tu stia usando una libreria client creata da Claude (es. HonApiClient)
-    # Recuperiamo il client memorizzato (adatta se la classe ha un nome leggermente diverso)
-     from .api import HonApiClient  # Modifica questo import se il file API ha un altro nome
-    
-    # Inizializziamo il client API (recuperando ipotetiche credenziali)
-    # Se nel tuo vecchio __init__ avevi una logica di inizializzazione diversa, mantienila qui
+    # Importiamo il client API corretto (adattalo se la classe ha un nome diverso nel tuo file api.py o hon_client.py)
+    try:
+        from .api import HonApiClient
+    except ImportError:
+        from .hon_client import HonApiClient
+
+    # Inizializziamo il client API con le credenziali del config entry
     api_client = HonApiClient(entry.data.get("username"), entry.data.get("password"))
 
-    # Creiamo il Coordinatore Centralizzato
     async def async_update_data():
         """Funzione interna che esegue l'unica chiamata di rete per tutti."""
         try:
@@ -41,8 +41,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER,
         name="Haier hOn data",
         update_method=async_update_data,
-        update_interval=timedelta(seconds=30), # Una chiamata ogni 30 secondi per TUTTI
+        update_interval=timedelta(seconds=30), # Una chiamata ogni 30 secondi per TUTTI i sensori
     )
+
+    # Inseriamo l'api_client dentro l'oggetto coordinator così le entità possono usarlo per i comandi
+    coordinator.api_client = api_client
 
     # Primo scaricamento dati all'avvio
     await coordinator.async_config_entry_first_refresh()
@@ -54,7 +57,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Scarica l'config entry quando l'integrazione viene rimossa o disattivata."""
+    """Scarica il config entry quando l'integrazione viene disattivata."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data["haier_hon"].pop(entry.entry_id)
