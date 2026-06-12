@@ -1,6 +1,7 @@
 """Entità base per Haier hOn."""
 from __future__ import annotations
 
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -10,18 +11,15 @@ from .const import DOMAIN
 class HonBaseEntity(CoordinatorEntity):
     """Entità base per tutti i dispositivi Haier hOn."""
 
-    def __init__(self, coordinator, appliance_id: str) -> None:
+    def __init__(self, coordinator, appliance_id: str, client=None) -> None:
         super().__init__(coordinator)
         self._appliance_id = appliance_id
+        self._client = client if client is not None else getattr(coordinator, "hon_client", None)
 
     @property
     def _hon_client(self):
         """Ritorna il HonClient per eseguire comandi sul loop dedicato."""
-        ha_data = self.hass.data.get(DOMAIN, {})
-        for entry_data in ha_data.values():
-            if isinstance(entry_data, dict) and "client" in entry_data:
-                return entry_data["client"]
-        return None
+        return self._client
 
     @property
     def _appliance_data(self) -> dict:
@@ -125,3 +123,17 @@ class HonBaseEntity(CoordinatorEntity):
             return _extract_value(val)
 
         return default
+
+    async def _async_request_command_refresh(self) -> None:
+        """Refresh coordinator data after a command and fail if HA stored the error."""
+        refresh = getattr(self.coordinator, "async_refresh", None)
+        if refresh is None:
+            refresh = self.coordinator.async_request_refresh
+        await refresh()
+        if getattr(self.coordinator, "last_update_success", True) is not False:
+            return
+
+        err = getattr(self.coordinator, "last_exception", None)
+        if err is None:
+            raise HomeAssistantError("Refresh dopo comando fallito")
+        raise HomeAssistantError(f"Refresh dopo comando fallito: {err}") from err

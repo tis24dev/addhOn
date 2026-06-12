@@ -1,9 +1,10 @@
+import asyncio
 import logging
 from datetime import timedelta
-import asyncio
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, PLATFORMS, SCAN_INTERVAL
@@ -11,9 +12,17 @@ from .const import DOMAIN, PLATFORMS, SCAN_INTERVAL
 _LOGGER = logging.getLogger(__name__)
 
 
+async def _async_close_client(client) -> None:
+    """Chiude HonClient senza mascherare l'errore originale di setup/unload."""
+    try:
+        await client.async_close()
+    except Exception as err:
+        _LOGGER.warning("Errore chiusura HonClient: %s", err)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configura l'integrazione Haier hOn partendo da un Config Entry."""
-    from .hon_client import HonClient
+    from .hon_client import HonClient, _requires_reauth
 
     # FIX: la chiave salvata dal config_flow è "email", non "username"
     email = entry.data.get("email")
@@ -31,36 +40,70 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Setup iniziale di pyhOn in executor (non blocca l'event loop di HA)
     try:
         await hass.async_add_executor_job(hon_client.setup_sync)
+    except asyncio.CancelledError:
+        await _async_close_client(hon_client)
+        raise
     except Exception as err:
         _LOGGER.error("Impossibile connettersi a hOn: %s", err)
-        return False
+        await _async_close_client(hon_client)
+        if _requires_reauth(err):
+            raise ConfigEntryAuthFailed(f"Credenziali hOn non valide: {err}") from err
+        raise ConfigEntryNotReady(f"Impossibile connettersi a hOn: {err}") from err
 
     async def async_update_data() -> dict:
         """Recupera i dati aggiornati da tutti i dispositivi hOn."""
         try:
             return await hon_client.async_get_appliances_data()
         except Exception as err:
+            if _requires_reauth(err):
+                raise ConfigEntryAuthFailed(f"Credenziali hOn non valide: {err}") from err
             raise UpdateFailed(f"Errore aggiornamento hOn: {err}") from err
 
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        name="Haier hOn data",
-        update_method=async_update_data,
-        update_interval=timedelta(seconds=SCAN_INTERVAL),
-    )
+    stored = False
+    try:
+        coordinator = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            name="Haier hOn data",
+            update_method=async_update_data,
+            update_interval=timedelta(seconds=SCAN_INTERVAL),
+        )
 
-    # Primo fetch
-    await coordinator.async_config_entry_first_refresh()
+        # Primo fetch
+        await coordinator.async_config_entry_first_refresh()
+        coordinator.hon_client = hon_client
 
-    # FIX: salva sia il coordinator che il client nella struttura attesa da tutte le piattaforme
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {
-        "coordinator": coordinator,
-        "client": hon_client,
-    }
+        # FIX: salva sia il coordinator che il client nella struttura attesa da tutte le piattaforme
+        hass.data.setdefault(DOMAIN, {})
+        hass.data[DOMAIN][entry.entry_id] = {
+            "coordinator": coordinator,
+            "client": hon_client,
+        }
+        stored = True
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except asyncio.CancelledError:
+        if stored:
+            unload_platforms = getattr(hass.config_entries, "async_unload_platforms", None)
+            if callable(unload_platforms):
+                try:
+                    await unload_platforms(entry, PLATFORMS)
+                except Exception as err:
+                    _LOGGER.warning("Errore unload piattaforme dopo setup annullato: %s", err)
+            hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        await _async_close_client(hon_client)
+        raise
+    except Exception:
+        if stored:
+            unload_platforms = getattr(hass.config_entries, "async_unload_platforms", None)
+            if callable(unload_platforms):
+                try:
+                    await unload_platforms(entry, PLATFORMS)
+                except Exception as err:
+                    _LOGGER.warning("Errore unload piattaforme dopo setup fallito: %s", err)
+            hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        await _async_close_client(hon_client)
+        raise
     return True
 
 
@@ -68,11 +111,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Scarica il config entry quando l'integrazione viene disattivata."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        entry_data = hass.data[DOMAIN].pop(entry.entry_id, {})
+        entry_data = hass.data.get(DOMAIN, {}).pop(entry.entry_id, {})
         client = entry_data.get("client")
         if client is not None:
-            try:
-                await client.async_close()
-            except Exception as err:
-                _LOGGER.warning("Errore chiusura HonClient: %s", err)
+            await _async_close_client(client)
     return unload_ok

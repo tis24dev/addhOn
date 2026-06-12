@@ -1,4 +1,4 @@
-"""Switch per Haier hOn - accensione e pausa lavatrice/asciugatrice."""
+"""Switch per Haier hOn - pausa lavatrice/asciugatrice."""
 from __future__ import annotations
 
 import logging
@@ -6,6 +6,7 @@ import logging
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity
@@ -20,94 +21,27 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     # FIX: accesso coerente alla struttura hass.data[DOMAIN][entry_id]["coordinator"]
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry_data["coordinator"]
+    client = entry_data["client"]
     entities = []
     for appliance_id, data in coordinator.data.items():
         if data.get("type") in APPLIANCE_WASH_GROUP:
-            entities.append(HonWashingMachineSwitch(coordinator, appliance_id))
             appliance = data.get("appliance")
             if appliance and hasattr(appliance, "commands"):
                 cmds = appliance.commands if isinstance(appliance.commands, dict) else {}
                 if "pauseProgram" in cmds and "resumeProgram" in cmds:
-                    entities.append(HonWashingMachinePauseSwitch(coordinator, appliance_id))
+                    entities.append(HonWashingMachinePauseSwitch(coordinator, appliance_id, client))
             _LOGGER.info("Aggiunto switch: %s", data.get("name"))
     async_add_entities(entities)
-
-
-class HonWashingMachineSwitch(HonBaseEntity, SwitchEntity):
-    """Switch per alimentazione lavatrice (on/off)."""
-
-    _attr_icon = "mdi:power"
-
-    def __init__(self, coordinator, appliance_id: str) -> None:
-        super().__init__(coordinator, appliance_id)
-        device_name = self._appliance_data.get("name", "Lavatrice")
-        self._attr_unique_id = f"{appliance_id}_power"
-        self._attr_name = f"{device_name} - Alimentazione"
-
-    @property
-    def is_on(self) -> bool:
-        val = self._get_attr(WM_ATTR_STATUS, "0")
-        return str(val) != "0"
-
-    async def async_turn_on(self, **kwargs) -> None:
-        appliance = self._appliance
-        client = self._hon_client
-        if not appliance or not client:
-            _LOGGER.error("Switch ON: appliance o client non disponibile")
-            return
-        try:
-            def _do():
-                async def _inner():
-                    commands = appliance.commands if isinstance(appliance.commands, dict) else {}
-                    command = commands.get("startProgram")
-                    if not command:
-                        raise RuntimeError(
-                            f"Comando 'startProgram' non trovato. Disponibili: {list(commands.keys())}"
-                        )
-                    await command.send()
-                client.run_command_sync(_inner())
-
-            await self.hass.async_add_executor_job(_do)
-            _LOGGER.info("Switch ON: startProgram inviato")
-            await self.coordinator.async_request_refresh()
-        except Exception as err:
-            _LOGGER.error("Switch ON: Errore: %s", err, exc_info=True)
-
-    async def async_turn_off(self, **kwargs) -> None:
-        appliance = self._appliance
-        client = self._hon_client
-        if not appliance or not client:
-            _LOGGER.error("Switch OFF: appliance o client non disponibile")
-            return
-        try:
-            def _do():
-                async def _inner():
-                    commands = appliance.commands if isinstance(appliance.commands, dict) else {}
-                    command = commands.get("stopProgram")
-                    if not command:
-                        raise RuntimeError(
-                            f"Comando 'stopProgram' non trovato. Disponibili: {list(commands.keys())}"
-                        )
-                    if hasattr(command, "parameters") and "onOffStatus" in command.parameters:
-                        command.parameters["onOffStatus"].value = "0"
-                    await command.send()
-                client.run_command_sync(_inner())
-
-            await self.hass.async_add_executor_job(_do)
-            _LOGGER.info("Switch OFF: stopProgram inviato")
-            await self.coordinator.async_request_refresh()
-        except Exception as err:
-            _LOGGER.error("Switch OFF: Errore: %s", err, exc_info=True)
-
 
 class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
     """Switch per mettere in pausa / riprendere il programma lavatrice."""
 
     _attr_icon = "mdi:pause-circle"
 
-    def __init__(self, coordinator, appliance_id: str) -> None:
-        super().__init__(coordinator, appliance_id)
+    def __init__(self, coordinator, appliance_id: str, client=None) -> None:
+        super().__init__(coordinator, appliance_id, client)
         device_name = self._appliance_data.get("name", "Lavatrice")
         self._attr_unique_id = f"{appliance_id}_pause"
         self._attr_name = f"{device_name} - Pausa"
@@ -121,7 +55,7 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
         appliance = self._appliance
         client = self._hon_client
         if not appliance or not client:
-            return
+            raise HomeAssistantError("Pausa: appliance o client non disponibile")
         try:
             def _do():
                 async def _inner():
@@ -136,9 +70,10 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
 
             await self.hass.async_add_executor_job(_do)
             _LOGGER.info("Pausa: %s inviato", command_name)
-            await self.coordinator.async_request_refresh()
+            await self._async_request_command_refresh()
         except Exception as err:
             _LOGGER.error("Pausa %s: Errore: %s", command_name, err, exc_info=True)
+            raise HomeAssistantError(f"Pausa {command_name}: errore comando: {err}") from err
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._send_pause_command("pauseProgram", "1")

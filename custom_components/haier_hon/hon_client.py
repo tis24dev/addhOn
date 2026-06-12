@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import threading
 from typing import Any
@@ -74,6 +75,56 @@ def _get_attributes(appliance) -> dict:
     return attributes
 
 
+def _error_text(err: BaseException) -> str:
+    return str(err).lower()
+
+
+def _is_auth_error(err: BaseException) -> bool:
+    err_str = _error_text(err)
+    return any(k in err_str for k in (
+        "personaccountid",
+        "unauthorized",
+        "401",
+        "403",
+        "token",
+        "auth",
+        "credential",
+    ))
+
+
+def _is_retryable_server_error(err: BaseException) -> bool:
+    if isinstance(err, (asyncio.TimeoutError, concurrent.futures.TimeoutError, TimeoutError)):
+        return True
+    err_str = _error_text(err)
+    return any(k in err_str for k in (
+        "internal server error",
+        "server error",
+        "500",
+        "502",
+        "503",
+        "504",
+        "timeout",
+        "timed out",
+        "temporarily unavailable",
+        "too many requests",
+        "429",
+    ))
+
+
+def _is_missing_session_error(err: BaseException) -> bool:
+    err_str = _error_text(err)
+    return any(k in err_str for k in (
+        "session non disponibile",
+        "session unavailable",
+    ))
+
+
+def _requires_reauth(err: BaseException) -> bool:
+    return (
+        _is_auth_error(err) or _is_missing_session_error(err)
+    ) and not _is_retryable_server_error(err)
+
+
 class HonClient:
     """Gestisce la connessione alle API Haier hOn tramite pyhOn.
 
@@ -86,6 +137,9 @@ class HonClient:
     - L'event loop di HA non viene mai bloccato.
     """
 
+    _RUN_TIMEOUT = 60
+    _CANCEL_TIMEOUT = 5
+
     def __init__(self, email: str, password: str) -> None:
         self._email = email
         self._password = password
@@ -93,6 +147,7 @@ class HonClient:
         self._api = None
         self._hon_loop: asyncio.AbstractEventLoop | None = None
         self._hon_thread: threading.Thread | None = None
+        self._lifecycle_lock = threading.RLock()
 
     # ── Gestione loop dedicato ────────────────────────────────────────────────
 
@@ -112,19 +167,147 @@ class HonClient:
 
         Chiamare solo da un thread non-loop (es. executor di HA).
         """
-        if self._hon_loop is None or not self._hon_loop.is_running():
-            raise RuntimeError("Loop dedicato hOn non attivo")
-        future = asyncio.run_coroutine_threadsafe(coro, self._hon_loop)
-        return future.result(timeout=60)
+        with self._lifecycle_lock:
+            loop = self._hon_loop
+            if loop is None or not loop.is_running():
+                if hasattr(coro, "close"):
+                    coro.close()
+                raise RuntimeError("Loop dedicato hOn non attivo")
+            if threading.current_thread() is self._hon_thread:
+                if hasattr(coro, "close"):
+                    coro.close()
+                raise RuntimeError("Chiamata sincrona sul loop hOn non consentita")
+
+            future: concurrent.futures.Future = concurrent.futures.Future()
+            task_holder: dict[str, asyncio.Task] = {}
+
+            def _schedule_task() -> None:
+                try:
+                    if future.cancelled():
+                        if hasattr(coro, "close"):
+                            coro.close()
+                        return
+
+                    task = loop.create_task(coro)
+                    task_holder["task"] = task
+                except Exception as err:
+                    if not future.done():
+                        future.set_exception(err)
+                    return
+
+                def _copy_result(done_task: asyncio.Task) -> None:
+                    if future.done():
+                        return
+                    try:
+                        future.set_result(done_task.result())
+                    except asyncio.CancelledError:
+                        future.cancel()
+                    except concurrent.futures.InvalidStateError:
+                        pass
+                    except Exception as err:
+                        try:
+                            future.set_exception(err)
+                        except concurrent.futures.InvalidStateError:
+                            pass
+
+                task.add_done_callback(_copy_result)
+
+            try:
+                loop.call_soon_threadsafe(_schedule_task)
+            except Exception:
+                if hasattr(coro, "close"):
+                    coro.close()
+                raise
+
+            try:
+                return future.result(timeout=self._RUN_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                drain_future: concurrent.futures.Future = concurrent.futures.Future()
+
+                def _cancel_and_drain() -> None:
+                    task = task_holder.get("task")
+                    if task is None:
+                        future.cancel()
+                        if not drain_future.done():
+                            drain_future.set_result(None)
+                        return
+
+                    async def _drain_task() -> None:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as err:
+                            _LOGGER.debug("Errore durante cancellazione task hOn: %s", err)
+                        if not future.done():
+                            future.cancel()
+                        if not drain_future.done():
+                            drain_future.set_result(None)
+
+                    loop.create_task(_drain_task())
+
+                try:
+                    loop.call_soon_threadsafe(_cancel_and_drain)
+                    drain_future.result(timeout=self._CANCEL_TIMEOUT)
+                except Exception as err:
+                    _LOGGER.debug("Timeout durante cancellazione task hOn: %s", err)
+                raise
+
+    def _cancel_pending_tasks(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Cancella task residui prima di fermare il loop dedicato."""
+
+        async def _cancel_pending() -> None:
+            current = asyncio.current_task()
+            pending = [task for task in asyncio.all_tasks() if task is not current and not task.done()]
+            if not pending:
+                return
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(_cancel_pending(), loop)
+            future.result(timeout=self._CANCEL_TIMEOUT)
+        except Exception as err:
+            _LOGGER.debug("Errore cancellazione task hOn pendenti: %s", err)
 
     def _stop_hon_loop(self) -> None:
         """Ferma il loop dedicato e il thread."""
-        if self._hon_loop and self._hon_loop.is_running():
-            self._hon_loop.call_soon_threadsafe(self._hon_loop.stop)
-        if self._hon_thread and self._hon_thread.is_alive():
-            self._hon_thread.join(timeout=10)
+        loop = self._hon_loop
+        thread = self._hon_thread
+
+        if loop and loop.is_running() and thread is not threading.current_thread():
+            self._cancel_pending_tasks(loop)
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=10)
+        if thread and thread.is_alive():
+            _LOGGER.warning("Thread dedicato hOn non terminato entro il timeout")
+            return
+        if loop and not loop.is_closed():
+            try:
+                loop.close()
+            except Exception as err:
+                _LOGGER.warning("Errore chiusura loop hOn: %s", err)
+                return
         self._hon_loop = None
         self._hon_thread = None
+
+    def _close_sync(self) -> None:
+        """Chiude sessione pyhOn e loop dedicato in modo idempotente."""
+        with self._lifecycle_lock:
+            hon = self._hon_instance
+            self._hon_instance = None
+            self._api = None
+
+            if hon is not None:
+                try:
+                    self._run_on_hon_loop(hon.__aexit__(None, None, None))
+                except Exception as err:
+                    _LOGGER.debug("Errore chiusura sessione hOn: %s", err)
+            self._stop_hon_loop()
 
     # ── Setup ─────────────────────────────────────────────────────────────────
 
@@ -140,41 +323,46 @@ class HonClient:
         except ImportError as err:
             raise ImportError("La libreria pyhOn non è installata.") from err
 
-        if self._hon_loop is None or not self._hon_loop.is_running():
-            self._start_hon_loop()
+        with self._lifecycle_lock:
+            try:
+                if self._hon_loop is None or not self._hon_loop.is_running():
+                    self._start_hon_loop()
 
-        # ── Patch BABYCARE (bug pyhOn enum) ──────────────────────────────────
-        # pyhOn crasha su load_commands() dell'asciugatrice TD perché il valore
-        # "BABYCARE" è nell'elenco dei valori ammessi ma il confronto stringa
-        # fallisce per un bug interno di HonParameterEnum.value setter.
-        # Patch: se il valore è già nella lista _values, lo accetta comunque.
-        try:
-            from pyhon.parameter.enum import HonParameterEnum as _HonEnum
-            _orig_setter = _HonEnum.value.fset
-
-            def _patched_setter(instance, value):
+                # ── Patch BABYCARE (bug pyhOn enum) ──────────────────────────────────
+                # pyhOn crasha su load_commands() dell'asciugatrice TD perché il valore
+                # "BABYCARE" è nell'elenco dei valori ammessi ma il confronto stringa
+                # fallisce per un bug interno di HonParameterEnum.value setter.
+                # Patch: se il valore è già nella lista _values, lo accetta comunque.
                 try:
-                    _orig_setter(instance, value)
-                except ValueError:
-                    # Accetta il valore se è già presente nella lista (confronto case-sensitive)
-                    if value in instance._values:
-                        instance._value = value
-                        _LOGGER.debug("Patch enum BABYCARE applicata per valore: %s", value)
-                    else:
-                        raise
+                    from pyhon.parameter.enum import HonParameterEnum as _HonEnum
+                    _orig_setter = _HonEnum.value.fset
 
-            _HonEnum.value = property(_HonEnum.value.fget, _patched_setter, _HonEnum.value.fdel)
-            _LOGGER.debug("Patch HonParameterEnum applicata")
-        except Exception as patch_err:
-            _LOGGER.warning("Impossibile applicare la patch HonParameterEnum: %s", patch_err)
-        # ─────────────────────────────────────────────────────────────────────
+                    def _patched_setter(instance, value):
+                        try:
+                            _orig_setter(instance, value)
+                        except ValueError:
+                            # Accetta il valore se è già presente nella lista (confronto case-sensitive)
+                            if value in instance._values:
+                                instance._value = value
+                                _LOGGER.debug("Patch enum BABYCARE applicata per valore: %s", value)
+                            else:
+                                raise
 
-        self._hon_instance = Hon(email=self._email, password=self._password)
-        _LOGGER.debug("Istanza Hon creata")
+                    _HonEnum.value = property(_HonEnum.value.fget, _patched_setter, _HonEnum.value.fdel)
+                    _LOGGER.debug("Patch HonParameterEnum applicata")
+                except Exception as patch_err:
+                    _LOGGER.warning("Impossibile applicare la patch HonParameterEnum: %s", patch_err)
+                # ─────────────────────────────────────────────────────────────────────
 
-        # Login + init sessione aiohttp — sul loop dedicato
-        self._api = self._run_on_hon_loop(self._hon_instance.__aenter__())
-        _LOGGER.info("Connessione a hOn riuscita per %s", self._email)
+                self._hon_instance = Hon(email=self._email, password=self._password)
+                _LOGGER.debug("Istanza Hon creata")
+
+                # Login + init sessione aiohttp — sul loop dedicato
+                self._api = self._run_on_hon_loop(self._hon_instance.__aenter__())
+                _LOGGER.info("Connessione a hOn riuscita per %s", self._email)
+            except Exception:
+                self._close_sync()
+                raise
 
     async def async_complete_setup(self) -> None:
         """Verifica che il setup sia andato a buon fine."""
@@ -192,23 +380,30 @@ class HonClient:
 
     async def async_get_appliances(self) -> list:
         if self._api is None:
-            return []
+            raise RuntimeError("hOn session non disponibile")
         try:
             return self._api.appliances
         except Exception as err:
             _LOGGER.error("Errore recupero elettrodomestici: %s", err)
-            return []
+            raise RuntimeError(f"Errore recupero elettrodomestici: {err}") from err
 
     def _update_appliance_sync(self, appliance) -> None:
         """Aggiorna un appliance sul loop dedicato (sincrono, chiamato in executor)."""
 
         async def _do_update():
+            update_returned_empty = False
+
             # Tentativo 1: update() standard
             if hasattr(appliance, "update") and callable(appliance.update):
                 try:
                     await appliance.update()
-                    return
+                    if _get_attributes(appliance):
+                        return
+                    update_returned_empty = True
+                    _LOGGER.debug("update() completato senza dati — provo load_*")
                 except Exception as err:
+                    if _requires_reauth(err) or _is_retryable_server_error(err):
+                        raise
                     _LOGGER.debug("update() fallito: %s — provo load_*", err or "<no msg>")
 
             # Tentativo 2: load_attributes / load_commands / load_statistics
@@ -222,8 +417,13 @@ class HonClient:
                         _LOGGER.debug("Fallback OK: %s", method_name)
                     except Exception as err:
                         _LOGGER.debug("Fallback %s fallito: %s", method_name, err)
+                        raise RuntimeError(f"Fallback {method_name} fallito: {err}") from err
 
             if not loaded:
+                if update_returned_empty:
+                    raise RuntimeError(
+                        "update() completato senza dati e fallback load_* non disponibili"
+                    )
                 raise RuntimeError(
                     "Nessun metodo di aggiornamento disponibile — "
                     "verifica la versione di pyhOn installata."
@@ -237,19 +437,9 @@ class HonClient:
         """Ri-autentica in caso di token scaduto."""
         _LOGGER.info("Tentativo re-autenticazione hOn...")
         try:
-            if self._hon_instance is not None:
-                hon = self._hon_instance
-                self._hon_instance = None
-                self._api = None
-                try:
-                    await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda: self._run_on_hon_loop(hon.__aexit__(None, None, None)),
-                    )
-                except Exception:
-                    pass
-
-            await asyncio.get_event_loop().run_in_executor(None, self.setup_sync)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._close_sync)
+            await loop.run_in_executor(None, self.setup_sync)
             _LOGGER.info("Re-autenticazione hOn riuscita")
             return True
         except Exception as err:
@@ -259,93 +449,107 @@ class HonClient:
     # ── Polling dati ──────────────────────────────────────────────────────────
 
     async def async_get_appliances_data(self) -> dict[str, Any]:
-        data: dict[str, Any] = {}
-        appliances = await self.async_get_appliances()
-        _LOGGER.debug("Trovati %d dispositivi hOn", len(appliances))
+        reauth_attempted = False
 
-        for appliance in appliances:
+        while True:
+            data: dict[str, Any] = {}
+            retry_after_reauth = False
             try:
-                last_err = None
-                for attempt in range(3):
-                    try:
-                        await asyncio.get_event_loop().run_in_executor(
-                            None, self._update_appliance_sync, appliance
-                        )
-                        last_err = None
-                        break
-                    except Exception as err:
-                        last_err = err
-                        err_str = str(err).lower()
-                        is_server_err = any(k in err_str for k in (
-                            "personaccountid", "internal server error",
-                            "500", "503", "unauthorized", "401", "token",
-                        ))
-                        if is_server_err and attempt < 2:
-                            wait = 5 * (attempt + 1)
-                            _LOGGER.warning(
-                                "Errore server Haier (tentativo %d/3), riprovo tra %ds: %s",
-                                attempt + 1, wait, err,
-                            )
-                            await asyncio.sleep(wait)
-                        else:
-                            break
-
-                if last_err is not None:
-                    raise last_err
-
-                appliance_id = (
-                    getattr(appliance, "unique_id", None)
-                    or _get_serial(appliance)
-                    or str(id(appliance))
-                )
-                attributes = _get_attributes(appliance)
-                name = _get_name(appliance)
-                app_type = _get_type(appliance)
-
-                data[appliance_id] = {
-                    "appliance": appliance,
-                    "type": app_type,
-                    "name": name,
-                    "model": _get_model(appliance),
-                    "serial": _get_serial(appliance),
-                    "attributes": attributes,
-                    "settings": dict(appliance.settings) if hasattr(appliance, "settings") else {},
-                }
-                _LOGGER.debug(
-                    "Aggiornato '%s' (type=%s, id=%s) — %d attributi",
-                    name, app_type, appliance_id, len(attributes),
-                )
-
+                appliances = await self.async_get_appliances()
             except Exception as err:
-                err_str = str(err).lower()
-                is_auth_err = any(k in err_str for k in (
-                    "personaccountid", "unauthorized", "401", "token", "auth",
-                ))
-                _LOGGER.warning(
-                    "Errore aggiornamento '%s' (type=%s): %s",
-                    _get_name(appliance), _get_type(appliance), err,
-                    exc_info=True,
-                )
-                if is_auth_err:
-                    _LOGGER.warning("Errore auth Haier — avvio re-autenticazione")
-                    await self._async_reauth()
-                    break
+                if _requires_reauth(err) and not reauth_attempted:
+                    _LOGGER.warning("Errore auth Haier recuperando dispositivi — avvio re-autenticazione")
+                    if not await self._async_reauth():
+                        raise RuntimeError(
+                            f"Errore auth Haier durante recupero dispositivi: {err}"
+                        ) from err
+                    reauth_attempted = True
+                    continue
+                raise
+            _LOGGER.debug("Trovati %d dispositivi hOn", len(appliances))
 
-        _LOGGER.info("Caricati %d dispositivi hOn con dati", len(data))
-        return data
+            for appliance in appliances:
+                try:
+                    last_err = None
+                    for attempt in range(3):
+                        try:
+                            await asyncio.get_running_loop().run_in_executor(
+                                None, self._update_appliance_sync, appliance
+                            )
+                            last_err = None
+                            break
+                        except Exception as err:
+                            last_err = err
+                            if _is_retryable_server_error(err) and attempt < 2:
+                                wait = 5 * (attempt + 1)
+                                _LOGGER.warning(
+                                    "Errore server Haier (tentativo %d/3), riprovo tra %ds: %s",
+                                    attempt + 1, wait, err,
+                                )
+                                await asyncio.sleep(wait)
+                            elif _requires_reauth(err):
+                                break
+                            else:
+                                break
+
+                    if last_err is not None:
+                        raise last_err
+
+                    appliance_id = (
+                        getattr(appliance, "unique_id", None)
+                        or _get_serial(appliance)
+                        or str(id(appliance))
+                    )
+                    attributes = _get_attributes(appliance)
+                    name = _get_name(appliance)
+                    app_type = _get_type(appliance)
+
+                    data[appliance_id] = {
+                        "appliance": appliance,
+                        "type": app_type,
+                        "name": name,
+                        "model": _get_model(appliance),
+                        "serial": _get_serial(appliance),
+                        "attributes": attributes,
+                        "settings": dict(appliance.settings) if hasattr(appliance, "settings") else {},
+                    }
+                    _LOGGER.debug(
+                        "Aggiornato '%s' (type=%s, id=%s) — %d attributi",
+                        name, app_type, appliance_id, len(attributes),
+                    )
+
+                except Exception as err:
+                    _LOGGER.warning(
+                        "Errore aggiornamento '%s' (type=%s): %s",
+                        _get_name(appliance), _get_type(appliance), err,
+                        exc_info=True,
+                    )
+                    if _requires_reauth(err):
+                        if reauth_attempted:
+                            raise RuntimeError(
+                                f"Errore auth Haier durante aggiornamento "
+                                f"'{_get_name(appliance)}': {err}"
+                            ) from err
+                        _LOGGER.warning("Errore auth Haier — avvio re-autenticazione")
+                        if not await self._async_reauth():
+                            raise RuntimeError(
+                                f"Errore auth Haier durante aggiornamento "
+                                f"'{_get_name(appliance)}': {err}"
+                            ) from err
+                        reauth_attempted = True
+                        retry_after_reauth = True
+                        break
+                    raise RuntimeError(
+                        f"Errore aggiornamento '{_get_name(appliance)}': {err}"
+                    ) from err
+
+            if retry_after_reauth:
+                continue
+
+            _LOGGER.info("Caricati %d dispositivi hOn con dati", len(data))
+            return data
 
     # ── Chiusura ──────────────────────────────────────────────────────────────
 
     async def async_close(self) -> None:
-        if self._hon_instance is not None:
-            hon = self._hon_instance
-            self._hon_instance = None
-            self._api = None
-            try:
-                await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: self._run_on_hon_loop(hon.__aexit__(None, None, None)),
-                )
-            except Exception:
-                pass
-        self._stop_hon_loop()
+        await asyncio.get_running_loop().run_in_executor(None, self._close_sync)

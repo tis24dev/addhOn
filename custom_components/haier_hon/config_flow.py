@@ -12,7 +12,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN
-from .hon_client import HonClient
+from .hon_client import HonClient, _requires_reauth
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,19 +29,30 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     client = HonClient(email=data["email"], password=data["password"])
 
     try:
-        # pyhOn esegue operazioni sincrone in __init__/__aenter__ → usa executor
-        await hass.async_add_executor_job(client.setup_sync)
-        await client.async_complete_setup()
-    except ImportError:
-        raise CannotConnect("pyhOn non installato")
-    except Exception as err:
-        _LOGGER.error("Errore validazione: %s", err)
-        raise InvalidAuth(str(err))
+        try:
+            # pyhOn esegue operazioni sincrone in __init__/__aenter__ → usa executor
+            await hass.async_add_executor_job(client.setup_sync)
+            await client.async_complete_setup()
+        except ImportError as err:
+            raise CannotConnect("pyhOn non installato") from err
+        except Exception as err:
+            _LOGGER.error("Errore validazione: %s", err)
+            if _requires_reauth(err):
+                raise InvalidAuth(str(err)) from err
+            raise CannotConnect(str(err)) from err
 
-    try:
-        appliances = await client.async_get_appliances()
+        try:
+            appliances = await client.async_get_appliances()
+        except Exception as err:
+            _LOGGER.error("Errore recupero appliance durante validazione: %s", err)
+            if _requires_reauth(err):
+                raise InvalidAuth(str(err)) from err
+            raise CannotConnect(str(err)) from err
     finally:
-        await client.async_close()
+        try:
+            await client.async_close()
+        except Exception as err:
+            _LOGGER.warning("Errore chiusura HonClient dopo validazione: %s", err)
 
     return {
         "title": f"Haier hOn ({data['email']})",

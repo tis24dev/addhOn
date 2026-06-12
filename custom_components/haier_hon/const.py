@@ -3,7 +3,7 @@
 DOMAIN = "haier_hon"
 
 # Piattaforme supportate
-PLATFORMS = ["climate", "sensor", "switch", "select"]
+PLATFORMS = ["climate", "sensor", "switch", "select", "button"]
 
 # Intervallo di aggiornamento in secondi
 # NOTA: il setup iniziale + primo fetch impiega ~22s su cloud lento.

@@ -1,0 +1,4 @@
+.codex-worklog.md
+.codex-worklog-*.md
+__pycache__/
+*.py[cod]

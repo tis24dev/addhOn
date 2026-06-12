@@ -8,6 +8,7 @@ from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity
@@ -33,9 +34,11 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Configura l'entità climate basandosi sul coordinator."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry_data["coordinator"]
+    client = entry_data["client"]
     entities = [
-        HaierClimateEntity(coordinator, aid)
+        HaierClimateEntity(coordinator, aid, client)
         for aid, data in coordinator.data.items()
         if data.get("type") == APPLIANCE_AC
     ]
@@ -45,8 +48,8 @@ async def async_setup_entry(
 class HaierClimateEntity(HonBaseEntity, ClimateEntity):
     """Rappresentazione del condizionatore Haier hOn."""
 
-    def __init__(self, coordinator, appliance_id: str) -> None:
-        super().__init__(coordinator, appliance_id)
+    def __init__(self, coordinator, appliance_id: str, client=None) -> None:
+        super().__init__(coordinator, appliance_id, client)
         device_name = self._appliance_data.get("name", "Condizionatore Haier")
         self._attr_name = device_name
         self._attr_unique_id = f"{appliance_id}_climate"
@@ -118,13 +121,13 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         """Invia il cambio modalità convertendo l'HVACMode nell'esatto codice numerico hOn."""
         appliance = self._appliance
         if not appliance:
-            _LOGGER.error("Climate: appliance non disponibile per %s", self._appliance_id)
-            return
+            raise HomeAssistantError(
+                f"Climate: appliance non disponibile per {self._appliance_id}"
+            )
         try:
             client = self._hon_client
             if client is None:
-                _LOGGER.error("Climate: HonClient non disponibile")
-                return
+                raise HomeAssistantError("Climate: HonClient non disponibile")
 
             if hvac_mode == HVACMode.OFF:
                 await self._send_command_in_executor(client, appliance, {"onOffStatus": "0"})
@@ -138,9 +141,10 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
                 await self._send_command_in_executor(
                     client, appliance, {"onOffStatus": "1", "machMode": str(mode_key)}
                 )
-            await self.coordinator.async_request_refresh()
+            await self._async_request_command_refresh()
         except Exception as err:
             _LOGGER.error("Climate: errore set_hvac_mode: %s", err, exc_info=True)
+            raise HomeAssistantError(f"Climate: errore set_hvac_mode: {err}") from err
 
     async def async_turn_on(self) -> None:
         """Accende il condizionatore portandolo in modalità COOL."""
@@ -158,25 +162,27 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         appliance = self._appliance
         client = self._hon_client
         if not appliance or not client:
-            return
+            raise HomeAssistantError("Climate: appliance o client non disponibile")
         try:
             await self._send_command_in_executor(client, appliance, {"tempSel": str(int(temp))})
-            await self.coordinator.async_request_refresh()
+            await self._async_request_command_refresh()
         except Exception as err:
             _LOGGER.error("Climate: errore set_temperature: %s", err, exc_info=True)
+            raise HomeAssistantError(f"Climate: errore set_temperature: {err}") from err
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Invia la velocità ventola basandosi sulla mappa del tuo const.py."""
         appliance = self._appliance
         client = self._hon_client
         if not appliance or not client:
-            return
+            raise HomeAssistantError("Climate: appliance o client non disponibile")
         try:
             speed_key = AC_FAN_MAP_REVERSE.get(fan_mode, "0")
             await self._send_command_in_executor(client, appliance, {"windSpeed": speed_key})
-            await self.coordinator.async_request_refresh()
+            await self._async_request_command_refresh()
         except Exception as err:
             _LOGGER.error("Climate: errore set_fan_mode: %s", err, exc_info=True)
+            raise HomeAssistantError(f"Climate: errore set_fan_mode: {err}") from err
 
     async def _send_command_in_executor(self, client, appliance, params: dict) -> None:
         """Invia un comando settings tramite pyhOn sul loop dedicato (in executor)."""
@@ -186,11 +192,30 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
                 command = commands.get("settings")
                 if command is None:
                     raise RuntimeError("Comando 'settings' non trovato sul dispositivo AC")
-                for key, value in params.items():
-                    if hasattr(command, "parameters") and key in command.parameters:
-                        command.parameters[key].value = value
-                    else:
-                        _LOGGER.warning("Climate: parametro '%s' non trovato nel comando settings", key)
+                command_params = getattr(command, "parameters", {})
+                missing_params = [key for key in params if key not in command_params]
+                if missing_params:
+                    raise RuntimeError(
+                        "Parametro/i non trovato/i nel comando settings: "
+                        + ", ".join(missing_params)
+                    )
+                previous_values = {}
+                assigned_params = []
+                try:
+                    for key, value in params.items():
+                        previous_values[key] = command_params[key].value
+                        assigned_params.append(key)
+                        command_params[key].value = value
+                except Exception:
+                    for key in reversed(assigned_params):
+                        try:
+                            command_params[key].value = previous_values[key]
+                        except Exception as rollback_err:
+                            _LOGGER.warning(
+                                "Climate: impossibile ripristinare parametro '%s': %s",
+                                key, rollback_err,
+                            )
+                    raise
                 await command.send()
 
             client.run_command_sync(_inner())
