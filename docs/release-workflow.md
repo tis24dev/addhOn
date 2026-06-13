@@ -20,19 +20,21 @@ v1.2.3
 v1.2.3-beta
 ```
 
-The integration version in `custom_components/haier_hon/manifest.json` must
-match the tag without the leading `v`. For example, tag `v1.2.3-beta` requires
-manifest version `1.2.3-beta`.
+The release tag is the source of truth for the integration version. When the tag
+is pushed, the intake workflow updates
+`custom_components/haier_hon/manifest.json` on `dev` to match the tag without
+the leading `v`. For example, tag `v1.2.3-beta` writes manifest version
+`1.2.3-beta`.
 
 ## Operator Flow
 
 1. Work only on `dev`.
-2. Update `manifest.json` to the intended version.
-3. Create the release tag on the current `dev` HEAD.
-4. Push the tag.
-5. Let the workflow open the automatic `dev -> main` pull request.
-6. Merge that PR with squash only.
-7. The post-merge workflow moves `dev` to the squash commit, recreates the tag
+2. Create the release tag on the current `dev` HEAD.
+3. Push the tag.
+4. Let the workflow update `manifest.json` and open the automatic `dev -> main`
+   pull request.
+5. Merge that PR with squash only.
+6. The post-merge workflow moves `dev` to the squash commit, recreates the tag
    on that commit, and publishes the GitHub release.
 
 ## Bootstrap
@@ -89,5 +91,5 @@ fall back to `GITHUB_TOKEN`, but a dedicated token is preferred because:
 
 ## Current Repository Caveat
 
-Historical tags such as `2.3`, `2.3-rc1`, `2.2`, and `Dev1.0` do not match this
-policy. They are kept as history; the new validation applies to future tags.
+Historical tags before this workflow do not use the leading `v` prefix. They are
+kept as history; the new validation applies to future tags.

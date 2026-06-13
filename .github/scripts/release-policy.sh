@@ -41,6 +41,22 @@ manifest_version_at_ref() {
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'
 }
 
+set_manifest_version() {
+  local version="${1:-}"
+
+  python3 - "${version}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+version = sys.argv[1]
+path = Path("custom_components/haier_hon/manifest.json")
+data = json.loads(path.read_text())
+data["version"] = version
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+}
+
 assert_manifest_matches_tag() {
   local ref="${1:-}"
   local tag="${2:-}"

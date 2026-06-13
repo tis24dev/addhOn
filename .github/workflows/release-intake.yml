@@ -49,8 +49,6 @@ jobs:
           DEV_SHA="$(git rev-parse origin/dev)"
           MAIN_SHA="$(git rev-parse origin/main)"
 
-          assert_manifest_matches_tag "${TAG_SHA}" "${TAG}"
-
           if [[ "${TAG_SHA}" == "${MAIN_SHA}" && "${DEV_SHA}" == "${MAIN_SHA}" ]]; then
             notice "Tag ${TAG} already points at the synchronized main/dev release commit."
             exit 0
@@ -68,7 +66,45 @@ jobs:
 
           OPEN_PR="$(gh pr list --base main --head dev --state open --json number --jq '.[0].number // ""')"
           if [[ -n "${OPEN_PR}" ]]; then
+            PR_BODY="$(gh pr view "${OPEN_PR}" --json body --jq '.body')"
+            export PR_BODY
+
+            if PR_TAG="$(extract_pr_marker release-tag)" && PR_SOURCE_SHA="$(extract_pr_marker release-source-sha)"; then
+              if [[ "${PR_TAG}" == "${TAG}" && "${PR_SOURCE_SHA}" == "${TAG_SHA}" && "${DEV_SHA}" == "${TAG_SHA}" ]]; then
+                notice "Release PR #${OPEN_PR} for ${TAG} already exists."
+                exit 0
+              fi
+            fi
+
             die "An open dev -> main PR already exists (#${OPEN_PR}). Close or merge it before pushing a new release tag."
+          fi
+
+          RELEASE_VERSION="$(version_from_tag "${TAG}")"
+          CURRENT_VERSION="$(manifest_version_at_ref "${TAG_SHA}")"
+
+          if [[ "${CURRENT_VERSION}" != "${RELEASE_VERSION}" ]]; then
+            notice "Updating manifest.json from ${CURRENT_VERSION} to ${RELEASE_VERSION} for ${TAG}."
+
+            git checkout -B dev origin/dev
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            set_manifest_version "${RELEASE_VERSION}"
+
+            if ! git diff --quiet -- custom_components/haier_hon/manifest.json; then
+              git add custom_components/haier_hon/manifest.json
+              git commit -m "chore: set manifest version ${RELEASE_VERSION}"
+              git push origin HEAD:refs/heads/dev
+            fi
+
+            TAG_SHA="$(git rev-parse HEAD)"
+            DEV_SHA="$(git rev-parse HEAD)"
+
+            git tag -f "${TAG}" "${TAG_SHA}"
+            git push origin ":refs/tags/${TAG}"
+            git push origin "refs/tags/${TAG}"
+          else
+            assert_manifest_matches_tag "${TAG_SHA}" "${TAG}"
           fi
 
           BODY="$(cat <<EOF
