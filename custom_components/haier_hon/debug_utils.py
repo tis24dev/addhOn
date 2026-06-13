@@ -36,9 +36,20 @@ def param_snapshot(params) -> dict:
     return snapshot
 
 
+def redact_email(email: str | None) -> str | None:
+    """Redact an account email for logs: 'a@b.com' -> '***@b.com'."""
+    if not email:
+        return None
+    if "@" not in email:
+        return "***"
+    _, domain = email.split("@", 1)
+    return f"***@{domain}"
+
+
 __all__ = [
     "DEBUG_KEY_SAMPLE_LIMIT",
     "command_names",
     "debug_key_sample",
     "param_snapshot",
+    "redact_email",
 ]

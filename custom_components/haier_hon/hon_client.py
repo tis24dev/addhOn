@@ -7,7 +7,7 @@ import logging
 import threading
 from typing import Any
 
-from .debug_utils import debug_key_sample
+from .debug_utils import debug_key_sample, redact_email
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -479,7 +479,7 @@ class HonClient:
 
                 # Login + init sessione aiohttp — sul loop dedicato
                 self._api = self._run_on_hon_loop(self._hon_instance.__aenter__())
-                _LOGGER.info("Connessione a hOn riuscita per %s", self._email)
+                _LOGGER.info("Connessione a hOn riuscita per %s", redact_email(self._email))
             except Exception:
                 self._close_sync()
                 raise
