@@ -7,9 +7,88 @@ import logging
 import threading
 from typing import Any
 
+from .debug_utils import debug_key_sample
+
 _LOGGER = logging.getLogger(__name__)
 
 _SERIAL_ATTRS = ("serial_number", "serialNumber", "mac_address", "macAddress", "code")
+_CONSUMPTION_ATTRS = (
+    "totalElectricityUsed",
+    "currentElectricityUsed",
+    "totalWaterUsed",
+    "currentWaterUsed",
+    "totalWashCycle",
+)
+
+
+def _debug_container_to_dict(container, label: str) -> dict:
+    """Best-effort conversione di container pyhOn per logging diagnostico."""
+    if container is None:
+        return {}
+    if isinstance(container, dict):
+        return dict(container)
+    try:
+        return dict(container)
+    except Exception as err:
+        _LOGGER.debug(
+            "Consumi debug: impossibile convertire %s (%s): %s",
+            label,
+            type(container).__name__,
+            err,
+        )
+        return {}
+
+
+def _debug_extract_value(value):
+    if hasattr(value, "value"):
+        return value.value
+    return value
+
+
+def _debug_consumption_values(values: dict) -> dict[str, Any]:
+    return {
+        key: _debug_extract_value(values[key]) if key in values else "<missing>"
+        for key in _CONSUMPTION_ATTRS
+    }
+
+
+def _debug_appliance_consumption(stage: str, appliance, attributes: dict | None = None) -> None:
+    """Log corposo per capire dove spariscono i contatori consumo."""
+    if not _LOGGER.isEnabledFor(logging.DEBUG):
+        return
+
+    stats = _debug_container_to_dict(getattr(appliance, "statistics", None), "statistics")
+    raw_attrs = _debug_container_to_dict(getattr(appliance, "attributes", None), "attributes")
+    settings = _debug_container_to_dict(getattr(appliance, "settings", None), "settings")
+    merged_attrs = attributes if attributes is not None else _get_attributes(appliance)
+    commands = getattr(appliance, "commands", None)
+    command_names = sorted(commands.keys()) if isinstance(commands, dict) else []
+
+    _LOGGER.debug(
+        "Consumi debug [%s] '%s' type=%s id=%s: "
+        "statistics_type=%s statistics_keys=%d %s statistics_values=%s; "
+        "raw_attribute_keys=%d %s; settings_keys=%d %s; "
+        "merged_keys=%d %s merged_values=%s; "
+        "load_statistics=%s update=%s commands=%s",
+        stage,
+        _get_name(appliance),
+        _get_type(appliance),
+        getattr(appliance, "unique_id", None) or _get_serial(appliance) or "<no-id>",
+        type(getattr(appliance, "statistics", None)).__name__,
+        len(stats),
+        debug_key_sample(stats),
+        _debug_consumption_values(stats),
+        len(raw_attrs),
+        debug_key_sample(raw_attrs),
+        len(settings),
+        debug_key_sample(settings),
+        len(merged_attrs),
+        debug_key_sample(merged_attrs),
+        _debug_consumption_values(merged_attrs),
+        callable(getattr(appliance, "load_statistics", None)),
+        callable(getattr(appliance, "update", None)),
+        command_names,
+    )
 
 
 def _get_serial(appliance) -> str:
@@ -406,12 +485,23 @@ class HonClient:
 
         async def _do_update():
             update_returned_empty = False
+            _debug_appliance_consumption("prima update", appliance)
 
             # Tentativo 1: update() standard
             if hasattr(appliance, "update") and callable(appliance.update):
                 try:
                     await appliance.update()
-                    if _get_attributes(appliance):
+                    attrs_after_update = _get_attributes(appliance)
+                    _debug_appliance_consumption("dopo update()", appliance, attrs_after_update)
+                    if attrs_after_update:
+                        _LOGGER.debug(
+                            "Consumi debug: update() ha prodotto %d attributi per '%s' "
+                            "(type=%s); fallback load_attributes/load_commands/"
+                            "load_statistics non eseguito in questo ciclo.",
+                            len(attrs_after_update),
+                            _get_name(appliance),
+                            _get_type(appliance),
+                        )
                         return
                     update_returned_empty = True
                     _LOGGER.debug("update() completato senza dati — provo load_*")
@@ -429,6 +519,7 @@ class HonClient:
                         await method()
                         loaded = True
                         _LOGGER.debug("Fallback OK: %s", method_name)
+                        _debug_appliance_consumption(f"dopo {method_name}", appliance)
                     except Exception as err:
                         _LOGGER.debug("Fallback %s fallito: %s", method_name, err)
                         raise RuntimeError(f"Fallback {method_name} fallito: {err}") from err
@@ -527,6 +618,7 @@ class HonClient:
                         "attributes": attributes,
                         "settings": dict(appliance.settings) if hasattr(appliance, "settings") else {},
                     }
+                    _debug_appliance_consumption("snapshot coordinator", appliance, attributes)
                     _LOGGER.debug(
                         "Aggiornato '%s' (type=%s, id=%s) — %d attributi",
                         name, app_type, appliance_id, len(attributes),

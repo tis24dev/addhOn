@@ -111,8 +111,6 @@ jobs:
 
           <!-- release-tag: ${TAG} -->
           <!-- release-source-sha: ${TAG_SHA} -->
-
-          Merge this PR with squash only. The post-merge workflow will move \`dev\` to the squash commit, recreate \`${TAG}\` on that commit, and publish the release.
           EOF
           )"
 

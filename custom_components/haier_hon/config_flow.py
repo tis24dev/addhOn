@@ -16,6 +16,15 @@ from .hon_client import HonClient, _requires_reauth
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _redact_email(email: str | None) -> str | None:
+    if not email:
+        return None
+    if "@" not in email:
+        return "***"
+    _, domain = email.split("@", 1)
+    return f"***@{domain}"
+
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required("email"): str,
@@ -26,13 +35,16 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Valida le credenziali hOn."""
+    _LOGGER.debug("ConfigFlow debug: inizio validazione account %s", _redact_email(data.get("email")))
     client = HonClient(email=data["email"], password=data["password"])
 
     try:
         try:
             # pyhOn esegue operazioni sincrone in __init__/__aenter__ → usa executor
+            _LOGGER.debug("ConfigFlow debug: setup_sync in executor")
             await hass.async_add_executor_job(client.setup_sync)
             await client.async_complete_setup()
+            _LOGGER.debug("ConfigFlow debug: setup client completato")
         except ImportError as err:
             raise CannotConnect("pyhOn non installato") from err
         except Exception as err:
@@ -42,7 +54,20 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             raise CannotConnect(str(err)) from err
 
         try:
+            _LOGGER.debug("ConfigFlow debug: recupero appliance per validazione")
             appliances = await client.async_get_appliances()
+            _LOGGER.debug(
+                "ConfigFlow debug: appliance recuperate=%d types=%s",
+                len(appliances),
+                [
+                    str(getattr(appliance, "appliance_type", None)
+                        or getattr(appliance, "applianceType", None)
+                        or getattr(appliance, "type_name", None)
+                        or getattr(appliance, "category", None)
+                        or "UNKNOWN").upper()
+                    for appliance in appliances
+                ],
+            )
         except Exception as err:
             _LOGGER.error("Errore recupero appliance durante validazione: %s", err)
             if _requires_reauth(err):
@@ -50,6 +75,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             raise CannotConnect(str(err)) from err
     finally:
         try:
+            _LOGGER.debug("ConfigFlow debug: chiusura client dopo validazione")
             await client.async_close()
         except Exception as err:
             _LOGGER.warning("Errore chiusura HonClient dopo validazione: %s", err)
@@ -72,11 +98,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            _LOGGER.debug(
+                "ConfigFlow debug: submit step user per account %s",
+                _redact_email(user_input.get("email")),
+            )
             try:
                 info = await validate_input(self.hass, user_input)
             except CannotConnect:
+                _LOGGER.debug("ConfigFlow debug: validazione fallita cannot_connect")
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
+                _LOGGER.debug("ConfigFlow debug: validazione fallita invalid_auth")
                 errors["base"] = "invalid_auth"
             except Exception:
                 _LOGGER.exception("Errore imprevisto")
@@ -86,6 +118,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(user_input["email"].lower())
                 self._abort_if_unique_id_configured()
 
+                _LOGGER.debug(
+                    "ConfigFlow debug: creo entry per account %s appliance_count=%s",
+                    _redact_email(user_input.get("email")),
+                    info.get("appliance_count"),
+                )
                 return self.async_create_entry(
                     title=info["title"],
                     data=user_input,

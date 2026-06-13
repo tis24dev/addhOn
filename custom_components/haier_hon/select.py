@@ -30,6 +30,16 @@ PROGRAM_SELECT_COMMANDS = ("settings", "setProgram", "setProgramme", "programSet
 PROGRAM_SOURCE_COMMANDS = PROGRAM_SELECT_COMMANDS + ("startProgram",)
 
 
+def _command_names(appliance) -> list[str]:
+    commands = getattr(appliance, "commands", None)
+    return sorted(commands.keys()) if isinstance(commands, dict) else []
+
+
+def _param_names(command) -> list[str]:
+    params = getattr(command, "parameters", None)
+    return sorted(params.keys()) if isinstance(params, dict) else []
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -42,12 +52,28 @@ async def async_setup_entry(
     entities = []
     for appliance_id, data in coordinator.data.items():
         appliance = data.get("appliance")
-        if (
-            data.get("type") in APPLIANCE_WASH_GROUP
-            and HonProgramSelect.supports_appliance(appliance)
-        ):
+        app_type = data.get("type")
+        _LOGGER.debug(
+            "Select debug: valuto appliance '%s' id=%s type=%s commands=%s",
+            data.get("name"),
+            appliance_id,
+            app_type,
+            _command_names(appliance),
+        )
+        if app_type not in APPLIANCE_WASH_GROUP:
+            _LOGGER.debug("Select debug: appliance id=%s ignorato, type=%s", appliance_id, app_type)
+            continue
+        if HonProgramSelect.supports_appliance(appliance):
             entities.append(HonProgramSelect(coordinator, appliance_id, client))
             _LOGGER.info("Aggiunto select programma: %s", data.get("name"))
+        else:
+            _LOGGER.debug(
+                "Select debug: nessun select programma per '%s' id=%s; "
+                "nessun comando sorgente con parametri %s",
+                data.get("name"),
+                appliance_id,
+                PROGRAM_PARAM_NAMES,
+            )
     async_add_entities(entities)
 
 
@@ -69,6 +95,13 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
 
         self._program_reverse: dict[str, str] = {v: k for k, v in self._program_map.items()}
         self._attr_options = list(self._program_reverse.keys())
+        _LOGGER.debug(
+            "Select debug: inizializzato '%s' id=%s programmi=%d map=%s",
+            self._attr_name,
+            appliance_id,
+            len(self._program_map),
+            self._program_map,
+        )
 
     @classmethod
     def supports_appliance(cls, appliance) -> bool:
@@ -76,24 +109,48 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         programma valorizzato da cui costruire l'elenco delle opzioni."""
         command_info = cls._find_program_command(appliance)
         if command_info is None:
+            _LOGGER.debug(
+                "Select debug: supports_appliance=False, nessun comando programma. commands=%s",
+                _command_names(appliance),
+            )
             return False
         _, command, param_name = command_info
-        return bool(cls._program_values(command, param_name))
+        values = cls._program_values(command, param_name)
+        _LOGGER.debug(
+            "Select debug: supports_appliance command param=%s values_count=%d params=%s",
+            param_name,
+            len(values),
+            _param_names(command),
+        )
+        return bool(values)
 
     @staticmethod
     def _find_program_command(appliance):
         if appliance is None:
             return None
-        commands = appliance.commands if isinstance(appliance.commands, dict) else {}
+        commands = getattr(appliance, "commands", None)
+        commands = commands if isinstance(commands, dict) else {}
         for command_name in PROGRAM_SOURCE_COMMANDS:
             command = commands.get(command_name)
             if command is None:
+                _LOGGER.debug("Select debug: comando sorgente '%s' assente", command_name)
                 continue
             params = getattr(command, "parameters", None)
             if not isinstance(params, dict):
+                _LOGGER.debug(
+                    "Select debug: comando sorgente '%s' senza parameters dict: %s",
+                    command_name,
+                    type(params).__name__,
+                )
                 continue
             for param_name in PROGRAM_PARAM_NAMES:
                 if param_name in params:
+                    _LOGGER.debug(
+                        "Select debug: trovato comando programma '%s' parametro '%s' params=%s",
+                        command_name,
+                        param_name,
+                        sorted(params.keys()),
+                    )
                     return command_name, command, param_name
         return None
 
@@ -102,13 +159,29 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         params = getattr(command, "parameters", {})
         prog_param = params.get(param_name) if isinstance(params, dict) else None
         if prog_param is None:
+            _LOGGER.debug("Select debug: parametro programma '%s' assente", param_name)
             return {}
         for attr in ("values", "value_list", "options"):
             raw = getattr(prog_param, attr, None)
             if isinstance(raw, dict):
-                return {str(code): str(label) for code, label in raw.items()}
+                values = {str(code): str(label) for code, label in raw.items()}
+                _LOGGER.debug(
+                    "Select debug: valori programmi da attr '%s' dict count=%d values=%s",
+                    attr,
+                    len(values),
+                    values,
+                )
+                return values
             if isinstance(raw, (list, tuple)):
-                return {str(value): str(value) for value in raw}
+                values = {str(value): str(value) for value in raw}
+                _LOGGER.debug(
+                    "Select debug: valori programmi da attr '%s' list count=%d values=%s",
+                    attr,
+                    len(values),
+                    values,
+                )
+                return values
+        _LOGGER.debug("Select debug: nessun values/value_list/options per parametro '%s'", param_name)
         return {}
 
     @staticmethod
@@ -116,15 +189,28 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         try:
             command_info = HonProgramSelect._find_program_command(appliance)
             if command_info is None:
+                _LOGGER.debug("Select debug: _load_programs senza command_info")
                 return {}
-            _, command, param_name = command_info
+            command_name, command, param_name = command_info
             values = HonProgramSelect._program_values(command, param_name)
             if not values:
+                _LOGGER.debug(
+                    "Select debug: _load_programs comando '%s' parametro '%s' senza valori",
+                    command_name,
+                    param_name,
+                )
                 return {}
-            return {
+            programs = {
                 str(code): str(label) if label else str(code)
                 for code, label in values.items()
             }
+            _LOGGER.debug(
+                "Select debug: _load_programs da comando '%s' parametro '%s': %s",
+                command_name,
+                param_name,
+                programs,
+            )
+            return programs
         except Exception as err:
             _LOGGER.debug("Errore caricamento programmi dinamici: %s", err)
             return {}
@@ -137,7 +223,19 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         if pending is not None:
             label = self._program_map.get(str(pending))
             if label is not None:
+                _LOGGER.debug(
+                    "Select debug: current_option usa pending id=%s code=%s label=%s",
+                    self._appliance_id,
+                    pending,
+                    label,
+                )
                 return label
+            _LOGGER.debug(
+                "Select debug: current_option pending id=%s code=%s non presente in map=%s",
+                self._appliance_id,
+                pending,
+                self._program_map,
+            )
 
         # 2) Stato reale dal device. Proviamo sia il nome programma sia il codice
         #    (prCode/program) e usiamo il primo che corrisponde a un'opzione nota.
@@ -153,14 +251,33 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         ):
             val = self._get_attr(key)
             if val is None:
+                _LOGGER.debug("Select debug: current_option key '%s' assente", key)
                 continue
             token = str(val)
             # token può essere un codice (chiave della mappa) oppure già
             # un'etichetta (es. programName espone il nome del programma).
             if token in self._program_map:
+                _LOGGER.debug(
+                    "Select debug: current_option key '%s' token codice=%s label=%s",
+                    key,
+                    token,
+                    self._program_map[token],
+                )
                 return self._program_map[token]
             if token in self._program_reverse:
+                _LOGGER.debug(
+                    "Select debug: current_option key '%s' token label=%s",
+                    key,
+                    token,
+                )
                 return token
+            _LOGGER.debug(
+                "Select debug: current_option key '%s' token=%s non mappato; map=%s",
+                key,
+                token,
+                self._program_map,
+            )
+        _LOGGER.debug("Select debug: current_option non disponibile per id=%s", self._appliance_id)
         return None
 
     async def async_select_option(self, option: str) -> None:
@@ -171,9 +288,17 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         # Selezionare un programma non deve mai far partire l'elettrodomestico;
         # l'avvio avviene col pulsante "Avvia programma", che legge questo
         # programma in attesa e lo applica al comando startProgram.
-        self._coordinator_store(PROGRAM_PENDING_STORE)[self._appliance_id] = code
+        store = self._coordinator_store(PROGRAM_PENDING_STORE)
+        _LOGGER.debug(
+            "Select debug: prima selezione option=%s code=%s store=%s",
+            option,
+            code,
+            dict(store),
+        )
+        store[self._appliance_id] = code
         _LOGGER.info(
             "Select: programma '%s' (code=%s) impostato; avvialo con 'Avvia programma'",
             option, code,
         )
+        _LOGGER.debug("Select debug: dopo selezione store=%s", dict(store))
         self.async_write_ha_state()

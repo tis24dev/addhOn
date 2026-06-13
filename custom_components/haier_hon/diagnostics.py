@@ -1,12 +1,26 @@
 """Diagnostics support for Haier hOn (Extended)."""
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _redact_title(title: str | None) -> str | None:
+    if not title:
+        return None
+    if "@" not in title:
+        return title
+    prefix, domain_and_suffix = title.rsplit("@", 1)
+    open_paren = prefix.rfind("(")
+    safe_prefix = prefix[: open_paren + 1] if open_paren >= 0 else ""
+    return f"{safe_prefix}***@{domain_and_suffix}"
 
 
 def _redact_email(email: str | None) -> str | None:
@@ -25,6 +39,12 @@ async def async_get_config_entry_diagnostics(
     domain_data = hass.data.get(DOMAIN, {})
     entry_data = domain_data.get(entry.entry_id, {})
     coordinator = entry_data.get("coordinator")
+    _LOGGER.debug(
+        "Diagnostics debug: richiesta diagnostics entry=%s title=%s coordinator_present=%s",
+        entry.entry_id,
+        _redact_title(getattr(entry, "title", None)),
+        coordinator is not None,
+    )
 
     appliances: list[dict] = []
     coord_data = getattr(coordinator, "data", None)
@@ -44,6 +64,15 @@ async def async_get_config_entry_diagnostics(
 
             attributes = data.get("attributes") if isinstance(data, dict) else None
             settings = data.get("settings") if isinstance(data, dict) else None
+            _LOGGER.debug(
+                "Diagnostics debug: appliance id=%s name=%s type=%s attributes=%d settings=%d commands=%s",
+                appliance_id,
+                data.get("name"),
+                data.get("type"),
+                len(attributes) if isinstance(attributes, dict) else 0,
+                len(settings) if isinstance(settings, dict) else 0,
+                commands_info,
+            )
 
             appliances.append(
                 {
@@ -64,7 +93,7 @@ async def async_get_config_entry_diagnostics(
 
     return {
         "entry": {
-            "title": entry.title,
+            "title": _redact_title(entry.title),
             "data": {
                 "email": _redact_email(entry.data.get("email")),
                 "password": "***",

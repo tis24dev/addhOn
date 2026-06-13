@@ -31,6 +31,38 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_CONSUMPTION_SENSOR_ATTRS = {
+    WM_ATTR_TOTAL_WASH,
+    WM_ATTR_TOTAL_WATER,
+    WM_ATTR_TOTAL_ENERGY,
+    WM_ATTR_CURRENT_ENERGY,
+    WM_ATTR_CURRENT_WATER,
+}
+_DEBUG_KEY_SAMPLE_LIMIT = 80
+
+
+def _debug_key_sample(values: dict) -> list[str]:
+    keys = sorted(str(key) for key in values.keys())
+    if len(keys) <= _DEBUG_KEY_SAMPLE_LIMIT:
+        return keys
+    return [
+        *keys[:_DEBUG_KEY_SAMPLE_LIMIT],
+        f"... (+{len(keys) - _DEBUG_KEY_SAMPLE_LIMIT})",
+    ]
+
+
+def _debug_value(value):
+    if hasattr(value, "value"):
+        return value.value
+    return value
+
+
+def _debug_consumption_values(values: dict) -> dict:
+    return {
+        key: _debug_value(values[key]) if key in values else "<missing>"
+        for key in _CONSUMPTION_SENSOR_ATTRS
+    }
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -52,6 +84,18 @@ async def async_setup_entry(
             ])
 
         elif app_type in APPLIANCE_WASH_GROUP:
+            attributes = data.get("attributes", {})
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "Sensori consumi debug: preparo sensori per '%s' (type=%s, id=%s). "
+                    "Attributi disponibili=%d %s; valori consumo=%s",
+                    data.get("name", "Haier"),
+                    app_type,
+                    appliance_id,
+                    len(attributes) if isinstance(attributes, dict) else 0,
+                    _debug_key_sample(attributes) if isinstance(attributes, dict) else [],
+                    _debug_consumption_values(attributes) if isinstance(attributes, dict) else {},
+                )
             entities.extend([
                 HonWMStateSensor(coordinator, appliance_id),
                 HonNumericSensor(coordinator, appliance_id, WM_ATTR_REMAINING, "Tempo Rimanente", "remaining_time", UnitOfTime.MINUTES, SensorDeviceClass.DURATION, None),
@@ -92,11 +136,48 @@ class HonNumericSensor(HonBaseEntity, SensorEntity):
     def native_value(self):
         val = self._get_attr(self._attr_key)
         if val is None:
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                attributes = self._attributes
+                _LOGGER.debug(
+                    "Sensore numerico debug: '%s' (id=%s, unique_id=%s) non trova "
+                    "l'attributo '%s'. Chiavi disponibili=%d %s; valori consumo=%s",
+                    self._attr_name,
+                    self._appliance_id,
+                    self._attr_unique_id,
+                    self._attr_key,
+                    len(attributes) if isinstance(attributes, dict) else 0,
+                    _debug_key_sample(attributes) if isinstance(attributes, dict) else [],
+                    _debug_consumption_values(attributes) if isinstance(attributes, dict) else {},
+                )
             return None
         try:
-            return float(val)
+            converted = float(val)
         except (ValueError, TypeError):
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "Sensore numerico debug: '%s' (id=%s, unique_id=%s) ha valore "
+                    "non numerico per '%s': %r (%s)",
+                    self._attr_name,
+                    self._appliance_id,
+                    self._attr_unique_id,
+                    self._attr_key,
+                    val,
+                    type(val).__name__,
+                )
             return None
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "Sensore numerico debug: '%s' (id=%s, unique_id=%s) legge '%s': "
+                "raw=%r -> native_value=%s %s",
+                self._attr_name,
+                self._appliance_id,
+                self._attr_unique_id,
+                self._attr_key,
+                val,
+                converted,
+                self._attr_native_unit_of_measurement,
+            )
+        return converted
 
 
 class HonWMStateSensor(HonBaseEntity, SensorEntity):

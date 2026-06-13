@@ -16,6 +16,7 @@ from .const import (
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_STORE,
 )
+from .debug_utils import command_names, param_snapshot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,11 +32,22 @@ async def async_setup_entry(
     client = entry_data["client"]
     entities = []
     for appliance_id, data in coordinator.data.items():
-        if data.get("type") not in APPLIANCE_WASH_GROUP:
+        app_type = data.get("type")
+        _LOGGER.debug(
+            "Button debug: valuto appliance '%s' id=%s type=%s commands=%s",
+            data.get("name"),
+            appliance_id,
+            app_type,
+            command_names(data.get("appliance")),
+        )
+        if app_type not in APPLIANCE_WASH_GROUP:
+            _LOGGER.debug("Button debug: appliance id=%s ignorato, type=%s", appliance_id, app_type)
             continue
         appliance = data.get("appliance")
-        commands = appliance.commands if appliance and isinstance(appliance.commands, dict) else {}
+        commands = getattr(appliance, "commands", None)
+        commands = commands if isinstance(commands, dict) else {}
         if "startProgram" in commands:
+            _LOGGER.debug("Button debug: creo button startProgram per id=%s", appliance_id)
             entities.append(
                 HonProgramCommandButton(
                     coordinator,
@@ -48,6 +60,7 @@ async def async_setup_entry(
                 )
             )
         if "stopProgram" in commands:
+            _LOGGER.debug("Button debug: creo button stopProgram per id=%s", appliance_id)
             entities.append(
                 HonProgramCommandButton(
                     coordinator,
@@ -85,6 +98,13 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
         self._attr_unique_id = f"{appliance_id}_{unique_suffix}"
         self._attr_name = f"{device_name} - {name_suffix}"
         self._attr_icon = icon
+        _LOGGER.debug(
+            "Button debug: inizializzato '%s' id=%s command=%s fixed_params=%s",
+            self._attr_name,
+            appliance_id,
+            command_name,
+            self._command_parameters,
+        )
 
     async def async_press(self) -> None:
         """Invia il comando fisico esplicito."""
@@ -101,10 +121,19 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
             if self._command_name == "startProgram"
             else None
         )
+        _LOGGER.debug(
+            "Button debug: press '%s' id=%s pending_program=%s store=%s commands=%s",
+            self._command_name,
+            self._appliance_id,
+            pending_program,
+            dict(store),
+            command_names(appliance),
+        )
         try:
             def _do():
                 async def _inner():
-                    commands = appliance.commands if isinstance(appliance.commands, dict) else {}
+                    commands = getattr(appliance, "commands", None)
+                    commands = commands if isinstance(commands, dict) else {}
                     command = commands.get(self._command_name)
                     if not command:
                         raise RuntimeError(
@@ -112,6 +141,12 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                             f"Disponibili: {list(commands.keys())}"
                         )
                     params = getattr(command, "parameters", {})
+                    if _LOGGER.isEnabledFor(logging.DEBUG):
+                        _LOGGER.debug(
+                            "Button debug: prima command '%s' params=%s",
+                            self._command_name,
+                            param_snapshot(params),
+                        )
                     if pending_program is not None:
                         # Fail-safe: se non riusciamo ad attaccare il programma
                         # scelto a startProgram, NON avviamo (eviteremmo di far
@@ -120,8 +155,16 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                         if isinstance(params, dict):
                             for pname in PROGRAM_PARAM_NAMES:
                                 if pname in params:
+                                    previous = getattr(params[pname], "value", None)
                                     params[pname].value = pending_program
                                     applied = True
+                                    _LOGGER.debug(
+                                        "Button debug: applicato pending_program=%s a parametro '%s' "
+                                        "(previous=%s)",
+                                        pending_program,
+                                        pname,
+                                        previous,
+                                    )
                                     break
                         if not applied:
                             available = (
@@ -134,8 +177,28 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                             )
                     for name, value in self._command_parameters.items():
                         if name in params:
+                            previous = getattr(params[name], "value", None)
                             params[name].value = value
+                            _LOGGER.debug(
+                                "Button debug: impostato parametro fisso '%s'=%s (previous=%s)",
+                                name,
+                                value,
+                                previous,
+                            )
+                        else:
+                            _LOGGER.debug(
+                                "Button debug: parametro fisso '%s' non presente in command '%s'",
+                                name,
+                                self._command_name,
+                            )
+                    if _LOGGER.isEnabledFor(logging.DEBUG):
+                        _LOGGER.debug(
+                            "Button debug: invio command '%s' params_finali=%s",
+                            self._command_name,
+                            param_snapshot(params),
+                        )
                     await command.send()
+                    _LOGGER.debug("Button debug: command '%s' send completato", self._command_name)
 
                 client.run_command_sync(_inner())
 
@@ -144,6 +207,10 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
             # attesa così il select torna a riflettere lo stato del device.
             if pending_program is not None:
                 store.pop(self._appliance_id, None)
+                _LOGGER.debug(
+                    "Button debug: pending program consumato e rimosso, store=%s",
+                    dict(store),
+                )
             _LOGGER.info("Button: comando '%s' inviato", self._command_name)
             await self._async_request_command_refresh()
         except Exception as err:

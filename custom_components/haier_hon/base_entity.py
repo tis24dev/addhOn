@@ -1,11 +1,16 @@
 """Entità base per Haier hOn."""
 from __future__ import annotations
 
+import logging
+
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .debug_utils import debug_key_sample
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class HonBaseEntity(CoordinatorEntity):
@@ -45,6 +50,11 @@ class HonBaseEntity(CoordinatorEntity):
         if not isinstance(store, dict):
             store = {}
             setattr(self.coordinator, name, store)
+            _LOGGER.debug(
+                "BaseEntity debug: creato coordinator store '%s' per appliance=%s",
+                name,
+                self._appliance_id,
+            )
         return store
 
     @property
@@ -90,52 +100,106 @@ class HonBaseEntity(CoordinatorEntity):
                     current = getattr(current, part, None)
             return current
 
+        def _debug_lookup(source: str, raw_value, extracted_value) -> None:
+            if not _LOGGER.isEnabledFor(logging.DEBUG):
+                return
+            attributes = self._attributes
+            settings = self._appliance_data.get("settings")
+            _LOGGER.debug(
+                "BaseEntity debug: lookup '%s' per '%s' (id=%s) risolto da %s: "
+                "raw=%r (%s), value=%r; attribute_keys=%d %s; settings_keys=%d %s",
+                key,
+                getattr(self, "_attr_name", self.__class__.__name__),
+                self._appliance_id,
+                source,
+                raw_value,
+                type(raw_value).__name__,
+                extracted_value,
+                len(attributes) if isinstance(attributes, dict) else 0,
+                debug_key_sample(attributes) if isinstance(attributes, dict) else [],
+                len(settings) if isinstance(settings, dict) else 0,
+                debug_key_sample(settings) if isinstance(settings, dict) else [],
+            )
+
         # 1) lookup diretto (chiavi già "flattened")
         val = self._attributes.get(key)
         if val is not None:
-            return _extract_value(val)
+            extracted = _extract_value(val)
+            _debug_lookup("attributes diretto", val, extracted)
+            return extracted
 
         # 2) supporto prefisso "settings." (alcuni modelli/vecchie versioni lo usano)
         if key.startswith("settings."):
             key_no_prefix = key.removeprefix("settings.")
             val = self._attributes.get(key_no_prefix)
             if val is not None:
-                return _extract_value(val)
+                extracted = _extract_value(val)
+                _debug_lookup("attributes senza prefisso settings", val, extracted)
+                return extracted
 
             val = _deep_get(self._attributes, key_no_prefix)
             if val is not None:
-                return _extract_value(val)
+                extracted = _extract_value(val)
+                _debug_lookup("attributes deep senza prefisso settings", val, extracted)
+                return extracted
 
             settings = self._appliance_data.get("settings")
             if isinstance(settings, dict):
                 val = settings.get(key_no_prefix)
                 if val is not None:
-                    return _extract_value(val)
+                    extracted = _extract_value(val)
+                    _debug_lookup("settings diretto", val, extracted)
+                    return extracted
                 val = _deep_get(settings, key_no_prefix)
                 if val is not None:
-                    return _extract_value(val)
+                    extracted = _extract_value(val)
+                    _debug_lookup("settings deep", val, extracted)
+                    return extracted
 
         # 2b) supporto prefisso "startProgram." (es. ecoMode che vive in startProgram)
         if key.startswith("startProgram."):
             key_no_prefix = key.removeprefix("startProgram.")
             val = self._attributes.get(key_no_prefix)
             if val is not None:
-                return _extract_value(val)
+                extracted = _extract_value(val)
+                _debug_lookup("attributes senza prefisso startProgram", val, extracted)
+                return extracted
 
             start_program = self._appliance_data.get("startProgram")
             if isinstance(start_program, dict):
                 val = start_program.get(key_no_prefix)
                 if val is not None:
-                    return _extract_value(val)
+                    extracted = _extract_value(val)
+                    _debug_lookup("startProgram diretto", val, extracted)
+                    return extracted
                 val = _deep_get(start_program, key_no_prefix)
                 if val is not None:
-                    return _extract_value(val)
+                    extracted = _extract_value(val)
+                    _debug_lookup("startProgram deep", val, extracted)
+                    return extracted
 
         # 3) fallback: prova lookup "dotted path" dentro attributes
         val = _deep_get(self._attributes, key)
         if val is not None:
-            return _extract_value(val)
+            extracted = _extract_value(val)
+            _debug_lookup("attributes dotted path", val, extracted)
+            return extracted
 
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            attributes = self._attributes
+            settings = self._appliance_data.get("settings")
+            _LOGGER.debug(
+                "BaseEntity debug: lookup '%s' per '%s' (id=%s) non trovato, "
+                "ritorno default=%r; attribute_keys=%d %s; settings_keys=%d %s",
+                key,
+                getattr(self, "_attr_name", self.__class__.__name__),
+                self._appliance_id,
+                default,
+                len(attributes) if isinstance(attributes, dict) else 0,
+                debug_key_sample(attributes) if isinstance(attributes, dict) else [],
+                len(settings) if isinstance(settings, dict) else 0,
+                debug_key_sample(settings) if isinstance(settings, dict) else [],
+            )
         return default
 
     async def _async_request_command_refresh(self) -> None:
@@ -143,8 +207,18 @@ class HonBaseEntity(CoordinatorEntity):
         refresh = getattr(self.coordinator, "async_refresh", None)
         if refresh is None:
             refresh = self.coordinator.async_request_refresh
+        _LOGGER.debug(
+            "BaseEntity debug: refresh richiesto dopo comando per appliance=%s entity=%s",
+            self._appliance_id,
+            getattr(self, "_attr_name", self.__class__.__name__),
+        )
         await refresh()
         if getattr(self.coordinator, "last_update_success", True) is not False:
+            _LOGGER.debug(
+                "BaseEntity debug: refresh dopo comando riuscito per appliance=%s entity=%s",
+                self._appliance_id,
+                getattr(self, "_attr_name", self.__class__.__name__),
+            )
             return
 
         err = getattr(self.coordinator, "last_exception", None)

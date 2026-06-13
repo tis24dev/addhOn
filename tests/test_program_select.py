@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import enum
+import logging
 import sys
 import types
 import unittest
@@ -116,6 +117,8 @@ def _install_homeassistant_stubs() -> None:
 
     components = _ensure_module("homeassistant.components")
     button_module = _ensure_module("homeassistant.components.button")
+    climate_module = _ensure_module("homeassistant.components.climate")
+    climate_const = _ensure_module("homeassistant.components.climate.const")
     switch_module = _ensure_module("homeassistant.components.switch")
     select_module = _ensure_module("homeassistant.components.select")
 
@@ -125,10 +128,32 @@ def _install_homeassistant_stubs() -> None:
     class ButtonEntity:
         pass
 
+    class ClimateEntity:
+        pass
+
+    class ClimateEntityFeature(enum.IntFlag):
+        TARGET_TEMPERATURE = 1
+        FAN_MODE = 2
+        TURN_ON = 4
+        TURN_OFF = 8
+
+    class HVACMode(str, enum.Enum):
+        OFF = "off"
+        AUTO = "auto"
+        COOL = "cool"
+        DRY = "dry"
+        HEAT = "heat"
+        FAN_ONLY = "fan_only"
+
     class SelectEntity:
         pass
 
     button_module.ButtonEntity = getattr(button_module, "ButtonEntity", ButtonEntity)
+    climate_module.ClimateEntity = getattr(climate_module, "ClimateEntity", ClimateEntity)
+    climate_const.ClimateEntityFeature = getattr(
+        climate_const, "ClimateEntityFeature", ClimateEntityFeature
+    )
+    climate_const.HVACMode = getattr(climate_const, "HVACMode", HVACMode)
     switch_module.SwitchEntity = getattr(switch_module, "SwitchEntity", SwitchEntity)
     select_module.SelectEntity = getattr(select_module, "SelectEntity", SelectEntity)
 
@@ -142,6 +167,7 @@ def _install_homeassistant_stubs() -> None:
     helpers.entity_registry = entity_registry
     helpers.update_coordinator = update_coordinator
     components.button = button_module
+    components.climate = climate_module
     components.switch = switch_module
     components.select = select_module
 
@@ -203,6 +229,18 @@ def _washer(commands: dict, attributes: dict | None = None) -> dict:
         "washer-1": {
             "type": "WM",
             "name": "Washer",
+            "appliance": types.SimpleNamespace(commands=commands),
+            "attributes": attributes or {},
+            "settings": {},
+        }
+    }
+
+
+def _ac(commands: dict, attributes: dict | None = None) -> dict:
+    return {
+        "ac-1": {
+            "type": "AC",
+            "name": "AC",
             "appliance": types.SimpleNamespace(commands=commands),
             "attributes": attributes or {},
             "settings": {},
@@ -456,6 +494,148 @@ class GetAttributesStatisticsTest(unittest.TestCase):
         attrs = _get_attributes(appliance)
 
         self.assertEqual("2", attrs["machMode"])
+
+
+class DebugUtilsTest(unittest.TestCase):
+    def test_debug_utils_exports_key_sample_and_rich_param_snapshot(self) -> None:
+        from custom_components.haier_hon.debug_utils import (
+            DEBUG_KEY_SAMPLE_LIMIT,
+            command_names,
+            debug_key_sample,
+            param_snapshot,
+        )
+
+        values = {f"k{i:03d}": i for i in range(DEBUG_KEY_SAMPLE_LIMIT + 2)}
+        self.assertEqual(
+            [*sorted(values.keys())[:DEBUG_KEY_SAMPLE_LIMIT], "... (+2)"],
+            debug_key_sample(values),
+        )
+
+        appliance = types.SimpleNamespace(commands={"z": object(), "a": object()})
+        self.assertEqual(["a", "z"], command_names(appliance))
+        self.assertEqual([], command_names(types.SimpleNamespace(commands=[])))
+        self.assertEqual(
+            {"program": {"value": "1", "has_values": True, "values_count": 2}},
+            param_snapshot({"program": Param("1", {"1": "Cotone", "2": "Sintetici"})}),
+        )
+        self.assertEqual({"<non-dict>": "list"}, param_snapshot([]))
+
+
+class DiagnosticsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_config_entry_diagnostics_redacts_email_from_title(self) -> None:
+        from custom_components.haier_hon.const import DOMAIN
+        from custom_components.haier_hon.diagnostics import (
+            async_get_config_entry_diagnostics,
+        )
+
+        entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            title="Haier (person@example.com)",
+            data={"email": "person@example.com", "password": "secret"},
+            options={"scan_interval": 60},
+        )
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": FakeCoordinator({})}}}
+        )
+
+        diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+
+        self.assertEqual("Haier (***@example.com)", diagnostics["entry"]["title"])
+        self.assertNotIn("person", diagnostics["entry"]["title"])
+
+
+class SwitchLoggingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_added_switch_log_only_emitted_when_entity_is_created(self) -> None:
+        from custom_components.haier_hon import switch
+        from custom_components.haier_hon.const import DOMAIN
+
+        missing_resume = {"pauseProgram": RecordingCommand()}
+        coordinator = FakeCoordinator(_washer(missing_resume))
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
+        )
+        added: list = []
+
+        with self.assertNoLogs(switch._LOGGER.name, level="INFO"):
+            await switch.async_setup_entry(hass, FakeEntry(), added.extend)
+
+        self.assertEqual([], added)
+
+        complete_commands = {
+            "pauseProgram": RecordingCommand(),
+            "resumeProgram": RecordingCommand(),
+        }
+        coordinator = FakeCoordinator(_washer(complete_commands))
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
+        )
+        added = []
+
+        with self.assertLogs(switch._LOGGER.name, level="INFO") as logs:
+            await switch.async_setup_entry(hass, FakeEntry(), added.extend)
+
+        self.assertEqual(1, len(added))
+        self.assertIn("Aggiunto switch: Washer", "\n".join(logs.output))
+
+
+class DebugLoggingGuardTest(unittest.IsolatedAsyncioTestCase):
+    def _attach(self, entity) -> None:
+        entity.hass = FakeHass()
+
+    def _force_info_logging(self, logger: logging.Logger) -> None:
+        original_level = logger.level
+        logger.setLevel(logging.INFO)
+        self.addCleanup(logger.setLevel, original_level)
+
+    def _replace_snapshot_with_failure(self, module) -> None:
+        name = "param_snapshot" if hasattr(module, "param_snapshot") else "_param_snapshot"
+        original = getattr(module, name)
+
+        def fail_if_called(params):
+            raise AssertionError("param snapshot should not be built outside DEBUG")
+
+        setattr(module, name, fail_if_called)
+        self.addCleanup(setattr, module, name, original)
+
+    async def test_button_does_not_build_param_snapshot_when_debug_is_disabled(self) -> None:
+        from custom_components.haier_hon import button
+
+        start = RecordingCommand({"program": Param(values={"1": "Cotone"})})
+        coordinator = FakeCoordinator(_washer({"startProgram": start}))
+        entity = button.HonProgramCommandButton(
+            coordinator,
+            "washer-1",
+            FakeClient(),
+            command_name="startProgram",
+            unique_suffix="start_program",
+            name_suffix="Avvia programma",
+            icon="mdi:play-circle",
+        )
+        self._attach(entity)
+        self._force_info_logging(button._LOGGER)
+        self._replace_snapshot_with_failure(button)
+
+        await entity.async_press()
+
+        self.assertEqual(1, start.send_calls)
+
+    async def test_climate_does_not_build_param_snapshot_when_debug_is_disabled(self) -> None:
+        from custom_components.haier_hon import climate
+
+        settings = RecordingCommand({"tempSel": Param("20")})
+        appliance = types.SimpleNamespace(commands={"settings": settings})
+        coordinator = FakeCoordinator(_ac({"settings": settings}))
+        entity = climate.HaierClimateEntity(coordinator, "ac-1", FakeClient())
+        self._attach(entity)
+        self._force_info_logging(climate._LOGGER)
+        self._replace_snapshot_with_failure(climate)
+
+        await entity._send_command_in_executor(
+            FakeClient(), appliance, {"tempSel": "21"}
+        )
+
+        self.assertEqual("21", settings.parameters["tempSel"].value)
+        self.assertEqual(1, settings.send_calls)
 
 
 if __name__ == "__main__":
