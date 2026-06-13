@@ -157,7 +157,17 @@ def _install_homeassistant_stubs() -> None:
     switch_module.SwitchEntity = getattr(switch_module, "SwitchEntity", SwitchEntity)
     select_module.SelectEntity = getattr(select_module, "SelectEntity", SelectEntity)
 
+    const_module = _ensure_module("homeassistant.const")
+
+    class UnitOfTemperature:
+        CELSIUS = "°C"
+
+    const_module.UnitOfTemperature = getattr(
+        const_module, "UnitOfTemperature", UnitOfTemperature
+    )
+
     homeassistant.config_entries = config_entries
+    homeassistant.const = const_module
     homeassistant.core = core
     homeassistant.exceptions = exceptions
     homeassistant.helpers = helpers

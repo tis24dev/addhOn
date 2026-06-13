@@ -7,6 +7,7 @@ import logging
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -63,7 +64,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         device_name = self._appliance_data.get("name", "Condizionatore Haier")
         self._attr_name = device_name
         self._attr_unique_id = f"{appliance_id}_climate"
-        self._attr_temperature_unit = "°C"
+        self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._attr_target_temperature_step = 1.0
         self._attr_min_temp = 16.0
         self._attr_max_temp = 30.0
