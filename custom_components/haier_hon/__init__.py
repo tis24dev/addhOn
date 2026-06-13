@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, PLATFORMS, SCAN_INTERVAL
+from .const import APPLIANCE_TD, DOMAIN, PLATFORMS, SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,24 +38,55 @@ async def _async_close_client(client) -> None:
         _LOGGER.warning("Errore chiusura HonClient: %s", err)
 
 
+# Sensori consumo "washer-only" che venivano creati per errore anche sulle
+# asciugatrici (TD): un'asciugatrice non usa acqua e non espone questi contatori,
+# quindi restavano entità sempre "sconosciute". Dopo il refactor per-tipo non
+# vengono più create: qui ripuliamo quelle già registrate, SOLO sui device TD.
+_TD_REMOVED_SUFFIXES = ("_total_water", "_total_energy", "_current_energy", "_current_water")
+
+
 def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Rimuove dal registry le entità legacy non più fornite dall'integrazione.
 
-    Lo switch "Alimentazione" (unique_id '<id>_power') è stato rimosso nel
-    refactor 2.3/2.4: senza questa pulizia resterebbe nel registry come entità
-    orfana, in stato 'unavailable' con il badge '?' su ogni elettrodomestico.
+    - Switch "Alimentazione" (unique_id '<id>_power'), rimosso nel refactor 2.3/2.4.
+    - Sensori consumo washer-only sulle asciugatrici (TD): '<td_id>_total_water',
+      '_total_energy', '_current_energy', '_current_water'. Rimossi SOLO sui
+      device di tipo TD (cross-check col coordinator), mai su WM/WD/AC.
+
+    Senza questa pulizia resterebbero entità orfane 'unavailable' col badge '?'.
     """
     from homeassistant.helpers import entity_registry as er
+
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    coordinator = entry_data.get("coordinator")
+    coord_data = getattr(coordinator, "data", None)
+    td_ids = {
+        appliance_id
+        for appliance_id, device in (coord_data or {}).items()
+        if isinstance(device, dict) and device.get("type") == APPLIANCE_TD
+    }
+    td_orphans = {
+        f"{appliance_id}{suffix}"
+        for appliance_id in td_ids
+        for suffix in _TD_REMOVED_SUFFIXES
+    }
 
     registry = er.async_get(hass)
     checked = 0
     removed = 0
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
         checked += 1
-        if (reg_entry.unique_id or "").endswith("_power"):
+        unique_id = reg_entry.unique_id or ""
+        if unique_id.endswith("_power"):
             registry.async_remove(reg_entry.entity_id)
             removed += 1
             _LOGGER.info("Rimossa entità legacy 'Alimentazione': %s", reg_entry.entity_id)
+        elif unique_id in td_orphans:
+            registry.async_remove(reg_entry.entity_id)
+            removed += 1
+            _LOGGER.info(
+                "Rimossa entità consumo non valida per asciugatrice: %s", reg_entry.entity_id
+            )
     _LOGGER.debug(
         "Setup debug: pulizia legacy completata per entry=%s, controllate=%d, rimosse=%d",
         entry.entry_id,

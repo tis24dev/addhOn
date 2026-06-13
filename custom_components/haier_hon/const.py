@@ -96,6 +96,11 @@ WM_ATTR_DOOR          = "doorLockStatus"            # Blocco porta (0=unlocked, 
 WM_ATTR_DOOR_OPEN     = "doorStatus"                # Porta fisica (0=chiusa, 1=aperta)
 WM_ATTR_ERRORS        = "errors"
 
+# ─── Attributi asciugatrice (TD) ──────────────────────────────────────────────
+# L'asciugatrice NON espone totalWashCycle; il contatore cicli arriva da
+# programsCounter (container statistics). Confermato sul device HD100-C367GU1-IT.
+TD_ATTR_CYCLES = "programsCounter"
+
 # ─── Stati lavatrice / asciugatrice ──────────────────────────────────────────
 WM_STATE_MAP = {
     "0": "In attesa",
