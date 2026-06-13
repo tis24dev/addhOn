@@ -38,6 +38,12 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+
+          if [[ ! -f .github/scripts/release-policy.sh ]]; then
+            echo "::notice::Release policy is not present on base yet; allowing bootstrap PR."
+            exit 0
+          fi
+
           source .github/scripts/release-policy.sh
 
           [[ "${PR_BASE_REF}" == "main" ]] || die "Release PRs must target main."
