@@ -24,6 +24,11 @@ APPLIANCE_WASH_GROUP = (APPLIANCE_WM, APPLIANCE_TD, APPLIANCE_WD)
 # "Avvia programma" (applica il programma scelto a startProgram).
 PROGRAM_PARAM_NAMES = ("program", "prCode")
 
+# Chiave dello store volatile (tenuto sul coordinator) che conserva il programma
+# scelto dal select ma non ancora avviato; il button "Avvia programma" lo applica
+# a startProgram. Unica fonte di verità condivisa tra select.py e button.py.
+PROGRAM_PENDING_STORE = "pending_programs"
+
 # ─── Attributi condizionatore ─────────────────────────────────────────────────
 # Confermati dai diagnostics del device AS35PBPHRA-PRE
 AC_ATTR_MODE         = "settings.machMode"

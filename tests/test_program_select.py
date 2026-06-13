@@ -1,6 +1,7 @@
 """Regression tests for the restored program select and power cleanup.
 
-Copre la fix Opzione B (release 2.4.0 vs 2.2):
+Copre la fix Opzione B (regressione comparsa nella release pubblica 2.4.0,
+l'ultima funzionante era la 2.2):
 - il select "Programma" torna a essere creato/disponibile anche quando il
   programma è esposto solo via startProgram;
 - selezionare un programma NON avvia il ciclo (imposta e basta);
@@ -315,6 +316,45 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("Cotone", entity.current_option)
 
+    async def test_current_option_matches_human_label_from_device(self) -> None:
+        from custom_components.haier_hon.select import HonProgramSelect
+
+        start = RecordingCommand({"program": Param(values={"1": "Cotone", "2": "Sintetici"})})
+        # Il device espone direttamente il NOME del programma, non il codice.
+        coordinator = FakeCoordinator(
+            _washer({"startProgram": start}, attributes={"programName": "Sintetici"})
+        )
+        entity = HonProgramSelect(coordinator, "washer-1", FakeClient())
+        self._attach(entity)
+
+        self.assertEqual("Sintetici", entity.current_option)
+
+    async def test_start_button_keeps_pending_when_program_not_applicable(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+        from custom_components.haier_hon.button import HonProgramCommandButton
+
+        # startProgram senza parametro programma: il programma scelto non è
+        # applicabile, quindi NON si avvia e la scelta in attesa resta.
+        start = RecordingCommand({"onOffStatus": Param("1")})
+        coordinator = FakeCoordinator(_washer({"startProgram": start}))
+        coordinator.pending_programs = {"washer-1": "2"}
+        button = HonProgramCommandButton(
+            coordinator,
+            "washer-1",
+            FakeClient(),
+            command_name="startProgram",
+            unique_suffix="start_program",
+            name_suffix="Avvia programma",
+            icon="mdi:play-circle",
+        )
+        self._attach(button)
+
+        with self.assertRaisesRegex(HomeAssistantError, "non applicabile"):
+            await button.async_press()
+
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual({"washer-1": "2"}, coordinator.pending_programs)
+
     async def test_unknown_option_raises(self) -> None:
         from homeassistant.exceptions import HomeAssistantError
         from custom_components.haier_hon.select import HonProgramSelect
@@ -352,6 +392,12 @@ class LegacyPowerCleanupTest(unittest.TestCase):
             RegEntry("select.washer_programma", "washer-1_program"),
             RegEntry("sensor.washer_energia_totale", "washer-1_total_energy"),
         ])
+        # Patch limitata al test: ripristina le funzioni globali del registry
+        # anche in caso di fallimento, per non sporcare gli altri test.
+        self.addCleanup(setattr, er, "async_get", er.async_get)
+        self.addCleanup(
+            setattr, er, "async_entries_for_config_entry", er.async_entries_for_config_entry
+        )
         er.async_get = lambda hass: registry
         er.async_entries_for_config_entry = lambda reg, entry_id: list(reg._entries)
 

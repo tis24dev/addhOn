@@ -10,13 +10,14 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity
-from .const import APPLIANCE_WASH_GROUP, DOMAIN, PROGRAM_PARAM_NAMES
+from .const import (
+    APPLIANCE_WASH_GROUP,
+    DOMAIN,
+    PROGRAM_PARAM_NAMES,
+    PROGRAM_PENDING_STORE,
+)
 
 _LOGGER = logging.getLogger(__name__)
-
-# Deve combaciare con select.PENDING_STORE: programma scelto dal select ma non
-# ancora avviato. Lo applichiamo a startProgram al momento dell'avvio.
-PENDING_STORE = "pending_programs"
 
 
 async def async_setup_entry(
@@ -94,7 +95,7 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
 
         # Avvio: applichiamo il programma scelto dal select (se presente).
         # Lo leggiamo qui sull'event loop di HA e lo passiamo dentro _inner.
-        store = self._coordinator_store(PENDING_STORE)
+        store = self._coordinator_store(PROGRAM_PENDING_STORE)
         pending_program = (
             store.get(self._appliance_id)
             if self._command_name == "startProgram"
@@ -111,11 +112,26 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                             f"Disponibili: {list(commands.keys())}"
                         )
                     params = getattr(command, "parameters", {})
-                    if pending_program is not None and isinstance(params, dict):
-                        for pname in PROGRAM_PARAM_NAMES:
-                            if pname in params:
-                                params[pname].value = pending_program
-                                break
+                    if pending_program is not None:
+                        # Fail-safe: se non riusciamo ad attaccare il programma
+                        # scelto a startProgram, NON avviamo (eviteremmo di far
+                        # partire un programma diverso da quello selezionato).
+                        applied = False
+                        if isinstance(params, dict):
+                            for pname in PROGRAM_PARAM_NAMES:
+                                if pname in params:
+                                    params[pname].value = pending_program
+                                    applied = True
+                                    break
+                        if not applied:
+                            available = (
+                                list(params.keys()) if isinstance(params, dict) else params
+                            )
+                            raise RuntimeError(
+                                "Programma selezionato non applicabile a "
+                                f"'{self._command_name}': nessun parametro "
+                                f"{PROGRAM_PARAM_NAMES} tra {available}"
+                            )
                     for name, value in self._command_parameters.items():
                         if name in params:
                             params[name].value = value

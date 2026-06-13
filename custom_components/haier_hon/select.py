@@ -10,7 +10,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity
-from .const import APPLIANCE_WASH_GROUP, DOMAIN, PROGRAM_PARAM_NAMES
+from .const import (
+    APPLIANCE_WASH_GROUP,
+    DOMAIN,
+    PROGRAM_PARAM_NAMES,
+    PROGRAM_PENDING_STORE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,8 +28,6 @@ PROGRAM_SELECT_COMMANDS = ("settings", "setProgram", "setProgramme", "programSet
 # programma solo via startProgram restavano senza select (entità orfana
 # "unavailable").
 PROGRAM_SOURCE_COMMANDS = PROGRAM_SELECT_COMMANDS + ("startProgram",)
-# Chiave dello store condiviso col button "Avvia programma".
-PENDING_STORE = "pending_programs"
 
 
 async def async_setup_entry(
@@ -130,7 +133,7 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
     def current_option(self) -> str | None:
         # 1) Scelta in attesa di avvio ("imposta e basta"): la mostriamo subito,
         #    finché l'utente non avvia il ciclo col pulsante "Avvia programma".
-        pending = self._coordinator_store(PENDING_STORE).get(self._appliance_id)
+        pending = self._coordinator_store(PROGRAM_PENDING_STORE).get(self._appliance_id)
         if pending is not None:
             label = self._program_map.get(str(pending))
             if label is not None:
@@ -149,8 +152,15 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
             "program",
         ):
             val = self._get_attr(key)
-            if val is not None and str(val) in self._program_map:
-                return self._program_map[str(val)]
+            if val is None:
+                continue
+            token = str(val)
+            # token può essere un codice (chiave della mappa) oppure già
+            # un'etichetta (es. programName espone il nome del programma).
+            if token in self._program_map:
+                return self._program_map[token]
+            if token in self._program_reverse:
+                return token
         return None
 
     async def async_select_option(self, option: str) -> None:
@@ -161,7 +171,7 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         # Selezionare un programma non deve mai far partire l'elettrodomestico;
         # l'avvio avviene col pulsante "Avvia programma", che legge questo
         # programma in attesa e lo applica al comando startProgram.
-        self._coordinator_store(PENDING_STORE)[self._appliance_id] = code
+        self._coordinator_store(PROGRAM_PENDING_STORE)[self._appliance_id] = code
         _LOGGER.info(
             "Select: programma '%s' (code=%s) impostato; avvialo con 'Avvia programma'",
             option, code,
