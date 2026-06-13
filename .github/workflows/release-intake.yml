@@ -99,9 +99,15 @@ jobs:
             TAG_SHA="$(git rev-parse HEAD)"
             DEV_SHA="$(git rev-parse HEAD)"
 
-            git tag -f "${TAG}" "${TAG_SHA}"
-            git push origin ":refs/tags/${TAG}"
-            git push origin "refs/tags/${TAG}"
+            # The "release tag policy" ruleset blocks deleting/updating
+            # refs/tags/v*.*.*; the delete+recreate needed to move the tag onto
+            # the bump commit fails ("fatal error in commit_refs"). Do NOT move
+            # the tag here. Drop the now-stale tag (it points at the pre-bump,
+            # manifest-mismatched commit) if the ruleset allows it, but tolerate
+            # failure so the PR is still opened. The authoritative published tag
+            # is (re)created on the squash commit by post-merge-release at merge.
+            git push origin ":refs/tags/${TAG}" || true
+            notice "Bumped manifest on dev (${DEV_SHA}); stale tag ${TAG} dropped (tolerated if blocked). Published ${TAG} is created on the squash commit at merge."
           else
             assert_manifest_matches_tag "${TAG_SHA}" "${TAG}"
           fi
