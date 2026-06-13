@@ -51,45 +51,30 @@ jobs:
 
           if TAG="$(extract_pr_marker release-tag)"; then
             HAS_RELEASE_MARKER="true"
-            SOURCE_SHA="$(extract_pr_marker release-source-sha)" || die "Missing release-source-sha marker in PR body."
             validate_release_tag "${TAG}"
-            [[ "${SOURCE_SHA}" == "${PR_HEAD_SHA}" ]] || die "PR head does not match the tagged release source."
           else
-            SOURCE_SHA="${PR_HEAD_SHA}"
             notice "No release marker found; syncing dev to the squash commit without publishing a release."
           fi
 
-          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]] || die "Invalid release-source-sha '${SOURCE_SHA}'."
-
           git fetch --force origin dev main
-          if [[ "${HAS_RELEASE_MARKER}" == "true" ]]; then
-            git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
-          fi
 
           MAIN_SHA="$(git rev-parse origin/main)"
           DEV_SHA="$(git rev-parse origin/dev)"
 
           [[ "${MERGE_SHA}" == "${MAIN_SHA}" ]] || die "main (${MAIN_SHA}) does not point to the PR merge commit (${MERGE_SHA})."
-          [[ "${DEV_SHA}" == "${SOURCE_SHA}" ]] || die "origin/dev moved after this PR was merged; refusing to overwrite it."
-
-          if [[ "${HAS_RELEASE_MARKER}" == "true" ]]; then
-            TAG_SHA="$(git rev-list -n 1 "${TAG}")"
-            [[ "${TAG_SHA}" == "${SOURCE_SHA}" ]] || die "Tag ${TAG} no longer points to the original release source commit."
-          fi
 
           PARENT_COUNT="$(git show -s --format=%P "${MERGE_SHA}" | wc -w | tr -d ' ')"
           [[ "${PARENT_COUNT}" == "1" ]] || die "The PR was not squash-merged; refusing to create a release."
 
-          BASE_PARENT="$(git rev-parse "${MERGE_SHA}^")"
-          EXPECTED_DIFF="$(mktemp)"
-          ACTUAL_DIFF="$(mktemp)"
-
-          git diff --binary "${BASE_PARENT}...${SOURCE_SHA}" > "${EXPECTED_DIFF}"
-          git diff --binary "${BASE_PARENT}" "${MERGE_SHA}" > "${ACTUAL_DIFF}"
-
-          if ! cmp -s "${EXPECTED_DIFF}" "${ACTUAL_DIFF}"; then
-            die "The merge commit does not match the squash diff of dev onto main."
-          fi
+          # Content gate that tolerates dev advancing during review: the squash
+          # commit on main must capture EXACTLY the current dev tree. We compare
+          # trees, not commit shas, so review fix commits (which rewrite history
+          # and change the head sha) are fine as long as the released content
+          # equals dev. If dev carries extra content the merge does not include,
+          # we refuse to clobber it and ask for a manual reconcile.
+          MERGE_TREE="$(git rev-parse "${MERGE_SHA}^{tree}")"
+          DEV_TREE="$(git rev-parse "origin/dev^{tree}")"
+          [[ "${MERGE_TREE}" == "${DEV_TREE}" ]] || die "origin/dev content differs from the merged release; refusing to overwrite dev. Reconcile dev with main manually."
 
           if [[ "${HAS_RELEASE_MARKER}" == "true" ]]; then
             assert_manifest_matches_tag "${MERGE_SHA}" "${TAG}"
@@ -98,20 +83,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git push origin "${MERGE_SHA}:refs/heads/dev" --force-with-lease="refs/heads/dev:${SOURCE_SHA}"
+          # Fast-forward dev onto the squash commit. Lease on the dev we just
+          # observed so a genuine concurrent push aborts instead of being lost.
+          git push origin "${MERGE_SHA}:refs/heads/dev" --force-with-lease="refs/heads/dev:${DEV_SHA}"
 
           if [[ "${HAS_RELEASE_MARKER}" != "true" ]]; then
-            notice "dev was synchronized to ${MERGE_SHA}; no release marker was present."
+            notice "dev synchronized to ${MERGE_SHA}; no release marker was present."
             exit 0
           fi
 
-          git tag -f "${TAG}" "${MERGE_SHA}"
-          git push origin ":refs/tags/${TAG}"
-          git push origin "refs/tags/${TAG}"
-
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            die "Release ${TAG} already exists after retagging; refusing to overwrite it."
+            die "Release ${TAG} already exists; refusing to overwrite it."
           fi
+
+          # Create the published tag on the squash commit, then publish.
+          git tag -f "${TAG}" "${MERGE_SHA}"
+          git push origin ":refs/tags/${TAG}" || true
+          git push origin "refs/tags/${TAG}"
 
           RELEASE_ARGS=(release create "${TAG}" --target "${MERGE_SHA}" --title "${TAG}" --verify-tag --generate-notes)
           if is_beta_tag "${TAG}"; then

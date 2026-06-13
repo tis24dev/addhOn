@@ -33,9 +33,18 @@ the leading `v`. For example, tag `v1.2.3-beta` writes manifest version
 3. Push the tag.
 4. Let the workflow update `manifest.json` and open the automatic `dev -> main`
    pull request.
-5. Merge that PR with squash only.
-6. The post-merge workflow moves `dev` to the squash commit, recreates the tag
-   on that commit, and publishes the GitHub release.
+5. If review (e.g. CodeRabbit) asks for changes, just push the fix commits to
+   `dev`. The PR updates in place and stays valid: `release-guard` validates the
+   live state of `dev` (the manifest version must still match the release tag),
+   not a frozen commit, so advancing `dev` no longer invalidates the release.
+6. Merge that PR with squash only.
+7. The post-merge workflow moves `dev` to the squash commit, creates the tag
+   on that commit, and publishes the GitHub release. `dev` is synchronized only
+   when its content matches the squash, so post-review fixes never get lost.
+
+The published `vX.Y.Z` tag is created on the final squash commit at merge time;
+during the open PR there is no need to re-tag or re-open the PR after a review
+fix.
 
 ## Bootstrap
 

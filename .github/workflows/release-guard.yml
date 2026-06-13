@@ -50,20 +50,22 @@ jobs:
           [[ "${PR_HEAD_REF}" == "dev" ]] || die "main only accepts release PRs from dev."
           [[ "${PR_HEAD_REPO}" == "${REPOSITORY}" ]] || die "Release PRs must come from the same repository."
 
-          TAG="$(extract_pr_marker release-tag)" || die "Missing release-tag marker in PR body."
-          SOURCE_SHA="$(extract_pr_marker release-source-sha)" || die "Missing release-source-sha marker in PR body."
+          # Maintenance (non-release) PRs dev -> main carry no release marker.
+          # Allow them through: post-merge syncs dev without publishing a release.
+          if ! TAG="$(extract_pr_marker release-tag)"; then
+            notice "No release marker in PR body; treating as a maintenance dev -> main PR."
+            exit 0
+          fi
 
           validate_release_tag "${TAG}"
 
-          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]] || die "Invalid release-source-sha '${SOURCE_SHA}'."
-          [[ "${SOURCE_SHA}" == "${PR_HEAD_SHA}" ]] || die "dev advanced after ${TAG} was created. Close this PR and push a new release tag."
-
-          git fetch --force origin dev main "refs/tags/${TAG}:refs/tags/${TAG}"
-
-          TAG_SHA="$(git rev-list -n 1 "${TAG}")"
+          # Validate against the LIVE state of dev, not a frozen source commit.
+          # This is what lets dev advance during review (e.g. CodeRabbit fix
+          # commits) without invalidating the release PR: the only invariant is
+          # that the manifest version on dev still matches the release tag. The
+          # published tag is (re)created on the squash commit at merge time by
+          # post-merge-release, so we deliberately do NOT fetch/pin it here.
+          git fetch --force origin dev
           DEV_SHA="$(git rev-parse origin/dev)"
 
-          [[ "${TAG_SHA}" == "${SOURCE_SHA}" ]] || die "Tag ${TAG} no longer points to the original release source commit."
-          [[ "${DEV_SHA}" == "${SOURCE_SHA}" ]] || die "origin/dev no longer points to the original release source commit."
-
-          assert_manifest_matches_tag "${SOURCE_SHA}" "${TAG}"
+          assert_manifest_matches_tag "${DEV_SHA}" "${TAG}"
