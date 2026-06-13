@@ -10,12 +10,21 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity
-from .const import APPLIANCE_WASH_GROUP, DOMAIN
+from .const import APPLIANCE_WASH_GROUP, DOMAIN, PROGRAM_PARAM_NAMES
 
 _LOGGER = logging.getLogger(__name__)
 
-PROGRAM_PARAM_NAMES = ("program", "prCode")
+# Comandi "safe" (non avviano un ciclo) da cui leggere/scrivere il programma.
 PROGRAM_SELECT_COMMANDS = ("settings", "setProgram", "setProgramme", "programSettings")
+# Comandi da cui ATTINGERE l'elenco programmi. Includiamo anche startProgram
+# come sorgente di metadati: la selezione è disaccoppiata dall'avvio (vedi
+# async_select_option), quindi leggere le opzioni da startProgram NON fa partire
+# l'elettrodomestico. Senza questo, le lavatrici/asciugatrici che espongono il
+# programma solo via startProgram restavano senza select (entità orfana
+# "unavailable").
+PROGRAM_SOURCE_COMMANDS = PROGRAM_SELECT_COMMANDS + ("startProgram",)
+# Chiave dello store condiviso col button "Avvia programma".
+PENDING_STORE = "pending_programs"
 
 
 async def async_setup_entry(
@@ -60,7 +69,8 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
 
     @classmethod
     def supports_appliance(cls, appliance) -> bool:
-        """Ritorna True solo se esiste un comando programma non-start."""
+        """True se esiste un comando (incluso startProgram) con un parametro
+        programma valorizzato da cui costruire l'elenco delle opzioni."""
         command_info = cls._find_program_command(appliance)
         if command_info is None:
             return False
@@ -72,7 +82,7 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         if appliance is None:
             return None
         commands = appliance.commands if isinstance(appliance.commands, dict) else {}
-        for command_name in PROGRAM_SELECT_COMMANDS:
+        for command_name in PROGRAM_SOURCE_COMMANDS:
             command = commands.get(command_name)
             if command is None:
                 continue
@@ -118,53 +128,42 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        # FIX: controllare esplicitamente is not None invece di usare 'or' che scarta 0
-        code = None
+        # 1) Scelta in attesa di avvio ("imposta e basta"): la mostriamo subito,
+        #    finché l'utente non avvia il ciclo col pulsante "Avvia programma".
+        pending = self._coordinator_store(PENDING_STORE).get(self._appliance_id)
+        if pending is not None:
+            label = self._program_map.get(str(pending))
+            if label is not None:
+                return label
+
+        # 2) Stato reale dal device. Proviamo sia il nome programma sia il codice
+        #    (prCode/program) e usiamo il primo che corrisponde a un'opzione nota.
+        #    FIX: controllare is not None invece di 'or' che scarterebbe lo 0.
         for key in (
+            "programName",
             "settings.program",
             "settings.prCode",
             "startProgram.program",
             "startProgram.prCode",
             "prCode",
+            "program",
         ):
             val = self._get_attr(key)
-            if val is not None:
-                code = val
-                break
-        
-        if code is None:
-            return None
-        return self._program_map.get(str(code))
+            if val is not None and str(val) in self._program_map:
+                return self._program_map[str(val)]
+        return None
 
     async def async_select_option(self, option: str) -> None:
         code = self._program_reverse.get(option)
         if code is None:
             raise HomeAssistantError(f"Select: programma '{option}' non trovato nella mappa")
-        appliance = self._appliance
-        client = self._hon_client
-        if not appliance or not client:
-            raise HomeAssistantError("Select: appliance o client non disponibile")
-        try:
-            def _do():
-                async def _inner():
-                    command_info = self._find_program_command(appliance)
-                    if command_info is None:
-                        commands = appliance.commands if isinstance(appliance.commands, dict) else {}
-                        raise RuntimeError(
-                            "Comando selezione programma sicuro non trovato. "
-                            f"Disponibili: {list(commands.keys())}"
-                        )
-                    command_name, command, param_name = command_info
-                    command.parameters[param_name].value = code
-                    await command.send()
-
-                client.run_command_sync(_inner())
-
-            await self.hass.async_add_executor_job(_do)
-            _LOGGER.info("Select: programma '%s' (code=%s) inviato", option, code)
-            await self._async_request_command_refresh()
-        except Exception as err:
-            _LOGGER.error("Select: errore selezione programma '%s': %s", option, err, exc_info=True)
-            raise HomeAssistantError(
-                f"Select: errore selezione programma '{option}': {err}"
-            ) from err
+        # "Imposta e basta": memorizziamo la scelta SENZA inviare alcun comando.
+        # Selezionare un programma non deve mai far partire l'elettrodomestico;
+        # l'avvio avviene col pulsante "Avvia programma", che legge questo
+        # programma in attesa e lo applica al comando startProgram.
+        self._coordinator_store(PENDING_STORE)[self._appliance_id] = code
+        _LOGGER.info(
+            "Select: programma '%s' (code=%s) impostato; avvialo con 'Avvia programma'",
+            option, code,
+        )
+        self.async_write_ha_state()

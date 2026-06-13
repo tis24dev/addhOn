@@ -20,6 +20,22 @@ async def _async_close_client(client) -> None:
         _LOGGER.warning("Errore chiusura HonClient: %s", err)
 
 
+def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Rimuove dal registry le entità legacy non più fornite dall'integrazione.
+
+    Lo switch "Alimentazione" (unique_id '<id>_power') è stato rimosso nel
+    refactor 2.3/2.4: senza questa pulizia resterebbe nel registry come entità
+    orfana, in stato 'unavailable' con il badge '?' su ogni elettrodomestico.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if (reg_entry.unique_id or "").endswith("_power"):
+            registry.async_remove(reg_entry.entity_id)
+            _LOGGER.info("Rimossa entità legacy 'Alimentazione': %s", reg_entry.entity_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configura l'integrazione Haier hOn partendo da un Config Entry."""
     from .hon_client import HonClient, _requires_reauth
@@ -80,6 +96,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "client": hon_client,
         }
         stored = True
+
+        # Pulizia entità legacy (es. switch "Alimentazione" rimosso): non deve
+        # mai bloccare il setup, quindi assorbiamo eventuali errori del registry.
+        try:
+            _remove_legacy_entities(hass, entry)
+        except Exception as err:
+            _LOGGER.debug("Pulizia entità legacy non riuscita: %s", err)
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except asyncio.CancelledError:

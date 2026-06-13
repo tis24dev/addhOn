@@ -19,6 +19,11 @@ APPLIANCE_WD = "WD"       # Lavasciuga
 # Raggruppa tutti gli elettrodomestici lavatrice/asciugatrice/lavasciuga
 APPLIANCE_WASH_GROUP = (APPLIANCE_WM, APPLIANCE_TD, APPLIANCE_WD)
 
+# Nomi dei parametri che, nei comandi hOn, contengono il codice/nome del
+# programma. Condivisi tra il select (sorgente opzioni + scelta) e il button
+# "Avvia programma" (applica il programma scelto a startProgram).
+PROGRAM_PARAM_NAMES = ("program", "prCode")
+
 # ─── Attributi condizionatore ─────────────────────────────────────────────────
 # Confermati dai diagnostics del device AS35PBPHRA-PRE
 AC_ATTR_MODE         = "settings.machMode"

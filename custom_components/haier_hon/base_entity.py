@@ -33,6 +33,20 @@ class HonBaseEntity(CoordinatorEntity):
     def _appliance(self):
         return self._appliance_data.get("appliance")
 
+    def _coordinator_store(self, name: str) -> dict:
+        """Store volatile condiviso tra le entità, tenuto sul coordinator.
+
+        A differenza di coordinator.data (ricreato a ogni refresh), un attributo
+        sul coordinator sopravvive agli aggiornamenti, così entità diverse dello
+        stesso device possono condividere stato effimero (es. il programma
+        scelto dal select ma non ancora avviato, letto poi dal button "Avvia").
+        """
+        store = getattr(self.coordinator, name, None)
+        if not isinstance(store, dict):
+            store = {}
+            setattr(self.coordinator, name, store)
+        return store
+
     @property
     def device_info(self) -> DeviceInfo:
         data = self._appliance_data

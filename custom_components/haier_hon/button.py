@@ -10,9 +10,13 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity
-from .const import APPLIANCE_WASH_GROUP, DOMAIN
+from .const import APPLIANCE_WASH_GROUP, DOMAIN, PROGRAM_PARAM_NAMES
 
 _LOGGER = logging.getLogger(__name__)
+
+# Deve combaciare con select.PENDING_STORE: programma scelto dal select ma non
+# ancora avviato. Lo applichiamo a startProgram al momento dell'avvio.
+PENDING_STORE = "pending_programs"
 
 
 async def async_setup_entry(
@@ -87,6 +91,15 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
         client = self._hon_client
         if not appliance or not client:
             raise HomeAssistantError("Button: appliance o client non disponibile")
+
+        # Avvio: applichiamo il programma scelto dal select (se presente).
+        # Lo leggiamo qui sull'event loop di HA e lo passiamo dentro _inner.
+        store = self._coordinator_store(PENDING_STORE)
+        pending_program = (
+            store.get(self._appliance_id)
+            if self._command_name == "startProgram"
+            else None
+        )
         try:
             def _do():
                 async def _inner():
@@ -98,6 +111,11 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                             f"Disponibili: {list(commands.keys())}"
                         )
                     params = getattr(command, "parameters", {})
+                    if pending_program is not None and isinstance(params, dict):
+                        for pname in PROGRAM_PARAM_NAMES:
+                            if pname in params:
+                                params[pname].value = pending_program
+                                break
                     for name, value in self._command_parameters.items():
                         if name in params:
                             params[name].value = value
@@ -106,6 +124,10 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                 client.run_command_sync(_inner())
 
             await self.hass.async_add_executor_job(_do)
+            # Avvio riuscito: il programma è ora "reale", svuotiamo la scelta in
+            # attesa così il select torna a riflettere lo stato del device.
+            if pending_program is not None:
+                store.pop(self._appliance_id, None)
             _LOGGER.info("Button: comando '%s' inviato", self._command_name)
             await self._async_request_command_refresh()
         except Exception as err:
