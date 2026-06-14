@@ -1,5 +1,8 @@
 {
   "name": "Haier hOn (Extended)",
   "homeassistant": "2024.11.0",
+  "zip_release": true,
+  "filename": "haier_hon.zip",
+  "hide_default_branch": true,
   "render_readme": true
 }
