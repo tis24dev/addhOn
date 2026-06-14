@@ -233,6 +233,28 @@ class SensorBuildTest(unittest.IsolatedAsyncioTestCase):
         state = next(e for e in added if e._attr_unique_id == "td-1_state")
         self.assertEqual(state.native_value, "In esecuzione")  # WM_STATE_MAP["1"]
 
+    async def test_td_cycles_can_read_programscounter_from_statistics(self) -> None:
+        from custom_components.haier_hon import sensor
+        from custom_components.haier_hon.const import DOMAIN
+
+        data = {
+            "td-1": {
+                "type": "TD",
+                "name": "Dryer",
+                "attributes": {"machMode": "1", "remainingTimeMM": 220},
+                "statistics": {"programsCounter": 27},
+                "settings": {},
+            }
+        }
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
+        added: list = []
+
+        await sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+
+        cycles = next(e for e in added if e._attr_unique_id == "td-1_total_washes")
+        self.assertEqual(cycles.native_value, 27.0)
+
     async def test_wm_keeps_water_and_energy(self) -> None:
         from custom_components.haier_hon import sensor
         from custom_components.haier_hon.const import DOMAIN

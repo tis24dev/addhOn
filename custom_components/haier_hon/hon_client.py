@@ -23,6 +23,7 @@ _CONSUMPTION_ATTRS = (
     "totalWaterUsed",
     "currentWaterUsed",
     "totalWashCycle",
+    "programsCounter",
 )
 
 
@@ -521,10 +522,30 @@ class HonClient:
                     attrs_after_update = _get_attributes(appliance)
                     _debug_appliance_consumption("dopo update()", appliance, attrs_after_update)
                     if attrs_after_update:
+                        stats_method = getattr(appliance, "load_statistics", None)
+                        if callable(stats_method):
+                            try:
+                                await stats_method()
+                                attrs_after_update = _get_attributes(appliance)
+                                _debug_appliance_consumption(
+                                    "dopo load_statistics post-update",
+                                    appliance,
+                                    attrs_after_update,
+                                )
+                            except Exception as err:
+                                if _requires_reauth(err) or _is_retryable_server_error(err):
+                                    raise
+                                _LOGGER.debug(
+                                    "load_statistics dopo update() fallito per '%s' "
+                                    "(type=%s): %s",
+                                    _get_name(appliance),
+                                    _get_type(appliance),
+                                    err,
+                                )
                         _LOGGER.debug(
                             "Consumi debug: update() ha prodotto %d attributi per '%s' "
-                            "(type=%s); fallback load_attributes/load_commands/"
-                            "load_statistics non eseguito in questo ciclo.",
+                            "(type=%s); statistics ricaricate se disponibili; fallback "
+                            "load_attributes/load_commands non eseguito in questo ciclo.",
                             len(attrs_after_update),
                             _get_name(appliance),
                             _get_type(appliance),
@@ -643,6 +664,9 @@ class HonClient:
                         "model": _get_model(appliance),
                         "serial": _get_serial(appliance),
                         "attributes": attributes,
+                        "statistics": _debug_container_to_dict(
+                            getattr(appliance, "statistics", None), "statistics"
+                        ),
                         "settings": dict(appliance.settings) if hasattr(appliance, "settings") else {},
                     }
                     _debug_appliance_consumption("snapshot coordinator", appliance, attributes)

@@ -505,6 +505,40 @@ class GetAttributesStatisticsTest(unittest.TestCase):
 
         self.assertEqual("2", attrs["machMode"])
 
+    def test_update_refreshes_statistics_even_when_attributes_exist(self) -> None:
+        from custom_components.haier_hon.hon_client import HonClient, _get_attributes
+
+        class Appliance:
+            nick_name = "Dryer"
+            appliance_type = "TD"
+            unique_id = "td-1"
+            commands = {}
+            settings = {}
+            statistics = {}
+            attributes = {}
+
+            def __init__(self) -> None:
+                self.update_calls = 0
+                self.statistics_calls = 0
+
+            async def update(self) -> None:
+                self.update_calls += 1
+                self.attributes = {"parameters": {"machMode": "1"}}
+
+            async def load_statistics(self) -> None:
+                self.statistics_calls += 1
+                self.statistics = {"programsCounter": "27"}
+
+        appliance = Appliance()
+        client = HonClient(email="user@example.com", password="secret")
+        client._run_on_hon_loop = lambda coro: asyncio.run(coro)
+
+        client._update_appliance_sync(appliance)
+
+        self.assertEqual(1, appliance.update_calls)
+        self.assertEqual(1, appliance.statistics_calls)
+        self.assertEqual("27", _get_attributes(appliance)["programsCounter"])
+
 
 class DebugUtilsTest(unittest.TestCase):
     def test_debug_utils_exports_key_sample_and_rich_param_snapshot(self) -> None:

@@ -35,6 +35,10 @@ class HonBaseEntity(CoordinatorEntity):
         return self._appliance_data.get("attributes", {})
 
     @property
+    def _statistics(self) -> dict:
+        return self._appliance_data.get("statistics", {})
+
+    @property
     def _appliance(self):
         return self._appliance_data.get("appliance")
 
@@ -145,6 +149,23 @@ class HonBaseEntity(CoordinatorEntity):
             extracted = _extract_value(val)
             _debug_lookup("attributes diretto", val, extracted)
             return extracted
+
+        # 1b) lookup nel container statistics separato (es. TD programsCounter).
+        # Normalmente hon_client lo fonde gia' in attributes, ma questo fallback
+        # evita che un payload separato nel coordinator renda il sensore vuoto.
+        statistics = self._statistics
+        if isinstance(statistics, dict):
+            val = statistics.get(key)
+            if val is not None:
+                extracted = _extract_value(val)
+                _debug_lookup("statistics diretto", val, extracted)
+                return extracted
+
+            val = _deep_get(statistics, key)
+            if val is not None:
+                extracted = _extract_value(val)
+                _debug_lookup("statistics dotted path", val, extracted)
+                return extracted
 
         # 2) supporto prefisso "settings." (alcuni modelli/vecchie versioni lo usano)
         if key.startswith("settings."):

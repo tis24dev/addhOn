@@ -3,3 +3,4 @@
 BUG_FINDINGS.md
 __pycache__/
 *.py[cod]
+/diagnostics/
