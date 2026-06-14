@@ -1,4 +1,5 @@
 .codex-worklog.md
 .codex-worklog-*.md
+BUG_FINDINGS.md
 __pycache__/
 *.py[cod]
