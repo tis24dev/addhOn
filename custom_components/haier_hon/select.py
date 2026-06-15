@@ -240,14 +240,20 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         # 2) Stato reale dal device. Proviamo sia il nome programma sia il codice
         #    (prCode/program) e usiamo il primo che corrisponde a un'opzione nota.
         #    FIX: controllare is not None invece di 'or' che scarterebbe lo 0.
+        #    Ordine: prima le chiavi che espongono il NOME del programma (mappabile
+        #    quando l'elenco opzioni è costruito da una lista di nomi, come sui
+        #    modelli reali), poi i codici numerici prCode. Così, quando il device
+        #    pubblica un prCode numerico non presente nella mappa per-nome, la
+        #    risoluzione avviene direttamente sul nome senza generare rumore DEBUG
+        #    "non mappato" per un codice che non sarebbe comunque mappabile.
         for key in (
             "programName",
             "settings.program",
-            "settings.prCode",
             "startProgram.program",
+            "program",
+            "settings.prCode",
             "startProgram.prCode",
             "prCode",
-            "program",
         ):
             val = self._get_attr(key)
             if val is None:

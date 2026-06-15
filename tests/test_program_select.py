@@ -377,6 +377,45 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("Sintetici", entity.current_option)
 
+    async def test_current_option_resolves_name_without_unmappable_prcode_noise(self) -> None:
+        """Caso reale (lavatrice/asciugatrice di produzione): l'elenco opzioni è
+        costruito da una LISTA di nomi (mappa name->name), il device pubblica un
+        settings.prCode NUMERICO non mappabile mentre il nome corretto è
+        disponibile via startProgram.program. current_option deve risolvere il
+        nome SENZA fermarsi né loggare 'non mappato' sul codice numerico.
+
+        Regressione: in precedenza le chiavi prCode venivano provate prima di
+        startProgram.program, generando centinaia di righe DEBUG fuorvianti.
+        """
+        from custom_components.haier_hon import select
+        from custom_components.haier_hon.select import HonProgramSelect
+
+        start = RecordingCommand({"program": Param(values=["hqd_smart", "hqd_eco"])})
+        # Il nome programma è raggiungibile SOLO via startProgram (non come
+        # attributo 'program' diretto, né via settings.program); prCode è numerico.
+        data = {
+            "washer-1": {
+                "type": "WM",
+                "name": "Washer",
+                "appliance": types.SimpleNamespace(commands={"startProgram": start}),
+                "attributes": {"prCode": "124"},
+                "settings": {},
+                "startProgram": {"program": "hqd_smart"},
+            }
+        }
+        coordinator = FakeCoordinator(data)
+        entity = HonProgramSelect(coordinator, "washer-1", FakeClient())
+        self._attach(entity)
+
+        with self.assertLogs(select._LOGGER.name, level="DEBUG") as logs:
+            result = entity.current_option
+
+        self.assertEqual("hqd_smart", result)
+        self.assertFalse(
+            any("non mappato" in line for line in logs.output),
+            msg=f"current_option non deve raggiungere il prCode numerico: {logs.output}",
+        )
+
     async def test_start_button_keeps_pending_when_program_not_applicable(self) -> None:
         from homeassistant.exceptions import HomeAssistantError
         from custom_components.haier_hon.button import HonProgramCommandButton
