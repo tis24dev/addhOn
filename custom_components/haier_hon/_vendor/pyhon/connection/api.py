@@ -89,6 +89,18 @@ class HonAPI:
             appliances: List[Dict[str, Any]] = result.get("payload", {}).get(
                 "appliances", {}
             )
+            if not appliances:
+                # Request/auth succeeded but the hOn cloud returned no appliances
+                # for this account. This is almost always an account-side state
+                # (devices not owned by / no longer shared with this login, or
+                # moved in the hOn app), not a client bug. Log it explicitly so it
+                # is diagnosable straight from the log instead of looking like a
+                # silent empty result.
+                _LOGGER.warning(
+                    "hOn API returned 0 appliances for this account (request OK). "
+                    "Check that the appliances are owned by or shared with this "
+                    "login in the hOn app."
+                )
             return appliances
         return []
 
