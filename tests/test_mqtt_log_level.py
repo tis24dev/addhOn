@@ -52,7 +52,12 @@ class ApplyLevelTest(unittest.TestCase):
             logging.getLogger(name).setLevel(level)
 
     def test_noise_loggers_include_pyhon_mqtt(self) -> None:
-        self.assertIn("pyhon.connection.mqtt", lu.MQTT_NOISE_LOGGERS)
+        # pyhon è vendorizzato, quindi i suoi logger (che usano __name__) sono
+        # sotto il package namespacizzato.
+        self.assertIn(
+            "custom_components.haier_hon._vendor.pyhon.connection.mqtt",
+            lu.MQTT_NOISE_LOGGERS,
+        )
 
     def test_levels_map_to_logging_constants(self) -> None:
         self.assertEqual(lu.MQTT_LOG_LEVELS["debug"], logging.DEBUG)
