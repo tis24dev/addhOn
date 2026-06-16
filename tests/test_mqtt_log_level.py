@@ -88,10 +88,10 @@ class ApplyMqttLevelTest(unittest.TestCase):
 
 class ApplyIntegrationLevelTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._saved = {
-            name: logging.getLogger(name).level
-            for name in lu.INTEGRATION_DEBUG_LOGGERS
-        }
+        # Salva i livelli di ENTRAMBI i set: il test silence_mqtt muta anche i
+        # logger MQTT, che vanno ripristinati per non sporcare gli altri test.
+        names = set(lu.INTEGRATION_DEBUG_LOGGERS) | set(lu.MQTT_NOISE_LOGGERS)
+        self._saved = {name: logging.getLogger(name).level for name in names}
 
     def tearDown(self) -> None:
         for name, level in self._saved.items():

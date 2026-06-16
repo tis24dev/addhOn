@@ -83,11 +83,10 @@ class HonAPI:
         return self
 
     async def load_appliances(self) -> List[Dict[str, Any]]:
-        # The hOn app fetches the FULL registered appliance list (including
-        # OFFLINE appliances) from the unified-api "view" aggregator via POST.
-        # The legacy GET commands/v1/appliance only returns appliances that are
-        # currently connected to the cloud, so it comes back empty when every
-        # appliance happens to be offline. Use the same source the app uses.
+        # The hOn app fetches the appliance list from the unified-api "view"
+        # aggregator via POST. The legacy GET commands/v1/appliance endpoint is
+        # deprecated and now returns an empty list for every account, regardless
+        # of whether the appliances are online or offline. Use the app's source.
         device_id = self._hon.device.mobile_id or const.MOBILE_ID
         async with self._hon.post(
             f"{const.API_URL}/unified-api/v1/view/appliance-list",
@@ -96,12 +95,21 @@ class HonAPI:
             result = await resp.json()
         appliances: List[Dict[str, Any]] = []
         if isinstance(result, dict):
-            appliances = (
+            raw = (
                 result.get("modules", {})
                 .get("applianceList", {})
                 .get("payload", {})
                 .get("appliances", [])
             )
+            if isinstance(raw, list):
+                appliances = raw
+            elif raw:
+                # Schema drift: a truthy non-list would make downstream setup
+                # iterate malformed entries, so treat it as no appliances.
+                _LOGGER.warning(
+                    "hOn appliance payload has unexpected type: %s",
+                    type(raw).__name__,
+                )
         if not appliances:
             # Request/auth succeeded but no appliances came back. Log the response
             # structure so a genuinely empty account can be told apart from an API
