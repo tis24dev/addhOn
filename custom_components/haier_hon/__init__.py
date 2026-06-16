@@ -5,11 +5,70 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+
+try:
+    # In Home Assistant reale questi simboli esistono sempre. L'import è
+    # tollerante solo per l'harness di test, che stubba homeassistant.core con
+    # il minimo indispensabile (sys.modules condiviso: il primo stub vince,
+    # quindi è più robusto degradare qui che estendere ogni stub).
+    from homeassistant.core import ServiceCall, callback
+except ImportError:  # pragma: no cover - solo sotto stub di test
+    ServiceCall = object  # type: ignore[assignment,misc]
+
+    def callback(func):  # type: ignore[no-redef]
+        return func
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import APPLIANCE_TD, DOMAIN, PLATFORMS, SCAN_INTERVAL
+from .const import (
+    APPLIANCE_TD,
+    ATTR_LEVEL,
+    DOMAIN,
+    PLATFORMS,
+    SCAN_INTERVAL,
+    SERVICE_SET_MQTT_LOG_LEVEL,
+)
+from .logging_utils import MQTT_LOG_LEVELS, apply_mqtt_log_level, silence_mqtt_noise
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@callback
+def _async_register_services(hass: HomeAssistant) -> None:
+    """Registra (una sola volta) il service per il livello di log MQTT.
+
+    Alla prima registrazione applica anche il silenziamento di default del
+    rumore MQTT realtime di pyhOn. Il service è globale al dominio, non
+    per-entry, quindi è idempotente: se già presente non fa nulla.
+
+    voluptuous è importato qui (non a livello di modulo) così l'import di
+    __init__ non dipende da voluptuous: l'harness di test importa il package
+    senza fornirne sempre lo stub, mentre questa funzione gira solo in HA reale.
+    """
+    if hass.services.has_service(DOMAIN, SERVICE_SET_MQTT_LOG_LEVEL):
+        return
+
+    import voluptuous as vol
+
+    # Prima registrazione (avvio/riavvio HA): silenzia il rumore di default.
+    # Su un reload di una singola entry il service resta registrato, quindi un
+    # eventuale livello di debug impostato a runtime non viene risilenziato.
+    silence_mqtt_noise()
+
+    async def _handle_set_mqtt_log_level(call: ServiceCall) -> None:
+        level_name = call.data[ATTR_LEVEL]
+        apply_mqtt_log_level(MQTT_LOG_LEVELS[level_name])
+        _LOGGER.info(
+            "Livello log MQTT realtime pyhOn impostato a %s", level_name.upper()
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_MQTT_LOG_LEVEL,
+        _handle_set_mqtt_log_level,
+        schema=vol.Schema(
+            {vol.Required(ATTR_LEVEL, default="debug"): vol.In(tuple(MQTT_LOG_LEVELS))}
+        ),
+    )
 
 
 def _redact_email(email: str | None) -> str | None:
@@ -98,6 +157,11 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configura l'integrazione Haier hOn partendo da un Config Entry."""
     from .hon_client import HonClient, _requires_reauth
+
+    # Silenzia di default il rumore dei tentativi MQTT realtime di pyhOn e
+    # registra il service di debug. Fatto PRIMA del setup di pyhOn così il
+    # logger è già a WARNING quando il client MQTT inizia a (ri)connettersi.
+    _async_register_services(hass)
 
     # FIX: la chiave salvata dal config_flow è "email", non "username"
     email = entry.data.get("email")
@@ -245,4 +309,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await _async_close_client(client)
         else:
             _LOGGER.debug("Unload debug: nessun HonClient da chiudere per entry=%s", entry.entry_id)
+        # Tolta l'ultima entry: rimuovi il service di debug MQTT (globale).
+        if not hass.data.get(DOMAIN) and hass.services.has_service(
+            DOMAIN, SERVICE_SET_MQTT_LOG_LEVEL
+        ):
+            hass.services.async_remove(DOMAIN, SERVICE_SET_MQTT_LOG_LEVEL)
+            _LOGGER.debug("Unload debug: rimosso service %s", SERVICE_SET_MQTT_LOG_LEVEL)
     return unload_ok

@@ -29,6 +29,13 @@ PROGRAM_PARAM_NAMES = ("program", "prCode")
 # a startProgram. Unica fonte di verità condivisa tra select.py e button.py.
 PROGRAM_PENDING_STORE = "pending_programs"
 
+# Service per cambiare a runtime il livello di log del canale MQTT realtime di
+# pyhOn. Di default il rumore dei tentativi di riconnessione è silenziato (vedi
+# logging_utils); questo service lo riattiva on-demand per il debug. Il nome dei
+# logger e la mappa dei livelli vivono in logging_utils.py (testabile in isolamento).
+SERVICE_SET_MQTT_LOG_LEVEL = "set_mqtt_log_level"
+ATTR_LEVEL = "level"
+
 # ─── Attributi condizionatore ─────────────────────────────────────────────────
 # Confermati dai diagnostics del device AS35PBPHRA-PRE
 AC_ATTR_MODE         = "settings.machMode"
