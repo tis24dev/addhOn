@@ -200,7 +200,7 @@ MIT License — see LICENSE file for details.
 Issues and pull requests are welcome! Please include:
 - Home Assistant version
 - Device model number
-- Debug logs (set `logger.haier_hon: debug`)
+- Debug logs (see [`docs/discovery-debugging.md`](docs/discovery-debugging.md))
 - Steps to reproduce
 
 ## Support

@@ -21,6 +21,10 @@ come through. Nothing else changes; polling is unaffected.
 
 ## Enable debug logging (on demand)
 
+For missing devices or discovery issues, start with
+[Discovery debugging](discovery-debugging.md). MQTT is optional and does not
+control device enumeration.
+
 When you need to inspect the realtime channel, raise the level with the
 dedicated service:
 

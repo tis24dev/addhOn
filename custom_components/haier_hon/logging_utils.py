@@ -1,4 +1,4 @@
-"""Controllo del livello di log del canale MQTT realtime di pyhOn.
+"""Controllo dei livelli di log diagnostici per l'integrazione.
 
 Il client MQTT di pyhOn (logger ``pyhon.connection.mqtt``) emette a livello INFO
 un messaggio per ogni tentativo di (ri)connessione realtime ("Lifecycle
@@ -20,13 +20,23 @@ from __future__ import annotations
 
 import logging
 
+# Logger da alzare/abbassare quando serve diagnosticare discovery, setup,
+# reauth e polling. Il logger MQTT resta controllato separatamente sotto
+# MQTT_NOISE_LOGGERS, così il debug discovery non riaccende il rumore realtime.
+INTEGRATION_DEBUG_LOGGERS: tuple[str, ...] = (
+    "custom_components.haier_hon",
+    "custom_components.haier_hon._vendor.pyhon",
+    "pyhon",
+)
+
 # Logger di pyhOn responsabili del rumore MQTT realtime. Tenuto come tupla così
 # è banale aggiungerne altri se in futuro pyhOn ne introduce di altrettanto
 # verbosi sullo stesso percorso. NB: pyhОn è vendorizzato sotto
-# custom_components.haier_hon._vendor.pyhon, e i suoi logger usano __name__,
-# quindi il nome completo include il prefisso del package vendorizzato.
+# custom_components.haier_hon._vendor.pyhon, ma nei log HA reali alcune righe
+# possono ancora arrivare come pyhon.connection.mqtt; copriamo entrambi.
 MQTT_NOISE_LOGGERS: tuple[str, ...] = (
     "custom_components.haier_hon._vendor.pyhon.connection.mqtt",
+    "pyhon.connection.mqtt",
 )
 
 # Livello applicato di default: nasconde i tentativi INFO/DEBUG, lascia passare
@@ -45,6 +55,12 @@ MQTT_LOG_LEVELS: dict[str, int] = {
 def apply_mqtt_log_level(level: int) -> None:
     """Imposta ``level`` su tutti i logger MQTT rumorosi di pyhOn."""
     for name in MQTT_NOISE_LOGGERS:
+        logging.getLogger(name).setLevel(level)
+
+
+def apply_integration_log_level(level: int) -> None:
+    """Imposta ``level`` sui logger utili a debug setup/discovery/polling."""
+    for name in INTEGRATION_DEBUG_LOGGERS:
         logging.getLogger(name).setLevel(level)
 
 

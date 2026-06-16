@@ -1,3 +1,26 @@
+set_log_level:
+  name: Imposta livello log diagnostico
+  description: >-
+    Cambia il livello di log dell'integrazione Haier hOn e dei logger pyhOn
+    utili a diagnosticare login, discovery dispositivi, reauth e polling. Usa
+    "debug" quando i dispositivi non appaiono, poi torna a "warning" per
+    ridurre il rumore. Non abilita il rumore MQTT realtime: per quello usa il
+    service dedicato set_mqtt_log_level.
+  fields:
+    level:
+      name: Livello
+      description: Livello di log diagnostico da applicare.
+      required: true
+      default: debug
+      example: debug
+      selector:
+        select:
+          options:
+            - "debug"
+            - "info"
+            - "warning"
+            - "error"
+
 set_mqtt_log_level:
   name: Imposta livello log MQTT
   description: >-

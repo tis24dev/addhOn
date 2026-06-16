@@ -25,9 +25,15 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SCAN_INTERVAL,
+    SERVICE_SET_LOG_LEVEL,
     SERVICE_SET_MQTT_LOG_LEVEL,
 )
-from .logging_utils import MQTT_LOG_LEVELS, apply_mqtt_log_level, silence_mqtt_noise
+from .logging_utils import (
+    MQTT_LOG_LEVELS,
+    apply_integration_log_level,
+    apply_mqtt_log_level,
+    silence_mqtt_noise,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,7 +50,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
     __init__ non dipende da voluptuous: l'harness di test importa il package
     senza fornirne sempre lo stub, mentre questa funzione gira solo in HA reale.
     """
-    if hass.services.has_service(DOMAIN, SERVICE_SET_MQTT_LOG_LEVEL):
+    mqtt_service_exists = hass.services.has_service(DOMAIN, SERVICE_SET_MQTT_LOG_LEVEL)
+    log_service_exists = hass.services.has_service(DOMAIN, SERVICE_SET_LOG_LEVEL)
+    if mqtt_service_exists and log_service_exists:
         return
 
     import voluptuous as vol
@@ -52,7 +60,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
     # Prima registrazione (avvio/riavvio HA): silenzia il rumore di default.
     # Su un reload di una singola entry il service resta registrato, quindi un
     # eventuale livello di debug impostato a runtime non viene risilenziato.
-    silence_mqtt_noise()
+    if not mqtt_service_exists:
+        silence_mqtt_noise()
 
     async def _handle_set_mqtt_log_level(call: ServiceCall) -> None:
         level_name = call.data[ATTR_LEVEL]
@@ -61,14 +70,32 @@ def _async_register_services(hass: HomeAssistant) -> None:
             "Livello log MQTT realtime pyhOn impostato a %s", level_name.upper()
         )
 
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_MQTT_LOG_LEVEL,
-        _handle_set_mqtt_log_level,
-        schema=vol.Schema(
-            {vol.Required(ATTR_LEVEL, default="debug"): vol.In(tuple(MQTT_LOG_LEVELS))}
-        ),
+    async def _handle_set_log_level(call: ServiceCall) -> None:
+        level_name = call.data[ATTR_LEVEL]
+        apply_integration_log_level(MQTT_LOG_LEVELS[level_name])
+        _LOGGER.info(
+            "Livello log diagnostico Haier hOn impostato a %s", level_name.upper()
+        )
+
+    level_schema = vol.Schema(
+        {vol.Required(ATTR_LEVEL, default="debug"): vol.In(tuple(MQTT_LOG_LEVELS))}
     )
+
+    if not mqtt_service_exists:
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_MQTT_LOG_LEVEL,
+            _handle_set_mqtt_log_level,
+            schema=level_schema,
+        )
+
+    if not log_service_exists:
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_LOG_LEVEL,
+            _handle_set_log_level,
+            schema=level_schema,
+        )
 
 
 def _redact_email(email: str | None) -> str | None:
@@ -309,10 +336,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await _async_close_client(client)
         else:
             _LOGGER.debug("Unload debug: nessun HonClient da chiudere per entry=%s", entry.entry_id)
-        # Tolta l'ultima entry: rimuovi il service di debug MQTT (globale).
-        if not hass.data.get(DOMAIN) and hass.services.has_service(
-            DOMAIN, SERVICE_SET_MQTT_LOG_LEVEL
-        ):
-            hass.services.async_remove(DOMAIN, SERVICE_SET_MQTT_LOG_LEVEL)
-            _LOGGER.debug("Unload debug: rimosso service %s", SERVICE_SET_MQTT_LOG_LEVEL)
+        # Tolta l'ultima entry: rimuovi i service di debug globali.
+        if not hass.data.get(DOMAIN):
+            for service in (SERVICE_SET_MQTT_LOG_LEVEL, SERVICE_SET_LOG_LEVEL):
+                if hass.services.has_service(DOMAIN, service):
+                    hass.services.async_remove(DOMAIN, service)
+                    _LOGGER.debug("Unload debug: rimosso service %s", service)
     return unload_ok

@@ -1,4 +1,4 @@
-"""Tests for silencing the pyhOn MQTT realtime log noise + the debug service.
+"""Tests for silencing pyhOn MQTT noise and enabling integration debug logs.
 
 pyhOn's MQTT client (logger 'pyhon.connection.mqtt') logs one INFO line per
 reconnect attempt. When the realtime push slot is contended (shared appliance,
@@ -39,7 +39,7 @@ def _load_logging_utils():
 lu = _load_logging_utils()
 
 
-class ApplyLevelTest(unittest.TestCase):
+class ApplyMqttLevelTest(unittest.TestCase):
     def setUp(self) -> None:
         # Salva i livelli correnti e li ripristina, così questi test non
         # inquinano il livello globale dei logger per gli altri test.
@@ -58,6 +58,9 @@ class ApplyLevelTest(unittest.TestCase):
             "custom_components.haier_hon._vendor.pyhon.connection.mqtt",
             lu.MQTT_NOISE_LOGGERS,
         )
+        # In Home Assistant reale alcune righe arrivano ancora col nome logger
+        # top-level pyhon.connection.mqtt; va silenziato insieme al vendorizzato.
+        self.assertIn("pyhon.connection.mqtt", lu.MQTT_NOISE_LOGGERS)
 
     def test_levels_map_to_logging_constants(self) -> None:
         self.assertEqual(lu.MQTT_LOG_LEVELS["debug"], logging.DEBUG)
@@ -83,6 +86,34 @@ class ApplyLevelTest(unittest.TestCase):
             self.assertEqual(logging.getLogger(name).level, logging.DEBUG)
 
 
+class ApplyIntegrationLevelTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._saved = {
+            name: logging.getLogger(name).level
+            for name in lu.INTEGRATION_DEBUG_LOGGERS
+        }
+
+    def tearDown(self) -> None:
+        for name, level in self._saved.items():
+            logging.getLogger(name).setLevel(level)
+
+    def test_integration_debug_loggers_cover_integration_and_pyhon(self) -> None:
+        self.assertIn("custom_components.haier_hon", lu.INTEGRATION_DEBUG_LOGGERS)
+        self.assertIn("custom_components.haier_hon._vendor.pyhon", lu.INTEGRATION_DEBUG_LOGGERS)
+        self.assertIn("pyhon", lu.INTEGRATION_DEBUG_LOGGERS)
+
+    def test_apply_integration_log_level_sets_all_debug_loggers(self) -> None:
+        lu.apply_integration_log_level(logging.DEBUG)
+        for name in lu.INTEGRATION_DEBUG_LOGGERS:
+            self.assertEqual(logging.getLogger(name).level, logging.DEBUG)
+
+    def test_apply_integration_log_level_does_not_override_mqtt_noise_level(self) -> None:
+        lu.silence_mqtt_noise()
+        lu.apply_integration_log_level(logging.DEBUG)
+        for name in lu.MQTT_NOISE_LOGGERS:
+            self.assertEqual(logging.getLogger(name).level, logging.WARNING)
+
+
 class WiringTest(unittest.TestCase):
     """Source-level guards: il service e il silenziamento devono restare cablati."""
 
@@ -91,17 +122,24 @@ class WiringTest(unittest.TestCase):
             'SERVICE_SET_MQTT_LOG_LEVEL = "set_mqtt_log_level"',
             CONST.read_text(encoding="utf-8"),
         )
+        self.assertIn(
+            'SERVICE_SET_LOG_LEVEL = "set_log_level"',
+            CONST.read_text(encoding="utf-8"),
+        )
 
     def test_services_yaml_defines_service_and_level_field(self) -> None:
         text = SERVICES.read_text(encoding="utf-8")
         self.assertIn("set_mqtt_log_level:", text)
+        self.assertIn("set_log_level:", text)
         self.assertIn("level:", text)
 
     def test_init_silences_by_default_and_registers_service(self) -> None:
         src = INIT.read_text(encoding="utf-8")
         self.assertIn("silence_mqtt_noise", src)
+        self.assertIn("apply_integration_log_level", src)
         self.assertIn("_async_register_services", src)
         self.assertIn("SERVICE_SET_MQTT_LOG_LEVEL", src)
+        self.assertIn("SERVICE_SET_LOG_LEVEL", src)
         self.assertIn("async_register", src)
 
 

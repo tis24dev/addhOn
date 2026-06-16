@@ -34,6 +34,12 @@ PROGRAM_PENDING_STORE = "pending_programs"
 # logging_utils); questo service lo riattiva on-demand per il debug. Il nome dei
 # logger e la mappa dei livelli vivono in logging_utils.py (testabile in isolamento).
 SERVICE_SET_MQTT_LOG_LEVEL = "set_mqtt_log_level"
+
+# Service per alzare/abbassare a runtime il debug dell'integrazione e dei logger
+# pyhOn utili alla discovery/polling. MQTT resta gestito dal service dedicato
+# sopra per non riaccendere il rumore realtime quando si indaga una lista device
+# vuota.
+SERVICE_SET_LOG_LEVEL = "set_log_level"
 ATTR_LEVEL = "level"
 
 # ─── Attributi condizionatore ─────────────────────────────────────────────────
