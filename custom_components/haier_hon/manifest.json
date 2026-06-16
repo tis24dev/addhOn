@@ -9,7 +9,9 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/telard-pixel/haier_hon/issues",
   "requirements": [
-    "pyhon==0.17.5"
+    "awsiotsdk>=1.21.0",
+    "yarl>=1.8",
+    "typing-extensions>=4.8"
   ],
-  "version": "2.6.2"
+  "version": "2.7.0"
 }

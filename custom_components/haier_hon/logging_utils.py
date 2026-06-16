@@ -22,8 +22,12 @@ import logging
 
 # Logger di pyhOn responsabili del rumore MQTT realtime. Tenuto come tupla così
 # è banale aggiungerne altri se in futuro pyhOn ne introduce di altrettanto
-# verbosi sullo stesso percorso.
-MQTT_NOISE_LOGGERS: tuple[str, ...] = ("pyhon.connection.mqtt",)
+# verbosi sullo stesso percorso. NB: pyhОn è vendorizzato sotto
+# custom_components.haier_hon._vendor.pyhon, e i suoi logger usano __name__,
+# quindi il nome completo include il prefisso del package vendorizzato.
+MQTT_NOISE_LOGGERS: tuple[str, ...] = (
+    "custom_components.haier_hon._vendor.pyhon.connection.mqtt",
+)
 
 # Livello applicato di default: nasconde i tentativi INFO/DEBUG, lascia passare
 # warning ed errori reali.

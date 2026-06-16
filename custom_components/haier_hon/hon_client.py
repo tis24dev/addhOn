@@ -243,7 +243,7 @@ def _ensure_enum_patch() -> None:
         if _ENUM_PATCH_APPLIED:
             return
         try:
-            from pyhon.parameter.enum import HonParameterEnum as _HonEnum
+            from ._vendor.pyhon.parameter.enum import HonParameterEnum as _HonEnum
 
             _orig_setter = _HonEnum.value.fset
 
@@ -462,7 +462,7 @@ class HonClient:
         legata per tutta la durata del client.
         """
         try:
-            from pyhon import Hon
+            from ._vendor.pyhon import Hon
         except ImportError as err:
             raise ImportError("La libreria pyhOn non è installata.") from err
 

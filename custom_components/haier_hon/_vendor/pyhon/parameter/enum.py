@@ -1,0 +1,51 @@
+from typing import Dict, Any, List
+
+from custom_components.haier_hon._vendor.pyhon.parameter.base import HonParameter
+
+
+def clean_value(value: str | float) -> str:
+    return str(value).strip("[]").replace("|", "_").lower()
+
+
+class HonParameterEnum(HonParameter):
+    def __init__(self, key: str, attributes: Dict[str, Any], group: str) -> None:
+        super().__init__(key, attributes, group)
+        self._default: str | float = ""
+        self._value: str | float = ""
+        self._values: List[str] = []
+        self._set_attributes()
+        if self._default and clean_value(self._default) not in self.values:
+            self._values.append(str(self._default))
+
+    def _set_attributes(self) -> None:
+        super()._set_attributes()
+        self._default = self._attributes.get("defaultValue", "")
+        self._value = self._default or "0"
+        self._values = self._attributes.get("enumValues", [])
+
+    def __repr__(self) -> str:
+        return f"{self.__class__} (<{self.key}> {self.values})"
+
+    @property
+    def values(self) -> List[str]:
+        return [clean_value(value) for value in self._values]
+
+    @values.setter
+    def values(self, values: List[str]) -> None:
+        self._values = values
+
+    @property
+    def intern_value(self) -> str:
+        return str(self._value) if self._value is not None else str(self.values[0])
+
+    @property
+    def value(self) -> str | float:
+        return clean_value(self._value) if self._value is not None else self.values[0]
+
+    @value.setter
+    def value(self, value: str | float) -> None:
+        if value in self.values:
+            self._value = value
+            self.check_trigger(value)
+        else:
+            raise ValueError(f"Allowed values: {self._values} But was: {value}")

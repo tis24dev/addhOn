@@ -64,6 +64,17 @@ def _install_min_ha_stubs() -> None:
 
 _install_min_ha_stubs()
 
+# pyhon è vendorizzato sotto questo namespace e _ensure_enum_patch importa da lì.
+# Stubbiamo l'intera catena in sys.modules così l'import del patch non esegue i
+# veri __init__ vendorizzati (che tirerebbero dentro aiohttp/awsiotsdk).
+_VENDOR_ENUM = "custom_components.haier_hon._vendor.pyhon.parameter.enum"
+_VENDOR_STUB_CHAIN = (
+    "custom_components.haier_hon._vendor",
+    "custom_components.haier_hon._vendor.pyhon",
+    "custom_components.haier_hon._vendor.pyhon.parameter",
+    _VENDOR_ENUM,
+)
+
 
 def _install_buggy_pyhon() -> type:
     """Install a stub pyhon whose enum setter rejects anything except 'OK'.
@@ -86,11 +97,11 @@ def _install_buggy_pyhon() -> type:
 
         value = property(_get, _set)
 
-    enum_mod = types.ModuleType("pyhon.parameter.enum")
+    enum_mod = types.ModuleType(_VENDOR_ENUM)
     enum_mod.HonParameterEnum = HonParameterEnum
-    sys.modules["pyhon"] = types.ModuleType("pyhon")
-    sys.modules["pyhon.parameter"] = types.ModuleType("pyhon.parameter")
-    sys.modules["pyhon.parameter.enum"] = enum_mod
+    for name in _VENDOR_STUB_CHAIN[:-1]:
+        sys.modules[name] = types.ModuleType(name)
+    sys.modules[_VENDOR_ENUM] = enum_mod
     return HonParameterEnum
 
 
@@ -105,6 +116,10 @@ class EnsureEnumPatchTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.hc._ENUM_PATCH_APPLIED = False
+        # Rimuovi gli stub dal sys.modules globale così non shadowano i veri
+        # moduli vendorizzati per gli altri test.
+        for name in _VENDOR_STUB_CHAIN:
+            sys.modules.pop(name, None)
 
     def test_patch_sets_applied_flag(self) -> None:
         self.assertFalse(self.hc._ENUM_PATCH_APPLIED)
@@ -143,7 +158,7 @@ class EnsureEnumPatchTest(unittest.TestCase):
     def test_failure_keeps_flag_false_for_retry(self) -> None:
         # If pyhon's shape is unexpected, the patch must fail soft and leave the
         # flag clear so a later setup_sync can retry.
-        sys.modules["pyhon.parameter.enum"] = types.ModuleType("pyhon.parameter.enum")
+        sys.modules[_VENDOR_ENUM] = types.ModuleType(_VENDOR_ENUM)
         self.hc._ENUM_PATCH_APPLIED = False
         with self.assertLogs(self.hc._LOGGER.name, level="WARNING"):
             self.hc._ensure_enum_patch()
