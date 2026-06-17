@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.exceptions import HomeAssistantError
+from .hon_commands import async_send_command
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,52 +78,13 @@ def sanitize_wind_direction(command_params: dict) -> None:
 
 
 async def async_send_settings(hass, client, appliance, params: dict) -> None:
-    """Applica `params` al comando `settings` e lo invia sul loop dedicato pyhОn.
+    """Applica `params` al comando `settings` dell'AC e lo invia.
 
-    Sana windDirection* prima dell'invio (mai 0) e fa rollback dei valori se
-    l'assegnazione di un parametro fallisce.
+    Sana windDirection* prima dell'invio (mai 0): i valori richiesti vincono
+    comunque. Delega al sender generico (hon_commands.async_send_command), che
+    gestisce lookup comando/parametri, rollback ed esecuzione sul loop dedicato
+    pyhОn; la sanitizzazione AC entra come hook pre_send.
     """
-    if not appliance or not client:
-        raise HomeAssistantError("AC: appliance o client non disponibile")
-
-    def _do_send():
-        async def _inner():
-            commands = getattr(appliance, "commands", None)
-            commands = commands if isinstance(commands, dict) else {}
-            command = commands.get("settings")
-            if command is None:
-                raise RuntimeError("Comando 'settings' non trovato sul dispositivo AC")
-            command_params = getattr(command, "parameters", {})
-            missing = [key for key in params if key not in command_params]
-            if missing:
-                raise RuntimeError(
-                    "Parametro/i non trovato/i nel comando settings: " + ", ".join(missing)
-                )
-            # Sana eventuali windDirection* stantii PRIMA di applicare i parametri
-            # richiesti: i valori richiesti vincono comunque.
-            sanitize_wind_direction(command_params)
-            previous = {}
-            assigned = []
-            try:
-                for key, value in params.items():
-                    previous[key] = command_params[key].value
-                    assigned.append(key)
-                    command_params[key].value = value
-                    _LOGGER.debug(
-                        "AC settings: '%s' = %s (previous=%s)", key, value, previous[key]
-                    )
-            except Exception:
-                for key in reversed(assigned):
-                    try:
-                        command_params[key].value = previous[key]
-                    except Exception as rollback_err:  # pragma: no cover - difensivo
-                        _LOGGER.warning(
-                            "AC settings: rollback '%s' fallito: %s", key, rollback_err
-                        )
-                raise
-            await command.send()
-            _LOGGER.debug("AC settings: send completato (params=%s)", list(params))
-
-        client.run_command_sync(_inner())
-
-    await hass.async_add_executor_job(_do_send)
+    await async_send_command(
+        hass, client, appliance, "settings", params, pre_send=sanitize_wind_direction
+    )
