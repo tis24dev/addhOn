@@ -27,6 +27,11 @@ il transport; il motore (stabile e complesso) si tiene il più a lungo possibile
 - [x] **Fase 1 — seam.** `interfaces.py`: i Protocol che catturano l'esatta
   superficie stretta che usiamo. È il punto su cui far combaciare pyhОn (oggi) e
   il client nativo (domani).
+- [x] **Fase 1b — adattatore-ponte sessione.** `pyhon_adapter.create_session`
+  è creato: `hon_client.py` ottiene la sessione hОn da `client/`, NON più con
+  `from ._vendor.pyhon import Hon`. Coupling residuo nel corpo dell'integrazione:
+  la patch enum BABYCARE (`hon_client.py` ~r255, ancora import diretto di
+  `_vendor.pyhon.parameter.enum`) + stringhe logger `_vendor.pyhon.*` — prossimo step.
 - [ ] **Fase 2 — transport nativo.** Dietro la seam, sostituire SOLO auth +
   appliance-list + send con la nostra implementazione (flusso AWS Cognito ricavato
   dalla decompilazione dell'APK), **riusando il motore comandi/parametri di
@@ -38,10 +43,11 @@ il transport; il motore (stabile e complesso) si tiene il più a lungo possibile
 ## Regole di confine
 
 1. Il codice in `client/` **non importa `_vendor.pyhon`** direttamente, tranne
-   UN solo adattatore-ponte previsto in Fase 2 (`pyhon_adapter.py`, quando arriva).
+   l'UNICO adattatore-ponte `pyhon_adapter.py` (già creato): è il solo file di
+   `client/` con un import di `_vendor` (lazy, dentro `create_session`).
 2. Il resto dell'integrazione dipende dai **Protocol** di `interfaces.py`, non
-   dagli oggetti concreti di pyhОn. Oggi il punto di strozzatura è `hon_client.py`
-   (l'unico, con `logging_utils.py`, a importare `_vendor.pyhon`).
+   dagli oggetti concreti di pyhОn. La sessione passa già per il ponte; l'aggancio
+   diretto residuo in `hon_client.py` è la patch enum (r255), da spostare poi.
 3. `_vendor/pyhon/` è **rigenerato** da `scripts/vendor_pyhon.py` (vedi
    `_vendor/VENDOR.md`): NON si modifica a mano. Le patch finché serve pyhОn
    vivono nel fork `telard-pixel/pyhon` e si ri-vendorizzano.

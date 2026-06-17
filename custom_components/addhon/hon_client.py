@@ -470,10 +470,9 @@ class HonClient:
         La sessione aiohttp viene creata sul loop dedicato e vi rimane
         legata per tutta la durata del client.
         """
-        try:
-            from ._vendor.pyhon import Hon
-        except ImportError as err:
-            raise ImportError("La libreria pyhOn non è installata.") from err
+        # La sessione hОn passa per l'adattatore-ponte (client/), non più con un
+        # import diretto di _vendor.pyhon: vedi client/MIGRATION.md (strangler).
+        from .client.pyhon_adapter import create_session
 
         with self._lifecycle_lock:
             try:
@@ -484,7 +483,7 @@ class HonClient:
                 # una sola volta per processo (vedi _ensure_enum_patch).
                 _ensure_enum_patch()
 
-                self._hon_instance = Hon(email=self._email, password=self._password)
+                self._hon_instance = create_session(self._email, self._password)
                 _LOGGER.debug("Istanza Hon creata")
 
                 # Login + init sessione aiohttp — sul loop dedicato

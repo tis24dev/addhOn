@@ -81,6 +81,27 @@ class ClientInterfacesTest(unittest.TestCase):
 
         self.assertIsInstance(App(), self.I.Appliance)
 
+    def test_session_conformance(self) -> None:
+        # La forma che il vero pyhon.Hon espone (appliances + context manager).
+        # test_session_protocol_live.py verifica che il Hon reale abbia questi
+        # membri; nota: runtime_checkable è presence-only, non garantisce che
+        # __aenter__/__aexit__ siano coroutine (quello lo sappiamo dal codice).
+        class Session:
+            appliances: list = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return None
+
+        self.assertIsInstance(Session(), self.I.HonSession)
+
+        class NoCtx:
+            appliances: list = []  # manca __aenter__/__aexit__
+
+        self.assertNotIsInstance(NoCtx(), self.I.HonSession)
+
     def test_module_is_dependency_free(self) -> None:
         # Controlla gli IMPORT reali (via ast), non il testo: la docstring cita
         # legittimamente "homeassistant"/"_vendor" spiegando cosa NON importa.
