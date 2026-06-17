@@ -50,13 +50,17 @@ from .const import (
     AC_ATTR_TOTAL_ENERGY,
     DOMAIN,
     TD_ATTR_CYCLES,
+    TUMBLE_DRYER_PHASE_MAP,
+    WASHING_PHASE_MAP,
     WM_ATTR_CURRENT_ENERGY,
     WM_ATTR_CURRENT_WATER,
     WM_ATTR_DELAY,
     WM_ATTR_DIRT_LEVEL,
     WM_ATTR_DRY_LEVEL,
+    WM_ATTR_ERRORS,
     WM_ATTR_LOADING,
     WM_ATTR_PROGRAM_NAME,
+    WM_ATTR_PROGRAM_PHASE,
     WM_ATTR_REMAINING,
     WM_ATTR_SPIN_SPEED,
     WM_ATTR_STATUS,
@@ -157,11 +161,46 @@ def _as_text(raw) -> str | None:
     return None if raw is None else str(raw)
 
 
+def _phase_wash(raw) -> str | None:
+    """prPhase -> etichetta fase (lavatrice/lavasciuga)."""
+    if raw is None:
+        return None
+    return WASHING_PHASE_MAP.get(str(raw), f"Fase {raw}")
+
+
+def _phase_dry(raw) -> str | None:
+    """prPhase -> etichetta fase (asciugatrice)."""
+    if raw is None:
+        return None
+    return TUMBLE_DRYER_PHASE_MAP.get(str(raw), f"Fase {raw}")
+
+
 _PROGRAM_NAME = HonSensorEntityDescription(
     key="program_name",
     name="Programma",
     icon="mdi:format-list-bulleted",
     attr_key=WM_ATTR_PROGRAM_NAME,
+    value_fn=_as_text,
+)
+_PHASE_WASH = HonSensorEntityDescription(
+    key="program_phase",
+    name="Fase",
+    icon="mdi:washing-machine",
+    attr_key=WM_ATTR_PROGRAM_PHASE,
+    value_fn=_phase_wash,
+)
+_PHASE_DRY = HonSensorEntityDescription(
+    key="program_phase",
+    name="Fase",
+    icon="mdi:tumble-dryer",
+    attr_key=WM_ATTR_PROGRAM_PHASE,
+    value_fn=_phase_dry,
+)
+_ERRORS = HonSensorEntityDescription(
+    key="errors",
+    name="Errori",
+    icon="mdi:alert-circle-outline",
+    attr_key=WM_ATTR_ERRORS,
     value_fn=_as_text,
 )
 _DELAY = HonSensorEntityDescription(
@@ -214,11 +253,13 @@ _WASH_EXTRA: tuple[HonSensorEntityDescription, ...] = (
 
 # Lavatrice (WM): stato/tempo + programma + extra lavaggio + carico/ritardo + consumi.
 _WASHER: tuple[HonSensorEntityDescription, ...] = (
-    _STATE, _REMAINING, _PROGRAM_NAME, *_WASH_EXTRA, _LOADING, _DELAY, *_WASH_CONSUMPTION,
+    _STATE, _REMAINING, _PROGRAM_NAME, _PHASE_WASH, *_WASH_EXTRA, _LOADING, _DELAY,
+    _ERRORS, *_WASH_CONSUMPTION,
 )
 # Lavasciuga (WD = WM + asciugatura): come la lavatrice + livello asciugatura.
 _WASHER_DRYER: tuple[HonSensorEntityDescription, ...] = (
-    _STATE, _REMAINING, _PROGRAM_NAME, *_WASH_EXTRA, _DRY_LEVEL, _LOADING, _DELAY, *_WASH_CONSUMPTION,
+    _STATE, _REMAINING, _PROGRAM_NAME, _PHASE_WASH, *_WASH_EXTRA, _DRY_LEVEL, _LOADING,
+    _DELAY, _ERRORS, *_WASH_CONSUMPTION,
 )
 
 # Asciugatrice: niente acqua/energia (hOn non li espone per la TD). I cicli
@@ -229,9 +270,11 @@ _DRYER: tuple[HonSensorEntityDescription, ...] = (
     _STATE,
     _REMAINING,
     _PROGRAM_NAME,
+    _PHASE_DRY,
     _DRY_LEVEL,
     _LOADING,
     _DELAY,
+    _ERRORS,
     HonSensorEntityDescription(
         key="total_washes",
         name="Cicli Totali",

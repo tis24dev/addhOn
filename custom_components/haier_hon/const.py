@@ -154,3 +154,40 @@ WM_ATTR_CHILD_LOCK       = "lockStatus"          # blocco comandi (sicurezza bam
 WM_ATTR_DRUM_CLEAN       = "drumCleaning"        # ciclo pulizia cestello consigliato
 WM_ATTR_FILTER_CLEAN     = "filterCleaning"      # pulizia filtro consigliata
 WM_ATTR_DRY_CLEAN_NEEDED = "dryCleaningNeeded"   # pulizia condensatore consigliata
+
+# Fase ciclo (prPhase, attributo grezzo numerico). Le mappe traducono prPhase ->
+# etichetta, estratte da decomp.txt: prPhaseToWashingPhase (983210, WM/WD) e
+# prPhaseToTumbleDryerPhase (983578, TD). Valori non in mappa -> "Fase N".
+WASHING_PHASE_MAP = {
+    "0": "Pronto",
+    "1": "Lavaggio",
+    "2": "Lavaggio",
+    "3": "Salto fase",
+    "4": "Risciacquo",
+    "5": "Risciacquo",
+    "6": "Risciacquo",
+    "7": "Asciugatura",
+    "8": "Salto fase",
+    "9": "Vapore",
+    "10": "Pronto",
+    "11": "Centrifuga",
+    "12": "Pesatura",
+    "14": "Lavaggio",
+    "15": "Lavaggio",
+    "16": "Lavaggio",
+    "20": "Avvio rotazione",
+    "24": "Rinfresco",
+}
+TUMBLE_DRYER_PHASE_MAP = {
+    "0": "Pronto",
+    "1": "Riscaldamento",
+    "2": "Asciugatura",
+    "3": "Raffreddamento",
+    "13": "Raffreddamento",
+    "14": "Riscaldamento",
+    "15": "Riscaldamento",
+    "16": "Raffreddamento",
+    "18": "Rotazione",
+    "19": "Asciugatura",
+    "20": "Asciugatura",
+}
