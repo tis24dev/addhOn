@@ -6,3 +6,5 @@ __pycache__/
 /diagnostics/
 # APK e output di decompilazione (reverse-engineering, non versionato)
 /apk/
+# Doc di resume reverse-engineering + mappatura (contiene dettagli RE, non versionato)
+/docs/hon-reverse-and-mapping.md
