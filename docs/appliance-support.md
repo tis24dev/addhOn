@@ -6,14 +6,22 @@ Last updated: **2026-06-17**.
 Legend:
 - ✅ = implemented and active
 - ◑ = partial (see notes)
-- 👁 = read-only (no commands)
-- ❌ = not implemented yet (parameters already mapped, see below)
+- 👁 = read-only (sensors only, no commands)
+- ❌ = not implemented yet
 
-Some platforms are **capability-gated**: the `binary_sensor` platform and the AC
-switches create an entity only when the device actually exposes the relevant
-attribute/command. The other platforms (notably `sensor`) are defined per
-appliance type; an attribute a given model does not report simply reads as
-*unavailable* rather than suppressing the entity.
+Some platforms are **capability-gated**: the `binary_sensor` platform, the AC
+switches, and every **read-only (👁) type** create an entity only when the
+device actually exposes the relevant attribute/command. So on the read-only
+types a parameter a given model does not report is simply not created (no
+permanently *unavailable* entities). The control-capable types' `sensor`
+platform (AC/WM/WD/TD) is instead defined per type and always created; an
+attribute a model does not report there reads as *unavailable*.
+
+> **Note on the read-only (👁) types:** they are wired from the hOn parameter
+> set but have **not** been validated on physical devices (none of the test
+> units are of these types). Capability-gating is the safety net: only the
+> parameters a device actually reports become entities. Controls (write) for
+> these types are a later stage.
 
 ---
 
@@ -34,29 +42,29 @@ switches.
 
 ## Read-only types (👁)
 
-Currently **none**: every implemented type has at least one control. Read-only
-will be the initial stage for the types below when they are added (Tier 2:
-sensors first, commands later).
+These types expose **sensors / binary sensors only** (no controls yet). All
+their entities are capability-gated and **not** live-validated (see note above).
+Aliased codes (`FR`/`FRE` → fridge set, `HOB` → hob set) are handled so the type
+is recognised whichever code the cloud reports.
+
+| Type | Code | Sensors | Binary sensors |
+|---|---|---|---|
+| Fridge / fridge-freezer | `REF` / `FR` | per-zone + upper/lower + ambient temperature, ambient humidity | per-zone doors, ice maker running, ice box full, energy saving |
+| Freezer | `FRE` | (same set as fridge; gating drops the unused zones) | (same as fridge) |
+| Oven | `OV` | state, cavity temperature, remaining time, meat-probe temperatures | door (main + per cavity) |
+| Dishwasher | `DW` | state, program, remaining time, salt level, rinse-aid level, wash temperature, errors | door |
+| Wine cellar | `WC` | ambient + zone temperature, remaining time | interior light, presence |
+| Hob / cooktop | `IH` / `HOB` | per-zone temperature (up to 5 zones) | pan detected per zone (up to 6) |
+| Hood | `HO` | fan speed | light, filter-cleaning alarm |
+| Coffee machine / kettle | `KT` | instantaneous power, descaling counter, lifetime cycles | — |
+| Water heater | `WH` | water / inlet / outlet temperature, power, available water volume, time-to-target, phase | indicator light, child lock |
+| Robot vacuum | `RVC` | battery, state, remaining time, suction power, last/total cleaned area, errors | — |
 
 ## Not yet supported (❌)
 
-These types are not exposed as entities yet. The required parameters are
-identified and support is planned (Tier 2: read-only sensors first, then
-controls).
-
-| Type | Code | Planned HA platform | Notes |
-|---|---|---|---|
-| Fridge / fridge-freezer | `REF` / `FR` | climate (per zone), sensor, binary_sensor, switch, select | multi-zone, ice maker, "My Zone" |
-| Freezer | `FRE` | sensor, switch, climate | subset of the fridge |
-| Oven | `OV` | sensor, binary_sensor, number, select, button | meat probes, phases, programs/recipes |
-| Dishwasher | `DW` | sensor, binary_sensor, switch, select | salt/rinse-aid, options |
-| Wine cellar | `WC` | climate (per zone), sensor, switch | light, presence sensor |
-| Hob / cooktop | `IH` / `HOB` | sensor, binary_sensor, number | up to 6 zones |
-| Hood | `HO` | fan/sensor, switch, select | speed, light, filters |
-| Coffee machine / kettle | `KT` | sensor, select, button | recipes, descaling |
-| Water heater | `WH` | water_heater, sensor, switch | eco/boost/anti-legionella modes |
-| Robot vacuum | `RVC` | **vacuum**, sensor, select, button | battery, power, modes (map = cloud-only) |
-| Microwave / toaster / blender | `MW` / `TO` / `BL` | sensor, select, button | small kitchen |
+| Type | Code | Notes |
+|---|---|---|
+| Microwave / toaster / blender | `MW` / `TO` / `BL` | minimal small-kitchen devices; lowest priority |
 
 ## Live-tested models
 

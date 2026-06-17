@@ -22,8 +22,18 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity
 from .const import (
+    APPLIANCE_DW,
+    APPLIANCE_FR,
+    APPLIANCE_FRE,
+    APPLIANCE_HO,
+    APPLIANCE_HOB,
+    APPLIANCE_IH,
+    APPLIANCE_OV,
+    APPLIANCE_REF,
     APPLIANCE_TD,
+    APPLIANCE_WC,
     APPLIANCE_WD,
+    APPLIANCE_WH,
     APPLIANCE_WM,
     DOMAIN,
     WM_ATTR_CHILD_LOCK,
@@ -95,10 +105,132 @@ _DRY_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     _DOOR_OPEN, _DOOR_LOCK, _CHILD_LOCK,
 )
 
+
+# ─── Tier 2: binary sensor (capability-gated come tutti i binary) ────────────
+# Chiavi inline = nomi-parametro hOn (telemetria 0/1) dei tipi mappati ma non
+# validati live. Il gate per attributo (già attivo per tutti i binary sensor)
+# scarta automaticamente quelli che un dato modello non riporta.
+
+
+def _door(key: str, name: str, attr: str) -> HonBinarySensorEntityDescription:
+    return HonBinarySensorEntityDescription(
+        key=key, name=name, attr_key=attr, device_class=BinarySensorDeviceClass.DOOR,
+    )
+
+
+# Frigo / frigo-congelatore / congelatore (REF/FR/FRE).
+_COOLING_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    _door("door_zone1", "Porta Zona 1", "doorStatusZ1"),
+    _door("door2_zone1", "Porta 2 Zona 1", "door2StatusZ1"),
+    _door("door_zone2", "Porta Zona 2", "doorStatusZ2"),
+    _door("door_zone3", "Porta Zona 3", "doorStatusZ3"),
+    HonBinarySensorEntityDescription(
+        key="ice_maker",
+        name="Produzione Ghiaccio",
+        icon="mdi:snowflake",
+        attr_key="icemakerOnOffStatus",
+        device_class=BinarySensorDeviceClass.RUNNING,
+    ),
+    HonBinarySensorEntityDescription(
+        key="ice_box_full",
+        name="Contenitore Ghiaccio Pieno",
+        attr_key="icemakerIceboxFullStatus",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    ),
+    HonBinarySensorEntityDescription(
+        key="energy_saving",
+        name="Risparmio Energetico",
+        icon="mdi:leaf",
+        attr_key="energySavingStatus",
+    ),
+)
+
+# Forno (OV).
+_OVEN_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    _door("door_open", "Porta", "doorStatus"),
+    _door("door_zone1", "Porta Cavità 1", "doorStatusZ1"),
+    _door("door_zone2", "Porta Cavità 2", "doorStatusZ2"),
+)
+
+# Lavastoviglie (DW).
+_DISHWASHER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    _door("door_open", "Porta", "doorStatus"),
+)
+
+# Cantinetta vino (WC).
+_WINE_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    HonBinarySensorEntityDescription(
+        key="light",
+        name="Luce",
+        attr_key="lightStatus",
+        device_class=BinarySensorDeviceClass.LIGHT,
+    ),
+    HonBinarySensorEntityDescription(
+        key="presence",
+        name="Presenza",
+        attr_key="humanSensingResult",
+        device_class=BinarySensorDeviceClass.OCCUPANCY,
+    ),
+)
+
+# Piano cottura (IH/HOB): pentola rilevata per zona.
+_HOB_BINARY: tuple[HonBinarySensorEntityDescription, ...] = tuple(
+    HonBinarySensorEntityDescription(
+        key=f"pan_zone{z}",
+        name=f"Pentola Zona {z}",
+        icon="mdi:pot-steam",
+        attr_key=f"panStatusZ{z}",
+    )
+    for z in range(1, 7)
+)
+
+# Cappa (HO).
+_HOOD_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    HonBinarySensorEntityDescription(
+        key="light",
+        name="Luce",
+        attr_key="lightStatus",
+        device_class=BinarySensorDeviceClass.LIGHT,
+    ),
+    HonBinarySensorEntityDescription(
+        key="filter_clean_needed",
+        name="Pulizia Filtro",
+        attr_key="filterCleaningAlarmStatus",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    ),
+)
+
+# Scaldabagno (WH).
+_WATER_HEATER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    HonBinarySensorEntityDescription(
+        key="light",
+        name="Spia",
+        attr_key="lightStatus",
+        device_class=BinarySensorDeviceClass.LIGHT,
+    ),
+    HonBinarySensorEntityDescription(
+        key="child_lock",
+        name="Blocco Comandi",
+        icon="mdi:lock-alert",
+        attr_key="lockStatus",
+    ),
+)
+
 BINARY_SENSORS: dict[str, tuple[HonBinarySensorEntityDescription, ...]] = {
     APPLIANCE_WM: _WASH_BINARY,
     APPLIANCE_WD: _WASH_BINARY,
     APPLIANCE_TD: _DRY_BINARY,
+    # Tier 2 (read-only). FR/FRE riusano il set frigo, HOB il set piano cottura.
+    APPLIANCE_REF: _COOLING_BINARY,
+    APPLIANCE_FR: _COOLING_BINARY,
+    APPLIANCE_FRE: _COOLING_BINARY,
+    APPLIANCE_OV: _OVEN_BINARY,
+    APPLIANCE_DW: _DISHWASHER_BINARY,
+    APPLIANCE_WC: _WINE_BINARY,
+    APPLIANCE_IH: _HOB_BINARY,
+    APPLIANCE_HOB: _HOB_BINARY,
+    APPLIANCE_HO: _HOOD_BINARY,
+    APPLIANCE_WH: _WATER_HEATER_BINARY,
 }
 
 

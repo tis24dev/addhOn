@@ -35,8 +35,20 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .base_entity import HonBaseEntity
 from .const import (
     APPLIANCE_AC,
+    APPLIANCE_DW,
+    APPLIANCE_FR,
+    APPLIANCE_FRE,
+    APPLIANCE_HO,
+    APPLIANCE_HOB,
+    APPLIANCE_IH,
+    APPLIANCE_KT,
+    APPLIANCE_OV,
+    APPLIANCE_REF,
+    APPLIANCE_RVC,
     APPLIANCE_TD,
+    APPLIANCE_WC,
     APPLIANCE_WD,
+    APPLIANCE_WH,
     APPLIANCE_WM,
     AC_ATTR_CH2O,
     AC_ATTR_CO2,
@@ -47,9 +59,14 @@ from .const import (
     AC_ATTR_PM25,
     AC_ATTR_TOTAL_ENERGY,
     DOMAIN,
+    DW_LEVEL_MAP,
+    MACHINE_MODE_MAP,
+    RVC_POWER_MAP,
+    RVC_STATE_MAP,
     TD_ATTR_CYCLES,
     TUMBLE_DRYER_PHASE_MAP,
     WASHING_PHASE_MAP,
+    WH_PHASE_MAP,
     WM_ATTR_CURRENT_ENERGY,
     WM_ATTR_CURRENT_WATER,
     WM_ATTR_DELAY,
@@ -88,10 +105,16 @@ class HonSensorEntityDescription(SensorEntityDescription):
     - `attr_key` = chiave attributo pyhOn letta via HonBaseEntity._get_attr.
     - `value_fn` opzionale trasforma il grezzo (es. mappa di stato testuale);
       senza value_fn il valore viene convertito a float (None se non numerico).
+    - `gated` = se True il sensore è CAPABILITY-GATED: viene creato solo se il
+      device espone davvero `attr_key` (presente in coordinator.data[id]
+      ["attributes"]). Usato per i tipi Tier 2, mappati dalla app ma non
+      validati live, così un parametro assente non genera entità "unknown".
+      I tipi storici (AC/WM/WD/TD) restano gated=False (sempre creati).
     """
 
     attr_key: str
     value_fn: Callable[[object], object] | None = None
+    gated: bool = False
 
 
 # Stato + tempo rimanente: identici per lavatrice/lavasciuga/asciugatrice.
@@ -351,11 +374,255 @@ _AC: tuple[HonSensorEntityDescription, ...] = (
     ),
 )
 
+# ─── Tier 2: sensori read-only (capability-gated) ────────────────────────────
+# Tipi mappati dalla app ufficiale ma non validati su device reali. Ogni
+# description ha gated=True: l'entità viene creata solo se il device espone
+# l'attributo (vedi async_setup_entry). Le `attr_key` sono i nomi-parametro hOn
+# (telemetria diretta), usati una sola volta qui, quindi restano stringhe inline
+# (a differenza dei tipi storici, che condividono le chiavi tra più piattaforme).
+
+
+def _mapped(mapping: dict[str, str], prefix: str) -> Callable[[object], object]:
+    """Costruisce una value_fn che traduce il grezzo via `mapping`.
+
+    Valore None -> None; valore non in mappa -> "<prefix> <raw>" (così un codice
+    inatteso resta visibile invece di sparire)."""
+
+    def _fn(raw):
+        if raw is None:
+            return None
+        return mapping.get(str(raw), f"{prefix} {raw}")
+
+    return _fn
+
+
+def _g_temp(key: str, name: str, attr: str) -> HonSensorEntityDescription:
+    return HonSensorEntityDescription(
+        key=key,
+        name=name,
+        attr_key=attr,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    )
+
+
+def _g_minutes(key: str, name: str, attr: str) -> HonSensorEntityDescription:
+    return HonSensorEntityDescription(
+        key=key,
+        name=name,
+        attr_key=attr,
+        icon="mdi:timer-outline",
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        device_class=SensorDeviceClass.DURATION,
+        gated=True,
+    )
+
+
+def _g_text(key: str, name: str, attr: str, icon: str | None = None,
+            value_fn: Callable[[object], object] | None = _as_text) -> HonSensorEntityDescription:
+    return HonSensorEntityDescription(
+        key=key, name=name, attr_key=attr, icon=icon, value_fn=value_fn, gated=True,
+    )
+
+
+# Frigo / frigo-congelatore / congelatore (REF/FR/FRE): temperature per zona +
+# ambiente. Le porte / ice-maker / eco sono binary sensor (binary_sensor.py).
+_COOLING: tuple[HonSensorEntityDescription, ...] = (
+    _g_temp("temp_zone1", "Temperatura Zona 1", "tempZ1"),
+    _g_temp("temp_zone2", "Temperatura Zona 2", "tempZ2"),
+    _g_temp("temp_zone3", "Temperatura Zona 3", "tempZ3"),
+    _g_temp("temp_zone4", "Temperatura Zona 4", "tempZ4"),
+    _g_temp("temp_upper", "Temperatura Zona Superiore", "tempUZ"),
+    _g_temp("temp_lower", "Temperatura Zona Inferiore", "tempLZ"),
+    _g_temp("temp_ambient", "Temperatura Ambiente", "tempEnv"),
+    HonSensorEntityDescription(
+        key="humidity_ambient",
+        name="Umidità Ambiente",
+        attr_key="humidityEnv",
+        native_unit_of_measurement="%",
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+)
+
+# Forno (OV): stato, temperatura cavità, tempo rimanente, sonde carne.
+_OVEN: tuple[HonSensorEntityDescription, ...] = (
+    _g_text("state", "Stato", "machMode", icon="mdi:stove",
+            value_fn=_mapped(MACHINE_MODE_MAP, "Modo")),
+    _g_temp("temp_cavity", "Temperatura Forno", "temp"),
+    _g_minutes("remaining_time", "Tempo Rimanente", "remainingTimeMM"),
+    _g_temp("probe_temp_1", "Temperatura Sonda 1", "tempEmployedProbe1"),
+    _g_temp("probe_temp_2", "Temperatura Sonda 2", "tempEmployedProbe2"),
+)
+
+# Lavastoviglie (DW): stato, programma, tempo, livelli sale/brillantante,
+# temperatura, errori. La porta è binary sensor.
+_DISHWASHER: tuple[HonSensorEntityDescription, ...] = (
+    _g_text("state", "Stato", "machMode", icon="mdi:dishwasher",
+            value_fn=_mapped(MACHINE_MODE_MAP, "Modo")),
+    _g_text("program_name", "Programma", "programName", icon="mdi:format-list-bulleted"),
+    _g_minutes("remaining_time", "Tempo Rimanente", "remainingTimeMM"),
+    _g_text("salt_level", "Livello Sale", "saltStatus", icon="mdi:shaker-outline",
+            value_fn=_mapped(DW_LEVEL_MAP, "Livello")),
+    _g_text("rinse_aid_level", "Livello Brillantante", "rinseAidStatus",
+            icon="mdi:water-opacity", value_fn=_mapped(DW_LEVEL_MAP, "Livello")),
+    HonSensorEntityDescription(
+        key="wash_temperature",
+        name="Temperatura Lavaggio",
+        attr_key="temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+    _g_text("errors", "Errori", "errors", icon="mdi:alert-circle-outline"),
+)
+
+# Cantinetta vino (WC): temperatura ambiente + zona. Luce/presenza sono binary.
+_WINE: tuple[HonSensorEntityDescription, ...] = (
+    _g_temp("temp_ambient", "Temperatura Ambiente", "tempEnv"),
+    _g_temp("temp_zone2", "Temperatura Zona 2", "tempZ2"),
+    _g_minutes("remaining_time", "Tempo Rimanente", "remainingTimeMM"),
+)
+
+# Piano cottura a induzione (IH/HOB): temperatura per zona di cottura. Il
+# rilevamento pentola è binary sensor.
+_HOB: tuple[HonSensorEntityDescription, ...] = (
+    _g_temp("temp_zone1", "Temperatura Zona 1", "sensorTempZ1"),
+    _g_temp("temp_zone2", "Temperatura Zona 2", "sensorTempZ2"),
+    _g_temp("temp_zone3", "Temperatura Zona 3", "sensorTempZ3"),
+    _g_temp("temp_zone4", "Temperatura Zona 4", "sensorTempZ4"),
+    _g_temp("temp_zone5", "Temperatura Zona 5", "sensorTempZ5"),
+)
+
+# Cappa (HO): velocità ventola. Luce/allarme filtro sono binary sensor.
+_HOOD: tuple[HonSensorEntityDescription, ...] = (
+    HonSensorEntityDescription(
+        key="fan_speed",
+        name="Velocità Ventola",
+        attr_key="windSpeed",
+        icon="mdi:fan",
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+)
+
+# Macchina caffè / bollitore (KT): potenza istantanea + contatori cicli.
+_COFFEE: tuple[HonSensorEntityDescription, ...] = (
+    HonSensorEntityDescription(
+        key="current_power",
+        name="Potenza",
+        attr_key="currentPower",
+        native_unit_of_measurement="W",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+    HonSensorEntityDescription(
+        key="descaling_cycles",
+        name="Cicli a Decalcificazione",
+        attr_key="descalingCycleCounter",
+        icon="mdi:counter",
+        gated=True,
+    ),
+    HonSensorEntityDescription(
+        key="lifetime_cycles",
+        name="Cicli Totali",
+        attr_key="lifetimeCycleCounter",
+        icon="mdi:counter",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        gated=True,
+    ),
+)
+
+# Scaldabagno (WH): temperature acqua/ingresso/uscita, potenza, volume
+# disponibile, tempo al target, fase. Luce/blocco sono binary sensor.
+_WATER_HEATER: tuple[HonSensorEntityDescription, ...] = (
+    _g_temp("water_temp", "Temperatura Acqua", "temp"),
+    _g_temp("temp_inlet", "Temperatura Ingresso", "tempIn"),
+    _g_temp("temp_outlet", "Temperatura Uscita", "tempOut"),
+    HonSensorEntityDescription(
+        key="power",
+        name="Potenza",
+        attr_key="power",
+        native_unit_of_measurement="W",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+    HonSensorEntityDescription(
+        key="water_volume",
+        name="Acqua Disponibile",
+        attr_key="waterVolume",
+        icon="mdi:water",
+        native_unit_of_measurement=UnitOfVolume.LITERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+    _g_minutes("heating_remaining", "Tempo al Target", "remainingTimeMMHeating"),
+    _g_text("program_phase", "Fase", "prPhase", icon="mdi:water-boiler",
+            value_fn=_mapped(WH_PHASE_MAP, "Fase")),
+)
+
+# Robot aspirapolvere (RVC): batteria, stato, tempo, potenza, aree, errori.
+_VACUUM: tuple[HonSensorEntityDescription, ...] = (
+    HonSensorEntityDescription(
+        key="battery",
+        name="Batteria",
+        attr_key="batteryStatus",
+        native_unit_of_measurement="%",
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+    _g_text("state", "Stato", "prPhase", icon="mdi:robot-vacuum",
+            value_fn=_mapped(RVC_STATE_MAP, "Stato")),
+    _g_minutes("remaining_time", "Tempo Rimanente", "remainingTimeMM"),
+    _g_text("power_mode", "Potenza Aspirazione", "power", icon="mdi:fan",
+            value_fn=_mapped(RVC_POWER_MAP, "Potenza")),
+    HonSensorEntityDescription(
+        key="last_work_area",
+        name="Area Ultima Pulizia",
+        attr_key="lastWorkArea",
+        icon="mdi:ruler-square",
+        native_unit_of_measurement="m²",
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+    HonSensorEntityDescription(
+        key="total_work_area",
+        name="Area Totale Pulita",
+        attr_key="totalWorkArea",
+        icon="mdi:ruler-square",
+        native_unit_of_measurement="m²",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        gated=True,
+    ),
+    _g_text("errors", "Errori", "errors", icon="mdi:alert-circle-outline"),
+)
+
 SENSORS: dict[str, tuple[HonSensorEntityDescription, ...]] = {
     APPLIANCE_AC: _AC,
     APPLIANCE_WM: _WASHER,
     APPLIANCE_WD: _WASHER_DRYER,
     APPLIANCE_TD: _DRYER,
+    # Tier 2 (read-only, capability-gated). FR/FRE riusano il set frigo, HOB
+    # riusa il set piano cottura (codici alias dello stesso device).
+    APPLIANCE_REF: _COOLING,
+    APPLIANCE_FR: _COOLING,
+    APPLIANCE_FRE: _COOLING,
+    APPLIANCE_OV: _OVEN,
+    APPLIANCE_DW: _DISHWASHER,
+    APPLIANCE_WC: _WINE,
+    APPLIANCE_IH: _HOB,
+    APPLIANCE_HOB: _HOB,
+    APPLIANCE_HO: _HOOD,
+    APPLIANCE_KT: _COFFEE,
+    APPLIANCE_WH: _WATER_HEATER,
+    APPLIANCE_RVC: _VACUUM,
 }
 
 
@@ -367,17 +634,27 @@ async def async_setup_entry(
     entities: list[SensorEntity] = []
     for appliance_id, data in coordinator.data.items():
         app_type = data.get("type", "")
+        attributes = data.get("attributes", {})
+        attributes = attributes if isinstance(attributes, dict) else {}
         descriptions = SENSORS.get(app_type, ())
+        created: list[str] = []
+        for description in descriptions:
+            # Capability-gating (solo Tier 2): salta i sensori il cui attributo
+            # non è esposto dal device. I tipi storici (gated=False) restano
+            # sempre creati, come prima.
+            if description.gated and description.attr_key not in attributes:
+                continue
+            entities.append(HonSensor(coordinator, appliance_id, description))
+            created.append(description.key)
         _LOGGER.debug(
-            "Sensori debug: '%s' (type=%s, id=%s) -> %d sensori %s",
+            "Sensori debug: '%s' (type=%s, id=%s) -> %d/%d sensori %s",
             data.get("name", "Haier"),
             app_type,
             appliance_id,
+            len(created),
             len(descriptions),
-            [d.key for d in descriptions],
+            created,
         )
-        for description in descriptions:
-            entities.append(HonSensor(coordinator, appliance_id, description))
     async_add_entities(entities)
 
 

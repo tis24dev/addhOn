@@ -16,6 +16,27 @@ APPLIANCE_WM = "WM"       # Lavatrice (Washing Machine)
 APPLIANCE_TD = "TD"       # Asciugatrice (Tumble Dryer)
 APPLIANCE_WD = "WD"       # Lavasciuga
 
+# ─── Tier 2: tipi read-only ───────────────────────────────────────────────────
+# Tipi aggiuntivi esposti come sensori in sola lettura. I parametri provengono
+# dalla mappatura della app ufficiale ma NON sono validati su device reali
+# (nessuno tra i dispositivi di test è di questi tipi): per questo i sensori di
+# questi tipi sono CAPABILITY-GATED (vedi sensor.py / binary_sensor.py), così
+# compaiono solo se il device riporta davvero l'attributo. Alcuni codici sono
+# alias dello stesso set (FR/FRE come REF, HOB come IH) perché a seconda del
+# modello/enroll il cloud può restituire l'uno o l'altro.
+APPLIANCE_REF = "REF"     # Frigorifero / frigo-congelatore
+APPLIANCE_FR  = "FR"      # Frigo (alias mappa icone)
+APPLIANCE_FRE = "FRE"     # Congelatore
+APPLIANCE_OV  = "OV"      # Forno
+APPLIANCE_DW  = "DW"      # Lavastoviglie
+APPLIANCE_WC  = "WC"      # Cantinetta vino
+APPLIANCE_IH  = "IH"      # Piano cottura a induzione
+APPLIANCE_HOB = "HOB"     # Piano cottura (alias)
+APPLIANCE_HO  = "HO"      # Cappa
+APPLIANCE_KT  = "KT"      # Macchina caffè / bollitore
+APPLIANCE_WH  = "WH"      # Scaldabagno
+APPLIANCE_RVC = "RVC"     # Robot aspirapolvere
+
 # Raggruppa tutti gli elettrodomestici lavatrice/asciugatrice/lavasciuga
 APPLIANCE_WASH_GROUP = (APPLIANCE_WM, APPLIANCE_TD, APPLIANCE_WD)
 
@@ -189,4 +210,58 @@ TUMBLE_DRYER_PHASE_MAP = {
     "18": "Rotazione",
     "19": "Asciugatura",
     "20": "Asciugatura",
+}
+
+# ─── Mappe value→label per i tipi Tier 2 (read-only) ─────────────────────────
+# Decodifiche degli enum hOn per i sensori dei tipi aggiuntivi. Valori non in
+# mappa -> stringa di fallback (gestita dalle value_fn in sensor.py).
+
+# machMode autoritativo della app (0-10), usato dai tipi che condividono
+# MachineMode (forno, lavastoviglie, ...). NOTA: è distinto da WM_STATE_MAP, che
+# resta una mappa 0-7 storica locale del gruppo lavaggio e non va modificata.
+MACHINE_MODE_MAP = {
+    "0": "Inattivo",
+    "1": "Selezione",
+    "2": "In esecuzione",
+    "3": "In pausa",
+    "4": "Avvio ritardato",
+    "5": "Avvio ritardato (in corso)",
+    "6": "Errore",
+    "7": "Terminato",
+    "8": "Test",
+    "9": "Arresto",
+    "10": "Mantieni fresco",
+}
+
+# Livello sale / brillantante lavastoviglie (saltStatus / rinseAidStatus).
+DW_LEVEL_MAP = {
+    "0": "OK",
+    "1": "Basso",
+    "2": "Critico",
+    "3": "Non presente",
+}
+
+# Fase scaldabagno (prPhase -> EnumWaterHeaterPhase ridotta).
+WH_PHASE_MAP = {
+    "0": "Pronto",
+    "1": "Riscaldamento",
+    "2": "Mantenimento",
+}
+
+# Stato robot aspirapolvere (prPhase/machMode -> RVCMachModes).
+RVC_STATE_MAP = {
+    "0": "In attesa",
+    "1": "Pulizia automatica",
+    "2": "Pulizia localizzata",
+    "3": "In pausa",
+    "4": "Full & Go",
+    "5": "Pulizia completata",
+    "6": "In carica",
+}
+
+# Potenza di aspirazione robot (power).
+RVC_POWER_MAP = {
+    "0": "Auto",
+    "1": "Turbo",
+    "2": "Silenzioso",
 }

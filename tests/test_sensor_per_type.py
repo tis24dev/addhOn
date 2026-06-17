@@ -102,6 +102,8 @@ def _install_homeassistant_stubs() -> None:
         DURATION = "duration"
         PM25 = "pm25"
         CO2 = "carbon_dioxide"
+        BATTERY = "battery"
+        POWER = "power"
 
     class SensorStateClass:
         MEASUREMENT = "measurement"
