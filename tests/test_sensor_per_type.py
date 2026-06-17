@@ -1,9 +1,11 @@
 """Tests for the per-appliance-type sensor refactor.
 
-Covers: the per-type SENSORS description table (AC/WM/WD/TD), the dryer (TD)
-getting only state/remaining/cycles (cycles from programsCounter, no water/
-energy), washer/AC sets unchanged, and the legacy registry cleanup of the
-washer-only sensors that used to land on dryers.
+Covers the per-type SENSORS description table (AC/WM/WD/TD). TD gets
+state/remaining/program/phase/dry_level/loading/delay/errors plus cycles (from
+programsCounter, still no water/energy); WM/WD add program/phase/spin/temp/soil/
+load/delay/errors on top of the consumption set (WD also dry_level); AC adds the
+air-quality sensors (PM2.5/CO2/CH2O). Also covers the legacy registry cleanup of
+the washer-only sensors that used to land on dryers.
 
 Stdlib unittest with inline Home Assistant stubs (incl. a real dataclass
 SensorEntityDescription so HonSensorEntityDescription can subclass it).

@@ -9,9 +9,11 @@ Legend:
 - 👁 = read-only (no commands)
 - ❌ = not implemented yet (parameters already mapped, see below)
 
-Entities are **capability-gated**: they are created only if the device actually
-exposes the relevant attribute/command, so a model that does not report a given
-key simply will not show that entity.
+Some platforms are **capability-gated**: the `binary_sensor` platform and the AC
+switches create an entity only when the device actually exposes the relevant
+attribute/command. The other platforms (notably `sensor`) are defined per
+appliance type; an attribute a given model does not report simply reads as
+*unavailable* rather than suppressing the entity.
 
 ---
 
@@ -64,7 +66,7 @@ End-to-end validation on a real Home Assistant instance (shared account).
 |---|---|---|---|
 | `AC` | **AS35PBPHRA-PRE** | "Clima camera" | ✅ climate + 16 switches + 8 sensors; swing re-enabled and validated |
 | `WM` | **HW80-B14959TU1IT** | "HW80-B14959TU1IT" | ✅ 15 sensors + 6 binary + pause/program |
-| `TD` | **HD100-C367GU1-IT** | "HD100-C367GU1-IT" | ✅ 9 sensors + 2 binary (door/lock) + pause/program |
+| `TD` | **HD100-C367GU1-IT** | "HD100-C367GU1-IT" | ✅ 9 sensors + 2 binary (door/child-lock) + pause/program |
 
 Other known but **not** validated devices:
 - A **fridge** (`REF`) on a different account, confirmed present but offline;
