@@ -3,7 +3,7 @@
 DOMAIN = "haier_hon"
 
 # Piattaforme supportate
-PLATFORMS = ["climate", "sensor", "switch", "select", "button"]
+PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button"]
 
 # Intervallo di aggiornamento in secondi
 # NOTA: il setup iniziale + primo fetch impiega ~22s su cloud lento.
@@ -136,3 +136,17 @@ WM_STATE_MAP = {
     "6": "Ritardo avvio",
     "7": "Mezzo carico",
 }
+
+# ─── Sensori/binary aggiuntivi gruppo lavaggio ────────────────────────────────
+# Chiavi CONFERMATE live sui device di Roberto: lavatrice HW80-B14959TU1IT e
+# asciugatrice HD100-C367GU1-IT. Sono attributi diretti (non in settings).
+WM_ATTR_DIRT_LEVEL       = "dirtyLevel"          # livello sporco selezionato (1..3)
+WM_ATTR_DRY_LEVEL        = "dryLevel"            # livello asciugatura (WD/TD)
+WM_ATTR_LOADING          = "loadingPercentage"  # % carico cestello
+WM_ATTR_DELAY            = "delayTime"           # ritardo avvio impostato (minuti)
+# Binary sensor (0/1). Porta/blocco oblò già definiti sopra: WM_ATTR_DOOR_OPEN
+# (doorStatus, porta aperta) e WM_ATTR_DOOR (doorLockStatus, oblò bloccato).
+WM_ATTR_CHILD_LOCK       = "lockStatus"          # blocco comandi (sicurezza bambini)
+WM_ATTR_DRUM_CLEAN       = "drumCleaning"        # ciclo pulizia cestello consigliato
+WM_ATTR_FILTER_CLEAN     = "filterCleaning"      # pulizia filtro consigliata
+WM_ATTR_DRY_CLEAN_NEEDED = "dryCleaningNeeded"   # pulizia condensatore consigliata

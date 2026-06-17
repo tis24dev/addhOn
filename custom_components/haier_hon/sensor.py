@@ -47,8 +47,15 @@ from .const import (
     TD_ATTR_CYCLES,
     WM_ATTR_CURRENT_ENERGY,
     WM_ATTR_CURRENT_WATER,
+    WM_ATTR_DELAY,
+    WM_ATTR_DIRT_LEVEL,
+    WM_ATTR_DRY_LEVEL,
+    WM_ATTR_LOADING,
+    WM_ATTR_PROGRAM_NAME,
     WM_ATTR_REMAINING,
+    WM_ATTR_SPIN_SPEED,
     WM_ATTR_STATUS,
+    WM_ATTR_TEMP,
     WM_ATTR_TOTAL_ENERGY,
     WM_ATTR_TOTAL_WASH,
     WM_ATTR_TOTAL_WATER,
@@ -138,7 +145,76 @@ _WASH_CONSUMPTION: tuple[HonSensorEntityDescription, ...] = (
     ),
 )
 
-_WASHER: tuple[HonSensorEntityDescription, ...] = (_STATE, _REMAINING, *_WASH_CONSUMPTION)
+# Sensori extra gruppo lavaggio (chiavi confermate live su HW80 / HD100).
+# `program_name` è testo (no conversione float); i livelli sporco/asciugatura sono
+# valori interi grezzi (etichette demandate a uno step successivo).
+def _as_text(raw) -> str | None:
+    return None if raw is None else str(raw)
+
+
+_PROGRAM_NAME = HonSensorEntityDescription(
+    key="program_name",
+    name="Programma",
+    icon="mdi:format-list-bulleted",
+    attr_key=WM_ATTR_PROGRAM_NAME,
+    value_fn=_as_text,
+)
+_DELAY = HonSensorEntityDescription(
+    key="delay_time",
+    name="Ritardo Avvio",
+    icon="mdi:timer-sand",
+    attr_key=WM_ATTR_DELAY,
+    native_unit_of_measurement=UnitOfTime.MINUTES,
+    device_class=SensorDeviceClass.DURATION,
+)
+_LOADING = HonSensorEntityDescription(
+    key="loading_percentage",
+    name="Carico",
+    icon="mdi:weight",
+    attr_key=WM_ATTR_LOADING,
+    native_unit_of_measurement="%",
+    state_class=SensorStateClass.MEASUREMENT,
+)
+_DRY_LEVEL = HonSensorEntityDescription(
+    key="dry_level",
+    name="Livello Asciugatura",
+    icon="mdi:tumble-dryer",
+    attr_key=WM_ATTR_DRY_LEVEL,
+)
+# Solo lavatrice/lavasciuga (lato lavaggio).
+_WASH_EXTRA: tuple[HonSensorEntityDescription, ...] = (
+    HonSensorEntityDescription(
+        key="spin_speed",
+        name="Centrifuga",
+        icon="mdi:rotate-3d-variant",
+        attr_key=WM_ATTR_SPIN_SPEED,
+        native_unit_of_measurement="rpm",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HonSensorEntityDescription(
+        key="wash_temperature",
+        name="Temperatura Lavaggio",
+        attr_key=WM_ATTR_TEMP,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HonSensorEntityDescription(
+        key="dirty_level",
+        name="Livello Sporco",
+        icon="mdi:liquid-spot",
+        attr_key=WM_ATTR_DIRT_LEVEL,
+    ),
+)
+
+# Lavatrice (WM): stato/tempo + programma + extra lavaggio + carico/ritardo + consumi.
+_WASHER: tuple[HonSensorEntityDescription, ...] = (
+    _STATE, _REMAINING, _PROGRAM_NAME, *_WASH_EXTRA, _LOADING, _DELAY, *_WASH_CONSUMPTION,
+)
+# Lavasciuga (WD = WM + asciugatura): come la lavatrice + livello asciugatura.
+_WASHER_DRYER: tuple[HonSensorEntityDescription, ...] = (
+    _STATE, _REMAINING, _PROGRAM_NAME, *_WASH_EXTRA, _DRY_LEVEL, _LOADING, _DELAY, *_WASH_CONSUMPTION,
+)
 
 # Asciugatrice: niente acqua/energia (hOn non li espone per la TD). I cicli
 # riusano il suffisso "total_washes" ma leggono programsCounter, cosi l'entita
@@ -147,6 +223,10 @@ _WASHER: tuple[HonSensorEntityDescription, ...] = (_STATE, _REMAINING, *_WASH_CO
 _DRYER: tuple[HonSensorEntityDescription, ...] = (
     _STATE,
     _REMAINING,
+    _PROGRAM_NAME,
+    _DRY_LEVEL,
+    _LOADING,
+    _DELAY,
     HonSensorEntityDescription(
         key="total_washes",
         name="Cicli Totali",
@@ -204,7 +284,7 @@ _AC: tuple[HonSensorEntityDescription, ...] = (
 SENSORS: dict[str, tuple[HonSensorEntityDescription, ...]] = {
     APPLIANCE_AC: _AC,
     APPLIANCE_WM: _WASHER,
-    APPLIANCE_WD: _WASHER,
+    APPLIANCE_WD: _WASHER_DRYER,
     APPLIANCE_TD: _DRYER,
 }
 
