@@ -52,11 +52,22 @@ AC_ATTR_OUTDOOR_TEMP     = "tempOutdoor"
 AC_ATTR_HUMIDITY_INDOOR  = "humidityIndoor"          # Umidità ambiente (lettura sensore)
 AC_ATTR_HUMIDITY_SEL     = "settings.humiditySel"   # Umidità target (setpoint utente)
 AC_ATTR_FAN_SPEED    = "settings.windSpeed"
-# DISABILITATO: AC_ATTR_SWING_V e AC_ATTR_SWING_H causano errore in pyhOn quando AC è OFF
-# pyhOn tenta di sincronizzare windDirectionVertical=0 che non è permesso (valori ammessi: 2,4,5,6,7,8)
-# Issue: https://github.com/telard-pixel/haier_hon/issues/XX
-# AC_ATTR_SWING_V      = "settings.windDirectionVertical"
-# AC_ATTR_SWING_H      = "settings.windDirectionHorizontal"
+# Swing verticale. windDirectionVertical è un ENUM di POSIZIONI, non un bool:
+# 2,4,5,6,7 = posizioni fisse del deflettore, 8 = SWING (oscillazione). Il device
+# riporta 0 da spento: 0 NON è tra gli enumValues, quindi inviarlo fa sollevare
+# ValueError al setter enum di pyhОn e l'API lo rifiuta — è la causa per cui lo
+# swing era stato disabilitato. Il fix (climate.py): non inviare MAI 0 (sanitazione
+# pre-send) e impostare windDirectionVertical solo a valori ammessi. Gli allowed
+# values reali sono letti a runtime da .values del parametro (per-device), con
+# windDirectionVerticalPositionSequence come sorgente sul device. Vedi
+# docs/hon-reverse-and-mapping.md §4.2.
+AC_ATTR_SWING_V      = "settings.windDirectionVertical"
+AC_ATTR_SWING_H      = "settings.windDirectionHorizontal"
+AC_SWING_V_PARAM     = "windDirectionVertical"   # nome param nel comando "settings"
+AC_SWING_H_PARAM     = "windDirectionHorizontal"
+AC_SWING_V_ON        = "8"                        # 8 = oscillazione verticale
+AC_SWING_MODE_ON     = "on"
+AC_SWING_MODE_OFF    = "off"
 AC_ATTR_ON_OFF       = "settings.onOffStatus"
 # ecoMode esiste solo in startProgram (NON in settings) — confermato da diagnostics
 AC_ATTR_ECO          = "startProgram.ecoMode"
