@@ -3,7 +3,7 @@
 DOMAIN = "haier_hon"
 
 # Piattaforme supportate
-PLATFORMS = ["climate", "sensor", "switch", "select", "button"]
+PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button"]
 
 # Intervallo di aggiornamento in secondi
 # NOTA: il setup iniziale + primo fetch impiega ~22s su cloud lento.
@@ -52,11 +52,21 @@ AC_ATTR_OUTDOOR_TEMP     = "tempOutdoor"
 AC_ATTR_HUMIDITY_INDOOR  = "humidityIndoor"          # Umidità ambiente (lettura sensore)
 AC_ATTR_HUMIDITY_SEL     = "settings.humiditySel"   # Umidità target (setpoint utente)
 AC_ATTR_FAN_SPEED    = "settings.windSpeed"
-# DISABILITATO: AC_ATTR_SWING_V e AC_ATTR_SWING_H causano errore in pyhOn quando AC è OFF
-# pyhOn tenta di sincronizzare windDirectionVertical=0 che non è permesso (valori ammessi: 2,4,5,6,7,8)
-# Issue: https://github.com/telard-pixel/haier_hon/issues/XX
-# AC_ATTR_SWING_V      = "settings.windDirectionVertical"
-# AC_ATTR_SWING_H      = "settings.windDirectionHorizontal"
+# Swing verticale. windDirectionVertical è un ENUM di POSIZIONI, non un bool:
+# 2,4,5,6,7 = posizioni fisse del deflettore, 8 = SWING (oscillazione). Il device
+# riporta 0 da spento: 0 NON è tra gli enumValues, quindi inviarlo fa sollevare
+# ValueError al setter enum di pyhОn e l'API lo rifiuta — è la causa per cui lo
+# swing era stato disabilitato. Il fix (climate.py): non inviare MAI 0 (sanitazione
+# pre-send) e impostare windDirectionVertical solo a valori ammessi. Gli allowed
+# values reali sono letti a runtime da .values del parametro (per-device), con
+# windDirectionVerticalPositionSequence come sorgente sul device.
+AC_ATTR_SWING_V      = "settings.windDirectionVertical"
+AC_ATTR_SWING_H      = "settings.windDirectionHorizontal"
+AC_SWING_V_PARAM     = "windDirectionVertical"   # nome param nel comando "settings"
+AC_SWING_H_PARAM     = "windDirectionHorizontal"
+AC_SWING_V_ON        = "8"                        # 8 = oscillazione verticale
+AC_SWING_MODE_ON     = "on"
+AC_SWING_MODE_OFF    = "off"
 AC_ATTR_ON_OFF       = "settings.onOffStatus"
 # ecoMode esiste solo in startProgram (NON in settings) — confermato da diagnostics
 AC_ATTR_ECO          = "startProgram.ecoMode"
@@ -69,6 +79,10 @@ AC_ATTR_SELF_CLEAN   = "settings.selfCleaningStatus"
 AC_ATTR_LIGHT        = "settings.lightStatus"
 AC_ATTR_COMPRESSOR_FREQ = "compressorFrequency"
 AC_ATTR_TOTAL_ENERGY = "totalElectricityUsed"
+# Qualità aria (attributi diretti, confermati sull'AC di Roberto)
+AC_ATTR_PM25        = "pm2p5ValueIndoor"   # PM2.5 interno (µg/m³)
+AC_ATTR_CO2         = "co2ValueIndoor"     # CO2 interna (ppm)
+AC_ATTR_CH2O        = "ch2oValueIndoor"    # formaldeide interna (mg/m³)
 
 # Mappatura modalità AC -> HA
 # Valori accettati dal device: [0, 1, 2, 4, 6]
@@ -124,4 +138,55 @@ WM_STATE_MAP = {
     "5": "Programmato",
     "6": "Ritardo avvio",
     "7": "Mezzo carico",
+}
+
+# ─── Sensori/binary aggiuntivi gruppo lavaggio ────────────────────────────────
+# Chiavi CONFERMATE live sui device di Roberto: lavatrice HW80-B14959TU1IT e
+# asciugatrice HD100-C367GU1-IT. Sono attributi diretti (non in settings).
+WM_ATTR_DIRT_LEVEL       = "dirtyLevel"          # livello sporco selezionato (1..3)
+WM_ATTR_DRY_LEVEL        = "dryLevel"            # livello asciugatura (WD/TD)
+WM_ATTR_LOADING          = "loadingPercentage"  # % carico cestello
+WM_ATTR_DELAY            = "delayTime"           # ritardo avvio impostato (minuti)
+# Binary sensor (0/1). Porta/blocco oblò già definiti sopra: WM_ATTR_DOOR_OPEN
+# (doorStatus, porta aperta) e WM_ATTR_DOOR (doorLockStatus, oblò bloccato).
+WM_ATTR_CHILD_LOCK       = "lockStatus"          # blocco comandi (sicurezza bambini)
+WM_ATTR_DRUM_CLEAN       = "drumCleaning"        # ciclo pulizia cestello consigliato
+WM_ATTR_FILTER_CLEAN     = "filterCleaning"      # pulizia filtro consigliata
+WM_ATTR_DRY_CLEAN_NEEDED = "dryCleaningNeeded"   # pulizia condensatore consigliata
+
+# Fase ciclo (prPhase, attributo grezzo numerico). Le mappe traducono prPhase ->
+# etichetta della fase; lavatrice/lavasciuga e asciugatrice usano tabelle
+# distinte. Valori non in mappa -> "Fase N".
+WASHING_PHASE_MAP = {
+    "0": "Pronto",
+    "1": "Lavaggio",
+    "2": "Lavaggio",
+    "3": "Salto fase",
+    "4": "Risciacquo",
+    "5": "Risciacquo",
+    "6": "Risciacquo",
+    "7": "Asciugatura",
+    "8": "Salto fase",
+    "9": "Vapore",
+    "10": "Pronto",
+    "11": "Centrifuga",
+    "12": "Pesatura",
+    "14": "Lavaggio",
+    "15": "Lavaggio",
+    "16": "Lavaggio",
+    "20": "Avvio rotazione",
+    "24": "Rinfresco",
+}
+TUMBLE_DRYER_PHASE_MAP = {
+    "0": "Pronto",
+    "1": "Riscaldamento",
+    "2": "Asciugatura",
+    "3": "Raffreddamento",
+    "13": "Raffreddamento",
+    "14": "Riscaldamento",
+    "15": "Riscaldamento",
+    "16": "Raffreddamento",
+    "18": "Rotazione",
+    "19": "Asciugatura",
+    "20": "Asciugatura",
 }

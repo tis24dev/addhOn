@@ -1,9 +1,11 @@
 """Tests for the per-appliance-type sensor refactor.
 
-Covers: the per-type SENSORS description table (AC/WM/WD/TD), the dryer (TD)
-getting only state/remaining/cycles (cycles from programsCounter, no water/
-energy), washer/AC sets unchanged, and the legacy registry cleanup of the
-washer-only sensors that used to land on dryers.
+Covers the per-type SENSORS description table (AC/WM/WD/TD). TD gets
+state/remaining/program/phase/dry_level/loading/delay/errors plus cycles (from
+programsCounter, still no water/energy); WM/WD add program/phase/spin/temp/soil/
+load/delay/errors on top of the consumption set (WD also dry_level); AC adds the
+air-quality sensors (PM2.5/CO2/CH2O). Also covers the legacy registry cleanup of
+the washer-only sensors that used to land on dryers.
 
 Stdlib unittest with inline Home Assistant stubs (incl. a real dataclass
 SensorEntityDescription so HonSensorEntityDescription can subclass it).
@@ -98,6 +100,8 @@ def _install_homeassistant_stubs() -> None:
         ENERGY = "energy"
         WATER = "water"
         DURATION = "duration"
+        PM25 = "pm25"
+        CO2 = "carbon_dioxide"
 
     class SensorStateClass:
         MEASUREMENT = "measurement"
@@ -166,24 +170,37 @@ class PerTypeTableTest(unittest.TestCase):
 
         return [d.key for d in SENSORS.get(app_type, ())]
 
-    def test_ac_unchanged(self) -> None:
+    def test_ac_keys(self) -> None:
         self.assertEqual(
             self._keys("AC"),
-            ["temp_indoor", "temp_outdoor", "humidity_indoor", "compressor_freq", "total_energy"],
+            ["temp_indoor", "temp_outdoor", "humidity_indoor", "compressor_freq",
+             "total_energy", "pm25", "co2", "ch2o"],
         )
 
-    def test_wm_unchanged(self) -> None:
+    def test_wm_keys(self) -> None:
         self.assertEqual(
             self._keys("WM"),
-            ["state", "remaining_time", "total_washes", "total_water",
-             "total_energy", "current_energy", "current_water"],
+            ["state", "remaining_time", "program_name", "program_phase", "spin_speed",
+             "wash_temperature", "dirty_level", "loading_percentage", "delay_time",
+             "errors", "total_washes", "total_water", "total_energy", "current_energy",
+             "current_water"],
         )
 
-    def test_wd_equals_wm(self) -> None:
-        self.assertEqual(self._keys("WD"), self._keys("WM"))
+    def test_wd_is_wm_plus_dry_level(self) -> None:
+        self.assertEqual(
+            self._keys("WD"),
+            ["state", "remaining_time", "program_name", "program_phase", "spin_speed",
+             "wash_temperature", "dirty_level", "dry_level", "loading_percentage",
+             "delay_time", "errors", "total_washes", "total_water", "total_energy",
+             "current_energy", "current_water"],
+        )
 
-    def test_td_only_state_remaining_cycles(self) -> None:
-        self.assertEqual(self._keys("TD"), ["state", "remaining_time", "total_washes"])
+    def test_td_keys(self) -> None:
+        self.assertEqual(
+            self._keys("TD"),
+            ["state", "remaining_time", "program_name", "program_phase", "dry_level",
+             "loading_percentage", "delay_time", "errors", "total_washes"],
+        )
 
     def test_td_has_no_water_or_energy(self) -> None:
         keys = set(self._keys("TD"))
@@ -226,7 +243,9 @@ class SensorBuildTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             {e._attr_unique_id for e in added},
-            {"td-1_state", "td-1_remaining_time", "td-1_total_washes"},
+            {"td-1_state", "td-1_remaining_time", "td-1_program_name",
+             "td-1_program_phase", "td-1_dry_level", "td-1_loading_percentage",
+             "td-1_delay_time", "td-1_errors", "td-1_total_washes"},
         )
         cycles = next(e for e in added if e._attr_unique_id == "td-1_total_washes")
         self.assertEqual(cycles.native_value, 42.0)  # reads programsCounter

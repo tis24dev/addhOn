@@ -1,7 +1,6 @@
 """Climate entity per Haier hOn - condizionatore AS35PBPHRA-PRE."""
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from homeassistant.components.climate import ClimateEntity
@@ -26,8 +25,19 @@ from .const import (
     AC_ATTR_CURRENT_TEMP,
     AC_ATTR_OUTDOOR_TEMP,
     AC_ATTR_FAN_SPEED,
+    AC_ATTR_SWING_V,
+    AC_SWING_V_PARAM,
+    AC_SWING_V_ON,
+    AC_SWING_MODE_ON,
+    AC_SWING_MODE_OFF,
 )
-from .debug_utils import command_names, param_snapshot
+from .debug_utils import command_names
+from .ac_command import (
+    async_send_settings,
+    fixed_vertical_value,
+    param_allowed_values,
+    settings_param,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,11 +79,19 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         self._attr_min_temp = 16.0
         self._attr_max_temp = 30.0
         self._attr_supported_features = (
-            ClimateEntityFeature.TARGET_TEMPERATURE 
+            ClimateEntityFeature.TARGET_TEMPERATURE
             | ClimateEntityFeature.FAN_MODE
             | ClimateEntityFeature.TURN_ON
             | ClimateEntityFeature.TURN_OFF
         )
+        # Swing: esposto SOLO se il device ha davvero windDirectionVertical tra i
+        # parametri del comando settings (capability-gate). Evita di offrire un
+        # controllo che il modello non supporta.
+        swing_param = settings_param(self._appliance, AC_SWING_V_PARAM)
+        self._swing_supported = swing_param is not None
+        if self._swing_supported:
+            self._attr_supported_features |= ClimateEntityFeature.SWING_MODE
+            self._attr_swing_modes = [AC_SWING_MODE_OFF, AC_SWING_MODE_ON]
         # Forziamo gli Enum nativi di HA per la plancia di comando
         self._attr_hvac_modes = [
             HVACMode.OFF,
@@ -165,6 +183,18 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         _LOGGER.debug("Climate debug: fan_mode raw=%s -> %s", val, fan)
         return fan
 
+    @property
+    def swing_mode(self) -> str | None:
+        """Ritorna 'on' se la posizione verticale è SWING (8), altrimenti 'off'."""
+        if not getattr(self, "_swing_supported", False):
+            return None
+        val = self._get_attr(AC_ATTR_SWING_V)
+        if val is None:
+            return None
+        mode = AC_SWING_MODE_ON if str(val) == AC_SWING_V_ON else AC_SWING_MODE_OFF
+        _LOGGER.debug("Climate debug: swing_mode windDirectionVertical=%s -> %s", val, mode)
+        return mode
+
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Invia il cambio modalità convertendo l'HVACMode nell'esatto codice numerico hOn."""
         appliance = self._appliance
@@ -241,61 +271,48 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             _LOGGER.error("Climate: errore set_fan_mode: %s", err, exc_info=True)
             raise HomeAssistantError(f"Climate: errore set_fan_mode: {err}") from err
 
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        """Attiva/disattiva l'oscillazione verticale (windDirectionVertical).
+
+        'on' -> 8 (swing). 'off' -> una posizione fissa AMMESSA dal device. Non
+        viene MAI inviato 0: i valori validi sono letti da .values del parametro.
+        """
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError("Climate: appliance o client non disponibile")
+        param = settings_param(appliance, AC_SWING_V_PARAM)
+        if param is None:
+            raise HomeAssistantError(
+                "Climate: il dispositivo non espone windDirectionVertical"
+            )
+        allowed = param_allowed_values(param)
+        if swing_mode == AC_SWING_MODE_ON:
+            target = AC_SWING_V_ON
+        else:
+            target = fixed_vertical_value(allowed)
+        if allowed and target not in allowed:
+            raise HomeAssistantError(
+                f"Climate: posizione swing {target} non ammessa (ammessi: {allowed})"
+            )
+        try:
+            _LOGGER.debug(
+                "Climate debug: set_swing_mode %s -> windDirectionVertical=%s (ammessi=%s)",
+                swing_mode, target, allowed,
+            )
+            await self._send_command_in_executor(
+                client, appliance, {AC_SWING_V_PARAM: target}
+            )
+            await self._async_request_command_refresh()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error("Climate: errore set_swing_mode: %s", err, exc_info=True)
+            raise HomeAssistantError(f"Climate: errore set_swing_mode: {err}") from err
+
     async def _send_command_in_executor(self, client, appliance, params: dict) -> None:
-        """Invia un comando settings tramite pyhOn sul loop dedicato (in executor)."""
-        def _do_send():
-            async def _inner():
-                commands = getattr(appliance, "commands", None)
-                commands = commands if isinstance(commands, dict) else {}
-                command = commands.get("settings")
-                if command is None:
-                    raise RuntimeError("Comando 'settings' non trovato sul dispositivo AC")
-                command_params = getattr(command, "parameters", {})
-                if _LOGGER.isEnabledFor(logging.DEBUG):
-                    _LOGGER.debug(
-                        "Climate debug: settings command disponibile commands=%s "
-                        "params_prima=%s requested=%s",
-                        sorted(commands.keys()),
-                        param_snapshot(command_params),
-                        params,
-                    )
-                missing_params = [key for key in params if key not in command_params]
-                if missing_params:
-                    raise RuntimeError(
-                        "Parametro/i non trovato/i nel comando settings: "
-                        + ", ".join(missing_params)
-                    )
-                previous_values = {}
-                assigned_params = []
-                try:
-                    for key, value in params.items():
-                        previous_values[key] = command_params[key].value
-                        assigned_params.append(key)
-                        command_params[key].value = value
-                        _LOGGER.debug(
-                            "Climate debug: parametro '%s' impostato a %s (previous=%s)",
-                            key,
-                            value,
-                            previous_values[key],
-                        )
-                except Exception:
-                    for key in reversed(assigned_params):
-                        try:
-                            command_params[key].value = previous_values[key]
-                        except Exception as rollback_err:
-                            _LOGGER.warning(
-                                "Climate: impossibile ripristinare parametro '%s': %s",
-                                key, rollback_err,
-                            )
-                    raise
-                if _LOGGER.isEnabledFor(logging.DEBUG):
-                    _LOGGER.debug(
-                        "Climate debug: invio settings params_finali=%s",
-                        param_snapshot(command_params),
-                    )
-                await command.send()
-                _LOGGER.debug("Climate debug: settings send completato")
+        """Invia il comando settings dell'AC (sanitazione windDirection inclusa).
 
-            client.run_command_sync(_inner())
-
-        await self.hass.async_add_executor_job(_do_send)
+        Delega a ac_command.async_send_settings, condiviso con gli switch AC.
+        """
+        await async_send_settings(self.hass, client, appliance, params)

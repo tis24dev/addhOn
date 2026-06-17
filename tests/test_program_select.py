@@ -671,7 +671,13 @@ class DebugLoggingGuardTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(logger.setLevel, original_level)
 
     def _replace_snapshot_with_failure(self, module) -> None:
+        # The AC settings send moved to ac_command, which builds no param_snapshot,
+        # so the climate module may not expose param_snapshot/_param_snapshot at all.
+        # When neither exists there is nothing to guard -> no-op (the send is then
+        # only checked for correctness below).
         name = "param_snapshot" if hasattr(module, "param_snapshot") else "_param_snapshot"
+        if not hasattr(module, name):
+            return
         original = getattr(module, name)
 
         def fail_if_called(params):
