@@ -186,8 +186,15 @@ def _error_text(err: BaseException) -> str:
 
 
 def _is_auth_error(err: BaseException) -> bool:
-    err_str = _error_text(err)
-    return any(k in err_str for k in (
+    # Controlla sia il messaggio SIA il nome della classe d'eccezione: gli errori
+    # del flusso di login (il nostro NativeAuthError, il HonAuthenticationError di
+    # pyhОn) contengono "auth" nel NOME anche quando il messaggio no (es. password
+    # errata -> "login: fallito"/"Can't login"), così si classificano come
+    # invalid_auth senza dover importare quelle classi (hon_client resta _vendor-free).
+    # Il check "retryable 5xx" in _requires_reauth resta prioritario: un errore di
+    # auth che però porta un 500/timeout va in retry, non in reauth.
+    haystack = f"{_error_text(err)} {type(err).__name__.lower()}"
+    return any(k in haystack for k in (
         "personaccountid",
         "unauthorized",
         "401",
