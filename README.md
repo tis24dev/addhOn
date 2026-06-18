@@ -35,7 +35,8 @@ Other hOn-compatible Haier appliances should work — feel free to test and repo
 1. **Clone or download** this integration to your Home Assistant custom integrations folder:
 
 ```bash
-git clone https://github.com/yourusername/haier-hon-integration.git /path/to/config/custom_components/addhon
+git clone https://github.com/telard-pixel/addhOn.git
+cp -r addhOn/custom_components/addhon /path/to/config/custom_components/addhon
 ```
 
 If you don't have a `custom_components` folder, create it:
