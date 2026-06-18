@@ -6,17 +6,20 @@ ristretto a un enum/range). Si aggancia via `parameter.add_trigger` (il sistema 
 trigger del parametro base nativo): quando il trigger cambia valore, `check_trigger`
 esegue le callback registrate qui.
 
-ATTENZIONE — modello rules (vedi diagnostics/FASE4-engine-plan.md):
-  Questo motore riproduce FEDELMENTE il comportamento OSSERVABILE di pyhОn, che
-  costruisce le rules dai parametri con `category=="rule"` (vedi commands.py) con un
-  nesting param-first e supporto `@`-ref / `|`-split / condizioni-extra. L'app hОn
-  decompilata modella invece le rules via `ancillaryParameters.programRules` con
-  nesting TRIGGER-first: pyhОn potrebbe quindi essere TRASPOSTO/sbagliato.
-  NON divergiamo qui: il frigo (unico dump) non ha rules e l'AC (che le esercita) è
-  OFFLINE -> non possiamo validare LIVE una versione "più corretta". Manteniamo la
-  parità con pyhОn (differential-testata su fixture sintetiche) e rimandiamo il
-  passaggio al modello `programRules` a quando l'AC sarà online (oracolo = app/AC,
-  non pyhОn). Riscrivere alla cieca violerebbe la disciplina di migrazione.
+MODELLO rules — RISOLTO sull'AC live (2026-06-18, vedi apk/analysis/rules-model.md):
+  Il vecchio dubbio "pyhОn forse trasposto vs il modello `programRules` dell'app" era un
+  MISREADING. Dump dell'AC reale (apk/dump/ac_live): `ancillaryParameters.programRules` È
+  il parametro con `category=="rule"`, stesso nodo, stesso nesting
+  `{targetParam: {triggerParam: {triggerValue: action}}}` (+ condizioni-extra annidate
+  es. `tempSel: {ecoMode: {"1": {machMode: {"1": {fixedValue:"26"}}}}}`). Quindi il
+  modello di pyhОn = il modello dell'app: già allineati, niente da "adottare".
+  UNA divergenza VOLUTA dopo la validazione live: il fix di `_extra_rules_matches`
+  (vedi sotto) - pyhОn confrontava `str(param)` (repr) invece di `str(param.value)`,
+  quindi le condizioni-extra non scattavano MAI; sull'AC reale ecoMode=1 ora vincola
+  tempSel/windSpeed/windDirection come fa l'app.
+  NOTA: le rules con trigger `$installationType` (config statica multi-split, non un
+  parametro) NON scattano (come in pyhОn: `$` non strippato, options vuote a
+  costruzione); impatto basso (remoteVisible/selfClean), non implementato alla cieca.
 
 `isinstance` qui è contro le classi parametro NATIVE: è il motivo per cui il flip
 avviene a CLUSTER (params+commands+rules insieme).
@@ -117,9 +120,17 @@ class HonRuleSet:
     def _extra_rules_matches(self, rule: HonRule) -> bool:
         if rule.extras:
             for key, value in rule.extras.items():
-                if not self._command.parameters.get(key):
+                param = self._command.parameters.get(key)
+                if not param:
                     return False
-                if str(self._command.parameters.get(key)) != str(value):
+                # FIX (validato sull'AC live, 2026-06-18): confronta il VALORE del
+                # parametro, non l'oggetto. pyhОn faceva `str(param)` (= il repr
+                # dell'oggetto) != `str(value)`, SEMPRE vero -> le condizioni-extra
+                # (rules annidate, es. AC `ecoMode==1 AND machMode==1 -> tempSel=26`)
+                # non scattavano MAI. Qui confrontiamo `str(param.value)`: sull'AC reale
+                # ecoMode=1 ora vincola correttamente tempSel/windSpeed/windDirection
+                # come fa l'app. Divergenza voluta vs pyhОn (suo bug).
+                if str(param.value) != str(value):
                     return False
         return True
 

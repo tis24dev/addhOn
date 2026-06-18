@@ -243,7 +243,37 @@ def _rule(rule_dict, kind="fixedValue"):
     return {"category": "rule", kind: rule_dict}
 
 
+# Struttura REALE dell'AC (anonimizzata, da apk/dump/ac_live IOT_COOL): condizione-extra
+# annidata ecoMode + machMode. Valida il fix di `_extra_rules_matches` sui dati dell'app.
+_AC_IOT_COOL = {
+    "parameters": {
+        "machMode": {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": "1"},
+        "tempSel": {"typology": "range", "category": "command", "mandatory": 1,
+                    "defaultValue": "22", "minimumValue": "16", "maximumValue": "30", "incrementValue": "1"},
+        "windSpeed": {"typology": "enum", "category": "command", "mandatory": 1,
+                      "defaultValue": "5", "enumValues": [1, 2, 3, 5]},
+        "windDirectionHorizontal": {"typology": "enum", "category": "command", "mandatory": 1,
+                                    "defaultValue": "0", "enumValues": [0, 3, 4, 5, 6, 7]},
+        "windDirectionVertical": {"typology": "enum", "category": "command", "mandatory": 1,
+                                  "defaultValue": "5", "enumValues": [2, 4, 5, 6, 8]},
+    },
+    "ancillaryParameters": {
+        "ecoMode": {"typology": "range", "category": "general", "mandatory": 1,
+                    "defaultValue": "0", "minimumValue": "0", "maximumValue": "1", "incrementValue": "1"},
+        "programRules": {"category": "rule", "mandatory": 0, "typology": "fixed", "fixedValue": {
+            "tempSel": {"ecoMode": {"1": {"machMode": {"1": {"fixedValue": "26", "typology": "fixed"},
+                                                       "4": {"fixedValue": "20", "typology": "fixed"}}}}},
+            "windDirectionHorizontal": {"ecoMode": {"1": {"machMode": {"1|4": {"fixedValue": "4", "typology": "fixed"}}}}},
+            "windDirectionVertical": {"ecoMode": {"1": {"machMode": {"1|4": {"fixedValue": "3", "typology": "fixed"}}}}},
+            "windSpeed": {"ecoMode": {"1": {"machMode": {"1|4": {"defaultValue": "5", "enumValues": "1|2|3|5", "typology": "enum"}}}}},
+        }},
+    },
+}
+
+
 _RULES = {
+    # AC reale: ecoMode=1 (con machMode fisso a 1) DEVE vincolare tempSel/windDir/windSpeed
+    "ac_eco_nested": (_AC_IOT_COOL, [("ecoMode", "1")]),
     "fixed_in_range": ({"parameters": {"mode": _enum("cold", ["cold", "hot"]), "temp": _range()},
                         "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "30"}}}})}},
                        [("mode", "hot")]),
@@ -323,6 +353,18 @@ class ClusterBehaviorTest(unittest.TestCase):
 
     def test_favourite_added(self) -> None:
         self.assertIn("MyFav", _native_snapshot()["rich_favourites_categories"])
+
+    def test_ac_eco_nested_rule_fires(self) -> None:
+        # struttura REALE dell'AC (apk/dump/ac_live): ecoMode=1 con machMode fisso=1
+        # deve vincolare tempSel a 26 e le wind-direction (condizione-extra annidata).
+        # Pin del fix `_extra_rules_matches` validato live: pyhОn lasciava tempSel a 22.
+        c = NaCommand("c", json.loads(json.dumps(_AC_IOT_COOL)), FakeAppliance(),
+                      category_name="PROGRAMS.AC.IOT_COOL")
+        self.assertEqual(c.parameters["tempSel"].value, 22)
+        c.parameters["ecoMode"].value = "1"
+        self.assertEqual(c.parameters["tempSel"].value, 26)
+        self.assertEqual(c.parameters["windDirectionHorizontal"].value, "4")
+        self.assertEqual(c.parameters["windDirectionVertical"].value, "3")
 
 
 class NativeEnumEdgeBehaviorTest(unittest.TestCase):

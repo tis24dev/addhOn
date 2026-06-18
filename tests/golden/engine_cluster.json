@@ -4136,6 +4136,435 @@
     }
   },
   "rules": {
+    "ac_eco_nested": [
+      {
+        "ecoMode": {
+          "category": "general",
+          "group": "ancillaryParameters",
+          "intern_value": "0",
+          "key": "ecoMode",
+          "mandatory": 1,
+          "max": 1,
+          "min": 0,
+          "step": 1,
+          "triggers": {
+            "1": {
+              "machMode": {
+                "1": {
+                  "tempSel": "26",
+                  "windDirectionHorizontal": "4",
+                  "windDirectionVertical": "3",
+                  "windSpeed": "5"
+                },
+                "4": {
+                  "tempSel": "20",
+                  "windDirectionHorizontal": "4",
+                  "windDirectionVertical": "3",
+                  "windSpeed": "5"
+                }
+              }
+            }
+          },
+          "typology": "range",
+          "value": 0,
+          "values": [
+            "0",
+            "1"
+          ]
+        },
+        "machMode": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "1",
+          "key": "machMode",
+          "mandatory": 1,
+          "triggers": {
+            "1": {
+              "ecoMode": {
+                "1": {
+                  "tempSel": "26",
+                  "windDirectionHorizontal": "4",
+                  "windDirectionVertical": "3",
+                  "windSpeed": "5"
+                }
+              }
+            },
+            "4": {
+              "ecoMode": {
+                "1": {
+                  "tempSel": "20",
+                  "windDirectionHorizontal": "4",
+                  "windDirectionVertical": "3",
+                  "windSpeed": "5"
+                }
+              }
+            }
+          },
+          "typology": "fixed",
+          "value": "1",
+          "values": [
+            "1"
+          ]
+        },
+        "programRules": {
+          "category": "rule",
+          "group": "ancillaryParameters",
+          "intern_value": "{'tempSel': {'ecoMode': {'1': {'machMode': {'1': {'fixedValue': '26', 'typology': 'fixed'}, '4': {'fixedValue': '20', 'typology': 'fixed'}}}}}, 'windDirectionHorizontal': {'ecoMode': {'1': {'machMode': {'1|4': {'fixedValue': '4', 'typology': 'fixed'}}}}}, 'windDirectionVertical': {'ecoMode': {'1': {'machMode': {'1|4': {'fixedValue': '3', 'typology': 'fixed'}}}}}, 'windSpeed': {'ecoMode': {'1': {'machMode': {'1|4': {'defaultValue': '5', 'enumValues': '1|2|3|5', 'typology': 'enum'}}}}}}",
+          "key": "programRules",
+          "mandatory": 0,
+          "triggers": {},
+          "typology": "fixed",
+          "value": {
+            "tempSel": {
+              "ecoMode": {
+                "1": {
+                  "machMode": {
+                    "1": {
+                      "fixedValue": "26",
+                      "typology": "fixed"
+                    },
+                    "4": {
+                      "fixedValue": "20",
+                      "typology": "fixed"
+                    }
+                  }
+                }
+              }
+            },
+            "windDirectionHorizontal": {
+              "ecoMode": {
+                "1": {
+                  "machMode": {
+                    "1|4": {
+                      "fixedValue": "4",
+                      "typology": "fixed"
+                    }
+                  }
+                }
+              }
+            },
+            "windDirectionVertical": {
+              "ecoMode": {
+                "1": {
+                  "machMode": {
+                    "1|4": {
+                      "fixedValue": "3",
+                      "typology": "fixed"
+                    }
+                  }
+                }
+              }
+            },
+            "windSpeed": {
+              "ecoMode": {
+                "1": {
+                  "machMode": {
+                    "1|4": {
+                      "defaultValue": "5",
+                      "enumValues": "1|2|3|5",
+                      "typology": "enum"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "values": [
+            "{'tempSel': {'ecoMode': {'1': {'machMode': {'1': {'fixedValue': '26', 'typology': 'fixed'}, '4': {'fixedValue': '20', 'typology': 'fixed'}}}}}, 'windDirectionHorizontal': {'ecoMode': {'1': {'machMode': {'1|4': {'fixedValue': '4', 'typology': 'fixed'}}}}}, 'windDirectionVertical': {'ecoMode': {'1': {'machMode': {'1|4': {'fixedValue': '3', 'typology': 'fixed'}}}}}, 'windSpeed': {'ecoMode': {'1': {'machMode': {'1|4': {'defaultValue': '5', 'enumValues': '1|2|3|5', 'typology': 'enum'}}}}}}"
+          ]
+        },
+        "tempSel": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "22",
+          "key": "tempSel",
+          "mandatory": 1,
+          "max": 30,
+          "min": 16,
+          "step": 1,
+          "triggers": {},
+          "typology": "range",
+          "value": 22,
+          "values": [
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21",
+            "22",
+            "23",
+            "24",
+            "25",
+            "26",
+            "27",
+            "28",
+            "29",
+            "30"
+          ]
+        },
+        "windDirectionHorizontal": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "0",
+          "key": "windDirectionHorizontal",
+          "mandatory": 1,
+          "triggers": {},
+          "typology": "enum",
+          "value": "0",
+          "values": [
+            "0",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7"
+          ]
+        },
+        "windDirectionVertical": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "5",
+          "key": "windDirectionVertical",
+          "mandatory": 1,
+          "triggers": {},
+          "typology": "enum",
+          "value": "5",
+          "values": [
+            "2",
+            "4",
+            "5",
+            "6",
+            "8"
+          ]
+        },
+        "windSpeed": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "5",
+          "key": "windSpeed",
+          "mandatory": 1,
+          "triggers": {},
+          "typology": "enum",
+          "value": "5",
+          "values": [
+            "1",
+            "2",
+            "3",
+            "5"
+          ]
+        }
+      },
+      {
+        "ecoMode": {
+          "category": "general",
+          "group": "ancillaryParameters",
+          "intern_value": "1",
+          "key": "ecoMode",
+          "mandatory": 1,
+          "max": 1,
+          "min": 0,
+          "step": 1,
+          "triggers": {
+            "1": {
+              "machMode": {
+                "1": {
+                  "tempSel": "26",
+                  "windDirectionHorizontal": "4",
+                  "windDirectionVertical": "3",
+                  "windSpeed": "5"
+                },
+                "4": {
+                  "tempSel": "20",
+                  "windDirectionHorizontal": "4",
+                  "windDirectionVertical": "3",
+                  "windSpeed": "5"
+                }
+              }
+            }
+          },
+          "typology": "range",
+          "value": 1,
+          "values": [
+            "0",
+            "1"
+          ]
+        },
+        "machMode": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "1",
+          "key": "machMode",
+          "mandatory": 1,
+          "triggers": {
+            "1": {
+              "ecoMode": {
+                "1": {
+                  "tempSel": "26",
+                  "windDirectionHorizontal": "4",
+                  "windDirectionVertical": "3",
+                  "windSpeed": "5"
+                }
+              }
+            },
+            "4": {
+              "ecoMode": {
+                "1": {
+                  "tempSel": "20",
+                  "windDirectionHorizontal": "4",
+                  "windDirectionVertical": "3",
+                  "windSpeed": "5"
+                }
+              }
+            }
+          },
+          "typology": "fixed",
+          "value": "1",
+          "values": [
+            "1"
+          ]
+        },
+        "programRules": {
+          "category": "rule",
+          "group": "ancillaryParameters",
+          "intern_value": "{'tempSel': {'ecoMode': {'1': {'machMode': {'1': {'fixedValue': '26', 'typology': 'fixed'}, '4': {'fixedValue': '20', 'typology': 'fixed'}}}}}, 'windDirectionHorizontal': {'ecoMode': {'1': {'machMode': {'1|4': {'fixedValue': '4', 'typology': 'fixed'}}}}}, 'windDirectionVertical': {'ecoMode': {'1': {'machMode': {'1|4': {'fixedValue': '3', 'typology': 'fixed'}}}}}, 'windSpeed': {'ecoMode': {'1': {'machMode': {'1|4': {'defaultValue': '5', 'enumValues': '1|2|3|5', 'typology': 'enum'}}}}}}",
+          "key": "programRules",
+          "mandatory": 0,
+          "triggers": {},
+          "typology": "fixed",
+          "value": {
+            "tempSel": {
+              "ecoMode": {
+                "1": {
+                  "machMode": {
+                    "1": {
+                      "fixedValue": "26",
+                      "typology": "fixed"
+                    },
+                    "4": {
+                      "fixedValue": "20",
+                      "typology": "fixed"
+                    }
+                  }
+                }
+              }
+            },
+            "windDirectionHorizontal": {
+              "ecoMode": {
+                "1": {
+                  "machMode": {
+                    "1|4": {
+                      "fixedValue": "4",
+                      "typology": "fixed"
+                    }
+                  }
+                }
+              }
+            },
+            "windDirectionVertical": {
+              "ecoMode": {
+                "1": {
+                  "machMode": {
+                    "1|4": {
+                      "fixedValue": "3",
+                      "typology": "fixed"
+                    }
+                  }
+                }
+              }
+            },
+            "windSpeed": {
+              "ecoMode": {
+                "1": {
+                  "machMode": {
+                    "1|4": {
+                      "defaultValue": "5",
+                      "enumValues": "1|2|3|5",
+                      "typology": "enum"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "values": [
+            "{'tempSel': {'ecoMode': {'1': {'machMode': {'1': {'fixedValue': '26', 'typology': 'fixed'}, '4': {'fixedValue': '20', 'typology': 'fixed'}}}}}, 'windDirectionHorizontal': {'ecoMode': {'1': {'machMode': {'1|4': {'fixedValue': '4', 'typology': 'fixed'}}}}}, 'windDirectionVertical': {'ecoMode': {'1': {'machMode': {'1|4': {'fixedValue': '3', 'typology': 'fixed'}}}}}, 'windSpeed': {'ecoMode': {'1': {'machMode': {'1|4': {'defaultValue': '5', 'enumValues': '1|2|3|5', 'typology': 'enum'}}}}}}"
+          ]
+        },
+        "tempSel": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "26",
+          "key": "tempSel",
+          "mandatory": 1,
+          "max": 30,
+          "min": 16,
+          "step": 1,
+          "triggers": {},
+          "typology": "range",
+          "value": 26,
+          "values": [
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21",
+            "22",
+            "23",
+            "24",
+            "25",
+            "26",
+            "27",
+            "28",
+            "29",
+            "30"
+          ]
+        },
+        "windDirectionHorizontal": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "4",
+          "key": "windDirectionHorizontal",
+          "mandatory": 1,
+          "triggers": {},
+          "typology": "enum",
+          "value": "4",
+          "values": [
+            "4"
+          ]
+        },
+        "windDirectionVertical": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "3",
+          "key": "windDirectionVertical",
+          "mandatory": 1,
+          "triggers": {},
+          "typology": "enum",
+          "value": "3",
+          "values": [
+            "3"
+          ]
+        },
+        "windSpeed": {
+          "category": "command",
+          "group": "parameters",
+          "intern_value": "5",
+          "key": "windSpeed",
+          "mandatory": 1,
+          "triggers": {},
+          "typology": "enum",
+          "value": "5",
+          "values": [
+            "1",
+            "2",
+            "3",
+            "5"
+          ]
+        }
+      }
+    ],
     "at_strip": [
       {
         "mode": {
@@ -4927,7 +5356,7 @@
         "temp": {
           "category": "command",
           "group": "parameters",
-          "intern_value": "20",
+          "intern_value": "35",
           "key": "temp",
           "mandatory": 0,
           "max": 40,
@@ -4935,7 +5364,7 @@
           "step": 1,
           "triggers": {},
           "typology": "range",
-          "value": 20,
+          "value": 35,
           "values": [
             "10",
             "11",
