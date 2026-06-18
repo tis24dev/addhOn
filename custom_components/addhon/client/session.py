@@ -133,5 +133,10 @@ class NativeHon:
             self._notify_function(None)
 
     async def close(self) -> None:
+        # Ferma il MQTT PRIMA della connessione (il watchdog non deve ritentare su
+        # una sessione in chiusura). pyhОn non lo faceva (leak): lo facciamo noi.
+        if self._mqtt_client is not None:
+            await pyhon_adapter.stop_mqtt(self._mqtt_client)
+            self._mqtt_client = None
         if self._api is not None:
             await self._api.close()

@@ -61,8 +61,18 @@ il transport; il motore (stabile e complesso) si tiene il più a lungo possibile
     `.appliances`/`subscribe_updates`/`notify` (il `MQTTClient` riusato li legge). MQTT
     gated da `enable_mqtt` (default True = pyhОn). Test offline + LIVE-validato: stessi 4
     appliance/fingerprint di pyhОn, MQTT smoke OK sopra la sessione nativa.
-  - [ ] piece 4 — FULL FLIP: `create_session` ritorna il `Hon` nativo → si cancella
-    `_vendor/connection/` (handler/api/auth/device-HTTP/mqtt) + `scripts/vendor_pyhon.py`.
+  - [x] piece 4a — FULL FLIP: `pyhon_adapter.create_session` ora ritorna `NativeHon`
+    (non più `pyhon.Hon` con auth iniettato). **La produzione gira sul transport nativo**;
+    `_vendor/connection/{handler,api,auth,device}` sono codice MORTO a runtime. `install_native_auth`
+    non è più chiamato (legacy). Preservato il warning diagnostico "0 appliance" in `HonApi`.
+    `NativeHon.close()` ora FERMA il MQTT (fix leak pyhОn). Test + LIVE-validato e2e
+    (`apk/validate_flip_native_live.py`): create_session→NativeHon, 4 appliance con comandi,
+    MQTT attivo, `appliance.update()` (polling) OK.
+  - [ ] piece 4b — cancellare `_vendor/connection/`: BLOCCATO da due cose — (1) il `MQTTClient`
+    vive lì e lo riusiamo ancora (riscriverlo nativo in `transport/mqtt.py` o rilocarlo);
+    (2) `_vendor/pyhon/__init__.py` + `hon.py` importano `connection.api`/`mqtt` (rigenerati dal
+    vendor script → serve cambiare `scripts/vendor_pyhon.py` per non vendorizzarli + ripulire
+    `__init__`). Poi si elimina `connection/` (handler/api/auth/device-HTTP).
 - [ ] **Fase 4 — motore parser nativo (= distacco TOTALE, la meta).** Riscrivere
   anche `commands`/`command_loader`/`parameter/`/`rules`/`appliance.py` con un
   modello NOSTRO (più semplice/tipizzato/idiomatico HA), validato sui dump reali,

@@ -81,7 +81,21 @@ class HonApi:
             json={"deviceId": device_id},
         ) as resp:
             result = await resp.json()
-        return parse_appliance_list(result)
+        appliances = parse_appliance_list(result)
+        if not appliances:
+            # Request/auth OK ma 0 appliance: logga la struttura della risposta per
+            # distinguere un account davvero vuoto da un cambio API (la lista
+            # unified-api include anche gli offline). Diagnostica portata da pyhОn.
+            modules = result.get("modules") if isinstance(result, dict) else None
+            _LOGGER.warning(
+                "hОn API: 0 appliance (request OK). result keys=%s; modules keys=%s. "
+                "Se gli apparecchi compaiono nell'app hОn, è probabile un cambio API "
+                "più che un account vuoto/non condiviso.",
+                sorted(result.keys()) if isinstance(result, dict) else "n/a",
+                sorted(modules.keys()) if isinstance(modules, dict) else "n/a",
+            )
+            _LOGGER.debug("hОn risposta appliance grezza: %s", result)
+        return appliances
 
     async def load_commands(self, appliance: Any) -> dict:
         params: dict[str, Any] = {

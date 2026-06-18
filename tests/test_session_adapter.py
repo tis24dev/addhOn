@@ -34,11 +34,25 @@ class SessionAdapterTest(unittest.TestCase):
         adapter = _load(_ADAPTER, "addhon_pyhon_adapter")
         self.assertTrue(callable(adapter.create_session))
 
-    def test_adapter_is_the_single_vendor_bridge(self) -> None:
-        # L'import di _vendor avviene SOLO dentro la funzione (lazy), non a
-        # livello di modulo: così client/ resta importabile a secco.
-        src = _ADAPTER.read_text(encoding="utf-8")
-        self.assertIn("from .._vendor.pyhon import Hon", src)
+    def test_adapter_vendor_imports_are_lazy(self) -> None:
+        # Gli import di _vendor stanno SOLO dentro le funzioni (lazy: create_session
+        # ->session, e i factory create_appliance/create_mqtt/ensure_enum_patch),
+        # mai a livello di modulo: così il modulo resta importabile a secco e
+        # l'adapter è l'unico ponte verso _vendor.
+        tree = ast.parse(_ADAPTER.read_text(encoding="utf-8"))
+        module_level_vendor: list[str] = []
+        for node in tree.body:  # solo statement top-level
+            if isinstance(node, ast.ImportFrom):
+                mod = ("." * (node.level or 0)) + (node.module or "")
+                if "_vendor" in mod:
+                    module_level_vendor.append(mod)
+            elif isinstance(node, ast.Import):
+                module_level_vendor.extend(a.name for a in node.names if "_vendor" in a.name)
+        self.assertEqual(
+            module_level_vendor, [], f"import _vendor a livello modulo: {module_level_vendor}"
+        )
+        # ...ma _vendor È usato (lazy, dentro i factory/patch)
+        self.assertIn("_vendor.pyhon", _ADAPTER.read_text(encoding="utf-8"))
 
     def test_hon_client_no_longer_imports_session_from_vendor(self) -> None:
         src = _HON_CLIENT.read_text(encoding="utf-8")

@@ -607,7 +607,7 @@ class HonClient:
                     "vuoto/non condiviso OPPURE un nuovo cambio API (NON è 'quasi "
                     "sempre lato account', vedi storia bug 0-appliance/v2.7.1). "
                     "Dettagli nel WARNING del logger "
-                    "custom_components.addhon._vendor.pyhon.connection.api."
+                    "custom_components.addhon.client.transport.api."
                 )
 
             for idx, appliance in enumerate(appliances, 1):

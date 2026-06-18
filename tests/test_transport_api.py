@@ -219,6 +219,14 @@ class ApiRequestShapeTest(unittest.TestCase):
         self.assertEqual(got, parse_appliance_list(copy.deepcopy(body)))
         self.assertEqual(got, [{"a": 1}])
 
+    def test_load_appliances_empty_returns_empty_and_warns(self) -> None:
+        # 0 appliance (request OK): ritorna [] e logga il warning diagnostico.
+        body = {"modules": {"applianceList": {"payload": {"appliances": []}}}}
+        with self.assertLogs("custom_components.addhon.client.transport.api", level="WARNING") as cm:
+            got = _run(_call(FakeConnection(body)).load_appliances())
+        self.assertEqual(got, [])
+        self.assertTrue(any("0 appliance" in m for m in cm.output))
+
     def test_load_commands_request(self) -> None:
         body = {"payload": {"resultCode": "0"}}
         conn = FakeConnection(body)
