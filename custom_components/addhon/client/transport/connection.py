@@ -90,7 +90,13 @@ class HonConnection:
                 await self.create()
                 async with self._intercept(method, url, *args, loop=2, **kwargs) as result:
                     yield result
-            elif loop >= 2:
+            elif loop >= 2 and (
+                self.auth.token_is_expired or response.status in (401, 403)
+            ):
+                # Terzo tentativo dopo re-auth: fallisce solo se è ANCORA non
+                # autorizzato. Se invece la re-auth ha funzionato (200), si cade nel
+                # ramo else e si restituisce la risposta (prima si sollevava sempre,
+                # scartando un recupero riuscito).
                 raise NativeAuthError(f"Login failure (status {response.status})")
             else:
                 # Forza un decode-check prima di yield-are (come pyhОn).

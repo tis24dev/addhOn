@@ -154,6 +154,70 @@ class ConnectionTest(unittest.TestCase):
         self.assertGreaterEqual(auth.refresh_calls, 1)
         self.assertEqual(len(session.calls), 2)  # un retry
 
+    def test_retry_on_403_refreshes(self) -> None:
+        # Stesso ramo del 401 (il codice li tratta identici) ma esplicitato per
+        # evitare regressioni sul 403 (nitpick CodeRabbit).
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        session = FakeSession([403, 200])  # primo 403 → refresh → 200
+        conn = _conn(auth, session)
+
+        async def run():
+            async with conn.get("https://x/api") as resp:
+                return resp.status
+
+        status = asyncio.run(run())
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(auth.refresh_calls, 1)
+        self.assertEqual(len(session.calls), 2)
+
+    def test_third_attempt_success_after_reauth_yields(self) -> None:
+        # ORACOLO: se refresh (loop0) non basta ma la re-auth (loop1) sì, il terzo
+        # tentativo torna 200 e DEVE restituire la risposta, non sollevare. Bug:
+        # `elif loop >= 2: raise` scartava ogni 200 al terzo giro.
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"  # già autenticato
+        session = FakeSession([401, 401, 200])  # 401 → refresh; 401 → re-auth; 200 ok
+        conn = _conn(auth, session)
+
+        async def _noop_create():
+            # re-auth riuscita: mantiene il fake auth e azzera l'expiry (come farebbe
+            # un login fresco), così al loop2 lo stato non forza più il fallimento.
+            auth.token_is_expired = False
+            return conn
+
+        conn.create = _noop_create
+
+        async def run():
+            async with conn.get("https://x/api") as resp:
+                return resp.status
+
+        status = asyncio.run(run())
+        self.assertEqual(status, 200)
+        self.assertEqual(len(session.calls), 3)  # tre tentativi, l'ultimo riuscito
+
+    def test_persistent_401_at_loop2_still_raises_via_status(self) -> None:
+        # Re-auth riuscita (token NON scaduto) ma il server continua a dare 401 al
+        # terzo giro: deve sollevare via il disgiunto sullo status, non restituire il
+        # 401. Pinna che il fix non si appoggi solo a token_is_expired.
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        session = FakeSession([401, 401, 401])
+        conn = _conn(auth, session)
+
+        async def _noop_create():
+            auth.token_is_expired = False  # login fresco: expiry azzerata
+            return conn
+
+        conn.create = _noop_create
+
+        async def run():
+            async with conn.get("https://x/api"):
+                pass
+
+        with self.assertRaises(NativeAuthError):
+            asyncio.run(run())
+
     def test_persistent_401_raises_login_failure(self) -> None:
         auth = FakeAuth()
         auth.cognito_token, auth.id_token = "C", "I"
