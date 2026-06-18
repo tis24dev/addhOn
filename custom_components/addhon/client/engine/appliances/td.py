@@ -20,8 +20,9 @@ class Appliance(ApplianceExtra):
     def attributes(self, data: dict[str, Any]) -> dict[str, Any]:
         data = super().attributes(data)
         params = data.get("parameters", {})
-        if not self.parent.connection:
-            self._set(params, "machMode", "0")
+        # niente zeroing offline: la disponibilità è gestita via `available`
+        # (entità HA -> unavailable se disconnesso), come fa l'app (tiene gli ultimi
+        # valori e segnala la connettività). Vedi base_entity.available.
         data["active"] = bool(data.get("activity"))
         data["pause"] = self._is_value(params, "machMode", 3)
         return data

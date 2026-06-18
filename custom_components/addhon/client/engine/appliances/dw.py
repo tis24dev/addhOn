@@ -12,8 +12,6 @@ from .base import ApplianceExtra
 class Appliance(ApplianceExtra):
     def attributes(self, data: dict[str, Any]) -> dict[str, Any]:
         data = super().attributes(data)
-        params = data.get("parameters", {})
-        if not self.parent.connection:
-            self._set(params, "machMode", "0")
+        # niente zeroing offline: disponibilità via `available` (vedi td.py/base_entity).
         data["active"] = bool(data.get("activity"))
         return data

@@ -50,13 +50,6 @@ class ApplianceExtra:
         pyhОn, che è SEMPRE False (manca __eq__) -> i suoi modeZ/pause erano no-op."""
         return cls._value(params, key) == expected
 
-    @staticmethod
-    def _set(params: dict[str, Any], key: str, value: Any) -> None:
-        """Imposta il valore dell'attributo se presente (no-op se assente)."""
-        attr = params.get(key)
-        if attr is not None and hasattr(attr, "value"):
-            attr.value = value
-
     def attributes(self, data: dict[str, Any]) -> dict[str, Any]:
         # programName: slug dal codice programma corrente (come pyhОn; l'app usa una
         # chiave i18n risolta via dictionaryId = altitudine sbagliata per HA).

@@ -83,12 +83,20 @@ class HonBaseEntity(CoordinatorEntity):
         dall'API). Senza questo check l'entità resterebbe "available" mostrando
         valori di default stantii. Manteniamo l'AND con lo stato del coordinator
         e una guardia isinstance perché `x in None` solleverebbe TypeError.
+
+        Inoltre (modello app): se il DEVICE è disconnesso (`available` derivato dal
+        motore da lastConnEvent.category) l'entità diventa unavailable, invece di
+        mostrare valori stantii. Sostituisce il vecchio zeroing offline lato motore.
+        Default True se l'attributo manca (device che ha errato il primo load): non
+        nascondere a sproposito.
         """
-        return (
+        if not (
             super().available
             and isinstance(self.coordinator.data, dict)
             and self._appliance_id in self.coordinator.data
-        )
+        ):
+            return False
+        return bool(self._attributes.get("available", True))
 
     def _get_attr(self, key: str, default=None):
         """Recupera un attributo del dispositivo.

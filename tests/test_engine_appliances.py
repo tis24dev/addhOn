@@ -70,7 +70,7 @@ def _native_snapshot():
     return {
         "td_online": _snap("td", {"machMode": "3"}, activity={"x": 1}),
         "td_offline": _snap("td", {"machMode": "5"}, connection=False, activity={}),
-        "wm_disc": _snap("wm", {"machMode": "3"}, last_conn="DISCONNECTED", activity={}),
+        "wm_disc": _snap("wm", {"machMode": "3"}, connection=False, activity={}),
         "dw": _snap("dw", {"machMode": "2"}, activity={"x": 1}),
         "ov_on": _snap("ov", {"onOffStatus": "1", "temp": "50"}),
         "ov_off": _snap("ov", {"onOffStatus": "1", "temp": "50", "remoteCtrValid": "1", "remainingTimeMM": "30"}, connection=False),
@@ -151,7 +151,17 @@ class EdgeRobustnessTest(unittest.TestCase):
         out = _na("wc")(FakeParent(settings={}, appliance_type="WC")).attributes({"parameters": _params({"prCode": ""})})
         self.assertEqual(out["programName"], "No Program")
 
-    def test_set_noop_on_missing_key(self) -> None:
+    def test_no_offline_zeroing(self) -> None:
+        # niente più zeroing offline: machMode mantiene l'ultimo valore anche disconnesso
+        # (la disponibilità è gestita da base_entity via `available`).
+        _, params = _run("td", {"machMode": "5"}, connection=False, activity={})
+        self.assertEqual(params["machMode"].value, 5)
+        _, op = _run("ov", {"onOffStatus": "1", "temp": "50"}, connection=False)
+        self.assertEqual(op["temp"].value, 50)
+        _, wp = _run("wm", {"machMode": "3"}, last_conn="DISCONNECTED", activity={})
+        self.assertEqual(wp["machMode"].value, 3)
+
+    def test_missing_machmode_no_crash(self) -> None:
         out, params = _run("td", {"otherParam": "1"}, connection=False, activity={})
         self.assertNotIn("machMode", params)
         self.assertFalse(out["pause"])

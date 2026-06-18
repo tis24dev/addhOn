@@ -11,15 +11,15 @@
     "temp": null
   },
   "ov_off": {
-    "active": false,
+    "active": true,
     "available": false,
     "machMode": null,
     "modeZ1": null,
     "modeZ2": null,
-    "onOffStatus": 0,
+    "onOffStatus": 1,
     "pause": null,
     "programName": "No Program",
-    "temp": 0
+    "temp": 50
   },
   "ov_on": {
     "active": true,
@@ -101,7 +101,7 @@
   "td_offline": {
     "active": false,
     "available": false,
-    "machMode": 0,
+    "machMode": 5,
     "modeZ1": null,
     "modeZ2": null,
     "onOffStatus": null,
@@ -133,12 +133,12 @@
   },
   "wm_disc": {
     "active": false,
-    "available": true,
-    "machMode": 0,
+    "available": false,
+    "machMode": 3,
     "modeZ1": null,
     "modeZ2": null,
     "onOffStatus": null,
-    "pause": false,
+    "pause": true,
     "programName": "No Program",
     "temp": null
   }
