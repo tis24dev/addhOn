@@ -26,8 +26,18 @@ _ROOT = Path(__file__).resolve().parents[1]
 def _deps_available() -> bool:
     # Importare il Hon reale richiede aiohttp E awscrt (hon.py importa mqtt.py
     # che fa `from awscrt import mqtt5`). Servono entrambi o il subprocess
-    # fallirebbe l'import invece di saltare.
-    return all(importlib.util.find_spec(m) is not None for m in ("aiohttp", "awscrt"))
+    # fallirebbe l'import invece di saltare. Robusto contro moduli STUBATI da
+    # altri test (un altro modulo di test può registrare un finto `aiohttp` in
+    # sys.modules: find_spec su un modulo senza __spec__ solleva ValueError, e un
+    # modulo reale ha sempre spec.origin) → in dubbio: non disponibile, skip.
+    for name in ("aiohttp", "awscrt"):
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ValueError, ImportError):
+            return False
+        if spec is None or spec.origin is None:
+            return False
+    return True
 
 
 class LiveSessionProtocolTest(unittest.TestCase):
