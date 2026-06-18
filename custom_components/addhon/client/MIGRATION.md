@@ -109,9 +109,19 @@ il transport; il motore (stabile e complesso) si tiene il più a lungo possibile
     test. Divergenze enum-casing su favourites/recover/rule-default documentate+pinnate (eredità slice 1,
     da rivalidare live). Confutatori (4+2 round): cluster/rules parità HOLDS, flip-deferral safe, test
     rinforzati (24/26 mutanti uccisi, 2 equivalenti).
-  - [ ] slice 4 — appliances per-tipo (registry nativo) + **FLIP del cluster+per-tipo insieme** (qui
-    `create_appliance` passerà a `_native_engine_appliance_cls`); slice 5 — appliance ROOT +
-    **cancellare `_vendor/`**.
+  - [x] **slice 4 — appliances per-tipo nativo + FLIP in produzione** `client/engine/appliances/`
+    (`base.py` + `ref/td/wm/wd/dw/ov/wh/wc.py` + `registry.py` statico, no importlib). `create_appliance`
+    ora ritorna `_native_engine_appliance_cls` (cluster comandi + per-tipo nativi iniettati nel ROOT pyhОn):
+    il MOTORE in produzione è nostro; del ROOT pyhОn resta l'involucro + `HonAttribute` (slice 5). Decisioni
+    app-priority (apk/analysis/per-type-derivations.md): FIX dei no-op pyhОn (modeZ1/Z2, pause, wh-active
+    erano sempre falsi perché `HonAttribute` non ha `__eq__` -> confronto per valore = intento app; campi
+    non consumati -> divergenza inerte+pinnata), miglioria dryLevel (nasconde anche '0', non solo '11'),
+    `available` first-class; programName slug e priorità modi frigo preservati+documentati. Confutatori
+    (3+1 round): flip-safety end-to-end HOLDS (integrazione, MQTT, zone>0, hon_client tutti ok con oggetti
+    nativi), correttezza per-tipo HOLDS, test rinforzati (Z1/Z2 precedence + branch difensivi). Nota slice 5:
+    `_vendor/printer.py` isinstance diventa cieco sui param nativi ma `appliance.diagnose` non è raggiungibile.
+    290 test verdi.
+  - [ ] slice 5 — appliance ROOT nativo + attributi nativi (HonAttribute) + **cancellare `_vendor/`**.
 
 ## Regole di confine
 

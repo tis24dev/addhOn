@@ -56,16 +56,19 @@ def create_session(email: str, password: str) -> Any:
 
 
 def _native_engine_appliance_cls() -> Any:
-    """Sottoclasse dell'appliance ROOT di pyhОn col CLUSTER comandi NATIVO iniettato
-    (Fase 4 slice 3). Definita lazy (sottoclassa una classe pyhОn importata lazy) e
-    cachata per processo.
+    """Sottoclasse dell'appliance ROOT di pyhОn col MOTORE NATIVO iniettato (cluster
+    comandi, slice 3 + layer per-tipo, slice 4). Definita lazy (sottoclassa una classe
+    pyhОn importata lazy) e cachata per processo. È quella che `create_appliance` ritorna
+    in PRODUZIONE: il motore comandi/parametri/rules/per-tipo è ora nostro; del ROOT
+    pyhОn resta solo l'involucro (info/attributes/data/properties), bersaglio dello slice 5.
 
-    PRONTA E DIFFERENTIAL-TESTATA, ma NON ancora usata in produzione: `create_appliance`
-    ritorna ancora il ROOT pyhОn puro. Il FLIP è RIMANDATO allo slice 4 (vedi sotto).
-    Oggi questa classe è esercitata solo dai test (tests/test_engine_cluster.py), che
-    la diffano contro il ROOT pyhОn sui dati reali del frigo.
-
-    Override (i punti del ROOT che toccano il tipo dei parametri):
+    Override (i punti del ROOT che toccano il MOTORE/i tipi parametro):
+    - `__init__`: dopo il super, sostituisce `self._extra` con il layer per-tipo NATIVO
+      (`engine.appliances.registry`). Le `_extra` di pyhОn facevano `isinstance` contro le
+      classi parametro di pyhОn (programName, dryLevel) a ogni poll: coi parametri nativi
+      quegli isinstance fallirebbero -> regressione. Le nostre `_extra` fanno isinstance
+      contro le classi NATIVE. Per questo cluster (slice 3) e per-tipo (slice 4) flippano
+      INSIEME (era il vincolo trovato dal pool allo slice 3).
     - `load_commands`: usa il `HonCommandLoader` NATIVO -> commands/rules/program/
       parametri tutti nostri. Stesso ordine di scrittura dello stato dell'appliance
       di pyhОn (commands -> additional_data -> appliance_model -> sync).
@@ -73,26 +76,24 @@ def _native_engine_appliance_cls() -> Any:
       i parametri sono nativi (non sottoclassi di pyhОn) -> usiamo il range NOSTRO,
       altrimenti i range cadrebbero sul ramo stringa (regressione sul send-path).
 
-    PERCHE' IL FLIP E' RIMANDATO (vincolo trovato dal pool confutatori, slice 3):
-    le appliance per-tipo `_extra` (`_vendor/pyhon/appliances/base.py`, `td.py`, ...)
-    fanno `isinstance(param, HonParameterProgram/HonParameterFixed)` di pyhОn a OGNI
-    poll (es. base.py mappa `program.ids` -> `programName`; td.py sopprime `dryLevel`).
-    Con i parametri nativi quegli isinstance fallirebbero -> regressione user-visible
-    (`programName`="No Program" per gli apparecchi con programma attivo; `dryLevel` TD
-    non soppresso). Quei siti isinstance NON erano negli "11" del ROOT: stanno nelle
-    per-tipo = slice 4. Quindi cluster (slice 3) e per-tipo (slice 4) devono flippare
-    INSIEME. `sync_parameter`/`sync_command` del ROOT restano invece MORTI (nessun
-    chiamante) e si rimuovono col ROOT nativo (slice 5).
+    `sync_parameter`/`sync_command` del ROOT restano MORTI (nessun chiamante) e si
+    rimuovono col ROOT nativo (slice 5).
     """
     global _NATIVE_APPLIANCE_CLS
     if _NATIVE_APPLIANCE_CLS is not None:
         return _NATIVE_APPLIANCE_CLS
 
     from .._vendor.pyhon.appliance import HonAppliance
+    from .engine.appliances import registry as _native_appliances
     from .engine.command_loader import HonCommandLoader
     from .engine.parameter.range import HonParameterRange
 
     class NativeEngineAppliance(HonAppliance):  # type: ignore[valid-type,misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            # rimpiazza l'_extra pyhОn (importlib) col layer per-tipo NATIVO
+            self._extra = _native_appliances.get_extra(self)
+
         async def load_commands(self) -> None:
             command_loader = HonCommandLoader(self.api, self)
             await command_loader.load_commands()
@@ -124,23 +125,19 @@ def _native_engine_appliance_cls() -> Any:
 
 
 def create_appliance(api: Any, appliance_data: dict, zone: int = 0) -> Any:
-    """Costruisce un HonAppliance di pyhОn (il MOTORE parser che ancora riusiamo).
+    """Costruisce l'appliance col MOTORE NATIVO (Fase 4 slice 3+4 FLIPPATI).
 
-    NB FLIP RIMANDATO (Fase 4 slice 3): il cluster comandi NATIVO è scritto e
-    differential-testato (`_native_engine_appliance_cls` + tests/test_engine_cluster.py),
-    ma NON lo iniettiamo ancora in produzione: il pool confutatori ha mostrato che
-    flippare i parametri a nativi ROMPE le appliance per-tipo `_extra` di pyhОn
-    (`appliances/base.py`/`td.py`), che fanno `isinstance` contro le classi parametro
-    di pyhОn a ogni poll. Cluster (slice 3) e per-tipo (slice 4) devono quindi flippare
-    INSIEME -> finché slice 4 non è pronto, qui si ritorna il ROOT pyhОn puro.
+    Ritorna `_native_engine_appliance_cls()`: cluster comandi + layer per-tipo nostri,
+    iniettati nel ROOT pyhОn (transitorio, slice 5). Del motore di pyhОn non gira più
+    nulla in produzione (loader/commands/rules/program/parametri/attributi/per-tipo sono
+    nativi); resta solo l'involucro ROOT (info/data/properties) e gli attributi
+    `HonAttribute` (flip allo slice 5, insieme alla cancellazione di `_vendor/`).
 
     Tenere la costruzione qui mantiene `pyhon_adapter` l'UNICO file di `client/` che
     importa `_vendor.pyhon` (MIGRATION.md regola 1). L'oggetto ritornato è conforme al
     Protocol `interfaces.Appliance` (duck-typing). Import lazy.
     """
-    from .._vendor.pyhon.appliance import HonAppliance
-
-    return HonAppliance(api, appliance_data, zone=zone)
+    return _native_engine_appliance_cls()(api, appliance_data, zone=zone)
 
 
 def ensure_enum_patch() -> None:
