@@ -84,7 +84,7 @@ AC_ATTR_FAN_SPEED    = "settings.windSpeed"
 # Vertical swing. windDirectionVertical is an ENUM of POSITIONS, not a bool:
 # 2,4,5,6,7 = fixed louver positions, 8 = SWING (oscillation). The device reports
 # 0 when off: 0 is NOT among the enumValues, so sending it raises a ValueError in
-# pyhOn's enum setter and the API rejects it, which is the reason swing had been
+# the enum setter and the API rejects it, which is the reason swing had been
 # disabled. The fix (climate.py): NEVER send 0 (pre-send sanitization) and set
 # windDirectionVertical only to allowed values. The real allowed values are read
 # at runtime from the parameter's .values (per-device), with

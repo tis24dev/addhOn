@@ -1,15 +1,14 @@
-"""Native HonParameterProgram. Porting of pyhOn's `parameter/program.py`.
+"""Program parameter.
 
 A "program" parameter is not an enum of data: it is a VIEW over the command's
 categories (the programs). Reading `value` = the command's current category;
 writing `value` = changing the command's category (and thus the active command
 on the appliance). `values` = the program names (categories) filtering out the iot recipes.
-Subclass of the native enum because the rules do `isinstance(param, enum)` and a
-program must count as an enum (it was in pyhOn too).
+Subclass of the enum because the rules do `isinstance(param, enum)` and a
+program counts as an enum.
 
-`command` is duck-typed (our native HonCommand): it needs `.category` (str) and
-`.categories` (dict name->command). Behavior anchored to pyhOn by the differential
-test against the real fridge programs (startProgram).
+`command` is duck-typed (our HonCommand): it needs `.category` (str) and
+`.categories` (dict name->command).
 """
 from __future__ import annotations
 

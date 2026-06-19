@@ -1,14 +1,13 @@
 """hOn OAuth login flow - PURE pieces (addhOn transport).
 
-Rewrite of the deterministic pieces of `pyhon auth.HonAuth._introduce`:
+Deterministic pieces of the login flow:
 - `build_authorize_url(nonce)`: the Salesforce authorize URL;
 - `is_oauth_done(text)` / `extract_login_url(text)`: the parsing of the authorize page.
 
-EXACT-PRESERVING: the URL and the "by hand" encoding of the parameters (scope with NON
-encoded spaces, pre-quoted `redirect_uri`) are the contract the server expects;
-they go to the cloud byte-identical. Inline constants (like the other transport modules);
-they mirror pyhon const today, pinned by the differential test against the real const.py.
-The HTTP orchestration that uses these pieces lives in the native session/auth (validated live).
+The URL and the "by hand" encoding of the parameters (scope with NON encoded spaces,
+pre-quoted `redirect_uri`) are the contract the server expects, so they are built
+exactly. Constants are inline (like the other transport modules). The HTTP
+orchestration that uses these pieces lives in the session/auth.
 """
 from __future__ import annotations
 
@@ -18,7 +17,7 @@ import secrets
 from typing import Any
 from urllib.parse import quote, unquote
 
-# Endpoints/identifiers (data values that mirror pyhon const).
+# Endpoints/identifiers of the hOn cloud.
 AUTH_API = "https://account2.hon-smarthome.com"
 APP = "hon"
 CLIENT_ID = (
@@ -41,7 +40,7 @@ def build_authorize_url(nonce: str) -> str:
         "scope": "api openid refresh_token web",
         "nonce": nonce,
     }
-    # "By hand" join like pyhon: NO urlencode (scope keeps the spaces).
+    # "By hand" join: NO urlencode (scope keeps the spaces).
     query = "&".join(f"{k}={v}" for k, v in params.items())
     return f"{AUTH_API}/services/oauth2/authorize/expid_Login?{query}"
 
@@ -50,8 +49,8 @@ def is_oauth_done(text: str) -> bool:
     """True if the authorize page is ALREADY the redirect with the tokens (login not needed).
 
     PRECEDENCE for the orchestration: call `extract_login_url` FIRST; consult
-    `is_oauth_done` ONLY if the extraction returns None (like pyhOn: if it finds the
-    login_url it ignores the presence of oauth/done).
+    `is_oauth_done` ONLY if the extraction returns None (if a login_url is found, the
+    presence of oauth/done is ignored).
     """
     return "oauth/done#access_token=" in text
 
@@ -60,7 +59,7 @@ def extract_login_url(text: str) -> str | None:
     """Login URL from the authorize page, or None if absent.
 
     The relative `/NewhOnLogin...` (new login page since Jul-2024) is rewritten
-    to the old endpoint `/s/login...`, as pyhOn does to avoid the new page.
+    to the old endpoint `/s/login...` to avoid the new page.
     """
     matches = _LOGIN_URL_RE.findall(text)
     if not matches:
@@ -72,7 +71,7 @@ def extract_login_url(text: str) -> str | None:
 
 
 def generate_nonce() -> str:
-    """Nonce in 8-4-4-4-12 format (like pyhOn)."""
+    """Nonce in 8-4-4-4-12 format."""
     nonce = secrets.token_hex(16)
     return f"{nonce[:8]}-{nonce[8:12]}-{nonce[12:16]}-{nonce[16:20]}-{nonce[20:]}"
 
@@ -82,9 +81,8 @@ def build_login_payload(
 ) -> tuple[str, dict[str, Any]]:
     """(body, params) of the Salesforce login POST (/s/sfsites/aura).
 
-    Rewrite of the body of pyhon auth._login. EXACT-PRESERVING: the aura shape and
-    the encoding `&`.join(f"{k}={quote(json.dumps(v))}") are the server contract
-    (key order included -> the body is byte-identical).
+    The aura shape and the encoding `&`.join(f"{k}={quote(json.dumps(v))}") are the
+    server contract (key order included), so the body is built exactly.
     """
     start_url = page_url.rsplit("startURL=", maxsplit=1)[-1]
     start_url = unquote(start_url).split("%3D")[0]

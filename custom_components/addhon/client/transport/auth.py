@@ -1,12 +1,12 @@
-"""Native addhOn auth: the hOn login flow (Salesforce OAuth) rewritten.
+"""Native addhOn auth: the hOn login flow (Salesforce OAuth).
 
-Faithful port of `pyhon connection/auth.HonAuth`, which ASSEMBLES the already-built
-native pieces (oauth, tokens, device, headers) + the HTTP orchestration. Validated LIVE
-(not offline): the login makes real requests to the cloud. Uses a single
-aiohttp.ClientSession (the Salesforce flow cookies must persist across the requests).
+Assembles the native pieces (oauth, tokens, device, headers) + the HTTP
+orchestration. Validated LIVE (not offline): the login makes real requests to the
+cloud. Uses a single aiohttp.ClientSession (the Salesforce flow cookies must
+persist across the requests).
 
 The PURE sub-builders/parsers (build_login_payload, the fwuid/href regexes) have
-offline differential tests; the orchestration (authenticate) is validated live.
+offline tests; the orchestration (authenticate) is validated live.
 """
 from __future__ import annotations
 
@@ -40,9 +40,9 @@ _TOKEN_EXPIRE_WARNING_HOURS = 7
 
 # Extracts fwuid + loaded from the Salesforce login page (aura).
 _FWUID_RE = re.compile('"fwuid":"(.*?)","loaded":(\\{.*?})')
-# Extracts the href of the token page (post-login). pyhOn uses two different regexes:
-# (.+?) on the first page, (.*?) in the ProgressiveLogin branch; both replicated
-# for fidelity (the second also matches an empty href, a pyhOn quirk).
+# Extracts the href of the token page (post-login). Two different regexes are
+# used: (.+?) on the first page, (.*?) in the ProgressiveLogin branch; the second
+# also matches an empty href, which the flow accepts.
 _HREF_RE = re.compile("href\\s*=\\s*[\"'](.+?)[\"']")
 _HREF_RE_PROGRESSIVE = re.compile("href\\s*=\\s*[\"'](.*?)[\"']")
 
@@ -223,9 +223,9 @@ class HonAuth:
         return True
 
     def clear(self) -> None:
-        # Replicates pyhOn LITERALLY: `AUTH_API.split("/")[-2]` is '' (not the host,
-        # because there is no trailing slash), so clear_domain('') is effectively a no-op
-        # on any session. Kept identical for fidelity (it is a pyhOn quirk).
+        # Note: `AUTH_API.split("/")[-2]` is '' here (not the host, because there is
+        # no trailing slash), so clear_domain('') is effectively a no-op on any
+        # session. This is intentional.
         self._session.cookie_jar.clear_domain(AUTH_API.split("/")[-2])
         self.cognito_token = ""
         self.id_token = ""

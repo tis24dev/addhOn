@@ -1,4 +1,4 @@
-"""WC (wine cellar). Rewrite of pyhOn's `appliances/wc.py`.
+"""WC (wine cellar) per-type appliance logic.
 
 No per-type logic beyond the base one (programName/available).
 """

@@ -1,8 +1,7 @@
-"""OV (oven). Rewrite of pyhOn's `appliances/ov.py`.
+"""OV (oven) per-type appliance logic.
 
-Offline zeroing of temp/onOffStatus/remoteCtrValid/remainingTimeMM; `active` =
-onOffStatus==1. ON PAR with pyhOn (it already used `.value == 1`, correct). Robustness:
-`.get`/no-op on absent keys instead of pyhOn's KeyError.
+`active` = onOffStatus==1 (compared by `.value`). Robustness: `.get`/no-op on absent
+keys instead of a KeyError.
 """
 from __future__ import annotations
 

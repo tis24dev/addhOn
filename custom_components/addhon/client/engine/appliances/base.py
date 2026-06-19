@@ -1,4 +1,4 @@
-"""Native base ApplianceExtra. Rewrite of pyhOn's `appliances/base.py`.
+"""Native base ApplianceExtra.
 
 Per-type hooks on the appliance state:
 - `attributes(data)`: post-processes the shadow (adds derived fields).
@@ -9,11 +9,10 @@ The VALUES in `data["parameters"][...]` are `HonAttribute`s (native): we read th
 duck-typed via `.value`/`str()`. The `isinstance` checks instead are against the
 native PARAMETER classes.
 
-Comparison helper: pyhOn compared `HonAttribute == "1"`, which is ALWAYS False
-(no `__eq__`) -> ref/td/wm pause were broken no-ops. Here we compare by VALUE
-(the app's intent), fixing the bug. The fields it derives (ref `modeZ1`/`modeZ2`, the
-per-type `pause` attribute) are computed but currently not surfaced as entities (the
-Pause switch reads `machMode` directly), so this is a latent-correctness fix.
+Comparison helper: compare by VALUE (flags "1"/"0" as int 1/0), so the flags
+evaluate correctly. The fields it derives (ref `modeZ1`/`modeZ2`, the per-type
+`pause` attribute) are computed but currently not surfaced as entities (the Pause
+switch reads `machMode` directly).
 """
 from __future__ import annotations
 
@@ -45,15 +44,14 @@ class ApplianceExtra:
     @classmethod
     def _is_value(cls, params: dict[str, Any], key: str, expected: Any) -> bool:
         """True if the `key` attribute's `.value` == expected. Comparison by VALUE
-        (flags "1"/"0" become int 1/0): replaces pyhOn's `HonAttribute == "..."`,
-        which is ALWAYS False (no __eq__) -> its modeZ/pause were no-ops."""
+        (flags "1"/"0" become int 1/0), so the flags evaluate correctly."""
         return cls._value(params, key) == expected
 
     def attributes(self, data: dict[str, Any]) -> dict[str, Any]:
-        # programName: slug from the current program code (like pyhOn; the app uses an
+        # programName: slug from the current program code (the app uses an
         # i18n key resolved via dictionaryId = wrong altitude for HA).
-        # Robustness vs pyhOn: `_raw(...) or "0"` handles an empty/absent prCode -> "No
-        # Program" instead of pyhOn's `int("")` -> ValueError (intentional divergence, safe).
+        # Robustness: `_raw(...) or "0"` handles an empty/absent prCode -> "No
+        # Program" instead of `int("")` -> ValueError.
         program_name = "No Program"
         params = data.get("parameters", {})
         if program := int(self._raw(params, "prCode") or "0"):

@@ -1,6 +1,6 @@
-"""DW (dishwasher). Rewrite of pyhOn's `appliances/dw.py`.
+"""DW (dishwasher) per-type appliance logic.
 
-`active = bool(activity)`, offline machMode zeroing. No `pause` (like pyhOn).
+`active = bool(activity)`. No pause derivation for this type.
 """
 from __future__ import annotations
 

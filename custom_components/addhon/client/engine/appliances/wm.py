@@ -1,4 +1,4 @@
-"""WM (washing machine). Rewrite of pyhOn's `appliances/wm.py`.
+"""WM (washing machine) per-type appliance logic.
 
 `active`/`pause` (machMode==3) derived. No offline zeroing: availability is
 handled via `available` (HA entity -> unavailable if disconnected), see base_entity.

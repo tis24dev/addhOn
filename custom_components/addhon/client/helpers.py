@@ -2,8 +2,7 @@
 
 `str_to_float` converts hOn values (usually strings) to numbers and is used by the
 parser engine (the range/enum parameters and the attributes layer). Its behavior is
-identical to pyhOn's, pinned by the golden test, so values parse exactly as the cloud
-expects.
+pinned by the golden test, so values parse exactly as the cloud expects.
 """
 from __future__ import annotations
 
@@ -11,7 +10,7 @@ from __future__ import annotations
 def str_to_float(value: str | float) -> float:
     """Convert an hOn value (usually a string) into a number.
 
-    Behavior (identical to pyhOn, verified by the golden test):
+    Behavior (pinned by the golden test):
     - tries `int(value)` first: "5"->5, "-16"->-16, 5->5;
     - on ValueError falls back to `float`, normalizing the decimal
       comma: "5.5"->5.5, "5,5"->5.5.

@@ -1,18 +1,14 @@
 """Parser of the hOn cloud responses (addhOn transport).
 
-Rewrite of the appliance-list extraction logic from
-`pyhon api.load_appliances` (the v2.7.1 fix: endpoint
-`POST /unified-api/v1/view/appliance-list`, which also returns offline devices).
+Appliance-list extraction from the endpoint
+`POST /unified-api/v1/view/appliance-list`, which also returns offline devices.
 
 Response shape: `result.modules.applianceList.payload.appliances` (a list).
 
-DELIBERATE difference from pyhOn: pyhOn extracts with a chain
-`result.get("modules", {}).get("applianceList", {})...` that **raises
-AttributeError** if an intermediate level is not a dict (e.g. `{"modules": "x"}`
-or `{"modules": {"applianceList": []}}`), making the setup fail. Here we
-walk defensively and any unexpected shape falls back to `[]` (fail-safe),
-so the caller treats schema-drift as "0 appliances" instead of a crash.
-On all well-formed responses the result is identical to pyhOn (differential test).
+The walk is defensive: any unexpected shape (a non-dict intermediate level such
+as `{"modules": "x"}` or `{"modules": {"applianceList": []}}`) falls back to `[]`
+(fail-safe), so the caller treats schema-drift as "0 appliances" instead of a
+crash.
 """
 from __future__ import annotations
 

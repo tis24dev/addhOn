@@ -1,26 +1,24 @@
-"""Native addhOn MQTT client (AWS IoT realtime push).
+"""addhOn MQTT client (AWS IoT realtime push).
 
-Rewrite (not a copy) of pyhOn's `connection/mqtt.MQTTClient`, using awscrt directly.
+Realtime push client built on awscrt directly.
 
 Receives the session (`NativeHon`) and reads its `api` (tokens: `load_aws_token` +
 `auth.id_token`), `appliances`, `notify` (all duck-typed): the `appliance` objects are the
-native parser engine, touched only via its public interface.
+parser engine, touched only via its public interface.
 
-Deliberate improvements over pyhOn:
-- a real `stop()` (cancels+awaits the watchdog BEFORE stopping the client, so
-  a `_start()` in flight does not recreate an orphan connection), which pyhOn did not have
-  (leak of one AWS IoT connection per reload);
-- defensive `_on_publish_received`: appliance not found for the topic / missing
-  parameters -> skip instead of crash (pyhOn did `next(...)`/`payload["parameters"]`
-  which raise). Identical to pyhOn when every `parName` of the message is already present
-  in `attributes["parameters"]` (seeded by the `load_attributes` HTTP poll); a parName
-  never seen before over MQTT is SKIPPED (pyhOn crashed and did not retain it anyway; the
-  next HTTP poll recovers it). On the native engine we could create the entry on the
-  fly, an option not yet necessary.
+Lifecycle and message-handling notes:
+- `stop()` cancels and awaits the watchdog BEFORE stopping the client, so a `_start()`
+  in flight does not recreate an orphan connection (which would leak one AWS IoT
+  connection per reload);
+- `_on_publish_received` is defensive: appliance not found for the topic / missing
+  parameters -> skip instead of crash. A `parName` never seen before over MQTT is
+  SKIPPED (it is recovered at the next HTTP poll); only parameters already present in
+  `attributes["parameters"]` (seeded by the `load_attributes` HTTP poll) are updated.
+  Creating the entry on the fly is an option not yet necessary.
 
-awscrt/awsiot are imported at the top (like pyhOn): the module is NOT importable
-dry; whoever uses it (`NativeHon`) imports it lazily. The lifecycle INFO noise is
-governed by `logging_utils` on this logger.
+awscrt/awsiot are imported at the top: the module is NOT importable dry; whoever uses
+it (`NativeHon`) imports it lazily. The lifecycle INFO noise is governed by
+`logging_utils` on this logger.
 """
 from __future__ import annotations
 
@@ -37,7 +35,7 @@ from .device import MOBILE_ID
 
 _LOGGER = logging.getLogger(__name__)
 
-# AWS IoT endpoint/authorizer of the hOn cloud (from pyhOn const.py).
+# AWS IoT endpoint/authorizer of the hOn cloud.
 AWS_ENDPOINT = "a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com"
 AWS_AUTHORIZER = "candy-iot-authorizer"
 
@@ -119,7 +117,7 @@ class NativeMqttClient:
             return
         payload = json.loads(data.publish_packet.payload.decode())
         topic = data.publish_packet.topic
-        # Defensive (pyhOn did next(...) -> StopIteration): appliance not found -> exit.
+        # Defensive: appliance not found for this topic -> exit.
         appliance = next(
             (
                 a

@@ -1,14 +1,13 @@
-"""REF (refrigerator). Rewrite of pyhOn's `appliances/ref.py`.
+"""REF (refrigerator) per-type appliance logic.
 
-modeZ1/modeZ2 from the holiday/intelligence/quickMode flags. FIX vs pyhOn: the comparison
-is by VALUE (pyhOn did `HonAttribute == "1"` = always False -> modeZ1/Z2 were always
-`no_mode`). Fields NOT consumed by the integration (the real modes are computed by the
-Tier-0 mapping from the shadow) -> the fix is inert but correct.
+modeZ1/modeZ2 are derived by VALUE from the holiday/intelligence/quickMode flags.
+These fields are NOT consumed by the integration (the real modes are computed by the
+Tier-0 mapping from the shadow).
 
 Documented app divergence (see apk/analysis/per-type-derivations.md #3): the app inverts
 the Z1 priority (super_cool BEFORE holiday) and has an `energySavingStatus`~auto_set alias.
-We keep pyhOn's order (the modes are mutually exclusive via startProgram/stopProgram,
-the inversion is cosmetic) until we validate live on the AC/fridge.
+The modes are evaluated in this order (they are mutually exclusive via
+startProgram/stopProgram, the inversion is cosmetic) until we validate live on the AC/fridge.
 """
 from __future__ import annotations
 

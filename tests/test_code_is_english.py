@@ -63,6 +63,31 @@ class CodeIsEnglishTest(unittest.TestCase):
             + "\n".join(offenders),
         )
 
+    def test_no_pyhon_references(self) -> None:
+        # The integration is fully native: the legacy library "pyhon" must not appear
+        # anywhere in the code (not in imports, identifiers, comments or docstrings).
+        # The migration is complete; its provenance lives in the gitignored
+        # diagnostics/pyhon-provenance.md, not in the shipped code.
+        rx = re.compile(r"pyhon", re.IGNORECASE)
+        offenders: list[str] = []
+        repo_root = COMPONENT.parents[1]
+        for path in sorted(COMPONENT.rglob("*.py")):
+            if "translations" in path.parts:
+                continue
+            for lineno, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1
+            ):
+                if rx.search(line):
+                    rel = path.relative_to(repo_root)
+                    offenders.append(f"{rel}:{lineno}: {line.strip()[:80]}")
+        self.assertEqual(
+            [],
+            offenders,
+            "Reference to the legacy 'pyhon' library found in the code. The client is "
+            "native; keep provenance in diagnostics/pyhon-provenance.md instead:\n"
+            + "\n".join(offenders),
+        )
+
     def test_no_known_italian_words(self) -> None:
         offenders: list[str] = []
         repo_root = COMPONENT.parents[1]

@@ -1,23 +1,21 @@
 """HTTP headers of the addhOn transport.
 
-Rewrite of pyhOn's authenticated header construction
-(`ConnectionHandler._HEADERS` in handler/base.py + the merge in
-handler/hon.py:_check_headers): every authenticated request carries user-agent +
-Content-Type + the two tokens (cognito-token, id-token).
+Authenticated header construction: every authenticated request carries
+user-agent + Content-Type + the two tokens (cognito-token, id-token).
 
-PURE function: the tokens are inputs, no hardcoded secret. `USER_AGENT`
-today mirrors pyhOn's value (data value, behavior-preserving, pinned by the
-differential test); the real app value will enter as a separate step.
+PURE function: the tokens are inputs, no hardcoded secret. `USER_AGENT` is the
+value sent to the cloud (pinned by the test); the real app value will enter as a
+separate step.
 """
 from __future__ import annotations
 
 from typing import Mapping
 
-# Data value that mirrors pyhon const.USER_AGENT (impersonation placeholder).
+# User-Agent value sent to the cloud (impersonation placeholder).
 USER_AGENT = "Chrome/999.999.999.999"
 CONTENT_TYPE = "application/json"
 
-# Base headers present on EVERY request (= ConnectionHandler._HEADERS).
+# Base headers present on EVERY request.
 BASE_HEADERS: dict[str, str] = {
     "user-agent": USER_AGENT,
     "Content-Type": CONTENT_TYPE,
@@ -31,9 +29,9 @@ def build_auth_headers(
 ) -> dict[str, str]:
     """Headers for an authenticated request.
 
-    Replicates pyhOn's `self._HEADERS | headers` where `headers` contains the
-    caller's `extra` PLUS the two tokens: the `extra` (and the tokens) win over the
-    base ones, the tokens are always present.
+    Merges the base headers with the caller's `extra` PLUS the two tokens: the
+    `extra` (and the tokens) win over the base ones, and the tokens are always
+    present.
     """
     overrides: dict[str, str] = dict(extra) if extra else {}
     overrides["cognito-token"] = cognito_token

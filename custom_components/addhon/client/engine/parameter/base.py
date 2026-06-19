@@ -1,11 +1,8 @@
-"""Native base HonParameter.
+"""Base HonParameter.
 
-Porting of pyhOn's `parameter/base.HonParameter`, identical behavior
-(verified by the differential test). The trigger system (`add_trigger`/
-`check_trigger`/`triggers`) is the surface through which the rules drive the parameters:
-we keep it faithful because the native commands+rules cluster interoperates with it the
-same way. `value` defaults to "0" if None: a preserved quirk
-(the entities and `intern_value` rely on it).
+The trigger system (`add_trigger`/`check_trigger`/`triggers`) is the surface through
+which the rules drive the parameters; the commands+rules cluster interoperates with it.
+`value` defaults to "0" if None (the entities and `intern_value` rely on it).
 """
 from __future__ import annotations
 

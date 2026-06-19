@@ -1,7 +1,7 @@
-"""Native HonParameterFixed. Faithful porting of pyhOn's `parameter/fixed.py`.
+"""Fixed parameter for hOn commands.
 
-`value` defaults to "0" if empty (preserved quirk). The setter does NOT validate (pyhOn:
-"fixed values are not that fixed after all") and fires the triggers.
+`value` defaults to "0" if empty. The setter does NOT validate (fixed values are not
+that fixed after all) and fires the triggers.
 """
 from __future__ import annotations
 

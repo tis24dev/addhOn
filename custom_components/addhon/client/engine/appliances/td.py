@@ -1,10 +1,10 @@
-"""TD (tumble dryer). Rewrite of pyhOn's `appliances/td.py`.
+"""TD (tumble dryer) per-type appliance logic.
 
-`active`/offline-zeroing on par with pyhOn (they worked). `pause` FIX: by value
-(pyhOn `machMode == "3"` = always False; field not consumed, inert but correct fix).
+`active` is derived from `activity`. `pause`: derived by value (machMode == 3); the
+derived attribute is not currently consumed by an entity.
 `settings`: hides `startProgram.dryLevel` when it is an "unselected" fixed value.
-App IMPROVEMENT (per-type-derivations.md #4): the app hides it for '11' AND '0'/empty
-(pyhOn only '11'); our fixed `value` is never "" (getter -> "0"), hence {"0","11"}.
+The app hides it for '11' AND '0'/empty (per-type-derivations.md #4); our fixed
+`value` is never "" (getter -> "0"), hence {"0","11"}.
 """
 from __future__ import annotations
 

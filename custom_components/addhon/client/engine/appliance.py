@@ -1,4 +1,4 @@
-"""Native ROOT HonAppliance. Rewrite of pyhOn's `appliance.HonAppliance`.
+"""Native ROOT HonAppliance.
 
 Puts together our whole engine: native attributes (engine.attributes), native loader/
 commands/rules/program (engine.command_loader), native per-type layer
@@ -6,8 +6,7 @@ commands/rules/program (engine.command_loader), native per-type layer
 
 Implements ONLY the surface actually consumed (measured across integration + session
 + engine): identity/state properties, load_*/update, settings/data/command_parameters,
-sync_*. Dropped pyhOn's dead code (`__getitem__`/`get`/`_get_nested_item`/`diagnose`/
-`data_archive`/`sync_command`/`sync_parameter`). `api` is OUR transport.api.HonApi.
+sync_*. `api` is OUR transport.api.HonApi.
 """
 from __future__ import annotations
 
@@ -47,7 +46,7 @@ class HonAppliance:
             not self._attributes.get("lastConnEvent", {}).get("category", "")
             == "DISCONNECTED"
         )
-        # NATIVE per-type layer (was dynamic importlib in pyhOn)
+        # Per-type layer (resolved via the static registry).
         self._extra = _native_appliances.get_extra(self)
 
     def _check_name_zone(self, name: str, frontend: bool = True) -> str:
@@ -166,11 +165,10 @@ class HonAppliance:
                 self._attributes.setdefault("parameters", {})[name] = HonAttribute(values)
         self._attributes |= attributes
         # Authoritative connectivity = lastConnEvent.category (app model
-        # ApplianceConnectionState, see apk/analysis/per-type-derivations.md #5). pyhOn
-        # left `_connection` stale-True on polling (only MQTT updated it) ->
-        # the per-type layers that zero based on `self.connection` (td/wd/dw/ov) did NOT
-        # fire on the poll, unlike wm (which reads lastConnEvent). Updating it here makes it
-        # accurate and consistent. Validated live: an offline TD showed a stale machMode=1,
+        # ApplianceConnectionState, see apk/analysis/per-type-derivations.md #5).
+        # Updating `_connection` here on every poll keeps the per-type layers that zero
+        # based on `self.connection` (td/wd/dw/ov) accurate and consistent with wm (which
+        # reads lastConnEvent). Validated live: an offline TD showed a stale machMode=1,
         # now 0 like WM. Does not overwrite a fresher MQTT state if lastConnEvent is missing.
         lce = self._attributes.get("lastConnEvent")
         # Only the authoritative `category` updates connectivity. If lastConnEvent is

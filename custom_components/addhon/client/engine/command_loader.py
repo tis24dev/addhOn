@@ -1,23 +1,20 @@
-"""Native HonCommandLoader. Porting of pyhOn's `command_loader.py`.
+"""Command loader.
 
 Loads the three cloud streams in parallel (commands / favourites / command-history)
-via the native api, builds the native `HonCommand`s, applies favourites and
+via the api, builds the `HonCommand`s, applies favourites and
 restores the last executed state of each command.
 
-`api`/`appliance` duck-typed. Behavior anchored to pyhOn by the differential test
-against the real fridge data (commands.json + command_history.json + favourites).
+`api`/`appliance` duck-typed.
 
-enum-casing DIVERGENCE (to re-validate LIVE): the favourites
+enum-casing note (to re-validate LIVE): the favourites
 (`_update_base_command_with_data`) and recover (`_recover_last_command_states`) paths
 write RAW values (saved by the cloud/the history) into the parameters, which may have a
-casing different from the `enumValues`. On an enum our setter accepts the value if the
-normalized form matches (BABYCARE fix) and keeps the raw one in `intern_value`;
-pyhOn+patch instead REJECTS a re-cast value (and the error is swallowed by the
-`suppress(ValueError)`), keeping the default. So on a favourite/history with a
-re-cast enum the value sent to the cloud may differ. This is not verifiable offline
-(the fridge has no favourites, the AC is offline) and pyhOn's "preserved" value is
-itself an artifact (e.g. `[dashboard]` with brackets): the decision is DEFERRED to
-live validation. On already-clean values (the common case) it is identical.
+casing different from the `enumValues`. On an enum the setter accepts the value if the
+normalized form matches and keeps the raw one in `intern_value`; the
+`suppress(ValueError)` guards the rare value that cannot be normalized to an allowed
+one (the default is kept). This is not verifiable offline (the fridge has no
+favourites, the AC is offline): the decision is DEFERRED to live validation. On
+already-clean values (the common case) the behavior is unchanged.
 """
 from __future__ import annotations
 

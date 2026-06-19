@@ -1,8 +1,8 @@
 """Native authenticated HTTP connection (addhOn transport).
 
-Port of pyhon `connection/handler/hon.py` + `base.py`: get/post with per-request
-token injection (`build_auth_headers`) and retry on expired token / 401-403
-(loop 0 -> refresh, loop 1 -> re-auth, loop >=2 -> error). Uses OUR HonAuth.
+get/post with per-request token injection (`build_auth_headers`) and retry on
+expired token / 401-403 (loop 0 -> refresh, loop 1 -> re-auth, loop >=2 ->
+error). Uses HonAuth.
 
 Happy path validated live; the retry branches have offline tests with a mocked session.
 """
@@ -65,8 +65,8 @@ class HonConnection:
         return self
 
     async def _check_headers(self, headers: dict) -> dict:
-        # Like pyhon _check_headers: if I have a refresh_token I try to refresh,
-        # otherwise (or if the tokens are missing) I log in; then I inject the tokens.
+        # If I have a refresh_token I try to refresh, otherwise (or if the tokens
+        # are missing) I log in; then I inject the tokens.
         if self._refresh_token:
             await self.auth.refresh(self._refresh_token)
         if not (self.auth.cognito_token and self.auth.id_token):
@@ -99,8 +99,8 @@ class HonConnection:
                 # discarding a successful recovery).
                 raise NativeAuthError(f"Login failure (status {response.status})")
             else:
-                # Force a decode-check before yielding (like pyhOn).
-                # content_type=None: DELIBERATE deviation (consistent with auth.py); it tolerates
+                # Force a decode-check before yielding.
+                # content_type=None: DELIBERATE (consistent with auth.py); it tolerates
                 # a non-JSON content-type but a valid JSON body (Salesforce sometimes does this);
                 # a NON-JSON body still raises JSONDecodeError -> "Decode Error".
                 try:

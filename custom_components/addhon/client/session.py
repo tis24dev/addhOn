@@ -1,11 +1,11 @@
-"""addhOn `NativeHon` orchestration (replaces the former `pyhon.Hon`).
+"""addhOn `NativeHon` session orchestration.
 
 Coordinates the setup on top of the native transport (`transport.connection.HonConnection` +
 `transport.api.HonApi`) and builds the native appliances (`engine.appliance.HonAppliance`)
 via `factory.create_appliance`, into which it injects our `api`.
 
-Boundary: appliance construction goes through `factory.create_appliance` (MIGRATION.md
-rule 1); the MQTT is NATIVE (`transport.mqtt.NativeMqttClient`, lazy import in `_make_mqtt`).
+Boundary: appliance construction goes through `factory.create_appliance`; the MQTT is
+NATIVE (`transport.mqtt.NativeMqttClient`, lazy import in `_make_mqtt`).
 `NativeHon` satisfies the Protocol `interfaces.HonSession` and exposes `.api`/`.appliances`/
 `subscribe_updates`/`notify` (the MQTT client reads exactly those members).
 
@@ -107,8 +107,8 @@ class NativeHon:
             await appliance.load_attributes()
             await appliance.load_statistics()
         except (KeyError, ValueError, IndexError) as error:
-            # Like pyhOn: an appliance with malformed data must not break
-            # the whole setup; it is kept anyway (partial state) and logged.
+            # An appliance with malformed data must not break the others; it is
+            # kept anyway (partial state) and logged.
             _LOGGER.exception(error)
             _LOGGER.error("Device data - %s", appliance_data)
         self._appliances.append(appliance)
@@ -138,7 +138,7 @@ class NativeHon:
 
     async def close(self) -> None:
         # Stop the MQTT BEFORE the connection (the watchdog must not retry on
-        # a session being closed). pyhOn did not do it (leak): we do.
+        # a session being closed); we close it to avoid leaking it.
         if self._mqtt_client is not None:
             await self._mqtt_client.stop()
             self._mqtt_client = None

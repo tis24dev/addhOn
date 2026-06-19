@@ -1,19 +1,16 @@
-"""Native HonCommand. Porting of pyhOn's `commands.py`.
+"""Command.
 
 A command = a dict of parameter groups (parameters / ancillaryParameters / ...)
-plus category/program metadata. It builds the native parameters (range/enum/
+plus category/program metadata. It builds the parameters (range/enum/
 fixed/program), collects the rules from the `category=="rule"` parameters, and knows how
-to send itself to the cloud via the injected native api (appliance.api).
+to send itself to the cloud via the injected api (appliance.api).
 
-`appliance` is duck-typed (the native ROOT HonAppliance):
-it needs `.api`, `.zone`, `.commands`, `.sync_command_to_params`. Behavior
-anchored to pyhOn by the differential test against the real fridge commands.
+`appliance` is duck-typed (the ROOT HonAppliance):
+it needs `.api`, `.zone`, `.commands`, `.sync_command_to_params`.
 
-INTENTIONAL DIVERGENCE (error-path, documented): on `NoAuthenticationException` pyhOn
-logged and returned False (the caller mistook it for success). Here we let the
-error propagate -> the caller (button/switch/hon_commands) turns it into an
-honest HomeAssistantError instead of a false "sent". The happy path (returning the
-result) is identical.
+Error-path: on `NoAuthenticationException` the error propagates -> the caller
+(button/switch/hon_commands) turns it into an honest HomeAssistantError instead of a
+false "sent".
 """
 from __future__ import annotations
 

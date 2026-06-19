@@ -1,6 +1,6 @@
-"""WD (washer-dryer). Rewrite of pyhOn's `appliances/wd.py`.
+"""WD (washer-dryer) per-type appliance logic.
 
-Like TD but without the dryLevel tweak. `pause` FIX by value (see td.py/base.py).
+Like TD but without the dryLevel tweak. `pause` derived by value (see td.py/base.py).
 """
 from __future__ import annotations
 

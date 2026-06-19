@@ -1,20 +1,18 @@
 """Native HonAttribute.
 
-Porting of pyhOn's `attributes.HonAttribute`. An "attribute" is a state value
-that arrives from the device shadow (`shadow.parameters.<name> =
-{parNewVal, lastUpdate}`) or from an MQTT push. Behavior anchored to pyhOn by the
-differential test (tests/test_engine_attributes.py) against the real fridge data
-(apk/dump/ref_10136/attributes.json).
+hOn attribute: a state value (`HonAttribute`) read from the device shadow
+(`shadow.parameters.<name> = {parNewVal, lastUpdate}`) or from an MQTT push.
+Behavior is pinned by the golden test (tests/test_engine_attributes.py) against
+the real fridge data (tests/fixtures/ref_10136/attributes.json).
 
-The ONLY intentional divergence vs pyhOn = deprecation FIX: the lock uses
-`datetime.now(timezone.utc)` (aware) instead of `datetime.utcnow()` (naive,
-deprecated since Python 3.12). The lock timestamp is written and compared ONLY in
-here, so naive->aware is consistent and never mixes aware/naive; the
-observable behavior of `lock` (True within 10s of a shield, then False) is
-identical. `last_update` is still parsed as-is from the ISO string (can be naive or
+The lock uses `datetime.now(timezone.utc)` (timezone-aware) rather than
+`datetime.utcnow()` (naive, deprecated since Python 3.12). The lock timestamp is
+written and compared ONLY in here, so it is consistent and never mixes aware/naive;
+the observable behavior of `lock` (True within 10s of a shield, then False) is
+unaffected. `last_update` is still parsed as-is from the ISO string (can be naive or
 aware) and is never compared with the lock, so there is no mixing risk.
 
-Reuses our own `str_to_float` (client/helpers), identical to pyhOn's.
+Reuses our own `str_to_float` (client/helpers).
 """
 from __future__ import annotations
 

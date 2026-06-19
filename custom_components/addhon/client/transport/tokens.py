@@ -1,18 +1,14 @@
 """Parsing of the OAuth tokens from the hOn login redirect (addhOn transport).
 
-Rewrite of `pyhon auth._parse_token_data`: from the redirect
+From the redirect
 `.../mobilesdk/detect/oauth/done#access_token=...&refresh_token=...&id_token=...`
 it extracts the three tokens via the regex `name=(.*?)&` (up to the first `&`).
 
-EXACT PRESERVATION (not hardening, unlike the appliance-list parser):
-the tokens go to the cloud byte-identical and the auth flow is not offline-validatable,
-so we replicate pyhOn's quirks to the letter:
+The tokens are passed to the cloud unchanged, so the parsing rules are exact:
 - only `refresh_token` is URL-decoded (`unquote`); access/id stay raw;
 - a token at the end WITHOUT a trailing `&` is NOT captured (the regex requires the `&`);
-- `complete` = all three patterns HAVE matched (even if the captured value
-  is empty, like pyhOn's `bool(findall and ...)`), not "all values non-empty".
-Rewrote the STRUCTURE (data-driven helper + immutable dataclass), preserved the
-BEHAVIOR (verified by the differential test against pyhOn).
+- `complete` = all three patterns HAVE matched; an empty captured value is still
+  accepted, so this is "all three matched", not "all values non-empty".
 """
 from __future__ import annotations
 
@@ -47,10 +43,10 @@ def parse_token_fragment(text: str) -> OAuthTokens:
     id_token = _match("id_token")
     return OAuthTokens(
         access_token=access or "",
-        # Only the refresh is URL-decoded, like pyhOn.
+        # Only the refresh token is URL-decoded.
         refresh_token=unquote(refresh) if refresh is not None else "",
         id_token=id_token or "",
-        # Like pyhOn: what counts is that the pattern MATCHED (not that the value is
+        # What counts is that the pattern MATCHED (not that the value is
         # non-empty), hence `None not in (...)`.
         complete=None not in (access, refresh, id_token),
     )

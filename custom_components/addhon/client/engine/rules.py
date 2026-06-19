@@ -1,27 +1,24 @@
-"""Native rules engine. Porting of pyhOn's `rules.py`.
+"""Rules engine.
 
 A "rule" ties a trigger-parameter to an action on another parameter: when the
 trigger takes a certain value, the target is constrained (fixed value, or
 restricted to an enum/range). It hooks in via `parameter.add_trigger` (the
-trigger system of the native base parameter): when the trigger changes value,
+trigger system of the base parameter): when the trigger changes value,
 `check_trigger` runs the callbacks registered here.
 
-rules MODEL - RESOLVED on the live AC (2026-06-18, see apk/analysis/rules-model.md):
-  The old doubt "pyhOn maybe transposed vs the app's `programRules` model" was a
-  MISREADING. Dump of the real AC (apk/dump/ac_live): `ancillaryParameters.programRules` IS
-  the parameter with `category=="rule"`, same node, same nesting
-  `{targetParam: {triggerParam: {triggerValue: action}}}` (+ nested extra-conditions
-  e.g. `tempSel: {ecoMode: {"1": {machMode: {"1": {fixedValue:"26"}}}}}`). So pyhOn's
-  model = the app's model: already aligned, nothing to "adopt".
-  ONE INTENTIONAL divergence after live validation: the fix in `_extra_rules_matches`
-  (see below) - pyhOn compared `str(param)` (repr) instead of `str(param.value)`,
-  so the extra-conditions NEVER fired; on the real AC ecoMode=1 now constrains
+rules MODEL (see apk/analysis/rules-model.md):
+  `ancillaryParameters.programRules` IS the parameter with `category=="rule"`, same
+  node, with nesting `{targetParam: {triggerParam: {triggerValue: action}}}`
+  (+ nested extra-conditions e.g.
+  `tempSel: {ecoMode: {"1": {machMode: {"1": {fixedValue:"26"}}}}}`).
+  The extra-conditions are matched in `_extra_rules_matches` (see below) by comparing
+  `str(param.value)`: on the real AC ecoMode=1 constrains
   tempSel/windSpeed/windDirection as the app does.
   NOTE: rules with the `$installationType` trigger (static multi-split config, not a
-  parameter) do NOT fire (as in pyhOn: `$` not stripped, options empty at
-  construction); low impact (remoteVisible/selfClean), not implemented blindly.
+  parameter) do NOT fire (`$` not stripped, options empty at construction);
+  low impact (remoteVisible/selfClean), not implemented blindly.
 
-`isinstance` here is against the NATIVE parameter classes: parameters, commands and
+`isinstance` here is against the parameter classes: parameters, commands and
 rules are a cohesive cluster.
 """
 from __future__ import annotations
@@ -147,13 +144,11 @@ class HonRuleSet:
                 param = self._command.parameters.get(key)
                 if not param:
                     return False
-                # FIX (validated on the live AC, 2026-06-18): compare the parameter
-                # VALUE, not the object. pyhOn did `str(param)` (= the object's
-                # repr) != `str(value)`, ALWAYS true -> the extra-conditions
-                # (nested rules, e.g. AC `ecoMode==1 AND machMode==1 -> tempSel=26`)
-                # NEVER fired. Here we compare `str(param.value)`: on the real AC
-                # ecoMode=1 now correctly constrains tempSel/windSpeed/windDirection
-                # as the app does. Intentional divergence vs pyhOn (its bug).
+                # Compare the parameter VALUE, not the object: `str(param.value)`
+                # against `str(value)`, so the extra-conditions (nested rules,
+                # e.g. AC `ecoMode==1 AND machMode==1 -> tempSel=26`) fire only when
+                # the actual value matches. On the real AC ecoMode=1 correctly
+                # constrains tempSel/windSpeed/windDirection as the app does.
                 if str(param.value) != str(value):
                     return False
         return True
@@ -182,8 +177,8 @@ class HonRuleSet:
             param.values = enum_values.split("|")
         if default_value := rule.param_data.get("defaultValue"):
             # NB enum-casing: if `defaultValue` has a casing different
-            # from its `enumValues`, our setter accepts it (BABYCARE fix) whereas
-            # pyhOn+patch would raise (and the trigger caller swallows the error).
+            # from its `enumValues`, the setter accepts it (it compares on the
+            # normalized value), and the trigger caller swallows any error.
             # Degenerate case, not verifiable offline -> deferred to live-AC.
             param.value = default_value
 
