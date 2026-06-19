@@ -1,10 +1,10 @@
-"""Connessione HTTP autenticata nativa (transport addhOn).
+"""Native authenticated HTTP connection (addhOn transport).
 
-Porting di pyhon `connection/handler/hon.py` + `base.py`: get/post con iniezione
-dei token per-richiesta (`build_auth_headers`) e retry su token scaduto / 401-403
-(loop 0 → refresh, loop 1 → re-auth, loop ≥2 → errore). Usa il NOSTRO HonAuth.
+get/post with per-request token injection (`build_auth_headers`) and retry on
+expired token / 401-403 (loop 0 -> refresh, loop 1 -> re-auth, loop >=2 ->
+error). Uses HonAuth.
 
-Happy path validato live; i rami di retry hanno test offline a sessione mockata.
+Happy path validated live; the retry branches have offline tests with a mocked session.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class HonConnection:
-    """Sessione HTTP autenticata: crea/possiede aiohttp.ClientSession + HonAuth."""
+    """Authenticated HTTP session: creates/owns aiohttp.ClientSession + HonAuth."""
 
     def __init__(
         self,
@@ -49,13 +49,13 @@ class HonConnection:
     @property
     def auth(self) -> HonAuth:
         if self._auth is None:
-            raise NativeAuthError("connessione non creata (manca create())")
+            raise NativeAuthError("connection not created (create() is missing)")
         return self._auth
 
     @property
     def session(self) -> aiohttp.ClientSession:
         if self._session is None:
-            raise NativeAuthError("nessuna sessione aiohttp")
+            raise NativeAuthError("no aiohttp session")
         return self._session
 
     async def create(self) -> "HonConnection":
@@ -65,8 +65,8 @@ class HonConnection:
         return self
 
     async def _check_headers(self, headers: dict) -> dict:
-        # Come pyhon _check_headers: se ho un refresh_token provo a rinfrescare,
-        # altrimenti (o se mancano i token) faccio il login; poi inietto i token.
+        # If I have a refresh_token I try to refresh, otherwise (or if the tokens
+        # are missing) I log in; then I inject the tokens.
         if self._refresh_token:
             await self.auth.refresh(self._refresh_token)
         if not (self.auth.cognito_token and self.auth.id_token):
@@ -81,28 +81,28 @@ class HonConnection:
         kwargs["headers"] = await self._check_headers(kwargs.get("headers", {}))
         async with method(url, *args, **kwargs) as response:
             if (self.auth.token_expires_soon or response.status in (401, 403)) and loop == 0:
-                _LOGGER.info("addhOn: token in scadenza/%s, refresh", response.status)
+                _LOGGER.info("addhOn: token expiring/%s, refresh", response.status)
                 await self.auth.refresh(self._refresh_token)
                 async with self._intercept(method, url, *args, loop=1, **kwargs) as result:
                     yield result
             elif (self.auth.token_is_expired or response.status in (401, 403)) and loop == 1:
-                _LOGGER.warning("addhOn: re-auth dopo %s", response.status)
+                _LOGGER.warning("addhOn: re-auth after %s", response.status)
                 await self.create()
                 async with self._intercept(method, url, *args, loop=2, **kwargs) as result:
                     yield result
             elif loop >= 2 and (
                 self.auth.token_is_expired or response.status in (401, 403)
             ):
-                # Terzo tentativo dopo re-auth: fallisce solo se è ANCORA non
-                # autorizzato. Se invece la re-auth ha funzionato (200), si cade nel
-                # ramo else e si restituisce la risposta (prima si sollevava sempre,
-                # scartando un recupero riuscito).
+                # Third attempt after re-auth: fails only if it is STILL not
+                # authorized. If instead the re-auth worked (200), we fall into the
+                # else branch and return the response (before, it always raised,
+                # discarding a successful recovery).
                 raise NativeAuthError(f"Login failure (status {response.status})")
             else:
-                # Forza un decode-check prima di yield-are (come pyhOn).
-                # content_type=None: deviazione VOLUTA (coerente con auth.py) — tollera
-                # content-type non-JSON ma body JSON valido (Salesforce a volte lo fa);
-                # un body NON-JSON solleva comunque JSONDecodeError → "Decode Error".
+                # Force a decode-check before yielding.
+                # content_type=None: DELIBERATE (consistent with auth.py); it tolerates
+                # a non-JSON content-type but a valid JSON body (Salesforce sometimes does this);
+                # a NON-JSON body still raises JSONDecodeError -> "Decode Error".
                 try:
                     await response.json(content_type=None)
                     yield response

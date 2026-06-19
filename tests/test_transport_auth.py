@@ -1,9 +1,9 @@
-"""Test offline del flusso auth nativo (HonAuth) con sessione MOCKATA.
+"""Offline test of the native auth flow (HonAuth) with a MOCKED session.
 
-L'happy path è già LIVE-validato (apk/validate_auth_live.py: login reale → token
-→ 4 appliance == pyhOn). Questo è il guard CI per la LOGICA del flusso (ordine
-degli step, header, payload, parsing, rami): yarl stubato, nessuna rete, risposte
-HTTP scriptate in ordine di chiamata.
+The happy path is already LIVE-validated (apk/validate_auth_live.py: real login ->
+token -> 4 appliances == pyhOn). This is the CI guard for the flow LOGIC (step
+order, headers, payload, parsing, branches): yarl stubbed, no network, HTTP
+responses scripted in call order.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def _mod(name: str) -> types.ModuleType:
 
 
 def _install_stubs() -> None:
-    # Stub HA minimi per far importare il package __init__.
+    # Minimal HA stubs to let the package __init__ import.
     ce = _mod("homeassistant.config_entries")
     ce.ConfigEntry = getattr(ce, "ConfigEntry", type("ConfigEntry", (), {}))
     core = _mod("homeassistant.core")
@@ -44,7 +44,7 @@ def _install_stubs() -> None:
     ha.config_entries, ha.core, ha.exceptions = ce, core, exc
     ha.helpers = _mod("homeassistant.helpers")
     ha.helpers.update_coordinator = uc
-    # Stub yarl.URL (auth.py fa URL(login_url, encoded=True)).
+    # Stub yarl.URL (auth.py does URL(login_url, encoded=True)).
     yarl = _mod("yarl")
     if not hasattr(yarl, "URL"):
         class URL:
@@ -87,7 +87,7 @@ class FakeResp:
 
 
 class FakeSession:
-    """Ritorna le risposte scriptate IN ORDINE di chiamata (il flusso è lineare)."""
+    """Returns the scripted responses IN call ORDER (the flow is linear)."""
 
     def __init__(self, responses) -> None:
         self._responses = list(responses)
@@ -97,7 +97,7 @@ class FakeSession:
     def _next(self, method, url):
         self.calls.append((method, str(url)))
         if not self._responses:
-            raise AssertionError(f"chiamata non prevista: {method} {url}")
+            raise AssertionError(f"unexpected call: {method} {url}")
         return self._responses.pop(0)
 
     def get(self, url, **kw):
@@ -109,18 +109,18 @@ class FakeSession:
 
 def _happy_responses():
     return [
-        # _introduce: pagina authorize con url di login
+        # _introduce: authorize page with the login url
         FakeResp(text="x url = '/s/login/p?startURL=%2Fhome' y"),
-        # _handle_redirects: 2 redirect (Location)
+        # _handle_redirects: 2 redirects (Location)
         FakeResp(status=302, headers={"Location": f"{AUTH}/r1"}),
         FakeResp(status=302, headers={"Location": f"{AUTH}/r2?startURL=%2Fhome"}),
         # _open_login_page: fwuid + loaded
         FakeResp(text='..."fwuid":"FW123","loaded":{"APPLICATION@x":"y"}...'),
         # _login: events url
         FakeResp(json={"events": [{"attributes": {"values": {"url": f"{AUTH}/tokpage"}}}]}),
-        # _get_token: pagina con href (no ProgressiveLogin)
+        # _get_token: page with href (no ProgressiveLogin)
         FakeResp(text="href = '/finaltok'"),
-        # _get_token: pagina token finale
+        # _get_token: final token page
         FakeResp(text="#access_token=AAA&refresh_token=r%2Fb&id_token=CCC&"),
         # _api_auth
         FakeResp(json={"cognitoUser": {"Token": "COG123"}}),
@@ -136,17 +136,17 @@ class NativeAuthFlowTest(unittest.TestCase):
         asyncio.run(auth.authenticate())
         self.assertEqual(auth.id_token, "CCC")
         self.assertEqual(auth.access_token, "AAA")
-        self.assertEqual(auth.refresh_token, "r/b")  # solo refresh urldecodato
+        self.assertEqual(auth.refresh_token, "r/b")  # only refresh url-decoded
         self.assertEqual(auth.cognito_token, "COG123")
 
     def test_no_auth_needed(self) -> None:
-        # La pagina authorize è già la redirect coi token: niente login, niente cognito.
+        # The authorize page is already the redirect with the tokens: no login, no cognito.
         auth = self._auth([
             FakeResp(text="...oauth/done#access_token=AAA&refresh_token=BBB&id_token=CCC&..."),
         ])
         asyncio.run(auth.authenticate())
         self.assertEqual(auth.id_token, "CCC")
-        self.assertEqual(auth.cognito_token, "")  # _api_auth saltato (come pyhOn)
+        self.assertEqual(auth.cognito_token, "")  # _api_auth skipped (like pyhOn)
 
     def test_login_page_without_fwuid_raises(self) -> None:
         auth = self._auth([
@@ -160,15 +160,15 @@ class NativeAuthFlowTest(unittest.TestCase):
 
     def test_api_auth_without_cognito_raises(self) -> None:
         responses = _happy_responses()
-        responses[-1] = FakeResp(json={"cognitoUser": {}})  # niente Token
+        responses[-1] = FakeResp(json={"cognitoUser": {}})  # no Token
         auth = self._auth(responses)
         with self.assertRaises(NativeAuthError):
             asyncio.run(auth.authenticate())
 
     def test_progressive_login_without_href_raises(self) -> None:
-        # Se la pagina ProgressiveLogin non contiene un href, prima si arrivava a
-        # href[0] con un IndexError non classificato come errore auth.
-        responses = _happy_responses()[:5]  # fino a _login incluso
+        # If the ProgressiveLogin page contains no href, before we reached
+        # href[0] with an IndexError that was not classified as an auth error.
+        responses = _happy_responses()[:5]  # up to and including _login
         responses.append(FakeResp(text="href = '/ProgressiveLogin?x=1'"))  # _get_token -> progressive
         responses.append(FakeResp(text="pagina progressive senza alcun href"))  # findall -> []
         auth = self._auth(responses)
@@ -176,7 +176,7 @@ class NativeAuthFlowTest(unittest.TestCase):
             asyncio.run(auth.authenticate())
 
     def test_step_order(self) -> None:
-        # L'ordine delle chiamate riflette il flusso pyhOn.
+        # The order of the calls reflects the pyhOn flow.
         session = FakeSession(_happy_responses())
         auth = HonAuth(session, "u", "p", HonDevice())
         asyncio.run(auth.authenticate())

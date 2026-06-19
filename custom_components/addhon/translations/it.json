@@ -42,5 +42,464 @@
         }
       }
     }
+  },
+  "services": {
+    "set_log_level": {
+      "name": "Imposta livello log diagnostico",
+      "description": "Cambia il livello di log dell'integrazione Haier hOn e dei logger pyhOn utili a diagnosticare login, discovery dispositivi, reauth e polling. Usa \"debug\" quando i dispositivi non appaiono, poi torna a \"warning\" per ridurre il rumore. Non abilita il rumore MQTT realtime: per quello usa il service dedicato set_mqtt_log_level.",
+      "fields": {
+        "level": {
+          "name": "Livello",
+          "description": "Livello di log diagnostico da applicare."
+        }
+      }
+    },
+    "set_mqtt_log_level": {
+      "name": "Imposta livello log MQTT",
+      "description": "Cambia il livello di log del canale MQTT realtime di pyhOn. Di default il rumore dei tentativi di riconnessione è silenziato (warning). Imposta \"debug\" per diagnosticare i problemi di push realtime, poi \"warning\" per risilenziare. Non persiste: al riavvio di Home Assistant torna silenziato.",
+      "fields": {
+        "level": {
+          "name": "Livello",
+          "description": "Livello di log da applicare al canale MQTT realtime di pyhOn."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": {
+        "name": "Stato",
+        "state": {
+          "waiting": "In attesa",
+          "running": "In esecuzione",
+          "paused": "In pausa",
+          "completed": "Completato",
+          "error": "Errore",
+          "scheduled": "Programmato",
+          "delayed_start": "Ritardo avvio",
+          "half_load": "Mezzo carico"
+        }
+      },
+      "remaining_time": {
+        "name": "Tempo Rimanente"
+      },
+      "total_washes": {
+        "name": "Cicli Totali"
+      },
+      "total_water": {
+        "name": "Acqua Totale Consumata"
+      },
+      "total_energy": {
+        "name": "Energia Totale Consumata"
+      },
+      "current_energy": {
+        "name": "Consumo Energetico Attuale"
+      },
+      "current_water": {
+        "name": "Consumo Acqua Attuale"
+      },
+      "program_name": {
+        "name": "Programma"
+      },
+      "program_phase": {
+        "name": "Fase",
+        "state": {
+          "ready": "Pronto",
+          "washing": "Lavaggio",
+          "phase_skip": "Salto fase",
+          "rinsing": "Risciacquo",
+          "drying": "Asciugatura",
+          "steam": "Vapore",
+          "spinning": "Centrifuga",
+          "weighing": "Pesatura",
+          "rotation_start": "Avvio rotazione",
+          "refresh": "Rinfresco"
+        }
+      },
+      "errors": {
+        "name": "Errori"
+      },
+      "delay_time": {
+        "name": "Ritardo Avvio"
+      },
+      "loading_percentage": {
+        "name": "Carico"
+      },
+      "dry_level": {
+        "name": "Livello Asciugatura"
+      },
+      "spin_speed": {
+        "name": "Centrifuga"
+      },
+      "wash_temperature": {
+        "name": "Temperatura Lavaggio"
+      },
+      "dirty_level": {
+        "name": "Livello Sporco"
+      },
+      "temp_indoor": {
+        "name": "Temperatura Interna"
+      },
+      "temp_outdoor": {
+        "name": "Temperatura Esterna"
+      },
+      "humidity_indoor": {
+        "name": "Umidità Interna"
+      },
+      "compressor_freq": {
+        "name": "Frequenza Compressore"
+      },
+      "ac_total_energy": {
+        "name": "Energia Totale Condizionatore"
+      },
+      "pm25": {
+        "name": "PM2.5"
+      },
+      "co2": {
+        "name": "CO2"
+      },
+      "ch2o": {
+        "name": "Formaldeide"
+      },
+      "temp_zone1": {
+        "name": "Temperatura Zona 1"
+      },
+      "temp_zone2": {
+        "name": "Temperatura Zona 2"
+      },
+      "temp_zone3": {
+        "name": "Temperatura Zona 3"
+      },
+      "temp_zone4": {
+        "name": "Temperatura Zona 4"
+      },
+      "temp_zone5": {
+        "name": "Temperatura Zona 5"
+      },
+      "temp_upper": {
+        "name": "Temperatura Zona Superiore"
+      },
+      "temp_lower": {
+        "name": "Temperatura Zona Inferiore"
+      },
+      "temp_ambient": {
+        "name": "Temperatura Ambiente"
+      },
+      "humidity_ambient": {
+        "name": "Umidità Ambiente"
+      },
+      "temp_cavity": {
+        "name": "Temperatura Forno"
+      },
+      "probe_temp_1": {
+        "name": "Temperatura Sonda 1"
+      },
+      "probe_temp_2": {
+        "name": "Temperatura Sonda 2"
+      },
+      "salt_level": {
+        "name": "Livello Sale",
+        "state": {
+          "ok": "OK",
+          "low": "Basso",
+          "critical": "Critico",
+          "empty": "Non presente"
+        }
+      },
+      "rinse_aid_level": {
+        "name": "Livello Brillantante",
+        "state": {
+          "ok": "OK",
+          "low": "Basso",
+          "critical": "Critico",
+          "empty": "Non presente"
+        }
+      },
+      "fan_speed": {
+        "name": "Velocità Ventola"
+      },
+      "current_power": {
+        "name": "Potenza"
+      },
+      "descaling_cycles": {
+        "name": "Cicli a Decalcificazione"
+      },
+      "lifetime_cycles": {
+        "name": "Cicli Totali"
+      },
+      "water_temp": {
+        "name": "Temperatura Acqua"
+      },
+      "temp_inlet": {
+        "name": "Temperatura Ingresso"
+      },
+      "temp_outlet": {
+        "name": "Temperatura Uscita"
+      },
+      "power": {
+        "name": "Potenza"
+      },
+      "water_volume": {
+        "name": "Acqua Disponibile"
+      },
+      "heating_remaining": {
+        "name": "Tempo al Target"
+      },
+      "battery": {
+        "name": "Batteria"
+      },
+      "power_mode": {
+        "name": "Potenza Aspirazione",
+        "state": {
+          "auto": "Auto",
+          "turbo": "Turbo",
+          "quiet": "Silenzioso"
+        }
+      },
+      "last_work_area": {
+        "name": "Area Ultima Pulizia"
+      },
+      "total_work_area": {
+        "name": "Area Totale Pulita"
+      },
+      "machine_mode": {
+        "name": "Stato",
+        "state": {
+          "idle": "Inattivo",
+          "selection": "Selezione",
+          "running": "In esecuzione",
+          "paused": "In pausa",
+          "delayed_start": "Avvio ritardato",
+          "delayed_start_running": "Avvio ritardato (in corso)",
+          "error": "Errore",
+          "finished": "Terminato",
+          "test": "Test",
+          "stopped": "Arresto",
+          "keep_fresh": "Mantieni fresco"
+        }
+      },
+      "vacuum_state": {
+        "name": "Stato",
+        "state": {
+          "waiting": "In attesa",
+          "auto_cleaning": "Pulizia automatica",
+          "spot_cleaning": "Pulizia localizzata",
+          "paused": "In pausa",
+          "full_and_go": "Full & Go",
+          "cleaning_completed": "Pulizia completata",
+          "charging": "In carica"
+        }
+      },
+      "dryer_phase": {
+        "name": "Fase",
+        "state": {
+          "ready": "Pronto",
+          "heating": "Riscaldamento",
+          "drying": "Asciugatura",
+          "cooling": "Raffreddamento",
+          "rotation": "Rotazione"
+        }
+      },
+      "heater_phase": {
+        "name": "Fase",
+        "state": {
+          "ready": "Pronto",
+          "heating": "Riscaldamento",
+          "holding": "Mantenimento"
+        }
+      }
+    },
+    "binary_sensor": {
+      "door_open": {
+        "name": "Porta"
+      },
+      "door_lock": {
+        "name": "Oblò Bloccato"
+      },
+      "child_lock": {
+        "name": "Blocco Comandi"
+      },
+      "drum_clean_needed": {
+        "name": "Pulizia Cestello"
+      },
+      "filter_clean_needed": {
+        "name": "Pulizia Filtro"
+      },
+      "dry_clean_needed": {
+        "name": "Pulizia Condensatore"
+      },
+      "connectivity": {
+        "name": "Connettività"
+      },
+      "door_zone1": {
+        "name": "Porta Zona 1"
+      },
+      "door2_zone1": {
+        "name": "Porta 2 Zona 1"
+      },
+      "door_zone2": {
+        "name": "Porta Zona 2"
+      },
+      "door_zone3": {
+        "name": "Porta Zona 3"
+      },
+      "door_cavity1": {
+        "name": "Porta Cavità 1"
+      },
+      "door_cavity2": {
+        "name": "Porta Cavità 2"
+      },
+      "ice_maker": {
+        "name": "Produzione Ghiaccio"
+      },
+      "ice_box_full": {
+        "name": "Contenitore Ghiaccio Pieno"
+      },
+      "energy_saving": {
+        "name": "Risparmio Energetico"
+      },
+      "light": {
+        "name": "Luce"
+      },
+      "presence": {
+        "name": "Presenza"
+      },
+      "pan_zone1": {
+        "name": "Pentola Zona 1"
+      },
+      "pan_zone2": {
+        "name": "Pentola Zona 2"
+      },
+      "pan_zone3": {
+        "name": "Pentola Zona 3"
+      },
+      "pan_zone4": {
+        "name": "Pentola Zona 4"
+      },
+      "pan_zone5": {
+        "name": "Pentola Zona 5"
+      },
+      "pan_zone6": {
+        "name": "Pentola Zona 6"
+      },
+      "indicator_light": {
+        "name": "Spia"
+      }
+    },
+    "switch": {
+      "sleep": {
+        "name": "Modalità Notte"
+      },
+      "mute": {
+        "name": "Muto"
+      },
+      "eco": {
+        "name": "Eco"
+      },
+      "rapid": {
+        "name": "Rapido"
+      },
+      "health": {
+        "name": "Health"
+      },
+      "self_clean": {
+        "name": "Autopulizia"
+      },
+      "self_clean_56": {
+        "name": "Autopulizia 56°C"
+      },
+      "display": {
+        "name": "Display"
+      },
+      "light": {
+        "name": "Luce"
+      },
+      "ten_degree_heating": {
+        "name": "Riscaldamento 10°C"
+      },
+      "child_lock": {
+        "name": "Blocco Bambini"
+      },
+      "human_sensing": {
+        "name": "Sensore Presenza"
+      },
+      "electric_heating": {
+        "name": "Riscaldamento Elettrico"
+      },
+      "fresh_air": {
+        "name": "Aria Fresca"
+      },
+      "half_degree": {
+        "name": "Mezzo Grado"
+      },
+      "energy_saving": {
+        "name": "Risparmio Energetico"
+      },
+      "pause": {
+        "name": "Pausa"
+      }
+    },
+    "number": {
+      "target_temp_zone1": {
+        "name": "Temperatura Zona 1"
+      },
+      "target_temp_zone2": {
+        "name": "Temperatura Zona 2"
+      },
+      "target_temp_zone3": {
+        "name": "Temperatura Zona 3"
+      },
+      "target_temp_zone4": {
+        "name": "Temperatura Zona 4"
+      },
+      "target_temp_upper": {
+        "name": "Temperatura Zona Superiore"
+      },
+      "target_temp_lower": {
+        "name": "Temperatura Zona Inferiore"
+      },
+      "target_temp": {
+        "name": "Temperatura"
+      },
+      "target_temp_oven": {
+        "name": "Temperatura Forno"
+      }
+    },
+    "select": {
+      "program": {
+        "name": "Programma"
+      }
+    },
+    "button": {
+      "start_program": {
+        "name": "Avvia programma"
+      },
+      "stop_program": {
+        "name": "Ferma programma"
+      }
+    }
+  },
+  "exceptions": {
+    "appliance_or_client_unavailable": {
+      "message": "L'apparecchio o il client non è disponibile."
+    },
+    "command_error": {
+      "message": "Comando non riuscito: {error}"
+    },
+    "program_not_found": {
+      "message": "Programma \"{program}\" non trovato."
+    },
+    "refresh_after_command_failed": {
+      "message": "Aggiornamento dopo il comando non riuscito."
+    },
+    "refresh_after_command_failed_error": {
+      "message": "Aggiornamento dopo il comando non riuscito: {error}"
+    },
+    "swing_not_supported": {
+      "message": "Questo apparecchio non supporta l'oscillazione verticale."
+    },
+    "swing_position_not_allowed": {
+      "message": "Posizione oscillazione {position} non ammessa (ammesse: {allowed})."
+    }
   }
 }

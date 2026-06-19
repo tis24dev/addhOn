@@ -1,7 +1,7 @@
-"""Golden + behavioral test del layer per-tipo nativo (Fase 4). Era differential vs
-pyhOn; con `_vendor/` cancellato è golden (output nativo provato == pyhOn al checkpoint
-5a) + pin dei FIX app-priority (modeZ/pause/wh-active per valore; dryLevel '0'/'11';
-`available`) e del registry.
+"""Golden + behavioral test of the native per-type layer (Phase 4). It used to be
+differential vs pyhOn; with `_vendor/` deleted it is golden (native output proven
+== pyhOn at checkpoint 5a) + pins for the app-priority FIXES (modeZ/pause/wh-active
+by value; dryLevel '0'/'11'; `available`) and for the registry.
 """
 from __future__ import annotations
 
@@ -91,15 +91,15 @@ class PerTypeGoldenTest(unittest.TestCase):
 
 
 class NativeFixesPinTest(unittest.TestCase):
-    """Pin esplicito dei FIX app-priority (codice nuovo, niente bug pyhOn)."""
+    """Explicit pin of the app-priority FIXES (new code, no pyhOn bug)."""
 
     def test_ref_modes_by_value(self) -> None:
         s = _native_snapshot()
         self.assertEqual(s["ref_holiday"]["modeZ1"], "holiday")
         self.assertEqual(s["ref_freeze"]["modeZ2"], "super_freeze")
         self.assertEqual((s["ref_autoset"]["modeZ1"], s["ref_autoset"]["modeZ2"]), ("auto_set", "auto_set"))
-        self.assertEqual(s["ref_both_z1"]["modeZ1"], "holiday")           # priorità Z1
-        self.assertEqual(s["ref_freeze_vs_autoset"]["modeZ2"], "super_freeze")  # priorità Z2
+        self.assertEqual(s["ref_both_z1"]["modeZ1"], "holiday")           # Z1 priority
+        self.assertEqual(s["ref_freeze_vs_autoset"]["modeZ2"], "super_freeze")  # Z2 priority
         self.assertEqual((s["ref_off"]["modeZ1"], s["ref_off"]["modeZ2"]), ("no_mode", "no_mode"))
 
     def test_pause_by_value(self) -> None:
@@ -152,8 +152,8 @@ class EdgeRobustnessTest(unittest.TestCase):
         self.assertEqual(out["programName"], "No Program")
 
     def test_no_offline_zeroing(self) -> None:
-        # niente più zeroing offline: machMode mantiene l'ultimo valore anche disconnesso
-        # (la disponibilità è gestita da base_entity via `available`).
+        # no more offline zeroing: machMode keeps the last value even when disconnected
+        # (availability is handled by base_entity via `available`).
         _, params = _run("td", {"machMode": "5"}, connection=False, activity={})
         self.assertEqual(params["machMode"].value, 5)
         _, op = _run("ov", {"onOffStatus": "1", "temp": "50"}, connection=False)
@@ -167,7 +167,7 @@ class EdgeRobustnessTest(unittest.TestCase):
         self.assertFalse(out["pause"])
 
 
-# --- programName end-to-end (full appliance, sintetico con prCode) ---
+# --- programName end-to-end (full appliance, synthetic with prCode) ---
 
 class DictApi:
     def __init__(self, commands, attributes) -> None:
@@ -221,8 +221,8 @@ def _shadow(prcode):
 
 class ProgramNameEndToEndTest(unittest.TestCase):
     def _build(self, attrs):
-        from custom_components.addhon.client import pyhon_adapter
-        app = pyhon_adapter._native_engine_appliance_cls()(DictApi(_PN_COMMANDS, attrs), dict(_PN_INFO), zone=0)
+        from custom_components.addhon.client import factory
+        app = factory._native_engine_appliance_cls()(DictApi(_PN_COMMANDS, attrs), dict(_PN_INFO), zone=0)
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(app.load_commands())
@@ -235,7 +235,7 @@ class ProgramNameEndToEndTest(unittest.TestCase):
         self.assertEqual(self._build(_shadow("5")).attributes["programName"], "super_freeze")
 
     def test_prcode0_is_no_program(self) -> None:
-        # 0 è falsy -> "No Program" anche se esiste un programma id-0
+        # 0 is falsy -> "No Program" even if a program with id-0 exists
         self.assertEqual(self._build(_shadow("0")).attributes["programName"], "No Program")
 
 

@@ -1,4 +1,4 @@
-"""Client asincrono per le API hOn di Haier."""
+"""Asynchronous client for Haier's hOn APIs."""
 from __future__ import annotations
 
 import asyncio
@@ -11,9 +11,8 @@ from .debug_utils import debug_key_sample, redact_email
 
 _LOGGER = logging.getLogger(__name__)
 
-# Il client hOn è interamente nativo (client/): la sessione arriva da
-# client.pyhon_adapter.create_session. pyhOn (_vendor/) è stato cancellato in Fase 4;
-# il fix BABYCARE è nativo nella classe enum.
+# The hOn client is entirely native (client/): the session comes from
+# client.factory.create_session. The BABYCARE fix is native in the enum class.
 
 _SERIAL_ATTRS = ("serial_number", "serialNumber", "mac_address", "macAddress", "code")
 _CONSUMPTION_ATTRS = (
@@ -27,7 +26,7 @@ _CONSUMPTION_ATTRS = (
 
 
 def _debug_container_to_dict(container, label: str) -> dict:
-    """Best-effort conversione di container pyhOn per logging diagnostico."""
+    """Best-effort conversion of a client container for diagnostic logging."""
     if container is None:
         return {}
     if isinstance(container, dict):
@@ -36,7 +35,7 @@ def _debug_container_to_dict(container, label: str) -> dict:
         return dict(container)
     except Exception as err:
         _LOGGER.debug(
-            "Consumi debug: impossibile convertire %s (%s): %s",
+            "Consumption debug: unable to convert %s (%s): %s",
             label,
             type(container).__name__,
             err,
@@ -58,7 +57,7 @@ def _debug_consumption_values(values: dict) -> dict[str, Any]:
 
 
 def _debug_appliance_consumption(stage: str, appliance, attributes: dict | None = None) -> None:
-    """Log corposo per capire dove spariscono i contatori consumo."""
+    """Verbose log to understand where the consumption counters disappear."""
     if not _LOGGER.isEnabledFor(logging.DEBUG):
         return
 
@@ -70,7 +69,7 @@ def _debug_appliance_consumption(stage: str, appliance, attributes: dict | None 
     command_names = sorted(commands.keys()) if isinstance(commands, dict) else []
 
     _LOGGER.debug(
-        "Consumi debug [%s] '%s' type=%s id=%s: "
+        "Consumption debug [%s] '%s' type=%s id=%s: "
         "statistics_type=%s statistics_keys=%d %s statistics_values=%s; "
         "raw_attribute_keys=%d %s; settings_keys=%d %s; "
         "merged_keys=%d %s merged_values=%s; "
@@ -105,7 +104,7 @@ def _get_serial(appliance) -> str:
 
 
 def _get_mac(appliance) -> str:
-    """MAC address dell'appliance — è l'identificatore usato nel device_registry."""
+    """MAC address of the appliance, the identifier used in the device_registry."""
     for attr in ("mac_address", "macAddress", "mac"):
         val = getattr(appliance, attr, None)
         if val:
@@ -138,14 +137,14 @@ def _get_type(appliance) -> str:
 
 
 def _get_attributes(appliance) -> dict:
-    """Estrae gli attributi dal device, cercando in statistics, attributes e settings."""
+    """Extract the attributes from the device, looking in statistics, attributes and settings."""
     attributes = {}
 
-    # I contatori di consumo (totalElectricityUsed, totalWaterUsed,
-    # totalWashCycle, currentElectricityUsed, currentWaterUsed, ...) vivono nel
-    # container pyhOn `statistics`, popolato da load_statistics() ma finora MAI
-    # esposto ai sensori. Lo uniamo per primo, così attributi real-time e
-    # settings vincono in caso di chiavi in conflitto.
+    # The consumption counters (totalElectricityUsed, totalWaterUsed,
+    # totalWashCycle, currentElectricityUsed, currentWaterUsed, ...) live in the
+    # the `statistics` container, populated by load_statistics() but so far NEVER
+    # exposed to the sensors. We merge it first, so real-time attributes and
+    # settings win in case of conflicting keys.
     stats = getattr(appliance, "statistics", None)
     if isinstance(stats, dict):
         attributes.update(stats)
@@ -153,7 +152,7 @@ def _get_attributes(appliance) -> dict:
         try:
             attributes.update(dict(stats))
         except Exception as err:
-            _LOGGER.debug("Errore lettura statistics: %s", err)
+            _LOGGER.debug("Error reading statistics: %s", err)
 
     raw = getattr(appliance, "attributes", {})
     if isinstance(raw, dict):
@@ -166,7 +165,7 @@ def _get_attributes(appliance) -> dict:
                 try:
                     attributes.update(dict(params))
                 except Exception as e:
-                    _LOGGER.debug("Errore lettura parameters: %s", e)
+                    _LOGGER.debug("Error reading parameters: %s", e)
     elif hasattr(raw, "parameters"):
         try:
             attributes.update(dict(raw.parameters))
@@ -177,7 +176,7 @@ def _get_attributes(appliance) -> dict:
         try:
             attributes.update(dict(appliance.settings))
         except Exception as err:
-            _LOGGER.error("Errore lettura settings: %s", err)
+            _LOGGER.error("Error reading settings: %s", err)
 
     return attributes
 
@@ -187,13 +186,12 @@ def _error_text(err: BaseException) -> str:
 
 
 def _is_auth_error(err: BaseException) -> bool:
-    # Controlla sia il messaggio SIA il nome della classe d'eccezione: gli errori
-    # del flusso di login (il nostro NativeAuthError, il HonAuthenticationError di
-    # pyhOn) contengono "auth" nel NOME anche quando il messaggio no (es. password
-    # errata -> "login: fallito"/"Can't login"), così si classificano come
-    # invalid_auth senza dover importare quelle classi (hon_client resta _vendor-free).
-    # Il check "retryable 5xx" in _requires_reauth resta prioritario: un errore di
-    # auth che però porta un 500/timeout va in retry, non in reauth.
+    # Check both the message AND the exception class name: the login-flow errors
+    # (e.g. our NativeAuthError) contain "auth" in the NAME even when the message
+    # does not (e.g. wrong password -> "login: failed"/"Can't login"), so they are
+    # classified as invalid_auth by name without importing those classes. The
+    # "retryable 5xx" check in _requires_reauth keeps priority: an auth error that
+    # nonetheless carries a 500/timeout goes into retry, not reauth.
     haystack = f"{_error_text(err)} {type(err).__name__.lower()}"
     return any(k in haystack for k in (
         "personaccountid",
@@ -228,7 +226,6 @@ def _is_retryable_server_error(err: BaseException) -> bool:
 def _is_missing_session_error(err: BaseException) -> bool:
     err_str = _error_text(err)
     return any(k in err_str for k in (
-        "session non disponibile",
         "session unavailable",
     ))
 
@@ -240,15 +237,15 @@ def _requires_reauth(err: BaseException) -> bool:
 
 
 class HonClient:
-    """Gestisce la connessione alle API Haier hOn tramite pyhOn.
+    """Manages the connection to the Haier hOn APIs via the native client.
 
-    Strategia loop:
-    - Manteniamo un singolo event loop dedicato (_hon_loop) che gira su un
-      thread di background (_hon_thread).
-    - TUTTE le chiamate a pyhOn (setup, update, comandi) vengono eseguite su
-      quel loop tramite asyncio.run_coroutine_threadsafe(), così la sessione
-      aiohttp non cambia mai loop e non va mai in errore.
-    - L'event loop di HA non viene mai bloccato.
+    Loop strategy:
+    - We keep a single dedicated event loop (_hon_loop) running on a background
+      thread (_hon_thread).
+    - ALL client calls (setup, update, commands) are executed on that loop via
+      asyncio.run_coroutine_threadsafe(), so the aiohttp session never changes
+      loop and never errors out.
+    - HA's event loop is never blocked.
     """
 
     _RUN_TIMEOUT = 60
@@ -263,10 +260,10 @@ class HonClient:
         self._hon_thread: threading.Thread | None = None
         self._lifecycle_lock = threading.RLock()
 
-    # ── Gestione loop dedicato ────────────────────────────────────────────────
+    # -- Dedicated loop management ---------------------------------------------
 
     def _start_hon_loop(self) -> None:
-        """Avvia il loop dedicato su un thread di background."""
+        """Start the dedicated loop on a background thread."""
         self._hon_loop = asyncio.new_event_loop()
         self._hon_thread = threading.Thread(
             target=self._hon_loop.run_forever,
@@ -274,23 +271,23 @@ class HonClient:
             daemon=True,
         )
         self._hon_thread.start()
-        _LOGGER.debug("Loop dedicato hOn avviato su thread '%s'", self._hon_thread.name)
+        _LOGGER.debug("Dedicated hOn loop started on thread '%s'", self._hon_thread.name)
 
     def _run_on_hon_loop(self, coro) -> Any:
-        """Esegue una coroutine sul loop dedicato e aspetta il risultato.
+        """Run a coroutine on the dedicated loop and wait for the result.
 
-        Chiamare solo da un thread non-loop (es. executor di HA).
+        Call only from a non-loop thread (e.g. HA's executor).
         """
         with self._lifecycle_lock:
             loop = self._hon_loop
             if loop is None or not loop.is_running():
                 if hasattr(coro, "close"):
                     coro.close()
-                raise RuntimeError("Loop dedicato hOn non attivo")
+                raise RuntimeError("Dedicated hOn loop not active")
             if threading.current_thread() is self._hon_thread:
                 if hasattr(coro, "close"):
                     coro.close()
-                raise RuntimeError("Chiamata sincrona sul loop hOn non consentita")
+                raise RuntimeError("Synchronous call on the hOn loop not allowed")
 
             future: concurrent.futures.Future = concurrent.futures.Future()
             task_holder: dict[str, asyncio.Task] = {}
@@ -353,7 +350,7 @@ class HonClient:
                         except asyncio.CancelledError:
                             pass
                         except Exception as err:
-                            _LOGGER.debug("Errore durante cancellazione task hOn: %s", err)
+                            _LOGGER.debug("Error while cancelling hOn task: %s", err)
                         if not future.done():
                             future.cancel()
                         if not drain_future.done():
@@ -365,11 +362,11 @@ class HonClient:
                     loop.call_soon_threadsafe(_cancel_and_drain)
                     drain_future.result(timeout=self._CANCEL_TIMEOUT)
                 except Exception as err:
-                    _LOGGER.debug("Timeout durante cancellazione task hOn: %s", err)
+                    _LOGGER.debug("Timeout while cancelling hOn task: %s", err)
                 raise
 
     def _cancel_pending_tasks(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Cancella task residui prima di fermare il loop dedicato."""
+        """Cancel leftover tasks before stopping the dedicated loop."""
 
         async def _cancel_pending() -> None:
             current = asyncio.current_task()
@@ -384,10 +381,10 @@ class HonClient:
             future = asyncio.run_coroutine_threadsafe(_cancel_pending(), loop)
             future.result(timeout=self._CANCEL_TIMEOUT)
         except Exception as err:
-            _LOGGER.debug("Errore cancellazione task hOn pendenti: %s", err)
+            _LOGGER.debug("Error cancelling pending hOn tasks: %s", err)
 
     def _stop_hon_loop(self) -> None:
-        """Ferma il loop dedicato e il thread."""
+        """Stop the dedicated loop and the thread."""
         loop = self._hon_loop
         thread = self._hon_thread
 
@@ -398,19 +395,19 @@ class HonClient:
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=10)
         if thread and thread.is_alive():
-            _LOGGER.warning("Thread dedicato hOn non terminato entro il timeout")
+            _LOGGER.warning("Dedicated hOn thread did not terminate within the timeout")
             return
         if loop and not loop.is_closed():
             try:
                 loop.close()
             except Exception as err:
-                _LOGGER.warning("Errore chiusura loop hOn: %s", err)
+                _LOGGER.warning("Error closing hOn loop: %s", err)
                 return
         self._hon_loop = None
         self._hon_thread = None
 
     def _close_sync(self) -> None:
-        """Chiude sessione pyhOn e loop dedicato in modo idempotente."""
+        """Close the hOn session and the dedicated loop idempotently."""
         with self._lifecycle_lock:
             hon = self._hon_instance
             self._hon_instance = None
@@ -420,21 +417,20 @@ class HonClient:
                 try:
                     self._run_on_hon_loop(hon.__aexit__(None, None, None))
                 except Exception as err:
-                    _LOGGER.debug("Errore chiusura sessione hOn: %s", err)
+                    _LOGGER.debug("Error closing hOn session: %s", err)
             self._stop_hon_loop()
 
-    # ── Setup ─────────────────────────────────────────────────────────────────
+    # -- Setup -----------------------------------------------------------------
 
     def setup_sync(self) -> None:
-        """Setup completo di pyhOn in executor (NON sull'event loop di HA).
+        """Full client setup in executor (NOT on HA's event loop).
 
-        Avvia il loop dedicato, crea l'istanza Hon e completa il login.
-        La sessione aiohttp viene creata sul loop dedicato e vi rimane
-        legata per tutta la durata del client.
+        Starts the dedicated loop, creates the Hon instance and completes the
+        login. The aiohttp session is created on the dedicated loop and stays
+        bound to it for the whole lifetime of the client.
         """
-        # La sessione hOn arriva dalla factory nativa (client/); nessun import di
-        # _vendor.pyhon (cancellato in Fase 4). Il fix BABYCARE è nativo nell'enum.
-        from .client.pyhon_adapter import create_session
+        # The hOn session comes from the native factory (client/).
+        from .client.factory import create_session
 
         with self._lifecycle_lock:
             try:
@@ -442,51 +438,51 @@ class HonClient:
                     self._start_hon_loop()
 
                 self._hon_instance = create_session(self._email, self._password)
-                _LOGGER.debug("Istanza Hon creata")
+                _LOGGER.debug("Hon instance created")
 
-                # Login + init sessione aiohttp — sul loop dedicato
+                # Login + aiohttp session init, on the dedicated loop
                 self._api = self._run_on_hon_loop(self._hon_instance.__aenter__())
-                _LOGGER.info("Connessione a hOn riuscita per %s", redact_email(self._email))
+                _LOGGER.info("Connection to hOn succeeded for %s", redact_email(self._email))
             except Exception:
                 self._close_sync()
                 raise
 
     async def async_complete_setup(self) -> None:
-        """Verifica che il setup sia andato a buon fine."""
+        """Verify that the setup completed successfully."""
         if self._api is None:
-            raise RuntimeError("setup_sync() non ha completato il login hOn")
+            raise RuntimeError("setup_sync() did not complete the hOn login")
 
     def run_command_sync(self, coro) -> Any:
-        """Esegue una coroutine pyhOn (es. command.send()) sul loop dedicato.
+        """Run a client coroutine (e.g. command.send()) on the dedicated loop.
 
-        Da chiamare in executor — non sull'event loop di HA.
+        To be called in executor, not on HA's event loop.
         """
         return self._run_on_hon_loop(coro)
 
-    # ── Appliances ───────────────────────────────────────────────────────────
+    # -- Appliances -----------------------------------------------------------
 
     async def async_get_appliances(self) -> list:
         if self._api is None:
-            raise RuntimeError("hOn session non disponibile")
+            raise RuntimeError("hOn session unavailable")
         try:
             return self._api.appliances
         except Exception as err:
-            _LOGGER.error("Errore recupero elettrodomestici: %s", err)
-            raise RuntimeError(f"Errore recupero elettrodomestici: {err}") from err
+            _LOGGER.error("Error fetching appliances: %s", err)
+            raise RuntimeError(f"Error fetching appliances: {err}") from err
 
     def _update_appliance_sync(self, appliance) -> None:
-        """Aggiorna un appliance sul loop dedicato (sincrono, chiamato in executor)."""
+        """Update an appliance on the dedicated loop (synchronous, called in executor)."""
 
         async def _do_update():
             update_returned_empty = False
-            _debug_appliance_consumption("prima update", appliance)
+            _debug_appliance_consumption("before update", appliance)
 
-            # Tentativo 1: update() standard
+            # Attempt 1: standard update()
             if hasattr(appliance, "update") and callable(appliance.update):
                 try:
                     await appliance.update()
                     attrs_after_update = _get_attributes(appliance)
-                    _debug_appliance_consumption("dopo update()", appliance, attrs_after_update)
+                    _debug_appliance_consumption("after update()", appliance, attrs_after_update)
                     if attrs_after_update:
                         stats_method = getattr(appliance, "load_statistics", None)
                         if callable(stats_method):
@@ -494,7 +490,7 @@ class HonClient:
                                 await stats_method()
                                 attrs_after_update = _get_attributes(appliance)
                                 _debug_appliance_consumption(
-                                    "dopo load_statistics post-update",
+                                    "after load_statistics post-update",
                                     appliance,
                                     attrs_after_update,
                                 )
@@ -502,29 +498,29 @@ class HonClient:
                                 if _requires_reauth(err) or _is_retryable_server_error(err):
                                     raise
                                 _LOGGER.debug(
-                                    "load_statistics dopo update() fallito per '%s' "
+                                    "load_statistics after update() failed for '%s' "
                                     "(type=%s): %s",
                                     _get_name(appliance),
                                     _get_type(appliance),
                                     err,
                                 )
                         _LOGGER.debug(
-                            "Consumi debug: update() ha prodotto %d attributi per '%s' "
-                            "(type=%s); statistics ricaricate se disponibili; fallback "
-                            "load_attributes/load_commands non eseguito in questo ciclo.",
+                            "Consumption debug: update() produced %d attributes for '%s' "
+                            "(type=%s); statistics reloaded if available; "
+                            "load_attributes/load_commands fallback not run in this cycle.",
                             len(attrs_after_update),
                             _get_name(appliance),
                             _get_type(appliance),
                         )
                         return
                     update_returned_empty = True
-                    _LOGGER.debug("update() completato senza dati — provo load_*")
+                    _LOGGER.debug("update() completed with no data, trying load_*")
                 except Exception as err:
                     if _requires_reauth(err) or _is_retryable_server_error(err):
                         raise
-                    _LOGGER.debug("update() fallito: %s — provo load_*", err or "<no msg>")
+                    _LOGGER.debug("update() failed: %s, trying load_*", err or "<no msg>")
 
-            # Tentativo 2: load_attributes / load_commands / load_statistics
+            # Attempt 2: load_attributes / load_commands / load_statistics
             loaded = False
             for method_name in ("load_attributes", "load_commands", "load_statistics"):
                 method = getattr(appliance, method_name, None)
@@ -533,39 +529,39 @@ class HonClient:
                         await method()
                         loaded = True
                         _LOGGER.debug("Fallback OK: %s", method_name)
-                        _debug_appliance_consumption(f"dopo {method_name}", appliance)
+                        _debug_appliance_consumption(f"after {method_name}", appliance)
                     except Exception as err:
-                        _LOGGER.debug("Fallback %s fallito: %s", method_name, err)
-                        raise RuntimeError(f"Fallback {method_name} fallito: {err}") from err
+                        _LOGGER.debug("Fallback %s failed: %s", method_name, err)
+                        raise RuntimeError(f"Fallback {method_name} failed: {err}") from err
 
             if not loaded:
                 if update_returned_empty:
                     raise RuntimeError(
-                        "update() completato senza dati e fallback load_* non disponibili"
+                        "update() completed with no data and load_* fallbacks not available"
                     )
                 raise RuntimeError(
-                    "Nessun metodo di aggiornamento disponibile — "
-                    "verifica la versione di pyhOn installata."
+                    "No update method available, "
+                    "check the integration version."
                 )
 
         self._run_on_hon_loop(_do_update())
 
-    # ── Re-auth ───────────────────────────────────────────────────────────────
+    # -- Re-auth ---------------------------------------------------------------
 
     async def _async_reauth(self) -> bool:
-        """Ri-autentica in caso di token scaduto."""
-        _LOGGER.info("Tentativo re-autenticazione hOn...")
+        """Re-authenticate in case of an expired token."""
+        _LOGGER.info("hOn re-authentication attempt...")
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._close_sync)
             await loop.run_in_executor(None, self.setup_sync)
-            _LOGGER.info("Re-autenticazione hOn riuscita")
+            _LOGGER.info("hOn re-authentication succeeded")
             return True
         except Exception as err:
-            _LOGGER.error("Re-autenticazione hOn fallita: %s", err)
+            _LOGGER.error("hOn re-authentication failed: %s", err)
             return False
 
-    # ── Polling dati ──────────────────────────────────────────────────────────
+    # -- Data polling ----------------------------------------------------------
 
     async def async_get_appliances_data(self) -> dict[str, Any]:
         reauth_attempted = False
@@ -577,19 +573,19 @@ class HonClient:
                 appliances = await self.async_get_appliances()
             except Exception as err:
                 if _requires_reauth(err) and not reauth_attempted:
-                    _LOGGER.warning("Errore auth Haier recuperando dispositivi — avvio re-autenticazione")
+                    _LOGGER.warning("Haier auth error while fetching devices, starting re-authentication")
                     if not await self._async_reauth():
                         raise RuntimeError(
-                            f"Errore auth Haier durante recupero dispositivi: {err}"
+                            f"Haier auth error while fetching devices: {err}"
                         ) from err
                     reauth_attempted = True
                     continue
                 raise
-            _LOGGER.debug("Trovati %d dispositivi hOn", len(appliances))
+            _LOGGER.debug("Found %d hOn devices", len(appliances))
             if appliances:
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     _LOGGER.debug(
-                        "Discovery: inventario appliance dal cloud — %s",
+                        "Discovery: appliance inventory from the cloud - %s",
                         "; ".join(
                             f"type={_get_type(a)} mac={_get_mac(a) or '<no-mac>'} "
                             f"name={_get_name(a)}"
@@ -598,19 +594,19 @@ class HonClient:
                     )
             else:
                 _LOGGER.debug(
-                    "Discovery: il cloud hOn ha restituito 0 appliance per questo "
-                    "account (request OK). Con l'endpoint unified-api la lista "
-                    "include anche i device offline, quindi 0 = account davvero "
-                    "vuoto/non condiviso OPPURE un nuovo cambio API (NON è 'quasi "
-                    "sempre lato account', vedi storia bug 0-appliance/v2.7.1). "
-                    "Dettagli nel WARNING del logger "
-                    "custom_components.addhon.client.transport.api."
+                    "Discovery: the hOn cloud returned 0 appliances for this "
+                    "account (request OK). With the unified-api endpoint the list "
+                    "also includes offline devices, so 0 = a truly empty/not-shared "
+                    "account OR a new API change (it is NOT 'almost always on the "
+                    "account side', see the 0-appliance/v2.7.1 bug history). "
+                    "Details in the WARNING of the "
+                    "custom_components.addhon.client.transport.api logger."
                 )
 
             for idx, appliance in enumerate(appliances, 1):
                 try:
                     _LOGGER.debug(
-                        "Discovery: elaboro appliance %d/%d — type=%s mac=%s name=%s",
+                        "Discovery: processing appliance %d/%d - type=%s mac=%s name=%s",
                         idx,
                         len(appliances),
                         _get_type(appliance),
@@ -630,7 +626,7 @@ class HonClient:
                             if _is_retryable_server_error(err) and attempt < 2:
                                 wait = 5 * (attempt + 1)
                                 _LOGGER.warning(
-                                    "Errore server Haier (tentativo %d/3), riprovo tra %ds: %s",
+                                    "Haier server error (attempt %d/3), retrying in %ds: %s",
                                     attempt + 1, wait, err,
                                 )
                                 await asyncio.sleep(wait)
@@ -664,45 +660,45 @@ class HonClient:
                         ),
                         "settings": dict(appliance.settings) if hasattr(appliance, "settings") else {},
                     }
-                    _debug_appliance_consumption("snapshot coordinator", appliance, attributes)
+                    _debug_appliance_consumption("coordinator snapshot", appliance, attributes)
                     _LOGGER.debug(
-                        "Aggiornato '%s' (type=%s, mac=%s, id=%s) — %d attributi",
+                        "Updated '%s' (type=%s, mac=%s, id=%s) - %d attributes",
                         name, app_type, _get_mac(appliance) or "<no-mac>",
                         appliance_id, len(attributes),
                     )
 
                 except Exception as err:
                     _LOGGER.warning(
-                        "Errore aggiornamento '%s' (type=%s): %s",
+                        "Error updating '%s' (type=%s): %s",
                         _get_name(appliance), _get_type(appliance), err,
                         exc_info=True,
                     )
                     if _requires_reauth(err):
                         if reauth_attempted:
                             raise RuntimeError(
-                                f"Errore auth Haier durante aggiornamento "
+                                f"Haier auth error while updating "
                                 f"'{_get_name(appliance)}': {err}"
                             ) from err
-                        _LOGGER.warning("Errore auth Haier — avvio re-autenticazione")
+                        _LOGGER.warning("Haier auth error, starting re-authentication")
                         if not await self._async_reauth():
                             raise RuntimeError(
-                                f"Errore auth Haier durante aggiornamento "
+                                f"Haier auth error while updating "
                                 f"'{_get_name(appliance)}': {err}"
                             ) from err
                         reauth_attempted = True
                         retry_after_reauth = True
                         break
                     raise RuntimeError(
-                        f"Errore aggiornamento '{_get_name(appliance)}': {err}"
+                        f"Error updating '{_get_name(appliance)}': {err}"
                     ) from err
 
             if retry_after_reauth:
                 continue
 
-            _LOGGER.info("Caricati %d dispositivi hOn con dati", len(data))
+            _LOGGER.info("Loaded %d hOn devices with data", len(data))
             return data
 
-    # ── Chiusura ──────────────────────────────────────────────────────────────
+    # -- Closing ---------------------------------------------------------------
 
     async def async_close(self) -> None:
         await asyncio.get_running_loop().run_in_executor(None, self._close_sync)

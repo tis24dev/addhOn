@@ -1,15 +1,16 @@
-"""Verifica LIVE che il vero `NativeHon` soddisfi il Protocol HonSession del seam.
+"""LIVE check that the real `NativeHon` satisfies the seam's HonSession Protocol.
 
-È il controllo "carico-portante" della sessione: l'adapter ritorna un `NativeHon`
-(piece 4a) e tutto il piano si regge sul fatto che quell'oggetto sia conforme a
-client/interfaces.HonSession. (La conformità è anche testata offline in
-test_native_session; qui la verifichiamo sull'oggetto reale, con le dipendenze vere.)
+This is the "load-bearing" session check: the adapter returns a `NativeHon`
+(piece 4a) and the whole plan rests on that object being conformant to
+client/interfaces.HonSession. (Conformance is also tested offline in
+test_native_session; here we verify it on the real object, with the real
+dependencies.)
 
-Richiede aiohttp/awsiotsdk (le dipendenze runtime del transport nativo): se assenti
-(es. CI unit senza HA), il test si SALTA in modo pulito. Quando ci sono (HA reale, o
-il venv /tmp/hon-dump-venv), gira davvero. L'import avviene in un SUBPROCESS isolato
-per non inquinare sys.modules del processo pytest (il trucco pre-registra package
-vuoti per saltare il pesante __init__ dell'integrazione).
+It requires aiohttp/awsiotsdk (the native transport's runtime dependencies): if
+absent (e.g. unit CI without HA), the test is SKIPPED cleanly. When present (real
+HA, or the /tmp/hon-dump-venv venv), it actually runs. The import happens in an
+isolated SUBPROCESS so it does not pollute the pytest process's sys.modules (the
+trick pre-registers empty packages to skip the heavy integration __init__).
 """
 from __future__ import annotations
 
@@ -24,12 +25,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 
 
 def _deps_available() -> bool:
-    # Importare il Hon reale richiede aiohttp E awscrt (hon.py importa mqtt.py
-    # che fa `from awscrt import mqtt5`). Servono entrambi o il subprocess
-    # fallirebbe l'import invece di saltare. Robusto contro moduli STUBATI da
-    # altri test (un altro modulo di test può registrare un finto `aiohttp` in
-    # sys.modules: find_spec su un modulo senza __spec__ solleva ValueError, e un
-    # modulo reale ha sempre spec.origin) → in dubbio: non disponibile, skip.
+    # Importing the real Hon requires aiohttp AND awscrt (hon.py imports mqtt.py
+    # which does `from awscrt import mqtt5`). Both are needed or the subprocess
+    # would fail the import instead of skipping. Robust against modules STUBBED by
+    # other tests (another test module may register a fake `aiohttp` in
+    # sys.modules: find_spec on a module without __spec__ raises ValueError, and a
+    # real module always has spec.origin) -> when in doubt: not available, skip.
     for name in ("aiohttp", "awscrt", "yarl"):
         try:
             spec = importlib.util.find_spec(name)
@@ -43,7 +44,7 @@ def _deps_available() -> bool:
 class LiveSessionProtocolTest(unittest.TestCase):
     def test_real_hon_satisfies_honsession(self) -> None:
         if not _deps_available():
-            self.skipTest("aiohttp/awscrt non disponibili: salto la verifica del Hon reale")
+            self.skipTest("aiohttp/awscrt/yarl not available: skipping the real Hon check")
         script = textwrap.dedent(
             f"""
             import sys, types, importlib.util
@@ -58,7 +59,7 @@ class LiveSessionProtocolTest(unittest.TestCase):
             ifc = importlib.util.module_from_spec(spec); spec.loader.exec_module(ifc)
             from custom_components.addhon.client.session import NativeHon
             h = NativeHon(email="x@example.com", password="y")
-            assert isinstance(h, ifc.HonSession), "NativeHon NON conforme a HonSession"
+            assert isinstance(h, ifc.HonSession), "NativeHon NOT conformant to HonSession"
             print("CONFORME")
             """
         )

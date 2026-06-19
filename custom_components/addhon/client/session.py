@@ -1,18 +1,18 @@
-"""Orchestrazione `NativeHon` di addhOn (rimpiazza l'ex `pyhon.Hon`).
+"""addhOn `NativeHon` session orchestration.
 
-Coordina il setup sopra il transport nativo (`transport.connection.HonConnection` +
-`transport.api.HonApi`) e costruisce gli appliance nativi (`engine.appliance.HonAppliance`)
-via il factory `pyhon_adapter.create_appliance`, a cui inietta il nostro `api`.
+Coordinates the setup on top of the native transport (`transport.connection.HonConnection` +
+`transport.api.HonApi`) and builds the native appliances (`engine.appliance.HonAppliance`)
+via `factory.create_appliance`, into which it injects our `api`.
 
-Confine: la costruzione dell'appliance passa dal factory `pyhon_adapter` (MIGRATION.md
-regola 1); il MQTT è NATIVO (`transport.mqtt.NativeMqttClient`, import lazy in `_make_mqtt`).
-`NativeHon` soddisfa il Protocol `interfaces.HonSession` ed espone `.api`/`.appliances`/
-`subscribe_updates`/`notify` (il client MQTT legge proprio quei membri).
+Boundary: appliance construction goes through `factory.create_appliance`; the MQTT is
+NATIVE (`transport.mqtt.NativeMqttClient`, lazy import in `_make_mqtt`).
+`NativeHon` satisfies the Protocol `interfaces.HonSession` and exposes `.api`/`.appliances`/
+`subscribe_updates`/`notify` (the MQTT client reads exactly those members).
 
-Sequenza di setup: crea connessione → `api.load_appliances()` → per ogni appliance
-costruisci l'HonAppliance e carica commands/attributes/statistics → avvia MQTT. L'ordine
-conta: i load_* fanno le prime richieste HTTP che popolano i token, così quando MQTT parte
-`api.auth.id_token` c'è.
+Setup sequence: create connection -> `api.load_appliances()` -> for each appliance
+build the HonAppliance and load commands/attributes/statistics -> start MQTT. The order
+matters: the load_* calls make the first HTTP requests that populate the tokens, so that
+when MQTT starts `api.auth.id_token` is present.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from typing import Any
 
 import aiohttp
 
-from . import pyhon_adapter
+from . import factory
 from .transport.api import HonApi
 from .transport.auth import NativeAuthError
 from .transport.connection import HonConnection
@@ -31,11 +31,11 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class NativeHon:
-    """Sessione hOn nativa: auth+transport NOSTRI, motore parser di pyhOn.
+    """Native hOn session: OUR auth, transport and parser engine.
 
-    Drop-in di `pyhon.Hon` per l'integrazione: context manager async che espone
-    `.appliances` (e `.api` per il MQTT). `enable_mqtt=False` salta il push AWS
-    (utile a test/validatori; la produzione lo lascia attivo come pyhOn).
+    Async context manager that exposes `.appliances` (and `.api` for MQTT) to the
+    integration. `enable_mqtt=False` skips the AWS push (useful for tests/validators;
+    production leaves it active).
     """
 
     def __init__(
@@ -73,7 +73,7 @@ class NativeHon:
     @property
     def api(self) -> HonApi:
         if self._api is None:
-            raise NativeAuthError("sessione non creata (manca create())")
+            raise NativeAuthError("session not created (create() is missing)")
         return self._api
 
     @property
@@ -82,8 +82,8 @@ class NativeHon:
 
     @appliances.setter
     def appliances(self, appliances: list[Any]) -> None:
-        # NB: il client MQTT lega la lista per riferimento a __init__. Non rebindare
-        # dopo che il MQTT è avviato, o le subscribe non vedrebbero la nuova lista.
+        # NB: the MQTT client binds the list by reference at __init__. Do not rebind
+        # after MQTT is started, or the subscriptions would not see the new list.
         self._appliances = appliances
 
     async def create(self) -> "NativeHon":
@@ -99,7 +99,7 @@ class NativeHon:
         return self
 
     async def _create_appliance(self, appliance_data: dict, zone: int = 0) -> None:
-        appliance = pyhon_adapter.create_appliance(self._api, appliance_data, zone=zone)
+        appliance = factory.create_appliance(self._api, appliance_data, zone=zone)
         if appliance.mac_address == "":
             return
         try:
@@ -107,8 +107,8 @@ class NativeHon:
             await appliance.load_attributes()
             await appliance.load_statistics()
         except (KeyError, ValueError, IndexError) as error:
-            # Come pyhOn: un appliance con dati malformati non deve far saltare
-            # l'intero setup; lo si tiene comunque (stato parziale) e si logga.
+            # An appliance with malformed data must not break the others; it is
+            # kept anyway (partial state) and logged.
             _LOGGER.exception(error)
             _LOGGER.error("Device data - %s", appliance_data)
         self._appliances.append(appliance)
@@ -124,7 +124,7 @@ class NativeHon:
             self._mqtt_client = await self._make_mqtt()
 
     async def _make_mqtt(self) -> Any:
-        # Import lazy: transport.mqtt importa awscrt/awsiot (assenti a secco/CI).
+        # Lazy import: transport.mqtt imports awscrt/awsiot (absent dry/CI).
         from .transport.mqtt import NativeMqttClient
 
         return await NativeMqttClient(self, self._mobile_id).create()
@@ -137,8 +137,8 @@ class NativeHon:
             self._notify_function(None)
 
     async def close(self) -> None:
-        # Ferma il MQTT PRIMA della connessione (il watchdog non deve ritentare su
-        # una sessione in chiusura). pyhOn non lo faceva (leak): lo facciamo noi.
+        # Stop the MQTT BEFORE the connection (the watchdog must not retry on
+        # a session being closed); we close it to avoid leaking it.
         if self._mqtt_client is not None:
             await self._mqtt_client.stop()
             self._mqtt_client = None

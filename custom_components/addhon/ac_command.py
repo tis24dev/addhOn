@@ -1,11 +1,11 @@
-"""Invio condiviso del comando `settings` del condizionatore.
+"""Shared sending of the air conditioner's `settings` command.
 
-Sia l'entità climate (modalità/temp/ventola/swing) sia gli switch AC modificano
-il MEDESIMO comando pyhOn `settings`, che all'invio trasmette TUTTI i suoi
-parametri. Quindi ogni invio deve applicare la stessa sanitazione di
-`windDirectionVertical`/`windDirectionHorizontal`: il device può riportarli a 0
-(valore non ammesso dagli enumValues) e l'API rifiuterebbe il comando.
-Centralizzare qui evita divergenze tra climate.py e switch.py.
+Both the climate entity (mode/temp/fan/swing) and the AC switches modify the SAME
+the `settings` command, which on send transmits ALL of its parameters. So every
+send must apply the same sanitization of
+`windDirectionVertical`/`windDirectionHorizontal`: the device may report them as 0
+(a value not allowed by the enumValues) and the API would reject the command.
+Centralizing this here avoids divergences between climate.py and switch.py.
 """
 from __future__ import annotations
 
@@ -15,14 +15,14 @@ from .hon_commands import async_send_command
 
 _LOGGER = logging.getLogger(__name__)
 
-# Parametri direzione-aria che possono valere 0 (device spento): da sanare.
+# Wind-direction parameters that may be 0 (device off): to be sanitized.
 AC_WIND_DIR_PARAMS = ("windDirectionVertical", "windDirectionHorizontal")
 AC_SWING_V_PARAM = "windDirectionVertical"
-AC_SWING_V_ON = "8"  # 8 = oscillazione verticale
+AC_SWING_V_ON = "8"  # 8 = vertical oscillation
 
 
 def settings_param(appliance, name):
-    """Ritorna il parametro `name` del comando `settings`, o None se assente."""
+    """Return the `name` parameter of the `settings` command, or None if absent."""
     commands = getattr(appliance, "commands", None)
     commands = commands if isinstance(commands, dict) else {}
     settings = commands.get("settings")
@@ -33,7 +33,7 @@ def settings_param(appliance, name):
 
 
 def param_allowed_values(param) -> list[str]:
-    """Allowed values (come stringhe) di un parametro enum, o [] se non enum."""
+    """Allowed values (as strings) of an enum parameter, or [] if not an enum."""
     values = getattr(param, "values", None)
     if not isinstance(values, list):
         return []
@@ -41,7 +41,7 @@ def param_allowed_values(param) -> list[str]:
 
 
 def fixed_vertical_value(allowed: list[str]) -> str:
-    """Posizione verticale FISSA (non-swing) tra quelle ammesse; mai 0."""
+    """FIXED (non-swing) vertical position among the allowed ones; never 0."""
     fixed = [v for v in allowed if v != AC_SWING_V_ON]
     if "2" in fixed:
         return "2"
@@ -49,8 +49,8 @@ def fixed_vertical_value(allowed: list[str]) -> str:
 
 
 def sanitize_wind_direction(command_params: dict) -> None:
-    """Riporta windDirectionVertical/Horizontal a un valore ammesso se quello
-    corrente non lo è (es. 0 da spento). Non tocca i parametri già validi."""
+    """Reset windDirectionVertical/Horizontal to an allowed value if the current
+    one is not (e.g. 0 when off). Does not touch already-valid parameters."""
     for key in AC_WIND_DIR_PARAMS:
         param = command_params.get(key)
         if param is None:
@@ -69,21 +69,21 @@ def sanitize_wind_direction(command_params: dict) -> None:
         try:
             param.value = safe
             _LOGGER.debug(
-                "AC settings: sanato %s da %r a %s (ammessi=%s)", key, current, safe, allowed
+                "AC settings: sanitized %s from %r to %s (allowed=%s)", key, current, safe, allowed
             )
-        except Exception as err:  # pragma: no cover - difensivo
+        except Exception as err:  # pragma: no cover - defensive
             _LOGGER.warning(
-                "AC settings: impossibile sanare %s (valore %r): %s", key, current, err
+                "AC settings: unable to sanitize %s (value %r): %s", key, current, err
             )
 
 
 async def async_send_settings(hass, client, appliance, params: dict) -> None:
-    """Applica `params` al comando `settings` dell'AC e lo invia.
+    """Apply `params` to the AC's `settings` command and send it.
 
-    Sana windDirection* prima dell'invio (mai 0): i valori richiesti vincono
-    comunque. Delega al sender generico (hon_commands.async_send_command), che
-    gestisce lookup comando/parametri, rollback ed esecuzione sul loop dedicato
-    pyhOn; la sanitizzazione AC entra come hook pre_send.
+    Sanitizes windDirection* before sending (never 0): the requested values win
+    anyway. Delegates to the generic sender (hon_commands.async_send_command),
+    which handles command/parameter lookup, rollback and execution on the client's
+    dedicated loop; the AC sanitization is plugged in as a pre_send hook.
     """
     await async_send_command(
         hass, client, appliance, "settings", params, pre_send=sanitize_wind_direction

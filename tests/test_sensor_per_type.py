@@ -86,10 +86,12 @@ def _install_homeassistant_stubs() -> None:
     class SensorEntityDescription:
         key: str
         name: str | None = None
+        translation_key: str | None = None
         icon: str | None = None
         native_unit_of_measurement: str | None = None
         device_class: object | None = None
         state_class: object | None = None
+        options: object | None = None
 
     class SensorEntity:
         pass
@@ -104,6 +106,7 @@ def _install_homeassistant_stubs() -> None:
         CO2 = "carbon_dioxide"
         BATTERY = "battery"
         POWER = "power"
+        ENUM = "enum"
 
     class SensorStateClass:
         MEASUREMENT = "measurement"
@@ -252,7 +255,7 @@ class SensorBuildTest(unittest.IsolatedAsyncioTestCase):
         cycles = next(e for e in added if e._attr_unique_id == "td-1_total_washes")
         self.assertEqual(cycles.native_value, 42.0)  # reads programsCounter
         state = next(e for e in added if e._attr_unique_id == "td-1_state")
-        self.assertEqual(state.native_value, "In esecuzione")  # WM_STATE_MAP["1"]
+        self.assertEqual(state.native_value, "running")  # WM_STATE_MAP["1"]
 
     async def test_td_cycles_can_read_programscounter_from_statistics(self) -> None:
         from custom_components.addhon import sensor

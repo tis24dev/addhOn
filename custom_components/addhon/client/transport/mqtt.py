@@ -1,27 +1,24 @@
-"""Client MQTT nativo addhOn (push realtime AWS IoT).
+"""addhOn MQTT client (AWS IoT realtime push).
 
-Riscrittura (non copia) di `_vendor/pyhon/connection/mqtt.MQTTClient` con awscrt
-diretto: rimpiazza l'ex `_vendor/pyhon/connection/mqtt` con awscrt diretto.
+Realtime push client built on awscrt directly.
 
-Riceve la sessione (`NativeHon`) e ne legge `api` (token: `load_aws_token` +
-`auth.id_token`), `appliances`, `notify` (tutto duck-typed): gli `appliance` sono il
-motore parser nativo, toccato solo via la sua interfaccia pubblica.
+Receives the session (`NativeHon`) and reads its `api` (tokens: `load_aws_token` +
+`auth.id_token`), `appliances`, `notify` (all duck-typed): the `appliance` objects are the
+parser engine, touched only via its public interface.
 
-Migliorie deliberate rispetto a pyhOn:
-- un vero `stop()` (cancella+attende il watchdog PRIMA di fermare il client, così
-  un `_start()` in volo non ricrea una connessione orfana), che pyhOn non aveva
-  (leak di una connessione AWS IoT per reload);
-- `_on_publish_received` difensivo: appliance non trovato per il topic / parametri
-  mancanti -> skip invece del crash (pyhOn faceva `next(...)`/`payload["parameters"]`
-  che sollevano). Identico a pyhOn quando ogni `parName` del messaggio è già presente
-  in `attributes["parameters"]` (seminato dal poll HTTP `load_attributes`); un parName
-  MQTT mai visto prima viene SALTATO (pyhOn crashava e non lo riteneva comunque; il
-  successivo poll HTTP lo recupera). Sul motore nativo potremmo crearne la voce al
-  volo, opzione non ancora necessaria.
+Lifecycle and message-handling notes:
+- `stop()` cancels and awaits the watchdog BEFORE stopping the client, so a `_start()`
+  in flight does not recreate an orphan connection (which would leak one AWS IoT
+  connection per reload);
+- `_on_publish_received` is defensive: appliance not found for the topic / missing
+  parameters -> skip instead of crash. A `parName` never seen before over MQTT is
+  SKIPPED (it is recovered at the next HTTP poll); only parameters already present in
+  `attributes["parameters"]` (seeded by the `load_attributes` HTTP poll) are updated.
+  Creating the entry on the fly is an option not yet necessary.
 
-awscrt/awsiot sono importati al top (come pyhOn): il modulo NON è importabile a
-secco; chi lo usa (`NativeHon`) lo importa lazy. Il rumore INFO del lifecycle è
-governato da `logging_utils` su questo logger.
+awscrt/awsiot are imported at the top: the module is NOT importable dry; whoever uses
+it (`NativeHon`) imports it lazily. The lifecycle INFO noise is governed by
+`logging_utils` on this logger.
 """
 from __future__ import annotations
 
@@ -38,16 +35,16 @@ from .device import MOBILE_ID
 
 _LOGGER = logging.getLogger(__name__)
 
-# Endpoint/authorizer AWS IoT del cloud hOn (da pyhOn const.py).
+# AWS IoT endpoint/authorizer of the hOn cloud.
 AWS_ENDPOINT = "a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com"
 AWS_AUTHORIZER = "candy-iot-authorizer"
 
-_WATCHDOG_INTERVAL = 5  # secondi
-_SUBSCRIBE_TIMEOUT = 10  # secondi
+_WATCHDOG_INTERVAL = 5  # seconds
+_SUBSCRIBE_TIMEOUT = 10  # seconds
 
 
 class NativeMqttClient:
-    """Push realtime via AWS IoT MQTT5 sopra la sessione nativa."""
+    """Realtime push via AWS IoT MQTT5 on top of the native session."""
 
     def __init__(self, hon: Any, mobile_id: str) -> None:
         self._hon = hon
@@ -61,7 +58,7 @@ class NativeMqttClient:
     @property
     def client(self) -> mqtt5.Client:
         if self._client is None:
-            raise AttributeError("client MQTT non avviato")
+            raise AttributeError("MQTT client not started")
         return self._client
 
     async def create(self) -> "NativeMqttClient":
@@ -71,24 +68,24 @@ class NativeMqttClient:
         return self
 
     async def stop(self) -> None:
-        """Ferma watchdog (cancella+attende) e poi il client awscrt. Idempotente."""
+        """Stop watchdog (cancel+await) and then the awscrt client. Idempotent."""
         if self._watchdog_task is not None:
             self._watchdog_task.cancel()
             try:
                 await self._watchdog_task
             except asyncio.CancelledError:
                 pass
-            except Exception as err:  # pragma: no cover - difensivo
-                _LOGGER.debug("addhOn: attesa cancel watchdog MQTT fallita: %s", err)
+            except Exception as err:  # pragma: no cover - defensive
+                _LOGGER.debug("addhOn: awaiting MQTT watchdog cancel failed: %s", err)
             self._watchdog_task = None
         if self._client is not None:
             try:
                 self._client.stop()
-            except Exception as err:  # pragma: no cover - difensivo
-                _LOGGER.debug("addhOn: stop client MQTT fallito: %s", err)
+            except Exception as err:  # pragma: no cover - defensive
+                _LOGGER.debug("addhOn: MQTT client stop failed: %s", err)
             self._client = None
 
-    # ── lifecycle callbacks ───────────────────────────────────────────────────
+    # -- lifecycle callbacks ---------------------------------------------------
     def _on_lifecycle_stopped(self, data: "mqtt5.LifecycleStoppedData") -> None:
         _LOGGER.info("Lifecycle Stopped: %s", data)
 
@@ -120,7 +117,7 @@ class NativeMqttClient:
             return
         payload = json.loads(data.publish_packet.payload.decode())
         topic = data.publish_packet.topic
-        # Difensivo (pyhOn faceva next(...) -> StopIteration): appliance non trovato -> esci.
+        # Defensive: appliance not found for this topic -> exit.
         appliance = next(
             (
                 a
@@ -130,15 +127,15 @@ class NativeMqttClient:
             None,
         )
         if appliance is None:
-            _LOGGER.debug("MQTT: topic senza appliance corrispondente: %s", topic)
+            _LOGGER.debug("MQTT: topic with no matching appliance: %s", topic)
             return
         if topic and "appliancestatus" in topic:
             params = appliance.attributes.get("parameters", {})
             for parameter in payload.get("parameters", []):
                 name = parameter.get("parName")
-                # Solo parametri già noti (seminati da load_attributes). Un parName
-                # nuovo si recupera al prossimo poll HTTP; crearlo qui legherebbe
-                # questo modulo a _vendor (HonAttribute) -> rimandato a Fase 4.
+                # Only already-known parameters (seeded by load_attributes). A new
+                # parName is recovered at the next HTTP poll; creating it here would
+                # couple this transport module to the engine's HonAttribute.
                 if name in params:
                     params[name].update(parameter)
             appliance.sync_params_to_command("settings")
@@ -157,7 +154,7 @@ class NativeMqttClient:
         self._hon.notify()
         _LOGGER.info("%s - %s", topic, payload)
 
-    # ── connessione / subscribe / watchdog ────────────────────────────────────
+    # -- connection / subscribe / watchdog -------------------------------------
     async def _start(self) -> None:
         self._client = mqtt5_client_builder.websockets_with_custom_authorizer(
             endpoint=AWS_ENDPOINT,

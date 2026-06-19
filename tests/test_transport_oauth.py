@@ -1,8 +1,8 @@
-"""Differential test del pezzo 5: build_authorize_url / extract_login_url / is_oauth_done.
+"""Differential test of piece 5: build_authorize_url / extract_login_url / is_oauth_done.
 
-Oracolo = trascrizione di pyhon auth.HonAuth._introduce (la parte PURA: build URL +
-parsing pagina; il resto è HTTP, validato live). Costanti caricate dal vero
-const.py (puro) → pinna anche il drift di AUTH_API/CLIENT_ID/APP.
+Oracle = transcription of pyhon auth.HonAuth._introduce (the PURE part: build URL +
+page parsing; the rest is HTTP, validated live). Constants loaded from the real
+const.py (pure) -> also pins the AUTH_API/CLIENT_ID/APP drift.
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ import types as _types
 
 _ROOT = Path(__file__).resolve().parents[1]
 _OUR = _ROOT / "custom_components" / "addhon" / "client" / "transport" / "oauth.py"
-# Costanti pyhOn (ora NOSTRE): trascritte come oracolo-replica dopo la cancellazione di
-# `_vendor/`; sono i valori che il nostro oauth.py espone (drift-guard self-owned).
+# pyhOn constants (now OURS): transcribed as an oracle-replica after deleting
+# `_vendor/`; they are the values our oauth.py exposes (self-owned drift-guard).
 _CONST = _types.SimpleNamespace(
     AUTH_API="https://account2.hon-smarthome.com",
     APP="hon",
@@ -36,7 +36,7 @@ def _load(path: Path, name: str):
 
 
 def _pyhon_authorize_url(c, nonce):
-    """Verbatim di _introduce (build URL)."""
+    """Verbatim of _introduce (build URL)."""
     redirect_uri = quote(f"{c.APP}://mobilesdk/detect/oauth/done")
     params = {
         "response_type": "token+id_token",
@@ -51,7 +51,7 @@ def _pyhon_authorize_url(c, nonce):
 
 
 def _pyhon_extract_login(c, text):
-    """Verbatim di _introduce (parsing pagina), modellando 'nessun match' -> None."""
+    """Verbatim of _introduce (page parsing), modeling 'no match' -> None."""
     login_url = re.findall("(?:url|href) ?= ?'(.+?)'", text)
     if not login_url:
         return None
@@ -61,7 +61,7 @@ def _pyhon_extract_login(c, text):
 
 
 def _pyhon_login_body(email, password, fw_uid, loaded, page_url):
-    """Verbatim del corpo di pyhon auth._login."""
+    """Verbatim of pyhon auth._login's body."""
     start_url = page_url.rsplit("startURL=", maxsplit=1)[-1]
     start_url = unquote(start_url).split("%3D")[0]
     action = {
@@ -102,18 +102,18 @@ class OAuthPiecesTest(unittest.TestCase):
                 )
 
     def test_authorize_url_preserves_unencoded_scope(self) -> None:
-        # quirk pyhon: lo scope tiene gli spazi (NON urlencoded).
+        # pyhon quirk: the scope keeps the spaces (NOT urlencoded).
         url = self.o.build_authorize_url("N")
         self.assertIn("scope=api openid refresh_token web", url)
-        # quote() lascia gli '/' (safe='/'): solo ':' -> %3A, slash invariati.
+        # quote() leaves the '/' (safe='/'): only ':' -> %3A, slashes unchanged.
         self.assertIn("redirect_uri=hon%3A//mobilesdk/detect/oauth/done", url)
 
     def test_extract_login_url_matches_pyhon(self) -> None:
         fixtures = [
             "blah url = 'https://account2.hon-smarthome.com/s/login/abc' end",
-            "x href='/NewhOnLogin/foo?bar=1' y",          # relativo -> riscritto
-            "href = '/some/relative/path'",                 # relativo non-NewhOnLogin -> as-is
-            "first url='AAA' second url='BBB'",            # primo match
+            "x href='/NewhOnLogin/foo?bar=1' y",          # relative -> rewritten
+            "href = '/some/relative/path'",                 # relative non-NewhOnLogin -> as-is
+            "first url='AAA' second url='BBB'",            # first match
             "nessun link qui",                              # None
             "",                                             # None
         ]
@@ -132,7 +132,7 @@ class OAuthPiecesTest(unittest.TestCase):
         self.assertFalse(self.o.is_oauth_done("normal login page"))
 
     def test_constants_match_vendored_const(self) -> None:
-        # Drift-guard: le costanti inline devono eguagliare quelle di pyhOn.
+        # Drift-guard: the inline constants must equal pyhOn's.
         self.assertEqual(self.o.AUTH_API, self.c.AUTH_API)
         self.assertEqual(self.o.APP, self.c.APP)
         self.assertEqual(self.o.CLIENT_ID, self.c.CLIENT_ID)
@@ -152,7 +152,7 @@ class OAuthPiecesTest(unittest.TestCase):
     def test_nonce_format(self) -> None:
         n = self.o.generate_nonce()
         self.assertRegex(n, r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-        self.assertNotEqual(n, self.o.generate_nonce())  # casuale
+        self.assertNotEqual(n, self.o.generate_nonce())  # random
 
 
 if __name__ == "__main__":

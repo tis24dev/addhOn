@@ -1,6 +1,7 @@
-"""Golden test del ROOT appliance nativo (Fase 4). Congela proprietà + load end-to-end
-sul dump reale del frigo. Era differential vs pyhOn (slice 5a); con `_vendor/` cancellato
-è golden (output nativo provato == pyhOn al checkpoint 5a, commit 520f036).
+"""Golden test of the native ROOT appliance (Phase 4). Freezes properties + the
+end-to-end load on the real fridge dump. It used to be differential vs pyhOn
+(slice 5a); with `_vendor/` deleted it is golden (native output proven == pyhOn
+at checkpoint 5a, commit 520f036).
 """
 from __future__ import annotations
 
@@ -16,9 +17,9 @@ from _golden import REPO, frozen, install_stubs, normalize  # noqa: E402
 install_stubs()
 _DUMP = REPO / "tests" / "fixtures" / "ref_10136"
 
-from custom_components.addhon.client import pyhon_adapter  # noqa: E402
+from custom_components.addhon.client import factory  # noqa: E402
 
-NaRoot = pyhon_adapter._native_engine_appliance_cls()
+NaRoot = factory._native_engine_appliance_cls()
 
 
 def _load(name: str):
@@ -106,8 +107,8 @@ class _ConnApi(FakeApi):
 
 
 class ConnectivityTest(unittest.TestCase):
-    """`connection`/`available` derivati da lastConnEvent.category (modello app), accurati
-    sul polling (prima `connection` era stale-True; validato live: TD offline ora azzera)."""
+    """`connection`/`available` derived from lastConnEvent.category (app model), accurate
+    on polling (before, `connection` was stale-True; validated live: offline TD now clears)."""
 
     def _build(self, category, type_name="REF"):
         info = dict(_INFO)
@@ -128,7 +129,7 @@ class ConnectivityTest(unittest.TestCase):
         self.assertTrue(a.attributes["available"])
 
     def test_available_universal_without_extra(self) -> None:
-        # un tipo senza layer per-tipo (es. AC) ottiene comunque `available` dal ROOT
+        # a type without a per-type layer (e.g. AC) still gets `available` from the ROOT
         a = self._build("CONNECTED", type_name="AC")
         self.assertIsNone(a._extra)
         self.assertTrue(a.attributes["available"])
@@ -140,9 +141,34 @@ class ConnectivityTest(unittest.TestCase):
 
         app = NaRoot(_BadApi(), json.loads(json.dumps(_INFO)), zone=0)
         _run(app.load_commands())
-        _run(app.load_attributes())  # non deve sollevare su lastConnEvent non-dict
-        self.assertTrue(app.connection)  # stato invariato (default)
+        _run(app.load_attributes())  # must not raise on a non-dict lastConnEvent
+        self.assertTrue(app.connection)  # state unchanged (default)
         self.assertTrue(app.attributes["available"])
+
+    def test_dict_without_category_keeps_state(self) -> None:
+        # A dict lastConnEvent lacking `category` must NOT force availability True:
+        # it keeps the prior (MQTT/previous-poll) state. Regression guard: the old code
+        # did `lce.get("category", "") != "DISCONNECTED"` -> "" -> True on every poll.
+        class _SeqApi(FakeApi):
+            def __init__(self) -> None:
+                self._payloads = [
+                    {"shadow": {"parameters": {}}, "lastConnEvent": {"category": "DISCONNECTED"}},
+                    {"shadow": {"parameters": {}}, "lastConnEvent": {"id": "x"}},  # dict, no category
+                ]
+                self._i = 0
+
+            async def load_attributes(self, a):
+                payload = self._payloads[min(self._i, len(self._payloads) - 1)]
+                self._i += 1
+                return payload
+
+        app = NaRoot(_SeqApi(), json.loads(json.dumps(_INFO)), zone=0)
+        _run(app.load_commands())
+        _run(app.load_attributes())  # DISCONNECTED -> False
+        self.assertFalse(app.connection)
+        _run(app.load_attributes())  # dict without category -> keep False (was forced True)
+        self.assertFalse(app.connection)
+        self.assertFalse(app.attributes["available"])
 
 
 class RootGoldenTest(unittest.TestCase):

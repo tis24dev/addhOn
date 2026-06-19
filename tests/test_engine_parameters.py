@@ -1,9 +1,10 @@
-"""Golden test dei parametri nativi (Fase 4). Riusa i 67 parametri REALI del frigo
-(apk/dump/ref_10136/commands.json: range+enum+fixed) e ne congela costruzione + setter.
+"""Golden test of the native parameters (Phase 4). Reuses the 67 REAL fridge
+parameters (apk/dump/ref_10136/commands.json: range+enum+fixed) and freezes their
+construction + setter.
 
-Storia: era un differential test vs pyhOn+patch BABYCARE; con `_vendor/` cancellato è
-diventato golden (l'output nativo era provato == pyhOn al checkpoint 5a). Il fix
-BABYCARE è nativo nell'enum; le divergenze enum-edge restano pinnate sotto.
+History: it used to be a differential test vs pyhOn+BABYCARE patch; with `_vendor/`
+deleted it became golden (the native output was proven == pyhOn at checkpoint 5a).
+The BABYCARE fix is native in the enum; the enum-edge divergences stay pinned below.
 """
 from __future__ import annotations
 
@@ -63,14 +64,14 @@ def _native_snapshot():
         t = d["typology"]
         out["by_typ"][t] = out["by_typ"].get(t, 0) + 1
         item = {"construct": _snap(_NA[t]("k", dict(d), "grp"), t)}
-        # setter sui valori validi: (value, intern_value) risultanti
+        # setter on the valid values: resulting (value, intern_value)
         na = _NA[t]("k", dict(d), "grp")
         setter = []
         for v in list(na.values):
             na.value = v
             setter.append([na.value, na.intern_value])
         item["setter_valid"] = setter
-        # setter su valore invalido
+        # setter on an invalid value
         if t == "fixed":
             item["setter_invalid"] = "n/a"
         else:
@@ -81,9 +82,10 @@ def _native_snapshot():
             except ValueError:
                 item["setter_invalid"] = "ValueError"
         if t == "range":
-            # Probe NUMERICHE del range setter: fuori-range e off-step. Senza queste,
-            # l'unico invalid è una stringa non-numerica che solleva già in str_to_float
-            # (prima dei check min/max/step) -> regressioni del bound/step invisibili.
+            # NUMERIC probes of the range setter: out-of-range and off-step. Without
+            # these, the only invalid is a non-numeric string that already raises in
+            # str_to_float (before the min/max/step checks) -> bound/step regressions
+            # would be invisible.
             probes: dict = {}
             nr = _NA[t]("k", dict(d), "grp")
             try:
@@ -93,7 +95,7 @@ def _native_snapshot():
                 probes["out_of_range"] = "ValueError"
             nr2 = _NA[t]("k", dict(d), "grp")
             try:
-                nr2.value = str(nr2.min + 0.5)  # stringa: evita il troncamento int di str_to_float
+                nr2.value = str(nr2.min + 0.5)  # string: avoids str_to_float's int truncation
                 probes["off_step"] = "accepted"
             except ValueError:
                 probes["off_step"] = "ValueError"
@@ -115,13 +117,13 @@ class ParameterGoldenTest(unittest.TestCase):
 
 
 class NativeEnumEdgeBehaviorTest(unittest.TestCase):
-    """Comportamento NATIVO inteso sugli edge enum (fix BABYCARE + divergenze pinnate)."""
+    """Intended NATIVE behavior on the enum edges (BABYCARE fix + pinned divergences)."""
 
     def test_babycare_cased_value_accepted(self) -> None:
         data = {"category": "command", "typology": "enum", "mandatory": 1,
                 "defaultValue": "OFF", "enumValues": ["OFF", "BABYCARE", "ECO"]}
         na = NaEnum("mode", dict(data), "grp")
-        # accetta sia il casing del cloud sia quello pulito; value normalizza, intern_value resta grezzo
+        # accepts both the cloud casing and the clean one; value normalizes, intern_value stays raw
         na.value = "BABYCARE"
         self.assertEqual(na.value, "babycare")
         self.assertEqual(na.intern_value, "BABYCARE")
@@ -138,8 +140,9 @@ class NativeEnumEdgeBehaviorTest(unittest.TestCase):
         self.assertEqual(len(fired), 1)
 
     def test_string_enumvalues_normalized_to_list(self) -> None:
-        # enumValues come stringa "cold|hot" + default fuori lista: prima `.append`
-        # su una str sollevava AttributeError in costruzione. Ora si normalizza a lista.
+        # enumValues as the string "cold|hot" + default outside the list: previously
+        # `.append` on a str raised AttributeError during construction. Now it is
+        # normalized to a list.
         data = {"category": "command", "typology": "enum", "mandatory": 1,
                 "defaultValue": "warm", "enumValues": "cold|hot"}
         na = NaEnum("mode", dict(data), "grp")

@@ -1,10 +1,10 @@
-"""Differential test del 2° pezzo del transport nativo: parse_appliance_list.
+"""Differential test of the native transport's 2nd piece: parse_appliance_list.
 
-La logica di estrazione di pyhOn vive INLINE nel metodo async+HTTP
-`api.load_appliances`, quindi non è importabile a sé: l'oracolo è la sua
-trascrizione VERBATIM (`_pyhon_extract` sotto). Confrontiamo il nostro parser
-contro l'oracolo su molte risposte; più i casi di DIVERGENZA VOLUTA dove pyhOn
-crasha (catena di `.get()` su un intermedio non-dict) e noi ricadiamo su `[]`.
+pyhOn's extraction logic lives INLINE in the async+HTTP method
+`api.load_appliances`, so it is not importable on its own: the oracle is its
+VERBATIM transcription (`_pyhon_extract` below). We compare our parser against
+the oracle on many responses; plus the INTENTIONAL DIVERGENCE cases where pyhOn
+crashes (a `.get()` chain on a non-dict intermediate) and we fall back to `[]`.
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ def _load(path: Path, name: str):
 
 
 def _pyhon_extract(result):
-    """Oracolo: trascrizione VERBATIM del parsing di pyhon api.load_appliances
-    (meno il logging). NON importabile a sé perché inline in un metodo async+HTTP."""
+    """Oracle: VERBATIM transcription of pyhon api.load_appliances' parsing (minus
+    the logging). NOT importable on its own because it is inline in an async+HTTP method."""
     appliances = []
     if isinstance(result, dict):
         raw = (
@@ -39,17 +39,17 @@ def _pyhon_extract(result):
         if isinstance(raw, list):
             appliances = raw
         elif raw:
-            pass  # pyhon qui logga un warning; per il confronto conta solo il ritorno
+            pass  # pyhon logs a warning here; only the return value matters for the comparison
     return appliances
 
 
-# Risposte ben formate / mancanti / vuote: il nostro parser DEVE dare lo stesso
-# risultato di pyhOn.
+# Well-formed / missing / empty responses: our parser MUST give the same result
+# as pyhOn.
 _EQUAL = [
     {"modules": {"applianceList": {"payload": {"appliances": [{"a": 1}, {"b": 2}]}}}},
     {"modules": {"applianceList": {"payload": {"appliances": []}}}},
-    {"modules": {"applianceList": {"payload": {"appliances": {"x": 1}}}}},  # non-lista truthy
-    {"modules": {"applianceList": {"payload": {"appliances": 0}}}},          # non-lista falsy
+    {"modules": {"applianceList": {"payload": {"appliances": {"x": 1}}}}},  # non-list truthy
+    {"modules": {"applianceList": {"payload": {"appliances": 0}}}},          # non-list falsy
     {"modules": {"applianceList": {"payload": {"appliances": None}}}},
     {"modules": {"applianceList": {"payload": {}}}},
     {"modules": {"applianceList": {}}},
@@ -61,18 +61,18 @@ _EQUAL = [
     123,
 ]
 
-# Forme malformate con un livello intermedio NON-dict: pyhOn crasha
-# (AttributeError), noi ricadiamo su [] (hardening voluto).
+# Malformed shapes with a NON-dict intermediate level: pyhOn crashes
+# (AttributeError), we fall back to [] (intentional hardening).
 _HARDENED = [
     {"modules": "x"},
     {"modules": []},
-    {"modules": None},                                       # None intermedio
+    {"modules": None},                                       # None intermediate
     {"modules": {"applianceList": "y"}},
     {"modules": {"applianceList": []}},
     {"modules": {"applianceList": None}},
     {"modules": {"applianceList": {"payload": []}}},
     {"modules": {"applianceList": {"payload": "z"}}},
-    {"modules": {"applianceList": {"payload": None}}},       # None intermedio (payload)
+    {"modules": {"applianceList": {"payload": None}}},       # None intermediate (payload)
 ]
 
 
@@ -88,16 +88,16 @@ class ParseApplianceListTest(unittest.TestCase):
     def test_pinned_real_shape(self) -> None:
         full = {"modules": {"applianceList": {"payload": {"appliances": [{"a": 1}, {"b": 2}]}}}}
         self.assertEqual(self.parse(full), [{"a": 1}, {"b": 2}])
-        # ritorna la lista REALE (stesso oggetto, non una copia): come pyhOn
+        # returns the REAL list (same object, not a copy): like pyhOn
         self.assertIs(self.parse(full), full["modules"]["applianceList"]["payload"]["appliances"])
 
     def test_hardened_vs_pyhon_crash_on_intermediate_non_dict(self) -> None:
         for result in _HARDENED:
             with self.subTest(result=result):
-                # pyhOn crasha su questi (documenta la fragilità che abbiamo tolto)...
+                # pyhOn crashes on these (documents the fragility we removed)...
                 with self.assertRaises(AttributeError):
                     _pyhon_extract(result)
-                # ...noi ricadiamo su [] (fail-safe).
+                # ...we fall back to [] (fail-safe).
                 self.assertEqual(self.parse(result), [])
 
 

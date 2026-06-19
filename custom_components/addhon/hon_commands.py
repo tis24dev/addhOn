@@ -1,16 +1,16 @@
-"""Helper condivisi per inviare comandi pyhOn ai controlli (Tier 3).
+"""Shared helpers to send hOn commands to the controls (Tier 3).
 
-Generalizza il pattern già usato da button.py (invio di un comando applicando
-override di parametri) e da ac_command.async_send_settings (set sul comando di
-scrittura), rendendolo neutro rispetto al nome del comando. I controlli dei tipi
-Tier 3 (number, switch/select/button per frigo/forno/…) lo riusano senza
-duplicare lookup, rollback ed esecuzione sul loop dedicato pyhOn.
+Generalizes the pattern already used by button.py (sending a command while
+applying parameter overrides) and by ac_command.async_send_settings (set on the
+write command), making it neutral with respect to the command name. The Tier 3
+controls (number, switch/select/button for fridge/oven/...) reuse it without
+duplicating lookup, rollback and execution on the client's dedicated loop.
 
-Principio di gating (vedi memoria/repo): ogni controllo è CAPABILITY-GATED, cioè
-si crea solo se il device espone DAVVERO il comando + parametro (schema runtime
-di pyhOn), col superset dei candidati seminato dalla mappatura della app. Così è
-validato dove abbiamo il dump reale, ampio per gli altri modelli, e sicuro
-ovunque (un parametro assente non genera entità).
+Gating principle (see memory/repo): every control is CAPABILITY-GATED, i.e. it is
+created only if the device ACTUALLY exposes the command + parameter (the client runtime
+schema), with the candidate superset seeded from the app mapping. This way it is
+validated where we have the real dump, broad for the other models, and safe
+everywhere (a missing parameter does not generate an entity).
 """
 from __future__ import annotations
 
@@ -19,28 +19,30 @@ import logging
 
 from homeassistant.exceptions import HomeAssistantError
 
+from .const import DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
 
-# Comandi pyhOn da cui i controlli "set" (number/switch/select-modo) leggono e
-# scrivono i parametri liberi. pyhOn nomina il comando dalla chiave di primo
-# livello del device: "settings" è quella dell'AC e del frigo reale (categoria
-# attiva setParameters); "setParameters" come fallback per altri modelli.
+# the hOn commands from which the "set" controls (number/switch/select-mode) read
+# and write the free parameters. The client names the command after the device's
+# top-level key: "settings" is the AC's and the real fridge's one (the active
+# category exposes setParameters); "setParameters" as a fallback for other models.
 SETTINGS_COMMANDS: tuple[str, ...] = ("settings", "setParameters")
 
 
 def get_commands(appliance) -> dict:
-    """Dizionario comandi del device, o {} se assente/non valido."""
+    """Command dictionary of the device, or {} if absent/invalid."""
     commands = getattr(appliance, "commands", None)
     return commands if isinstance(commands, dict) else {}
 
 
 def get_command(appliance, name: str):
-    """Comando `name`, o None."""
+    """Command `name`, or None."""
     return get_commands(appliance).get(name)
 
 
 def command_param(appliance, command_name: str, param_name: str):
-    """Parametro `param_name` del comando `command_name`, o None se assente."""
+    """Parameter `param_name` of command `command_name`, or None if absent."""
     command = get_command(appliance, command_name)
     params = getattr(command, "parameters", None) if command is not None else None
     if isinstance(params, dict):
@@ -51,10 +53,10 @@ def command_param(appliance, command_name: str, param_name: str):
 def find_settings_param(
     appliance, param_name: str, command_names: Sequence[str] = SETTINGS_COMMANDS
 ):
-    """Cerca `param_name` tra i comandi `command_names` (in ordine).
+    """Search for `param_name` among the `command_names` commands (in order).
 
-    Ritorna (command_name, param) del primo match, o None. È il capability-gate
-    dei controlli che scrivono su un comando settings/setParameters.
+    Returns (command_name, param) of the first match, or None. It is the
+    capability-gate of the controls that write to a settings/setParameters command.
     """
     for name in command_names:
         param = command_param(appliance, name, param_name)
@@ -64,7 +66,7 @@ def find_settings_param(
 
 
 def param_values(param) -> list[str]:
-    """Valori ammessi (stringhe) di un parametro enum, o [] se non enumerato."""
+    """Allowed values (strings) of an enum parameter, or [] if not enumerated."""
     values = getattr(param, "values", None)
     if isinstance(values, (list, tuple)):
         return [str(v) for v in values]
@@ -72,10 +74,10 @@ def param_values(param) -> list[str]:
 
 
 def param_range(param) -> tuple[float, float, float] | None:
-    """(min, max, step) di un parametro range pyhOn, o None se non è un range.
+    """(min, max, step) of a range parameter, or None if it is not a range.
 
-    Duck-typing su min/max/step (HonParameterRange li espone). step torna 1.0 se
-    pyhOn lo riporta a 0 (nessun incremento dichiarato)."""
+    Duck-typing on min/max/step (HonParameterRange exposes them). step returns 1.0
+    if the parameter reports it as 0 (no declared increment)."""
     if not all(hasattr(param, attr) for attr in ("min", "max", "step")):
         return None
     try:
@@ -86,7 +88,7 @@ def param_range(param) -> tuple[float, float, float] | None:
         return None
     if hi < lo:
         return None
-    if step <= 0:  # incremento non positivo: range incoerente per un controllo numerico
+    if step <= 0:  # non-positive increment: inconsistent range for a numeric control
         return None
     return lo, hi, step
 
@@ -100,22 +102,25 @@ async def async_send_command(
     *,
     pre_send: Callable[[dict], None] | None = None,
 ) -> None:
-    """Applica `params` (nome->valore) al comando `command_name` e lo invia sul
-    loop dedicato pyhOn, con rollback se un assegnamento fallisce.
+    """Apply `params` (name->value) to command `command_name` and send it on
+    the client's dedicated loop, with rollback if an assignment fails.
 
-    `pre_send(command_params)`: hook opzionale eseguito PRIMA di applicare i
-    parametri richiesti (l'AC lo usa per sanare windDirection*). I valori
-    richiesti vincono comunque su ciò che pre_send ha impostato.
+    `pre_send(command_params)`: optional hook run BEFORE applying the requested
+    parameters (the AC uses it to sanitize windDirection*). The requested values
+    win anyway over whatever pre_send has set.
     """
     if not appliance or not client:
-        raise HomeAssistantError("Comando: appliance o client non disponibile")
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="appliance_or_client_unavailable",
+        )
 
     def _do_send():
         async def _inner():
             command = get_command(appliance, command_name)
             if command is None:
                 raise RuntimeError(
-                    f"Comando '{command_name}' non trovato sul dispositivo"
+                    f"Command '{command_name}' not found on the device"
                 )
             command_params = getattr(command, "parameters", {})
             if not isinstance(command_params, dict):
@@ -123,18 +128,18 @@ async def async_send_command(
             missing = [key for key in params if key not in command_params]
             if missing:
                 raise RuntimeError(
-                    f"Parametro/i non trovato/i nel comando {command_name}: "
+                    f"Parameter(s) not found in command {command_name}: "
                     + ", ".join(missing)
                 )
-            # Snapshot dello stato interno completo di OGNI parametro PRIMA di pre_send.
-            # Assegnare un parametro-trigger fa scattare le rule, che mutano i sibling
-            # (value E values/min/max). Su un fallimento di pre_send o di send()
-            # ripristiniamo copiando __dict__ DIRETTAMENTE, senza passare dai setter:
-            # cosi' NON ri-scateniamo le rule e ripristiniamo anche values/min/max. Un
-            # rollback via setter lascerebbe i .values ristretti e solleverebbe in
-            # rivalidazione -> stato corrotto che contaminerebbe gli invii successivi.
-            # I parametri SOSTITUISCONO le liste (mai mutate in-place), quindi una copia
-            # shallow di __dict__ e' sufficiente.
+            # Snapshot of the complete internal state of EVERY parameter BEFORE pre_send.
+            # Assigning a trigger parameter fires the rules, which mutate the siblings
+            # (value AND values/min/max). On a pre_send or send() failure we restore by
+            # copying __dict__ DIRECTLY, without going through the setters: this way we
+            # do NOT re-fire the rules and we also restore values/min/max. A rollback
+            # via setter would leave the .values restricted and would raise on
+            # revalidation -> corrupted state that would contaminate later sends. The
+            # parameters REPLACE the lists (never mutated in-place), so a shallow copy
+            # of __dict__ is enough.
             snapshots: dict = {
                 key: dict(attr.__dict__)
                 for key, attr in command_params.items()
@@ -145,7 +150,7 @@ async def async_send_command(
                     pre_send(command_params)
                 for key, value in params.items():
                     command_params[key].value = value
-                    _LOGGER.debug("Comando %s: '%s' = %s", command_name, key, value)
+                    _LOGGER.debug("Command %s: '%s' = %s", command_name, key, value)
                 await command.send()
             except Exception:
                 for key, snap in snapshots.items():
@@ -156,7 +161,7 @@ async def async_send_command(
                     attr.__dict__.update(snap)
                 raise
             _LOGGER.debug(
-                "Comando %s: send completato (params=%s)", command_name, list(params)
+                "Command %s: send completed (params=%s)", command_name, list(params)
             )
 
         client.run_command_sync(_inner())

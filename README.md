@@ -21,6 +21,19 @@ A custom Home Assistant integration for controlling Haier appliances via the hOn
 
 Other hOn-compatible Haier appliances should work — feel free to test and report.
 
+## Localization
+
+The user interface is multi-language. Entity names, the config and options
+screens, service names and descriptions, and user-facing error messages are
+provided as translations (currently English and Italian) and follow Home
+Assistant's configured language. The code, comments and log messages are
+English-only.
+
+> **Upgrading to v5.0.0:** entity *friendly names* are now localized and use Home
+> Assistant's `has_entity_name` format (`<device> <entity>`), so the displayed
+> names change. Entity IDs are unchanged, so dashboards and automations that
+> reference `entity_id` keep working.
+
 ## Prerequisites
 
 - Home Assistant 2024.12.0 or newer

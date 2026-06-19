@@ -1,26 +1,23 @@
-"""API HTTP nativa del cloud hOn (transport addhOn).
+"""Authenticated HTTP API client of the hOn cloud (addhOn transport).
 
-Riscrittura (NON copia) dei metodi autenticati di `_vendor/pyhon/connection/api.HonAPI`
-sopra il nostro `HonConnection` (che inietta i token per-richiesta e gestisce il
-retry su scadenza/401-403). Ogni metodo ritorna la STESSA shape JSON che il motore
-parser/command_loader nativo si aspetta: è il contratto verso `HonAppliance`/
-`HonCommandLoader`, che ricevono QUESTO api iniettato.
+Implements the authenticated methods on top of `HonConnection` (which injects the
+per-request tokens and handles the retry on expiry/401-403). Every method returns the
+JSON shape that the parser/command_loader engine expects: it is the contract towards
+`HonAppliance`/`HonCommandLoader`, which receive THIS injected api.
 
-DUE filosofie, deliberate (come parse.py/tokens.py):
-  * COSTRUZIONE RICHIESTA (verbo, path, params, body) = EXACT-PRESERVING: va al
-    cloud byte-identica a pyhOn (le quirk contano, es. il timestamp di send_command).
-  * ESTRAZIONE RISPOSTA = difensiva (come parse.py): dove pyhOn solleverebbe
-    KeyError/AttributeError su una risposta malformata, noi ricadiamo sul default
-    vuoto sicuro. Su ogni risposta ben formata il risultato è IDENTICO a pyhOn
-    (lo verifica il differential test); le divergenze sono solo sul ramo malformato.
+TWO philosophies, deliberate:
+  * REQUEST CONSTRUCTION (verb, path, params, body) is exact: the cloud is strict about
+    the exact request shape (the quirks matter, e.g. the send_command timestamp).
+  * RESPONSE EXTRACTION is defensive: on a malformed response we fall back to the safe
+    empty default rather than raising KeyError/AttributeError.
 
-Metodi ANONIMI (appliance_configuration / app_config / translation_keys) NON sono
-qui: usano un handler senza auth e non entrano nel flusso di setup dei nostri
-appliance; non implementati perché non usati.
+ANONYMOUS methods (appliance_configuration / app_config / translation_keys) are NOT
+here: they use a handler without auth and do not enter the setup flow of our
+appliances; not implemented because not used.
 
-`appliance` è duck-typed (`Any`): leggiamo solo `.appliance_type`, `.appliance_model_id`,
-`.mac_address`, `.code`, `.info` (dict), `.options`. Così `transport/` resta
-_vendor-free (nessun import di pyhOn), com'è per tutto lo strato nativo.
+`appliance` is duck-typed (`Any`): we only read `.appliance_type`, `.appliance_model_id`,
+`.mac_address`, `.code`, `.info` (dict), `.options`. This way `transport/` stays
+decoupled from the engine, as the whole native layer is.
 """
 from __future__ import annotations
 
@@ -35,32 +32,27 @@ from .parse import parse_appliance_list
 
 _LOGGER = logging.getLogger(__name__)
 
-# Base URL del cloud hOn (pyhOn const.API_URL).
+# Base URL of the hOn cloud.
 API_URL = "https://api-iot.he.services"
 
 
 def _command_timestamp() -> str:
-    """Timestamp UTC del comando in millisecondi + "Z" (es. 2026-06-18T12:34:56.789Z).
+    """Command UTC timestamp in milliseconds + "Z" (e.g. 2026-06-18T12:34:56.789Z).
 
-    pyhOn usa `datetime.utcnow().isoformat()[:-3] + "Z"`: lo slice `[:-3]` taglia i
-    microsecondi (6 cifre) a millisecondi (3), MA quando `microsecond == 0`
-    `isoformat()` omette del tutto la parte frazionaria, così `[:-3]` mangia i
-    secondi e produce un timestamp MALFORMATO ("...T12:34Z"). È un bug di pyhOn
-    (raro, ~1/1e6 invii). Qui usiamo `isoformat(timespec="milliseconds")` che rende
-    SEMPRE esattamente 3 cifre frazionarie: byte-identico a pyhOn sul percorso
-    normale (microsecondi != 0) e corretto ("...56.000Z") sul caso che pyhOn rompe.
-    `replace(tzinfo=None)` evita il suffisso "+00:00" (manteniamo il valore UTC naive,
-    come l'ormai deprecato `utcnow()`).
+    The cloud expects exactly 3 fractional digits, so we use
+    `isoformat(timespec="milliseconds")` which always renders them (including
+    "...56.000Z" when the microseconds are 0). `replace(tzinfo=None)` avoids the
+    "+00:00" suffix, keeping the naive UTC value.
     """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     return f"{now.isoformat(timespec='milliseconds')}Z"
 
 
 class HonApi:
-    """Metodi HTTP del cloud hOn sopra una `HonConnection` autenticata.
+    """HTTP methods of the hOn cloud on top of an authenticated `HonConnection`.
 
-    Drop-in del `HonAPI` di pyhOn dal punto di vista del motore parser: stesse
-    firme (appliance duck-typed) e stesse shape di ritorno.
+    Exposes the signatures (duck-typed appliance) and return shapes the parser
+    engine consumes.
     """
 
     def __init__(self, connection: HonConnection) -> None:
@@ -68,13 +60,13 @@ class HonApi:
 
     @property
     def auth(self) -> Any:
-        """L'oggetto auth della connessione (come pyhOn `HonAPI.auth`)."""
+        """The connection's auth object."""
         return self._connection.auth
 
     async def load_appliances(self) -> list:
-        # L'app hOn legge la lista appliance dall'aggregatore unified-api via POST
-        # (fix v2.7.1: il vecchio GET commands/v1/appliance ritorna [] per ogni
-        # account). L'estrazione difensiva vive in parse.parse_appliance_list.
+        # The hOn app reads the appliance list from the unified-api aggregator via POST
+        # (fix v2.7.1: the old GET commands/v1/appliance returns [] for every
+        # account). The defensive extraction lives in parse.parse_appliance_list.
         device_id = self._connection.device.mobile_id or _device.MOBILE_ID
         async with self._connection.post(
             f"{API_URL}/unified-api/v1/view/appliance-list",
@@ -83,18 +75,18 @@ class HonApi:
             result = await resp.json()
         appliances = parse_appliance_list(result)
         if not appliances:
-            # Request/auth OK ma 0 appliance: logga la struttura della risposta per
-            # distinguere un account davvero vuoto da un cambio API (la lista
-            # unified-api include anche gli offline). Diagnostica portata da pyhOn.
+            # Request/auth OK but 0 appliances: log the response structure to
+            # distinguish a truly empty account from an API change (the
+            # unified-api list includes offline ones too).
             modules = result.get("modules") if isinstance(result, dict) else None
             _LOGGER.warning(
-                "hOn API: 0 appliance (request OK). result keys=%s; modules keys=%s. "
-                "Se gli apparecchi compaiono nell'app hOn, è probabile un cambio API "
-                "più che un account vuoto/non condiviso.",
+                "hOn API: 0 appliances (request OK). result keys=%s; modules keys=%s. "
+                "If the appliances appear in the hOn app, it is more likely an API change "
+                "than an empty/unshared account.",
                 sorted(result.keys()) if isinstance(result, dict) else "n/a",
                 sorted(modules.keys()) if isinstance(modules, dict) else "n/a",
             )
-            _LOGGER.debug("hOn risposta appliance grezza: %s", result)
+            _LOGGER.debug("hOn raw appliance response: %s", result)
         return appliances
 
     async def load_commands(self, appliance: Any) -> dict:
@@ -116,12 +108,11 @@ class HonApi:
         async with self._connection.get(url, params=params) as response:
             data = await response.json()
         payload = data.get("payload") if isinstance(data, dict) else None
-        # pyhOn fa `result.pop("resultCode")` (KeyError su payload senza resultCode,
-        # TypeError su payload non-dict); qui ramo-errore su qualsiasi forma non
-        # valida -> {}, identico al ben formato. Il pop RIMUOVE resultCode dal dict
-        # ritornato (il parser non lo vuole nelle voci comando): preservato.
+        # Error-branch on any invalid shape (non-dict or empty payload) -> {}. The pop
+        # below REMOVES resultCode from the returned dict (the parser does not want it
+        # in the command entries) while validating it.
         if not isinstance(payload, dict) or not payload:
-            _LOGGER.error("hOn load_commands: payload invalido: %s", data)
+            _LOGGER.error("hOn load_commands: invalid payload: %s", data)
             return {}
         if payload.pop("resultCode", None) != "0":
             _LOGGER.error("hOn load_commands: resultCode != 0: %s", data)
@@ -243,7 +234,7 @@ class HonApi:
             payload = json_data.get("payload") if isinstance(json_data, dict) else None
             if isinstance(payload, dict) and payload.get("resultCode") == "0":
                 return True
-            _LOGGER.error("hOn send_command fallito: %s", await response.text())
+            _LOGGER.error("hOn send_command failed: %s", await response.text())
             _LOGGER.error("%s - Payload:\n%s", url, pformat(data))
         return False
 

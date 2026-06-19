@@ -1,12 +1,12 @@
 """Regression tests for the restored program select and power cleanup.
 
-Copre la fix Opzione B (regressione comparsa nella release pubblica 2.4.0,
-l'ultima funzionante era la 2.2):
-- il select "Programma" torna a essere creato/disponibile anche quando il
-  programma è esposto solo via startProgram;
-- selezionare un programma NON avvia il ciclo (imposta e basta);
-- il pulsante "Avvia programma" applica il programma scelto e svuota la scelta;
-- lo switch legacy "Alimentazione" (_power) viene rimosso dal registry.
+Covers the Option B fix (regression that appeared in the public release 2.4.0,
+the last working one was 2.2):
+- the "Programma" select is created/available again even when the program is
+  exposed only via startProgram;
+- selecting a program does NOT start the cycle (it only sets it);
+- the "Avvia programma" button applies the chosen program and clears the choice;
+- the legacy "Alimentazione" switch (_power) is removed from the registry.
 """
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def _install_homeassistant_stubs() -> None:
     )
 
     entity_registry = _ensure_module("homeassistant.helpers.entity_registry")
-    # Default no-op; i test che servono li sovrascrivono.
+    # Default no-op; the tests that need them override them.
     entity_registry.async_get = getattr(
         entity_registry, "async_get", lambda hass: None
     )
@@ -278,7 +278,7 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         await select.async_setup_entry(hass, FakeEntry(), added.extend)
 
         self.assertEqual(1, len(added))
-        self.assertEqual("Washer - Programma", added[0]._attr_name)
+        self.assertEqual("program", added[0]._attr_translation_key)
         self.assertEqual(["Cotone", "Sintetici"], added[0]._attr_options)
 
     async def test_select_option_records_pending_without_starting(self) -> None:
@@ -291,12 +291,12 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
 
         await entity.async_select_option("Sintetici")
 
-        # Nessun comando inviato: selezionare NON avvia l'elettrodomestico.
+        # No command sent: selecting does NOT start the appliance.
         self.assertEqual(0, start.send_calls)
         self.assertEqual(0, coordinator.refreshes)
-        # Il parametro del comando NON è stato toccato in fase di selezione.
+        # The command parameter is NOT touched during selection.
         self.assertIsNone(start.parameters["program"].value)
-        # La scelta è memorizzata e riflessa subito da current_option.
+        # The choice is stored and reflected right away by current_option.
         self.assertEqual({"washer-1": "2"}, coordinator.pending_programs)
         self.assertEqual("Sintetici", entity.current_option)
 
@@ -315,7 +315,7 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
             FakeClient(),
             command_name="startProgram",
             unique_suffix="start_program",
-            name_suffix="Avvia programma",
+            translation_key="start_program",
             icon="mdi:play-circle",
         )
         self._attach(button)
@@ -323,10 +323,10 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         await select_entity.async_select_option("Sintetici")
         await button.async_press()
 
-        # Il programma scelto è stato applicato a startProgram ed effettivamente avviato.
+        # The chosen program was applied to startProgram and actually started.
         self.assertEqual("2", start.parameters["program"].value)
         self.assertEqual(1, start.send_calls)
-        # La scelta in attesa è stata svuotata: il select torna allo stato device.
+        # The pending choice was cleared: the select goes back to the device state.
         self.assertEqual({}, coordinator.pending_programs)
         self.assertEqual(1, coordinator.refreshes)
 
@@ -342,7 +342,7 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
             FakeClient(),
             command_name="stopProgram",
             unique_suffix="stop_program",
-            name_suffix="Ferma programma",
+            translation_key="stop_program",
             icon="mdi:stop-circle",
             command_parameters={"onOffStatus": "0"},
         )
@@ -351,7 +351,7 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         await button.async_press()
 
         self.assertEqual(1, stop.send_calls)
-        # Lo stop non deve consumare né usare la scelta programma in attesa.
+        # The stop must not consume or use the pending program choice.
         self.assertEqual({"washer-1": "2"}, coordinator.pending_programs)
 
     async def test_current_option_reads_device_state_when_no_pending(self) -> None:
@@ -368,7 +368,7 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         from custom_components.addhon.select import HonProgramSelect
 
         start = RecordingCommand({"program": Param(values={"1": "Cotone", "2": "Sintetici"})})
-        # Il device espone direttamente il NOME del programma, non il codice.
+        # The device exposes the program NAME directly, not the code.
         coordinator = FakeCoordinator(
             _washer({"startProgram": start}, attributes={"programName": "Sintetici"})
         )
@@ -378,21 +378,21 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("Sintetici", entity.current_option)
 
     async def test_current_option_resolves_name_without_unmappable_prcode_noise(self) -> None:
-        """Caso reale (lavatrice/asciugatrice di produzione): l'elenco opzioni è
-        costruito da una LISTA di nomi (mappa name->name), il device pubblica un
-        settings.prCode NUMERICO non mappabile mentre il nome corretto è
-        disponibile via startProgram.program. current_option deve risolvere il
-        nome SENZA fermarsi né loggare 'non mappato' sul codice numerico.
+        """Real case (production washer/dryer): the options list is built from a
+        LIST of names (name->name map), the device publishes a NUMERIC,
+        unmappable settings.prCode while the correct name is available via
+        startProgram.program. current_option must resolve the name WITHOUT
+        stopping or logging 'not mapped' for the numeric code.
 
-        Regressione: in precedenza le chiavi prCode venivano provate prima di
-        startProgram.program, generando centinaia di righe DEBUG fuorvianti.
+        Regression: previously the prCode keys were tried before
+        startProgram.program, generating hundreds of misleading DEBUG lines.
         """
         from custom_components.addhon import select
         from custom_components.addhon.select import HonProgramSelect
 
         start = RecordingCommand({"program": Param(values=["hqd_smart", "hqd_eco"])})
-        # Il nome programma è raggiungibile SOLO via startProgram (non come
-        # attributo 'program' diretto, né via settings.program); prCode è numerico.
+        # The program name is reachable ONLY via startProgram (not as a direct
+        # 'program' attribute, nor via settings.program); prCode is numeric.
         data = {
             "washer-1": {
                 "type": "WM",
@@ -412,16 +412,16 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("hqd_smart", result)
         self.assertFalse(
-            any("non mappato" in line for line in logs.output),
-            msg=f"current_option non deve raggiungere il prCode numerico: {logs.output}",
+            any("not mapped" in line for line in logs.output),
+            msg=f"current_option must not reach the numeric prCode: {logs.output}",
         )
 
     async def test_start_button_keeps_pending_when_program_not_applicable(self) -> None:
         from homeassistant.exceptions import HomeAssistantError
         from custom_components.addhon.button import HonProgramCommandButton
 
-        # startProgram senza parametro programma: il programma scelto non è
-        # applicabile, quindi NON si avvia e la scelta in attesa resta.
+        # startProgram without a program parameter: the chosen program is not
+        # applicable, so it does NOT start and the pending choice stays.
         start = RecordingCommand({"onOffStatus": Param("1")})
         coordinator = FakeCoordinator(_washer({"startProgram": start}))
         coordinator.pending_programs = {"washer-1": "2"}
@@ -431,13 +431,17 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
             FakeClient(),
             command_name="startProgram",
             unique_suffix="start_program",
-            name_suffix="Avvia programma",
+            translation_key="start_program",
             icon="mdi:play-circle",
         )
         self._attach(button)
 
-        with self.assertRaisesRegex(HomeAssistantError, "non applicabile"):
+        with self.assertRaises(HomeAssistantError) as ctx:
             await button.async_press()
+        # Translatable error: the wrapper carries translation_key="command_error"
+        # and the underlying detail ("not applicable") in the error placeholder.
+        self.assertEqual("command_error", ctx.exception.translation_key)
+        self.assertIn("not applicable", ctx.exception.translation_placeholders["error"])
 
         self.assertEqual(0, start.send_calls)
         self.assertEqual({"washer-1": "2"}, coordinator.pending_programs)
@@ -451,8 +455,10 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         entity = HonProgramSelect(coordinator, "washer-1", FakeClient())
         self._attach(entity)
 
-        with self.assertRaisesRegex(HomeAssistantError, "non trovato"):
+        with self.assertRaises(HomeAssistantError) as ctx:
             await entity.async_select_option("Inesistente")
+        self.assertEqual("program_not_found", ctx.exception.translation_key)
+        self.assertEqual("Inesistente", ctx.exception.translation_placeholders["program"])
 
 
 class LegacyPowerCleanupTest(unittest.TestCase):
@@ -479,8 +485,8 @@ class LegacyPowerCleanupTest(unittest.TestCase):
             RegEntry("select.washer_programma", "washer-1_program"),
             RegEntry("sensor.washer_energia_totale", "washer-1_total_energy"),
         ])
-        # Patch limitata al test: ripristina le funzioni globali del registry
-        # anche in caso di fallimento, per non sporcare gli altri test.
+        # Test-scoped patch: restores the registry's global functions even on
+        # failure, so the other tests are not dirtied.
         self.addCleanup(setattr, er, "async_get", er.async_get)
         self.addCleanup(
             setattr, er, "async_entries_for_config_entry", er.async_entries_for_config_entry
@@ -490,7 +496,7 @@ class LegacyPowerCleanupTest(unittest.TestCase):
 
         _remove_legacy_entities(FakeHass(), FakeEntry())
 
-        # Solo l'entità "Alimentazione" (_power) viene rimossa; le altre restano.
+        # Only the "Alimentazione" entity (_power) is removed; the others stay.
         self.assertEqual(["switch.washer_alimentazione"], registry.removed)
 
 
@@ -510,11 +516,11 @@ class GetAttributesStatisticsTest(unittest.TestCase):
 
         attrs = _get_attributes(appliance)
 
-        # I contatori di consumo dal container statistics ora sono visibili.
+        # The consumption counters from the statistics container are now visible.
         self.assertEqual("123.4", attrs["totalElectricityUsed"])
         self.assertEqual("5000", attrs["totalWaterUsed"])
         self.assertEqual("42", attrs["totalWashCycle"])
-        # Attributi real-time e settings continuano a funzionare.
+        # Real-time attributes and settings keep working.
         self.assertEqual("1", attrs["machMode"])
         self.assertEqual("40", attrs["tempSel"])
 
@@ -529,7 +535,7 @@ class GetAttributesStatisticsTest(unittest.TestCase):
 
         attrs = _get_attributes(appliance)
 
-        # In caso di chiave in conflitto vince il valore real-time, non statistics.
+        # On a conflicting key the real-time value wins, not statistics.
         self.assertEqual("999", attrs["totalElectricityUsed"])
 
     def test_missing_statistics_is_tolerated(self) -> None:
@@ -658,7 +664,7 @@ class SwitchLoggingTest(unittest.IsolatedAsyncioTestCase):
             await switch.async_setup_entry(hass, FakeEntry(), added.extend)
 
         self.assertEqual(1, len(added))
-        self.assertIn("Aggiunto switch: Washer", "\n".join(logs.output))
+        self.assertIn("Added switch: Washer", "\n".join(logs.output))
 
 
 class DebugLoggingGuardTest(unittest.IsolatedAsyncioTestCase):
@@ -697,7 +703,7 @@ class DebugLoggingGuardTest(unittest.IsolatedAsyncioTestCase):
             FakeClient(),
             command_name="startProgram",
             unique_suffix="start_program",
-            name_suffix="Avvia programma",
+            translation_key="start_program",
             icon="mdi:play-circle",
         )
         self._attach(entity)

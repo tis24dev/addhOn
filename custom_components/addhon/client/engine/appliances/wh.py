@@ -1,8 +1,7 @@
-"""WH (scaldabagno). Riscrittura di `_vendor/pyhon/appliances/wh.py`.
+"""WH (water heater) per-type appliance logic.
 
-`active` = onOffStatus==1. FIX vs pyhOn: pyhOn faceva `isinstance(attr, HonParameter)`
-(falso: è un HonAttribute) -> ramo `attr == 1` = sempre False -> active rotto. Qui per
-valore (corretto). Campo non consumato -> fix inerte ma corretto.
+`active` = onOffStatus==1, compared by value. The derived field is not currently
+consumed by an entity.
 """
 from __future__ import annotations
 

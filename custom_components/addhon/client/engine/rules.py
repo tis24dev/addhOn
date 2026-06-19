@@ -1,28 +1,25 @@
-"""Motore rules nativo. Porting di `_vendor/pyhon/rules.py`.
+"""Rules engine.
 
-Una "rule" lega un parametro-trigger a un'azione su un altro parametro: quando il
-trigger assume un certo valore, il target viene vincolato (valore fisso, oppure
-ristretto a un enum/range). Si aggancia via `parameter.add_trigger` (il sistema di
-trigger del parametro base nativo): quando il trigger cambia valore, `check_trigger`
-esegue le callback registrate qui.
+A "rule" ties a trigger-parameter to an action on another parameter: when the
+trigger takes a certain value, the target is constrained (fixed value, or
+restricted to an enum/range). It hooks in via `parameter.add_trigger` (the
+trigger system of the base parameter): when the trigger changes value,
+`check_trigger` runs the callbacks registered here.
 
-MODELLO rules — RISOLTO sull'AC live (2026-06-18, vedi apk/analysis/rules-model.md):
-  Il vecchio dubbio "pyhOn forse trasposto vs il modello `programRules` dell'app" era un
-  MISREADING. Dump dell'AC reale (apk/dump/ac_live): `ancillaryParameters.programRules` È
-  il parametro con `category=="rule"`, stesso nodo, stesso nesting
-  `{targetParam: {triggerParam: {triggerValue: action}}}` (+ condizioni-extra annidate
-  es. `tempSel: {ecoMode: {"1": {machMode: {"1": {fixedValue:"26"}}}}}`). Quindi il
-  modello di pyhOn = il modello dell'app: già allineati, niente da "adottare".
-  UNA divergenza VOLUTA dopo la validazione live: il fix di `_extra_rules_matches`
-  (vedi sotto) - pyhOn confrontava `str(param)` (repr) invece di `str(param.value)`,
-  quindi le condizioni-extra non scattavano MAI; sull'AC reale ecoMode=1 ora vincola
-  tempSel/windSpeed/windDirection come fa l'app.
-  NOTA: le rules con trigger `$installationType` (config statica multi-split, non un
-  parametro) NON scattano (come in pyhOn: `$` non strippato, options vuote a
-  costruzione); impatto basso (remoteVisible/selfClean), non implementato alla cieca.
+rules MODEL (see apk/analysis/rules-model.md):
+  `ancillaryParameters.programRules` IS the parameter with `category=="rule"`, same
+  node, with nesting `{targetParam: {triggerParam: {triggerValue: action}}}`
+  (+ nested extra-conditions e.g.
+  `tempSel: {ecoMode: {"1": {machMode: {"1": {fixedValue:"26"}}}}}`).
+  The extra-conditions are matched in `_extra_rules_matches` (see below) by comparing
+  `str(param.value)`: on the real AC ecoMode=1 constrains
+  tempSel/windSpeed/windDirection as the app does.
+  NOTE: rules with the `$installationType` trigger (static multi-split config, not a
+  parameter) do NOT fire (`$` not stripped, options empty at construction);
+  low impact (remoteVisible/selfClean), not implemented blindly.
 
-`isinstance` qui è contro le classi parametro NATIVE: parametri, comandi e rules sono
-un cluster coeso.
+`isinstance` here is against the parameter classes: parameters, commands and
+rules are a cohesive cluster.
 """
 from __future__ import annotations
 
@@ -43,9 +40,9 @@ class HonRule:
     extras: Optional[dict[str, str]] = None
 
 
-# Trigger key `$<x>` = variabile di CONFIG del device (sigil dell'app), non un
-# parametro runtime. Mappatura -> campo del record appliance (da app decompilata,
-# `getMappedParamName`): l'app conosce SOLO `$installationType` -> `unitConfiguration`.
+# Trigger key `$<x>` = device CONFIG variable (the app's sigil), not a
+# runtime parameter. Mapping -> field of the appliance record (from the decompiled app,
+# `getMappedParamName`): the app knows ONLY `$installationType` -> `unitConfiguration`.
 _DOLLAR_FIELDS = {"$installationType": "unitConfiguration"}
 
 
@@ -53,7 +50,7 @@ class HonRuleSet:
     def __init__(self, command: Any, rule: dict[str, Any]) -> None:
         self._command = command
         self._rules: dict[str, list[HonRule]] = {}
-        # rules "di config" (trigger `$...`): risolte staticamente, non via trigger.
+        # "config" rules (trigger `$...`): resolved statically, not via triggers.
         self._config_rules: list[tuple[str, str, dict[str, Any]]] = []
         self._parse_rule(rule)
 
@@ -75,9 +72,9 @@ class HonRuleSet:
         extra: Optional[dict[str, str]] = None,
     ) -> None:
         if extra is None and trigger_key.startswith("$"):
-            # CONFIG-rule (modello app): il trigger `$installationType` non è un
-            # parametro ma un campo del device (unitConfiguration). Risolta staticamente
-            # in `patch()` contro il record appliance, non come trigger runtime.
+            # CONFIG-rule (app model): the `$installationType` trigger is not a
+            # parameter but a device field (unitConfiguration). Resolved statically
+            # in `patch()` against the appliance record, not as a runtime trigger.
             self._config_rules.append((param_key, trigger_key, trigger_data))
             return
         trigger_key = trigger_key.replace("@", "")
@@ -89,9 +86,9 @@ class HonRuleSet:
                         param_key, trigger_key, trigger_value, param_data, extra
                     )
                 elif isinstance(param_data, dict):
-                    # Copia per ramo: `extra` non va mutato/condiviso tra le iterazioni
-                    # del loop, altrimenti una rule gia' creata in un ramo precedente
-                    # vedrebbe la condizione di un ramo successivo (es. ecoMode 1 -> 2).
+                    # Per-branch copy: `extra` must not be mutated/shared across the
+                    # loop iterations, otherwise a rule already created in an earlier
+                    # branch would see a later branch's condition (e.g. ecoMode 1 -> 2).
                     branch_extra = dict(extra or {})
                     branch_extra[trigger_key] = trigger_value
                     for extra_key, extra_data in param_data.items():
@@ -147,13 +144,11 @@ class HonRuleSet:
                 param = self._command.parameters.get(key)
                 if not param:
                     return False
-                # FIX (validato sull'AC live, 2026-06-18): confronta il VALORE del
-                # parametro, non l'oggetto. pyhOn faceva `str(param)` (= il repr
-                # dell'oggetto) != `str(value)`, SEMPRE vero -> le condizioni-extra
-                # (rules annidate, es. AC `ecoMode==1 AND machMode==1 -> tempSel=26`)
-                # non scattavano MAI. Qui confrontiamo `str(param.value)`: sull'AC reale
-                # ecoMode=1 ora vincola correttamente tempSel/windSpeed/windDirection
-                # come fa l'app. Divergenza voluta vs pyhOn (suo bug).
+                # Compare the parameter VALUE, not the object: `str(param.value)`
+                # against `str(value)`, so the extra-conditions (nested rules,
+                # e.g. AC `ecoMode==1 AND machMode==1 -> tempSel=26`) fire only when
+                # the actual value matches. On the real AC ecoMode=1 correctly
+                # constrains tempSel/windSpeed/windDirection as the app does.
                 if str(param.value) != str(value):
                     return False
         return True
@@ -168,9 +163,9 @@ class HonRuleSet:
                 param.min = numeric
             elif numeric > param.max:
                 param.max = numeric
-            # Passa una STRINGA al setter: str_to_float fa int() per primo e un float
-            # come 22.5 verrebbe troncato a 22 (vedi helpers.str_to_float). La stringa
-            # preserva i decimali (stesso motivo per cui number.py invia i setpoint come str).
+            # Pass a STRING to the setter: str_to_float tries int() first and a float
+            # like 22.5 would be truncated to 22 (see helpers.str_to_float). The string
+            # preserves decimals (same reason number.py sends setpoints as str).
             param.value = str(value)
             return
         param.value = str(value)
@@ -181,10 +176,10 @@ class HonRuleSet:
         if enum_values := rule.param_data.get("enumValues"):
             param.values = enum_values.split("|")
         if default_value := rule.param_data.get("defaultValue"):
-            # NB enum-casing: se `defaultValue` ha un casing diverso
-            # dai suoi `enumValues`, il nostro setter lo accetta (fix BABYCARE) mentre
-            # pyhOn+patch solleverebbe (e il chiamante del trigger inghiotte l'errore).
-            # Caso degenere, non validabile offline -> rimandato a live-AC.
+            # NB enum-casing: if `defaultValue` has a casing different
+            # from its `enumValues`, the setter accepts it (it compares on the
+            # normalized value), and the trigger caller swallows any error.
+            # Degenerate case, not verifiable offline -> deferred to live-AC.
             param.value = default_value
 
     def _add_trigger(self, parameter: HonParameter, data: HonRule) -> None:
@@ -201,13 +196,13 @@ class HonRuleSet:
         parameter.add_trigger(data.trigger_value, apply, data)
 
     def _apply_config_rules(self) -> None:
-        """Applica le rules con trigger `$...` (config statica del device) come fa l'app:
-        risolve il campo del record appliance (es. `$installationType`->`unitConfiguration`),
-        indicizza il ramo col valore del device e ne scrive il `fixedValue`/enum nel target.
-        Statico (il valore è una proprietà persistente del device, non cambia operando).
-        Se il device non ha quel campo o non c'è un ramo per il suo valore -> non scatta
-        (come l'app: `if(!r5) return`). Validato live: AC `unitConfiguration='1to1'` -> nessun
-        ramo (le rules hanno solo 1to2/1toN) -> non scatta, corretto."""
+        """Apply the rules with a `$...` trigger (static device config) as the app does:
+        resolve the appliance record field (e.g. `$installationType`->`unitConfiguration`),
+        index the branch by the device value and write its `fixedValue`/enum into the target.
+        Static (the value is a persistent device property, it does not change while operating).
+        If the device lacks that field or there is no branch for its value -> it does not fire
+        (like the app: `if(!r5) return`). Validated live: AC `unitConfiguration='1to1'` -> no
+        branch (the rules have only 1to2/1toN) -> does not fire, correct."""
         if not self._config_rules:
             return
         info = getattr(self._command.appliance, "info", {}) or {}

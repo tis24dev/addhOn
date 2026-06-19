@@ -1,23 +1,24 @@
-"""Number Haier hOn (Tier 3): setpoint di temperatura scrivibili.
+"""Haier hOn numbers (Tier 3): writable temperature setpoints.
 
-Cross-reference tra lo schema runtime di pyhOn (ground truth: dump del frigo
-reale REF HDPW5620CNPK -> `settings`/`setParameters` con tempSelZ1[2..8],
-tempSelZ2[-24..-16], tempSelZ3[0..5]) e la mappatura della app decompilata (§7,
-superset: tempSelZ1..Z4, tempSelUZ/LZ, tempSel generico).
+Cross-reference between the runtime schema (ground truth: dump of the real
+fridge REF HDPW5620CNPK -> `settings`/`setParameters` with tempSelZ1[2..8],
+tempSelZ2[-24..-16], tempSelZ3[0..5]) and the mapping of the decompiled app (S7,
+superset: tempSelZ1..Z4, tempSelUZ/LZ, generic tempSel).
 
-Ogni number è CAPABILITY-GATED: si crea solo se il device espone il parametro
-in un comando di scrittura (`settings`/`setParameters`), e min/max/step sono
-letti dal parametro REALE a runtime (non hardcoded), così è corretto per ogni
-modello. La scrittura passa dal sender generico (hon_commands.async_send_command),
-lo stesso meccanismo del comando `settings` dell'AC.
+Each number is CAPABILITY-GATED: it is created only if the device exposes the
+parameter in a write command (`settings`/`setParameters`), and min/max/step are
+read from the REAL parameter at runtime (not hardcoded), so it is correct for
+every model. The write goes through the generic sender
+(hon_commands.async_send_command), the same mechanism as the AC `settings`
+command.
 
-VINCOLO unique_id: la `key` di ogni description è il SUFFISSO di unique_id;
-distinto dai sensori Tier 2 (es. number `target_temp_zone1` vs sensor
-`temp_zone1`), quindi nessuna collisione.
+unique_id CONSTRAINT: the `key` of each description is the SUFFIX of unique_id;
+distinct from the Tier 2 sensors (e.g. number `target_temp_zone1` vs sensor
+`temp_zone1`), so no collision.
 
-CAVEAT: i tipi mappati non sono live-validati su device acceso (il frigo di test
-è offline). Lo SCHEMA è validato dal dump; la scrittura live va in coda sul cloud
-finché il device non è online.
+CAVEAT: the mapped types are not live-validated on a powered-on device (the test
+fridge is offline). The SCHEMA is validated from the dump; the live write is
+queued on the cloud until the device comes online.
 """
 from __future__ import annotations
 
@@ -52,12 +53,12 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True, kw_only=True)
 class HonNumberEntityDescription(NumberEntityDescription):
-    """Description di un number Haier hOn.
+    """Description of a Haier hOn number.
 
-    - `key` = suffisso unique_id (nuovo, nessuna collisione coi sensori Tier 2).
-    - `param` = nome del parametro hOn da leggere (stato) e scrivere (comando).
-    - `fallback_min/max/step` = usati solo se pyhOn non espone il range sul
-      parametro; di norma il range REALE è letto a runtime da param_range().
+    - `key` = unique_id suffix (new, no collision with the Tier 2 sensors).
+    - `param` = name of the hOn parameter to read (state) and write (command).
+    - `fallback_min/max/step` = used only if the client does not expose the range on
+      the parameter; normally the REAL range is read at runtime from param_range().
     """
 
     param: str
@@ -66,12 +67,12 @@ class HonNumberEntityDescription(NumberEntityDescription):
     fallback_step: float = 1.0
 
 
-def _temp(key: str, name: str, param: str) -> HonNumberEntityDescription:
-    """Setpoint di temperatura (°C)."""
+def _temp(key: str, param: str, translation_key=None) -> HonNumberEntityDescription:
+    """Temperature setpoint (C)."""
     return HonNumberEntityDescription(
         key=key,
-        name=name,
         param=param,
+        translation_key=translation_key,
         device_class=NumberDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         mode=NumberMode.BOX,
@@ -79,27 +80,27 @@ def _temp(key: str, name: str, param: str) -> HonNumberEntityDescription:
     )
 
 
-# Famiglia frigo (REF/FR/FRE): superset zone §7. Sul frigo reale appaiono Z1/Z2/Z3;
-# Z4/UZ/LZ compaiono solo sui modelli che li espongono (gate).
+# Fridge family (REF/FR/FRE): zone superset S7. On the real fridge Z1/Z2/Z3 appear;
+# Z4/UZ/LZ appear only on the models that expose them (gate).
 _COOLING_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
-    _temp("target_temp_zone1", "Temperatura Zona 1", "tempSelZ1"),
-    _temp("target_temp_zone2", "Temperatura Zona 2", "tempSelZ2"),
-    _temp("target_temp_zone3", "Temperatura Zona 3", "tempSelZ3"),
-    _temp("target_temp_zone4", "Temperatura Zona 4", "tempSelZ4"),
-    _temp("target_temp_upper", "Temperatura Zona Superiore", "tempSelUZ"),
-    _temp("target_temp_lower", "Temperatura Zona Inferiore", "tempSelLZ"),
+    _temp("target_temp_zone1", "tempSelZ1"),
+    _temp("target_temp_zone2", "tempSelZ2"),
+    _temp("target_temp_zone3", "tempSelZ3"),
+    _temp("target_temp_zone4", "tempSelZ4"),
+    _temp("target_temp_upper", "tempSelUZ"),
+    _temp("target_temp_lower", "tempSelLZ"),
 )
 
-# Cantinetta vino (WC): target per-zona + generico (§7).
+# Wine cellar (WC): per-zone target + generic (S7).
 _WINE_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
-    _temp("target_temp", "Temperatura", "tempSel"),
-    _temp("target_temp_zone2", "Temperatura Zona 2", "tempSelZ2"),
-    _temp("target_temp_zone3", "Temperatura Zona 3", "tempSelZ3"),
+    _temp("target_temp", "tempSel"),
+    _temp("target_temp_zone2", "tempSelZ2"),
+    _temp("target_temp_zone3", "tempSelZ3"),
 )
 
-# Forno (OV): target cavità (§7).
+# Oven (OV): cavity target (S7).
 _OVEN_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
-    _temp("target_temp", "Temperatura Forno", "tempSel"),
+    _temp("target_temp", "tempSel", translation_key="target_temp_oven"),
 )
 
 NUMBERS: dict[str, tuple[HonNumberEntityDescription, ...]] = {
@@ -114,7 +115,7 @@ NUMBERS: dict[str, tuple[HonNumberEntityDescription, ...]] = {
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    """Crea i number solo per i setpoint che il device espone come scrivibili."""
+    """Create the numbers only for the setpoints the device exposes as writable."""
     entry_data = hass.data[DOMAIN][entry.entry_id]
     coordinator = entry_data["coordinator"]
     client = entry_data["client"]
@@ -133,7 +134,7 @@ async def async_setup_entry(
             )
             created.append(description.key)
         _LOGGER.debug(
-            "Number debug: '%s' (type=%s, id=%s) -> %d/%d number %s",
+            "Number debug: '%s' (type=%s, id=%s) -> %d/%d numbers %s",
             data.get("name", "Haier"),
             app_type,
             appliance_id,
@@ -145,7 +146,7 @@ async def async_setup_entry(
 
 
 class HonNumber(HonBaseEntity, NumberEntity):
-    """Number Haier hOn: scrive un parametro range del comando settings."""
+    """Haier hOn number: writes a range parameter of the settings command."""
 
     entity_description: HonNumberEntityDescription
 
@@ -162,11 +163,10 @@ class HonNumber(HonBaseEntity, NumberEntity):
         self.entity_description = description
         self._command_name = command_name
         self._param = param
-        device_name = self._appliance_data.get("name", "Haier")
-        self._attr_name = f"{device_name} - {description.name}"
+        self._attr_translation_key = description.translation_key or description.key
         self._attr_unique_id = f"{appliance_id}_{description.key}"
-        # Snapshot del range come fallback; i bound vivi sono riletti dal
-        # parametro a ogni accesso (le rule pyhOn possono cambiarli a runtime).
+        # Range snapshot used as fallback; the live bounds are re-read from the
+        # parameter on each access (the engine rules can change them at runtime).
         self._fallback_range = param_range(param) or (
             description.fallback_min,
             description.fallback_max,
@@ -174,12 +174,12 @@ class HonNumber(HonBaseEntity, NumberEntity):
         )
         _LOGGER.debug(
             "Number debug: init '%s' id=%s param=%s cmd=%s range=%s",
-            self._attr_name, appliance_id, description.param, command_name, self._live_range,
+            self._attr_unique_id, appliance_id, description.param, command_name, self._live_range,
         )
 
     @property
     def _live_range(self) -> tuple[float, float, float]:
-        """(min, max, step) letti dal parametro runtime, fallback allo snapshot."""
+        """(min, max, step) read from the runtime parameter, fallback to the snapshot."""
         return param_range(self._param) or self._fallback_range
 
     @property
@@ -203,7 +203,7 @@ class HonNumber(HonBaseEntity, NumberEntity):
             return float(raw)
         except (ValueError, TypeError):
             _LOGGER.debug(
-                "Number debug: native_value non numerico per %s raw=%r",
+                "Number debug: native_value not numeric for %s raw=%r",
                 self.entity_description.param, raw,
             )
             return None
@@ -212,11 +212,14 @@ class HonNumber(HonBaseEntity, NumberEntity):
         appliance = self._appliance
         client = self._hon_client
         if not appliance or not client:
-            raise HomeAssistantError("Number: appliance o client non disponibile")
-        # Manda SEMPRE una stringa: pyhOn str_to_float fa `int(string)` e cattura
-        # solo ValueError, quindi un float frazionario (5.5) verrebbe troncato a 5
-        # SENZA errore. La stringa "5.5" invece resta 5.5 e il setter range valida
-        # lo step (rifiuta i fuori-griglia). Intero -> "4" pulito (no "4.0").
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        # ALWAYS send a string: the client's str_to_float does `int(string)` and catches
+        # only ValueError, so a fractional float (5.5) would be truncated to 5
+        # WITHOUT error. The string "5.5" instead stays 5.5 and the range setter
+        # validates the step (rejects off-grid values). Integer -> clean "4" (no "4.0").
         send_value = str(int(value)) if float(value).is_integer() else str(value)
         param = self.entity_description.param
         try:
@@ -231,5 +234,9 @@ class HonNumber(HonBaseEntity, NumberEntity):
         except HomeAssistantError:
             raise
         except Exception as err:
-            _LOGGER.error("Number: errore set %s=%s: %s", param, send_value, err, exc_info=True)
-            raise HomeAssistantError(f"Number: errore comando {param}: {err}") from err
+            _LOGGER.error("Number: set error %s=%s: %s", param, send_value, err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err

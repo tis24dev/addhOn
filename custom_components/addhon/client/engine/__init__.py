@@ -1,11 +1,11 @@
-"""Motore parser nativo di addhOn (comandi/parametri/rules/program/appliance).
+"""addhOn native parser engine (commands/parameters/rules/program/appliance).
 
-Codice NOSTRO che ha sostituito il "motore" un tempo vendorizzato di pyhOn
-(commands/parameter/rules/command_loader/appliance), più moderno e validato sui dump
-reali + sull'app decompilata (vedi client/MIGRATION.md, diagnostics/FASE4-engine-plan.md
-e apk/analysis/). pyhOn è stato cancellato.
+OUR code (commands/parameter/rules/command_loader/appliance), validated against
+the real dumps + the decompiled app (see diagnostics/FASE4-engine-plan.md and
+apk/analysis/).
 
-Vincolo di design: `rules.py` usa `isinstance` contro le classi parametro; per questo
-parametri, comandi, rules, program e layer per-tipo sono un cluster coeso che vive e si
-evolve insieme. Comportamento ancorato ai dump reali dai golden test (tests/golden/).
+Design constraint: `rules.py` uses `isinstance` against the parameter classes; for this
+reason parameters, commands, rules, program and the per-type layer are a cohesive cluster
+that lives and evolves together. Behavior anchored to the real dumps by the golden tests
+(tests/golden/).
 """

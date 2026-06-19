@@ -1,8 +1,9 @@
-"""Offline test del connection wrapper nativo (HonConnection).
+"""Offline test of the native connection wrapper (HonConnection).
 
-Verifica la logica novel: iniezione token per-richiesta (build_auth_headers) +
-retry su 401/403 (loop0→refresh, loop1→re-auth, loop≥2→errore). Auth e sessione
-mockate; aiohttp/yarl stubati (nessuna rete). L'happy path è anche live-validato.
+Verifies the novel logic: per-request token injection (build_auth_headers) +
+retry on 401/403 (loop0->refresh, loop1->re-auth, loop>=2->error). Auth and
+session mocked; aiohttp/yarl stubbed (no network). The happy path is also
+live-validated.
 """
 from __future__ import annotations
 
@@ -133,16 +134,16 @@ class ConnectionTest(unittest.TestCase):
 
         status = asyncio.run(run())
         self.assertEqual(status, 200)
-        self.assertEqual(auth.authenticate_calls, 1)  # niente token → login
-        # gli header iniettati contengono i token
+        self.assertEqual(auth.authenticate_calls, 1)  # no token -> login
+        # the injected headers contain the tokens
         hdr = session.calls[0]
         self.assertEqual(hdr["cognito-token"], "COG")
         self.assertEqual(hdr["id-token"], "IDT")
 
     def test_retry_on_401_refreshes(self) -> None:
         auth = FakeAuth()
-        auth.cognito_token, auth.id_token = "C", "I"  # già autenticato
-        session = FakeSession([401, 200])  # primo 401 → refresh → 200
+        auth.cognito_token, auth.id_token = "C", "I"  # already authenticated
+        session = FakeSession([401, 200])  # first 401 -> refresh -> 200
         conn = _conn(auth, session)
 
         async def run():
@@ -152,14 +153,14 @@ class ConnectionTest(unittest.TestCase):
         status = asyncio.run(run())
         self.assertEqual(status, 200)
         self.assertGreaterEqual(auth.refresh_calls, 1)
-        self.assertEqual(len(session.calls), 2)  # un retry
+        self.assertEqual(len(session.calls), 2)  # one retry
 
     def test_retry_on_403_refreshes(self) -> None:
-        # Stesso ramo del 401 (il codice li tratta identici) ma esplicitato per
-        # evitare regressioni sul 403 (nitpick CodeRabbit).
+        # Same branch as the 401 (the code treats them identically) but made explicit
+        # to avoid regressions on the 403 (CodeRabbit nitpick).
         auth = FakeAuth()
         auth.cognito_token, auth.id_token = "C", "I"
-        session = FakeSession([403, 200])  # primo 403 → refresh → 200
+        session = FakeSession([403, 200])  # first 403 -> refresh -> 200
         conn = _conn(auth, session)
 
         async def run():
@@ -172,17 +173,17 @@ class ConnectionTest(unittest.TestCase):
         self.assertEqual(len(session.calls), 2)
 
     def test_third_attempt_success_after_reauth_yields(self) -> None:
-        # ORACOLO: se refresh (loop0) non basta ma la re-auth (loop1) sì, il terzo
-        # tentativo torna 200 e DEVE restituire la risposta, non sollevare. Bug:
-        # `elif loop >= 2: raise` scartava ogni 200 al terzo giro.
+        # ORACLE: if refresh (loop0) is not enough but the re-auth (loop1) is, the third
+        # attempt returns 200 and MUST return the response, not raise. Bug:
+        # `elif loop >= 2: raise` discarded any 200 on the third round.
         auth = FakeAuth()
-        auth.cognito_token, auth.id_token = "C", "I"  # già autenticato
-        session = FakeSession([401, 401, 200])  # 401 → refresh; 401 → re-auth; 200 ok
+        auth.cognito_token, auth.id_token = "C", "I"  # already authenticated
+        session = FakeSession([401, 401, 200])  # 401 -> refresh; 401 -> re-auth; 200 ok
         conn = _conn(auth, session)
 
         async def _noop_create():
-            # re-auth riuscita: mantiene il fake auth e azzera l'expiry (come farebbe
-            # un login fresco), così al loop2 lo stato non forza più il fallimento.
+            # successful re-auth: keeps the fake auth and clears the expiry (like a
+            # fresh login would), so at loop2 the state no longer forces the failure.
             auth.token_is_expired = False
             return conn
 
@@ -194,19 +195,19 @@ class ConnectionTest(unittest.TestCase):
 
         status = asyncio.run(run())
         self.assertEqual(status, 200)
-        self.assertEqual(len(session.calls), 3)  # tre tentativi, l'ultimo riuscito
+        self.assertEqual(len(session.calls), 3)  # three attempts, the last one succeeded
 
     def test_persistent_401_at_loop2_still_raises_via_status(self) -> None:
-        # Re-auth riuscita (token NON scaduto) ma il server continua a dare 401 al
-        # terzo giro: deve sollevare via il disgiunto sullo status, non restituire il
-        # 401. Pinna che il fix non si appoggi solo a token_is_expired.
+        # Successful re-auth (token NOT expired) but the server keeps returning 401 on
+        # the third round: it must raise via the disjunct on the status, not return the
+        # 401. Pins that the fix does not rely on token_is_expired alone.
         auth = FakeAuth()
         auth.cognito_token, auth.id_token = "C", "I"
         session = FakeSession([401, 401, 401])
         conn = _conn(auth, session)
 
         async def _noop_create():
-            auth.token_is_expired = False  # login fresco: expiry azzerata
+            auth.token_is_expired = False  # fresh login: expiry cleared
             return conn
 
         conn.create = _noop_create
@@ -225,9 +226,9 @@ class ConnectionTest(unittest.TestCase):
         session = FakeSession([401, 401, 401])
         conn = _conn(auth, session)
 
-        # Al loop-1 la connessione fa re-auth via create(): qui lo rendiamo un
-        # no-op che MANTIENE il fake auth (altrimenti create() istanzierebbe un
-        # HonAuth reale che farebbe rete). Così il loop≥2 col fake → Login failure.
+        # At loop-1 the connection re-auths via create(): here we make it a
+        # no-op that KEEPS the fake auth (otherwise create() would instantiate a
+        # real HonAuth that would hit the network). So loop>=2 with the fake -> Login failure.
         async def _noop_create():
             return conn
 

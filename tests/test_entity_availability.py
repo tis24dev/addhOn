@@ -135,8 +135,8 @@ class AvailabilityTest(unittest.TestCase):
         self.assertFalse(entity.available)
 
     def test_unavailable_when_device_disconnected(self) -> None:
-        # Modello app: device offline (available=False da lastConnEvent) -> entità
-        # unavailable invece di valori stantii (sostituisce il vecchio zeroing).
+        # App model: device offline (available=False from lastConnEvent) -> entity
+        # unavailable instead of stale values (replaces the old zeroing).
         data = {"washer-1": {"type": "WM", "name": "Washer",
                              "attributes": {"available": False}, "settings": {}}}
         entity = self._make_entity(FakeCoordinator(data))
@@ -149,7 +149,7 @@ class AvailabilityTest(unittest.TestCase):
         self.assertTrue(entity.available)
 
     def test_available_when_flag_absent_defaults_true(self) -> None:
-        # `available` assente (es. load fallito) -> non nascondere a sproposito.
+        # `available` absent (e.g. load failed) -> do not hide it without reason.
         entity = self._make_entity(FakeCoordinator(_appliance_data()))
         self.assertTrue(entity.available)
 

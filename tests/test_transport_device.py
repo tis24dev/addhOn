@@ -1,10 +1,8 @@
-"""Test del descrittore device nativo: `client/transport/device.HonDevice`.
+"""Test of the native device descriptor: `client/transport/device.HonDevice`.
 
-In origine era un DIFFERENTIAL test contro il `HonDevice` reale di pyhOn (caricato
-in subprocess). Nel piece 4b il transport pyhOn (`_vendor/connection/device.py`) è
-stato CANCELLATO: l'oracolo non esiste più. I valori attesi qui sotto SONO il
-contratto (erano byte-identici a pyhOn, validati dal differential prima del
-cutover): ora pinniamo direttamente il payload del cloud.
+Pins the identity payload sent to the hOn cloud (appVersion/mobileId/os/osVersion/
+deviceModel) so it does not drift unintentionally. See
+apk/analysis/device-identity.md for where these values come from.
 """
 from __future__ import annotations
 
@@ -16,19 +14,19 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _OUR_DEVICE = _ROOT / "custom_components" / "addhon" / "client" / "transport" / "device.py"
 
-# Contratto del payload device verso il cloud hOn (ex-oracolo pyhOn, ora congelato).
+# Device payload contract towards the hOn cloud.
 _DEFAULT = {
-    "appVersion": "2.6.5",
-    "mobileId": "pyhOn",
+    "appVersion": "2.27.9",
+    "mobileId": "addhon",
     "os": "android",
-    "osVersion": 999,
-    "deviceModel": "pyhOn",
+    "osVersion": 34,
+    "deviceModel": "addhon",
 }
 _DEFAULT_MOBILE = {
-    "appVersion": "2.6.5",
-    "mobileId": "pyhOn",
-    "osVersion": 999,
-    "deviceModel": "pyhOn",
+    "appVersion": "2.27.9",
+    "mobileId": "addhon",
+    "osVersion": 34,
+    "deviceModel": "addhon",
     "mobileOs": "android",
 }
 _CUSTOM = {**_DEFAULT, "mobileId": "ABC123"}
@@ -38,8 +36,8 @@ _CUSTOM_MOBILE = {**_DEFAULT_MOBILE, "mobileId": "ABC123"}
 def _load(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
-    # Registrare in sys.modules PRIMA di exec: con `from __future__ import
-    # annotations` il @dataclass risolve le annotazioni via sys.modules[__module__].
+    # Register in sys.modules BEFORE exec: with `from __future__ import
+    # annotations` the @dataclass resolves the annotations via sys.modules[__module__].
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
@@ -61,7 +59,7 @@ class TransportDeviceTest(unittest.TestCase):
         self.assertEqual(mobile["mobileOs"], "android")
 
     def test_empty_mobile_id_falls_back_to_default(self) -> None:
-        self.assertEqual(self.our("").mobile_id, "pyhOn")
+        self.assertEqual(self.our("").mobile_id, "addhon")
 
 
 if __name__ == "__main__":

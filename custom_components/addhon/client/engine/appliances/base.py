@@ -1,18 +1,18 @@
-"""ApplianceExtra base nativo. Riscrittura di `_vendor/pyhon/appliances/base.py`.
+"""Native base ApplianceExtra.
 
-Hook per-tipo sullo stato dell'appliance:
-- `attributes(data)`: post-processa lo shadow (aggiunge campi derivati).
-- `settings(result)`: ritocca il dict settings (default: no-op).
+Per-type hooks on the appliance state:
+- `attributes(data)`: post-processes the shadow (adds derived fields).
+- `settings(result)`: tweaks the settings dict (default: no-op).
 
-`parent` è l'appliance (duck-typed): servono `.settings`, `.connection`.
-I VALORI in `data["parameters"][...]` sono `HonAttribute` (nativi): li leggiamo
-duck-typed via `.value`/`str()`. Gli `isinstance` invece sono contro le classi
-PARAMETRO native.
+`parent` is the appliance (duck-typed): it needs `.settings`, `.connection`.
+The VALUES in `data["parameters"][...]` are `HonAttribute`s (native): we read them
+duck-typed via `.value`/`str()`. The `isinstance` checks instead are against the
+native PARAMETER classes.
 
-Helper di confronto: pyhOn confrontava `HonAttribute == "1"` che è SEMPRE False
-(nessun `__eq__`) -> ref/td/wm pause erano no-op rotti. Qui confrontiamo per VALORE
-(intento dell'app), correggendo il bug. I campi che ne dipendono (modeZ1/Z2/pause) non
-sono però consumati dall'integrazione: la differenza è documentata, non rischiosa.
+Comparison helper: compare by VALUE (flags "1"/"0" as int 1/0), so the flags
+evaluate correctly. The fields it derives (ref `modeZ1`/`modeZ2`, the per-type
+`pause` attribute) are computed but currently not surfaced as entities (the Pause
+switch reads `machMode` directly).
 """
 from __future__ import annotations
 
@@ -25,34 +25,33 @@ class ApplianceExtra:
     def __init__(self, appliance: Any) -> None:
         self.parent = appliance
 
-    # --- helper di lettura attributi (duck-typed su HonAttribute) ---
+    # --- attribute-reading helpers (duck-typed on HonAttribute) ---
     @staticmethod
     def _raw(params: dict[str, Any], key: str) -> str:
-        """Valore grezzo (stringa) via __str__. SOLO per campi mai impostati a numero
-        (es. prCode): dopo un set numerico __str__ solleverebbe. Per i flag usare _value."""
+        """Raw value (string) via __str__. ONLY for fields never set to a number
+        (e.g. prCode): after a numeric set __str__ would raise. For flags use _value."""
         if key not in params:
             return ""
         return str(params[key])
 
     @staticmethod
     def _value(params: dict[str, Any], key: str, default: Any = None) -> Any:
-        """Valore tipizzato dell'attributo (`.value`, numerico se convertibile),
-        default se assente."""
+        """Typed attribute value (`.value`, numeric if convertible),
+        default if absent."""
         attr = params.get(key)
         return attr.value if attr is not None and hasattr(attr, "value") else default
 
     @classmethod
     def _is_value(cls, params: dict[str, Any], key: str, expected: Any) -> bool:
-        """True se `.value` dell'attributo `key` == expected. Confronto per VALORE
-        (i flag "1"/"0" diventano int 1/0): sostituisce il `HonAttribute == "..."` di
-        pyhOn, che è SEMPRE False (manca __eq__) -> i suoi modeZ/pause erano no-op."""
+        """True if the `key` attribute's `.value` == expected. Comparison by VALUE
+        (flags "1"/"0" become int 1/0), so the flags evaluate correctly."""
         return cls._value(params, key) == expected
 
     def attributes(self, data: dict[str, Any]) -> dict[str, Any]:
-        # programName: slug dal codice programma corrente (come pyhOn; l'app usa una
-        # chiave i18n risolta via dictionaryId = altitudine sbagliata per HA).
-        # Robustezza vs pyhOn: `_raw(...) or "0"` gestisce prCode vuoto/assente -> "No
-        # Program" invece del `int("")` -> ValueError di pyhOn (divergenza voluta, safe).
+        # programName: slug from the current program code (the app uses an
+        # i18n key resolved via dictionaryId = wrong altitude for HA).
+        # Robustness: `_raw(...) or "0"` handles an empty/absent prCode -> "No
+        # Program" instead of `int("")` -> ValueError.
         program_name = "No Program"
         params = data.get("parameters", {})
         if program := int(self._raw(params, "prCode") or "0"):
@@ -60,9 +59,9 @@ class ApplianceExtra:
             if isinstance(start_cmd, HonParameterProgram) and (ids := start_cmd.ids):
                 program_name = ids.get(program, program_name)
         data["programName"] = program_name
-        # available: connettività come attributo first-class (modello app). L'offline
-        # è gestito dalla disponibilità entità (base_entity), non più con lo zeroing
-        # dei parametri. (Vedi apk/analysis/per-type-derivations.md #5.)
+        # available: connectivity as a first-class attribute (app model). Offline
+        # is handled by entity availability (base_entity), no longer by zeroing
+        # the parameters. (See apk/analysis/per-type-derivations.md #5.)
         data["available"] = bool(self.parent.connection)
         return data
 

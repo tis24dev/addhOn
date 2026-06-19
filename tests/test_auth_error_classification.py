@@ -1,10 +1,10 @@
-"""Test del fix LOW: classificazione errori di auth (wrong-password -> reauth).
+"""Test for the LOW fix: auth error classification (wrong-password -> reauth).
 
-`_is_auth_error` ora controlla anche il NOME della classe d'eccezione, così gli
-errori del flusso di login (NativeAuthError nostro, HonAuthenticationError di
-pyhOn) — che contengono "auth" nel nome ma spesso non nel messaggio — vengono
-classificati come errori di auth → reauth (invalid_auth) invece di cannot_connect.
-Il check "retryable 5xx" resta prioritario.
+`_is_auth_error` now also checks the NAME of the exception class, so errors from
+the login flow (our NativeAuthError, pyhOn's HonAuthenticationError) which
+contain "auth" in the name but often not in the message, are classified as auth
+errors -> reauth (invalid_auth) instead of cannot_connect. The "retryable 5xx"
+check still takes priority.
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ _install_ha_stubs()
 from custom_components.addhon import hon_client as hc  # noqa: E402
 
 
-# Finte eccezioni che imitano i NOMI reali (il messaggio NON contiene keyword auth).
+# Fake exceptions mimicking the real NAMES (the message does NOT contain auth keywords).
 class NativeAuthError(Exception):
     pass
 
@@ -61,12 +61,12 @@ class HonAuthenticationError(Exception):
 
 class AuthErrorClassificationTest(unittest.TestCase):
     def test_wrong_password_native_classifies_as_auth(self) -> None:
-        err = NativeAuthError("login: fallito (status 200)")  # nessuna keyword nel msg
+        err = NativeAuthError("login: fallito (status 200)")  # no keyword in the msg
         self.assertTrue(hc._is_auth_error(err))
         self.assertTrue(hc._requires_reauth(err))
 
     def test_pyhon_cant_login_classifies_as_auth(self) -> None:
-        err = HonAuthenticationError("Can't login")  # nessuna keyword nel msg
+        err = HonAuthenticationError("Can't login")  # no keyword in the msg
         self.assertTrue(hc._is_auth_error(err))
         self.assertTrue(hc._requires_reauth(err))
 
@@ -76,10 +76,10 @@ class AuthErrorClassificationTest(unittest.TestCase):
         self.assertFalse(hc._requires_reauth(err))
 
     def test_auth_class_but_5xx_does_not_reauth(self) -> None:
-        # Nome classe = auth, ma messaggio 500 -> retryable -> NON reauth.
+        # Class name = auth, but message 500 -> retryable -> NOT reauth.
         err = NativeAuthError("boom status 500")
-        self.assertTrue(hc._is_auth_error(err))      # via nome classe
-        self.assertFalse(hc._requires_reauth(err))   # ma retryable vince
+        self.assertTrue(hc._is_auth_error(err))      # via class name
+        self.assertFalse(hc._requires_reauth(err))   # but retryable wins
 
     def test_message_based_classification_still_works(self) -> None:
         self.assertTrue(hc._is_auth_error(RuntimeError("HTTP 401 unauthorized")))

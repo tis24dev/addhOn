@@ -1,18 +1,14 @@
-"""Parser delle risposte del cloud hOn (transport addhOn).
+"""Parser of the hOn cloud responses (addhOn transport).
 
-Riscrittura della logica di estrazione della lista appliance da
-`pyhon api.load_appliances` (il fix v2.7.1: endpoint
-`POST /unified-api/v1/view/appliance-list`, che ritorna anche i device offline).
+Appliance-list extraction from the endpoint
+`POST /unified-api/v1/view/appliance-list`, which also returns offline devices.
 
-Forma della risposta: `result.modules.applianceList.payload.appliances` (lista).
+Response shape: `result.modules.applianceList.payload.appliances` (a list).
 
-Differenza VOLUTA rispetto a pyhOn: pyhOn estrae con una catena
-`result.get("modules", {}).get("applianceList", {})...` che **solleva
-AttributeError** se un livello intermedio non è un dict (es. `{"modules": "x"}`
-o `{"modules": {"applianceList": []}}`), facendo fallire il setup. Qui
-camminiamo difensivamente e qualsiasi forma inattesa ricade su `[]` (fail-safe),
-così il chiamante tratta lo schema-drift come "0 appliance" invece di un crash.
-Su tutte le risposte ben formate il risultato è identico a pyhOn (differential test).
+The walk is defensive: any unexpected shape (a non-dict intermediate level such
+as `{"modules": "x"}` or `{"modules": {"applianceList": []}}`) falls back to `[]`
+(fail-safe), so the caller treats schema-drift as "0 appliances" instead of a
+crash.
 """
 from __future__ import annotations
 
@@ -21,16 +17,16 @@ from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
 
-# Percorso nella risposta POST /unified-api/v1/view/appliance-list.
+# Path in the POST /unified-api/v1/view/appliance-list response.
 _APPLIANCE_LIST_PATH = ("modules", "applianceList", "payload", "appliances")
 
 
 def parse_appliance_list(result: Any) -> list:
-    """Estrae la lista appliance (inclusi gli offline) dalla risposta unified-api.
+    """Extract the appliance list (including offline ones) from the unified-api response.
 
-    Ritorna la lista a `modules.applianceList.payload.appliances`. Qualsiasi forma
-    inattesa (chiave mancante, livello intermedio non-dict, valore finale non-lista)
-    -> `[]`. Un valore finale non-lista ma *truthy* = schema drift: log + `[]`.
+    Returns the list at `modules.applianceList.payload.appliances`. Any unexpected
+    shape (missing key, non-dict intermediate level, non-list final value)
+    -> `[]`. A non-list but *truthy* final value = schema drift: log + `[]`.
     """
     node: Any = result
     for key in _APPLIANCE_LIST_PATH:
@@ -41,7 +37,7 @@ def parse_appliance_list(result: Any) -> list:
         return node
     if node:
         _LOGGER.warning(
-            "Risposta appliance-list: 'appliances' di tipo inatteso %s, ignorato",
+            "appliance-list response: 'appliances' of unexpected type %s, ignored",
             type(node).__name__,
         )
     return []

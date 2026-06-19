@@ -1,30 +1,27 @@
-"""Descrittore del device client per il transport addhOn.
+"""Client device descriptor for the addhOn transport.
 
-Riscrittura nativa di `_vendor/pyhon/connection/device.HonDevice`: il "chi sono"
-(app version, OS, modello, mobileId) inviato al cloud hOn in ogni richiesta.
-
-I valori sotto rispecchiano OGGI quelli di pyhOn, così il payload è identico e
-il differential test (tests/test_transport_device.py) lo verifica contro la
-classe pyhOn reale. Quando avremo il flusso/identità reali dell'app (vedi APK
-reverse: appVersion 2.x, deviceModel "BVL", osVersion 34, mobileId vero) qui
-andranno quei valori, come passo separato e validato.
+Builds the "who am I" identity (app version, OS, model, mobileId) sent to the hOn
+cloud on every request. The official app fills these from the running device
+(model, OS level, a per-device unique id); addhOn runs headless, so it sends a fixed
+identity that presents as addhOn while reporting the current app version, so the
+cloud sees an up-to-date client.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Identità client (valori-dato che oggi rispecchiano pyhOn; punto unico da
-# aggiornare per impersonare l'app reale).
-APP_VERSION = "2.6.5"
-OS_VERSION = 999
+# Fixed client identity sent to the cloud (single point to update). APP_VERSION
+# tracks the current hOn app version.
+APP_VERSION = "2.27.9"
+OS_VERSION = 34
 OS = "android"
-DEVICE_MODEL = "pyhOn"
-MOBILE_ID = "pyhOn"
+DEVICE_MODEL = "addhon"
+MOBILE_ID = "addhon"
 
 
 @dataclass(frozen=True)
 class HonDevice:
-    """Descrittore immutabile del client. `mobile_id` vuoto ricade sul default."""
+    """Immutable client descriptor. An empty `mobile_id` falls back to the default."""
 
     mobile_id: str = MOBILE_ID
 
@@ -33,10 +30,10 @@ class HonDevice:
             object.__setattr__(self, "mobile_id", MOBILE_ID)
 
     def payload(self, mobile: bool = False) -> dict[str, str | int]:
-        """Il dizionario identità inviato al cloud.
+        """The identity dictionary sent to the cloud.
 
-        Con `mobile=True` la chiave `os` diventa `mobileOs` (come fa l'app per le
-        chiamate "mobile"); è la stessa trasformazione di pyhOn.
+        With `mobile=True` the `os` key becomes `mobileOs`, used for the cloud's
+        "mobile" calls.
         """
         data: dict[str, str | int] = {
             "appVersion": APP_VERSION,

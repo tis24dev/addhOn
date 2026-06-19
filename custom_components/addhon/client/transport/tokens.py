@@ -1,18 +1,14 @@
-"""Parsing dei token OAuth dalla redirect di login hOn (transport addhOn).
+"""Parsing of the OAuth tokens from the hOn login redirect (addhOn transport).
 
-Riscrittura di `pyhon auth._parse_token_data`: dalla redirect
+From the redirect
 `.../mobilesdk/detect/oauth/done#access_token=...&refresh_token=...&id_token=...`
-estrae i tre token via regex `nome=(.*?)&` (fino al primo `&`).
+it extracts the three tokens via the regex `name=(.*?)&` (up to the first `&`).
 
-PRESERVAZIONE ESATTA (non hardening, a differenza del parser appliance-list):
-i token vanno al cloud byte-identici e il flusso auth non è validabile offline,
-quindi replichiamo alla lettera le quirk di pyhOn:
-- solo `refresh_token` viene URL-decodificato (`unquote`); access/id restano grezzi;
-- un token in fondo SENZA `&` finale NON viene catturato (la regex richiede il `&`);
-- `complete` = tutti e tre i pattern HANNO matchato (anche se il valore catturato
-  è vuoto, come il `bool(findall and ...)` di pyhOn), non "tutti i valori non vuoti".
-Riscritta la STRUTTURA (helper data-driven + dataclass immutabile), preservato il
-COMPORTAMENTO (verificato dal differential test contro pyhOn).
+The tokens are passed to the cloud unchanged, so the parsing rules are exact:
+- only `refresh_token` is URL-decoded (`unquote`); access/id stay raw;
+- a token at the end WITHOUT a trailing `&` is NOT captured (the regex requires the `&`);
+- `complete` = all three patterns HAVE matched; an empty captured value is still
+  accepted, so this is "all three matched", not "all values non-empty".
 """
 from __future__ import annotations
 
@@ -23,10 +19,10 @@ from urllib.parse import unquote
 
 @dataclass(frozen=True)
 class OAuthTokens:
-    """Token estratti dalla redirect OAuth. `complete` = tutti e tre presenti.
+    """Tokens extracted from the OAuth redirect. `complete` = all three present.
 
-    NB: `cognito_token` NON è qui: arriva da una POST separata (token-refresh),
-    non dalla redirect.
+    NB: `cognito_token` is NOT here: it comes from a separate POST (token-refresh),
+    not from the redirect.
     """
 
     access_token: str = ""
@@ -36,7 +32,7 @@ class OAuthTokens:
 
 
 def parse_token_fragment(text: str) -> OAuthTokens:
-    """Estrae access/refresh/id token dal testo della redirect OAuth."""
+    """Extract access/refresh/id token from the OAuth redirect text."""
 
     def _match(name: str) -> str | None:
         found = re.findall(f"{name}=(.*?)&", text)
@@ -47,10 +43,10 @@ def parse_token_fragment(text: str) -> OAuthTokens:
     id_token = _match("id_token")
     return OAuthTokens(
         access_token=access or "",
-        # Solo il refresh è URL-decodificato, come pyhOn.
+        # Only the refresh token is URL-decoded.
         refresh_token=unquote(refresh) if refresh is not None else "",
         id_token=id_token or "",
-        # Come pyhOn: conta che il pattern abbia MATCHATO (non che il valore sia
-        # non vuoto), quindi `None not in (...)`.
+        # What counts is that the pattern MATCHED (not that the value is
+        # non-empty), hence `None not in (...)`.
         complete=None not in (access, refresh, id_token),
     )

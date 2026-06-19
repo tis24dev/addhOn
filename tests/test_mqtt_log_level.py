@@ -41,8 +41,8 @@ lu = _load_logging_utils()
 
 class ApplyMqttLevelTest(unittest.TestCase):
     def setUp(self) -> None:
-        # Salva i livelli correnti e li ripristina, così questi test non
-        # inquinano il livello globale dei logger per gli altri test.
+        # Save the current levels and restore them, so these tests do not
+        # pollute the global logger levels for the other tests.
         self._saved = {
             name: logging.getLogger(name).level for name in lu.MQTT_NOISE_LOGGERS
         }
@@ -52,8 +52,8 @@ class ApplyMqttLevelTest(unittest.TestCase):
             logging.getLogger(name).setLevel(level)
 
     def test_noise_loggers_are_native_only(self) -> None:
-        # Il client MQTT è il NOSTRO (pyhOn cancellato in Fase 4): l'unico logger di
-        # rumore è quello nativo; nessun namespace _vendor/pyhon residuo.
+        # The MQTT client is OURS (pyhOn deleted in Phase 4): the only noise logger
+        # is the native one; no leftover _vendor/pyhon namespace.
         self.assertEqual(
             lu.MQTT_NOISE_LOGGERS, ("custom_components.addhon.client.transport.mqtt",)
         )
@@ -68,7 +68,7 @@ class ApplyMqttLevelTest(unittest.TestCase):
         self.assertEqual(lu.DEFAULT_MQTT_LOG_LEVEL, logging.WARNING)
 
     def test_silence_sets_warning_even_from_debug(self) -> None:
-        # Parte da DEBUG (rumore acceso) e verifica che il silenziamento vinca.
+        # Start from DEBUG (noise on) and verify that the silencing wins.
         for name in lu.MQTT_NOISE_LOGGERS:
             logging.getLogger(name).setLevel(logging.DEBUG)
         lu.silence_mqtt_noise()
@@ -84,8 +84,8 @@ class ApplyMqttLevelTest(unittest.TestCase):
 
 class ApplyIntegrationLevelTest(unittest.TestCase):
     def setUp(self) -> None:
-        # Salva i livelli di ENTRAMBI i set: il test silence_mqtt muta anche i
-        # logger MQTT, che vanno ripristinati per non sporcare gli altri test.
+        # Save the levels of BOTH sets: the silence_mqtt test also mutates the
+        # MQTT loggers, which must be restored so the other tests are not dirtied.
         names = set(lu.INTEGRATION_DEBUG_LOGGERS) | set(lu.MQTT_NOISE_LOGGERS)
         self._saved = {name: logging.getLogger(name).level for name in names}
 
@@ -94,7 +94,7 @@ class ApplyIntegrationLevelTest(unittest.TestCase):
             logging.getLogger(name).setLevel(level)
 
     def test_integration_debug_loggers_native_only(self) -> None:
-        # pyhOn cancellato: l'unico namespace è quello nativo dell'integrazione.
+        # pyhOn deleted: the only namespace is the integration's native one.
         self.assertEqual(lu.INTEGRATION_DEBUG_LOGGERS, ("custom_components.addhon",))
 
     def test_apply_integration_log_level_sets_all_debug_loggers(self) -> None:
@@ -110,7 +110,7 @@ class ApplyIntegrationLevelTest(unittest.TestCase):
 
 
 class WiringTest(unittest.TestCase):
-    """Source-level guards: il service e il silenziamento devono restare cablati."""
+    """Source-level guards: the service and the silencing must stay wired."""
 
     def test_const_declares_service_name(self) -> None:
         self.assertIn(

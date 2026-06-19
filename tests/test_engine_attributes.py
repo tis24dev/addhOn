@@ -1,9 +1,9 @@
-"""Golden test dell'attributo nativo (Fase 4). Congela costruzione/update/lock di
-HonAttribute sui dati shadow REALI del frigo + casi sintetici.
+"""Golden test of the native attribute (Phase 4). Freezes construction/update/lock
+of HonAttribute on the REAL fridge shadow data + synthetic cases.
 
-Storia: era differential vs pyhOn; con `_vendor/` cancellato è golden (output nativo
-provato == pyhOn al checkpoint 5a). Divergenza voluta pinnata: lock con
-`datetime.now(timezone.utc)` (aware) invece del deprecato `utcnow()`.
+History: it used to be differential vs pyhOn; with `_vendor/` deleted it is golden
+(native output proven == pyhOn at checkpoint 5a). Intentional divergence pinned:
+lock with `datetime.now(timezone.utc)` (aware) instead of the deprecated `utcnow()`.
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def _native_snapshot() -> dict:
         b = NaAttr(dict(data))
         b.update(dict(new))
         out["dict_update"][name] = _snap(b)
-    # casi sintetici
+    # synthetic cases
     out["synthetic_values"] = {
         v: _snap(NaAttr({"parNewVal": v}))
         for v in ["5.5", "5,5", "-3,25", "12.0", "abc", "00", "-16", " 5 ", ""]
@@ -71,14 +71,14 @@ class NativeAttributeBehaviorTest(unittest.TestCase):
         self.assertIsNone(a.last_update)
 
     def test_nonstring_last_update_no_crash(self) -> None:
-        # lastUpdate non-stringa dal cloud: fromisoformat solleva TypeError, che ora
-        # viene gestito (last_update=None) invece di propagare in costruzione.
+        # non-string lastUpdate from the cloud: fromisoformat raises TypeError, which
+        # is now handled (last_update=None) instead of propagating during construction.
         a = NaAttr({"parNewVal": "5", "lastUpdate": 1717000000})
         self.assertIsNone(a.last_update)
 
     def test_missing_parnewval_on_update_resets(self) -> None:
         a = NaAttr({"parNewVal": "5", "lastUpdate": "2024-01-01T00:00:00"})
-        a.update({"lastUpdate": "2024-02-02T00:00:00"})  # niente parNewVal
+        a.update({"lastUpdate": "2024-02-02T00:00:00"})  # no parNewVal
         self.assertEqual(a._value, "")
 
     def test_nonstring_none_raises(self) -> None:
@@ -89,9 +89,9 @@ class NativeAttributeBehaviorTest(unittest.TestCase):
         a = NaAttr({"parNewVal": "0"})
         self.assertTrue(a.update({"parNewVal": "5"}, shield=True))
         self.assertTrue(a.lock)
-        self.assertFalse(a.update({"parNewVal": "999"}))  # rifiutato mentre lockato
+        self.assertFalse(a.update({"parNewVal": "999"}))  # rejected while locked
         self.assertEqual(a.value, 5)
-        self.assertTrue(a.update({"parNewVal": "999"}, shield=True))  # shield passa
+        self.assertTrue(a.update({"parNewVal": "999"}, shield=True))  # shield passes through
         self.assertEqual(a.value, 999)
 
     def test_no_lock_by_default(self) -> None:

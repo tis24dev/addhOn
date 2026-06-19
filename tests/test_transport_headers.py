@@ -1,11 +1,11 @@
-"""Differential test del 4° pezzo del transport: build_auth_headers.
+"""Differential test of the transport's 4th piece: build_auth_headers.
 
-Oracolo = costruzione header di pyhOn: `ConnectionHandler._HEADERS | headers`
-(handler/base.py:18-21 + handler/hon.py:66-68), dove `headers` = extra del
-chiamante + i due token. `_HEADERS` usa `const.USER_AGENT`: lo carichiamo dal
-vero const.py (puro, importabile a sé) così il test pinna anche il drift del UA.
-handler/base.py importa aiohttp → non importabile a sé, quindi `_HEADERS` (2 chiavi)
-è trascritto verbatim.
+Oracle = pyhOn's header construction: `ConnectionHandler._HEADERS | headers`
+(handler/base.py:18-21 + handler/hon.py:66-68), where `headers` = caller's extra
++ the two tokens. `_HEADERS` uses `const.USER_AGENT`: we load it from the real
+const.py (pure, importable on its own) so the test also pins the UA drift.
+handler/base.py imports aiohttp -> not importable on its own, so `_HEADERS`
+(2 keys) is transcribed verbatim.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 _OUR_HEADERS = _ROOT / "custom_components" / "addhon" / "client" / "transport" / "headers.py"
-# USER_AGENT pyhOn (ora NOSTRO): trascritto dopo la cancellazione di `_vendor/`.
+# pyhOn USER_AGENT (now OURS): transcribed after deleting `_vendor/`.
 _USER_AGENT = "Chrome/999.999.999.999"
 
 
@@ -48,8 +48,8 @@ class BuildAuthHeadersTest(unittest.TestCase):
             ("", "", None),
             ("c", "i", {}),
             ("c", "i", {"x-extra": "1"}),
-            ("c", "i", {"user-agent": "OVERRIDE/1.0"}),          # extra sovrascrive base UA
-            ("c", "i", {"cognito-token": "WILL_BE_REPLACED"}),    # token reale vince sull'extra
+            ("c", "i", {"user-agent": "OVERRIDE/1.0"}),          # extra overrides the base UA
+            ("c", "i", {"cognito-token": "WILL_BE_REPLACED"}),    # the real token wins over the extra
             ("c", "i", {"Content-Type": "text/plain", "id-token": "X"}),
         ]
         for cog, idt, extra in cases:
@@ -71,7 +71,7 @@ class BuildAuthHeadersTest(unittest.TestCase):
         )
 
     def test_ua_matches_vendored_const(self) -> None:
-        # Pin contro drift: il nostro USER_AGENT deve eguagliare quello di pyhOn.
+        # Drift pin: our USER_AGENT must equal pyhOn's.
         our_ua = _load(_OUR_HEADERS, "addhon_transport_headers2").USER_AGENT
         self.assertEqual(our_ua, self.ua)
 

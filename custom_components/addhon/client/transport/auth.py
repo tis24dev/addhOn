@@ -1,12 +1,12 @@
-"""Auth nativo addhOn: il flusso di login hOn (Salesforce OAuth) riscritto.
+"""Native addhOn auth: the hOn login flow (Salesforce OAuth).
 
-Porting fedele di `pyhon connection/auth.HonAuth`, che ASSEMBLA i pezzi nativi già
-costruiti (oauth, tokens, device, headers) + l'orchestrazione HTTP. Validato LIVE
-(non offline): il login fa richieste reali al cloud. Usa una singola
-aiohttp.ClientSession (i cookie del flusso Salesforce devono persistere tra le richieste).
+Assembles the native pieces (oauth, tokens, device, headers) + the HTTP
+orchestration. Validated LIVE (not offline): the login makes real requests to the
+cloud. Uses a single aiohttp.ClientSession (the Salesforce flow cookies must
+persist across the requests).
 
-I sotto-builder/parser PURI (build_login_payload, le regex fwuid/href) hanno test
-offline differential; l'orchestrazione (authenticate) è validata live.
+The PURE sub-builders/parsers (build_login_payload, the fwuid/href regexes) have
+offline tests; the orchestration (authenticate) is validated live.
 """
 from __future__ import annotations
 
@@ -38,25 +38,25 @@ API_URL = "https://api-iot.he.services"
 _TOKEN_EXPIRES_AFTER_HOURS = 8
 _TOKEN_EXPIRE_WARNING_HOURS = 7
 
-# Estrae fwuid + loaded dalla pagina di login Salesforce (aura).
+# Extracts fwuid + loaded from the Salesforce login page (aura).
 _FWUID_RE = re.compile('"fwuid":"(.*?)","loaded":(\\{.*?})')
-# Estrae l'href della pagina token (post-login). pyhOn usa due regex diverse:
-# (.+?) sulla prima pagina, (.*?) nel ramo ProgressiveLogin — replicate entrambe
-# per fedeltà (la seconda matcha anche un href vuoto, quirk di pyhOn).
+# Extracts the href of the token page (post-login). Two different regexes are
+# used: (.+?) on the first page, (.*?) in the ProgressiveLogin branch; the second
+# also matches an empty href, which the flow accepts.
 _HREF_RE = re.compile("href\\s*=\\s*[\"'](.+?)[\"']")
 _HREF_RE_PROGRESSIVE = re.compile("href\\s*=\\s*[\"'](.*?)[\"']")
 
 
 class NativeAuthError(Exception):
-    """Errore del flusso auth nativo."""
+    """Error of the native auth flow."""
 
 
 class _NoAuthNeeded(Exception):
-    """La pagina authorize era già la redirect coi token (login non serve)."""
+    """The authorize page was already the redirect with the tokens (login not needed)."""
 
 
 class HonAuth:
-    """Flusso di login hOn nativo. Assembla i pezzi + l'orchestrazione HTTP."""
+    """Native hOn login flow. Assembles the pieces + the HTTP orchestration."""
 
     def __init__(self, session, email: str, password: str, device: HonDevice) -> None:
         self._session = session
@@ -102,7 +102,7 @@ class HonAuth:
                     self.refresh_token = t.refresh_token
                     self.id_token = t.id_token
                     raise _NoAuthNeeded()
-                raise NativeAuthError(f"introduce: nessun login url (status {resp.status})")
+                raise NativeAuthError(f"introduce: no login url (status {resp.status})")
         return login_url
 
     async def _manual_redirect(self, url: str) -> str:
@@ -123,7 +123,7 @@ class HonAuth:
             text = await resp.text()
             match = _FWUID_RE.findall(text)
             if not match:
-                raise NativeAuthError(f"login page: niente fwuid (status {resp.status})")
+                raise NativeAuthError(f"login page: no fwuid (status {resp.status})")
             self._fw_uid, loaded_str = match[0]
             self._loaded = json.loads(loaded_str)
             self._page_url = login_url.replace(AUTH_API, "")
@@ -144,7 +144,7 @@ class HonAuth:
                     return str(result["events"][0]["attributes"]["values"]["url"])
                 except (json.JSONDecodeError, KeyError, TypeError):
                     pass
-            raise NativeAuthError(f"login: fallito (status {resp.status})")
+            raise NativeAuthError(f"login: failed (status {resp.status})")
 
     async def _get_token(self, url: str) -> None:
         async with self._session.get(url, headers=self._ua()) as resp:
@@ -152,29 +152,29 @@ class HonAuth:
                 raise NativeAuthError(f"get_token: status {resp.status}")
             href = _HREF_RE.findall(await resp.text())
         if not href:
-            raise NativeAuthError("get_token: nessun href")
+            raise NativeAuthError("get_token: no href")
         if "ProgressiveLogin" in href[0]:
             async with self._session.get(href[0], headers=self._ua()) as resp:
                 if resp.status != 200:
                     raise NativeAuthError(f"progressive: status {resp.status}")
                 href = _HREF_RE_PROGRESSIVE.findall(await resp.text())
-            if not href:  # come il guard dopo il primo findall: niente IndexError
-                raise NativeAuthError("progressive: nessun href")
+            if not href:  # like the guard after the first findall: no IndexError
+                raise NativeAuthError("progressive: no href")
         token_url = AUTH_API + href[0]
         async with self._session.get(token_url, headers=self._ua()) as resp:
             if resp.status != 200:
                 raise NativeAuthError(f"token page: status {resp.status}")
             tokens = parse_token_fragment(await resp.text())
         if not tokens.complete:
-            raise NativeAuthError("token page: token incompleti")
+            raise NativeAuthError("token page: incomplete tokens")
         self.access_token = tokens.access_token
         self.refresh_token = tokens.refresh_token
         self.id_token = tokens.id_token
 
     async def _api_auth(self) -> None:
-        # Il nostro HonDevice espone payload(); il ramo get() è un fallback difensivo
-        # per un device che esponga la vecchia interfaccia. Stesso dizionario in
-        # entrambi i casi.
+        # Our HonDevice exposes payload(); the get() branch is a defensive fallback
+        # for a device that exposes the old interface. Same dictionary in
+        # both cases.
         device_payload = (
             self._device.payload()
             if hasattr(self._device, "payload")
@@ -188,7 +188,7 @@ class HonAuth:
             data = await resp.json(content_type=None)
         self.cognito_token = data.get("cognitoUser", {}).get("Token", "")
         if not self.cognito_token:
-            raise NativeAuthError("api_auth: nessun cognito token")
+            raise NativeAuthError("api_auth: no cognito token")
 
     async def authenticate(self) -> None:
         self.clear()
@@ -223,9 +223,9 @@ class HonAuth:
         return True
 
     def clear(self) -> None:
-        # Replica pyhOn ALLA LETTERA: `AUTH_API.split("/")[-2]` vale '' (non l'host,
-        # perché non c'è slash finale), quindi clear_domain('') è di fatto un no-op
-        # su qualsiasi sessione. Mantenuto identico per fedeltà (è una quirk di pyhOn).
+        # Note: `AUTH_API.split("/")[-2]` is '' here (not the host, because there is
+        # no trailing slash), so clear_domain('') is effectively a no-op on any
+        # session. This is intentional.
         self._session.cookie_jar.clear_domain(AUTH_API.split("/")[-2])
         self.cognito_token = ""
         self.id_token = ""

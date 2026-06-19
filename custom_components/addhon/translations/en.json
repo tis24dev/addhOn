@@ -42,5 +42,464 @@
         }
       }
     }
+  },
+  "services": {
+    "set_log_level": {
+      "name": "Set diagnostic log level",
+      "description": "Change the log level of the Haier hOn integration and the pyhOn loggers used to diagnose login, device discovery, reauth and polling. Use \"debug\" when devices do not appear, then return to \"warning\" to reduce noise. Does not enable MQTT realtime noise: for that use the dedicated set_mqtt_log_level service.",
+      "fields": {
+        "level": {
+          "name": "Level",
+          "description": "Diagnostic log level to apply."
+        }
+      }
+    },
+    "set_mqtt_log_level": {
+      "name": "Set MQTT log level",
+      "description": "Change the log level of the pyhOn MQTT realtime channel. By default the reconnect-attempt noise is silenced (warning). Set \"debug\" to diagnose realtime push problems, then \"warning\" to silence it again. Not persistent: it returns to silenced after a Home Assistant restart.",
+      "fields": {
+        "level": {
+          "name": "Level",
+          "description": "Log level to apply to the pyhOn MQTT realtime channel."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": {
+        "name": "Status",
+        "state": {
+          "waiting": "Waiting",
+          "running": "Running",
+          "paused": "Paused",
+          "completed": "Completed",
+          "error": "Error",
+          "scheduled": "Scheduled",
+          "delayed_start": "Delayed start",
+          "half_load": "Half load"
+        }
+      },
+      "remaining_time": {
+        "name": "Remaining time"
+      },
+      "total_washes": {
+        "name": "Total cycles"
+      },
+      "total_water": {
+        "name": "Total water used"
+      },
+      "total_energy": {
+        "name": "Total energy used"
+      },
+      "current_energy": {
+        "name": "Current energy use"
+      },
+      "current_water": {
+        "name": "Current water use"
+      },
+      "program_name": {
+        "name": "Program"
+      },
+      "program_phase": {
+        "name": "Phase",
+        "state": {
+          "ready": "Ready",
+          "washing": "Washing",
+          "phase_skip": "Phase skip",
+          "rinsing": "Rinsing",
+          "drying": "Drying",
+          "steam": "Steam",
+          "spinning": "Spinning",
+          "weighing": "Weighing",
+          "rotation_start": "Rotation start",
+          "refresh": "Refresh"
+        }
+      },
+      "errors": {
+        "name": "Errors"
+      },
+      "delay_time": {
+        "name": "Start delay"
+      },
+      "loading_percentage": {
+        "name": "Load"
+      },
+      "dry_level": {
+        "name": "Dry level"
+      },
+      "spin_speed": {
+        "name": "Spin speed"
+      },
+      "wash_temperature": {
+        "name": "Wash temperature"
+      },
+      "dirty_level": {
+        "name": "Soil level"
+      },
+      "temp_indoor": {
+        "name": "Indoor temperature"
+      },
+      "temp_outdoor": {
+        "name": "Outdoor temperature"
+      },
+      "humidity_indoor": {
+        "name": "Indoor humidity"
+      },
+      "compressor_freq": {
+        "name": "Compressor frequency"
+      },
+      "ac_total_energy": {
+        "name": "Air conditioner total energy"
+      },
+      "pm25": {
+        "name": "PM2.5"
+      },
+      "co2": {
+        "name": "CO2"
+      },
+      "ch2o": {
+        "name": "Formaldehyde"
+      },
+      "temp_zone1": {
+        "name": "Zone 1 temperature"
+      },
+      "temp_zone2": {
+        "name": "Zone 2 temperature"
+      },
+      "temp_zone3": {
+        "name": "Zone 3 temperature"
+      },
+      "temp_zone4": {
+        "name": "Zone 4 temperature"
+      },
+      "temp_zone5": {
+        "name": "Zone 5 temperature"
+      },
+      "temp_upper": {
+        "name": "Upper zone temperature"
+      },
+      "temp_lower": {
+        "name": "Lower zone temperature"
+      },
+      "temp_ambient": {
+        "name": "Ambient temperature"
+      },
+      "humidity_ambient": {
+        "name": "Ambient humidity"
+      },
+      "temp_cavity": {
+        "name": "Oven temperature"
+      },
+      "probe_temp_1": {
+        "name": "Probe 1 temperature"
+      },
+      "probe_temp_2": {
+        "name": "Probe 2 temperature"
+      },
+      "salt_level": {
+        "name": "Salt level",
+        "state": {
+          "ok": "OK",
+          "low": "Low",
+          "critical": "Critical",
+          "empty": "Empty"
+        }
+      },
+      "rinse_aid_level": {
+        "name": "Rinse aid level",
+        "state": {
+          "ok": "OK",
+          "low": "Low",
+          "critical": "Critical",
+          "empty": "Empty"
+        }
+      },
+      "fan_speed": {
+        "name": "Fan speed"
+      },
+      "current_power": {
+        "name": "Power"
+      },
+      "descaling_cycles": {
+        "name": "Cycles to descaling"
+      },
+      "lifetime_cycles": {
+        "name": "Total cycles"
+      },
+      "water_temp": {
+        "name": "Water temperature"
+      },
+      "temp_inlet": {
+        "name": "Inlet temperature"
+      },
+      "temp_outlet": {
+        "name": "Outlet temperature"
+      },
+      "power": {
+        "name": "Power"
+      },
+      "water_volume": {
+        "name": "Available water"
+      },
+      "heating_remaining": {
+        "name": "Time to target"
+      },
+      "battery": {
+        "name": "Battery"
+      },
+      "power_mode": {
+        "name": "Suction power",
+        "state": {
+          "auto": "Auto",
+          "turbo": "Turbo",
+          "quiet": "Quiet"
+        }
+      },
+      "last_work_area": {
+        "name": "Last cleaned area"
+      },
+      "total_work_area": {
+        "name": "Total cleaned area"
+      },
+      "machine_mode": {
+        "name": "Status",
+        "state": {
+          "idle": "Idle",
+          "selection": "Selection",
+          "running": "Running",
+          "paused": "Paused",
+          "delayed_start": "Delayed start",
+          "delayed_start_running": "Delayed start (running)",
+          "error": "Error",
+          "finished": "Finished",
+          "test": "Test",
+          "stopped": "Stopped",
+          "keep_fresh": "Keep fresh"
+        }
+      },
+      "vacuum_state": {
+        "name": "Status",
+        "state": {
+          "waiting": "Waiting",
+          "auto_cleaning": "Auto cleaning",
+          "spot_cleaning": "Spot cleaning",
+          "paused": "Paused",
+          "full_and_go": "Full & Go",
+          "cleaning_completed": "Cleaning completed",
+          "charging": "Charging"
+        }
+      },
+      "dryer_phase": {
+        "name": "Phase",
+        "state": {
+          "ready": "Ready",
+          "heating": "Heating",
+          "drying": "Drying",
+          "cooling": "Cooling",
+          "rotation": "Rotation"
+        }
+      },
+      "heater_phase": {
+        "name": "Phase",
+        "state": {
+          "ready": "Ready",
+          "heating": "Heating",
+          "holding": "Holding"
+        }
+      }
+    },
+    "binary_sensor": {
+      "door_open": {
+        "name": "Door"
+      },
+      "door_lock": {
+        "name": "Door locked"
+      },
+      "child_lock": {
+        "name": "Child lock"
+      },
+      "drum_clean_needed": {
+        "name": "Drum clean needed"
+      },
+      "filter_clean_needed": {
+        "name": "Filter clean needed"
+      },
+      "dry_clean_needed": {
+        "name": "Condenser clean needed"
+      },
+      "connectivity": {
+        "name": "Connectivity"
+      },
+      "door_zone1": {
+        "name": "Zone 1 door"
+      },
+      "door2_zone1": {
+        "name": "Zone 1 door 2"
+      },
+      "door_zone2": {
+        "name": "Zone 2 door"
+      },
+      "door_zone3": {
+        "name": "Zone 3 door"
+      },
+      "door_cavity1": {
+        "name": "Cavity 1 door"
+      },
+      "door_cavity2": {
+        "name": "Cavity 2 door"
+      },
+      "ice_maker": {
+        "name": "Ice maker"
+      },
+      "ice_box_full": {
+        "name": "Ice box full"
+      },
+      "energy_saving": {
+        "name": "Energy saving"
+      },
+      "light": {
+        "name": "Light"
+      },
+      "presence": {
+        "name": "Presence"
+      },
+      "pan_zone1": {
+        "name": "Zone 1 pan"
+      },
+      "pan_zone2": {
+        "name": "Zone 2 pan"
+      },
+      "pan_zone3": {
+        "name": "Zone 3 pan"
+      },
+      "pan_zone4": {
+        "name": "Zone 4 pan"
+      },
+      "pan_zone5": {
+        "name": "Zone 5 pan"
+      },
+      "pan_zone6": {
+        "name": "Zone 6 pan"
+      },
+      "indicator_light": {
+        "name": "Indicator light"
+      }
+    },
+    "switch": {
+      "sleep": {
+        "name": "Sleep mode"
+      },
+      "mute": {
+        "name": "Mute"
+      },
+      "eco": {
+        "name": "Eco"
+      },
+      "rapid": {
+        "name": "Rapid"
+      },
+      "health": {
+        "name": "Health"
+      },
+      "self_clean": {
+        "name": "Self-clean"
+      },
+      "self_clean_56": {
+        "name": "Self-clean 56°C"
+      },
+      "display": {
+        "name": "Display"
+      },
+      "light": {
+        "name": "Light"
+      },
+      "ten_degree_heating": {
+        "name": "10°C heating"
+      },
+      "child_lock": {
+        "name": "Child lock"
+      },
+      "human_sensing": {
+        "name": "Presence sensor"
+      },
+      "electric_heating": {
+        "name": "Electric heating"
+      },
+      "fresh_air": {
+        "name": "Fresh air"
+      },
+      "half_degree": {
+        "name": "Half degree"
+      },
+      "energy_saving": {
+        "name": "Energy saving"
+      },
+      "pause": {
+        "name": "Pause"
+      }
+    },
+    "number": {
+      "target_temp_zone1": {
+        "name": "Zone 1 temperature"
+      },
+      "target_temp_zone2": {
+        "name": "Zone 2 temperature"
+      },
+      "target_temp_zone3": {
+        "name": "Zone 3 temperature"
+      },
+      "target_temp_zone4": {
+        "name": "Zone 4 temperature"
+      },
+      "target_temp_upper": {
+        "name": "Upper zone temperature"
+      },
+      "target_temp_lower": {
+        "name": "Lower zone temperature"
+      },
+      "target_temp": {
+        "name": "Temperature"
+      },
+      "target_temp_oven": {
+        "name": "Oven temperature"
+      }
+    },
+    "select": {
+      "program": {
+        "name": "Program"
+      }
+    },
+    "button": {
+      "start_program": {
+        "name": "Start program"
+      },
+      "stop_program": {
+        "name": "Stop program"
+      }
+    }
+  },
+  "exceptions": {
+    "appliance_or_client_unavailable": {
+      "message": "The appliance or client is not available."
+    },
+    "command_error": {
+      "message": "Command failed: {error}"
+    },
+    "program_not_found": {
+      "message": "Program \"{program}\" was not found."
+    },
+    "refresh_after_command_failed": {
+      "message": "Refresh after the command failed."
+    },
+    "refresh_after_command_failed_error": {
+      "message": "Refresh after the command failed: {error}"
+    },
+    "swing_not_supported": {
+      "message": "This device does not support vertical swing."
+    },
+    "swing_position_not_allowed": {
+      "message": "Swing position {position} is not allowed (allowed: {allowed})."
+    }
   }
 }

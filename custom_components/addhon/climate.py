@@ -1,4 +1,4 @@
-"""Climate entity per Haier hOn - condizionatore AS35PBPHRA-PRE."""
+"""Climate entity for Haier hOn - air conditioner AS35PBPHRA-PRE."""
 from __future__ import annotations
 
 import logging
@@ -44,7 +44,7 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    """Configura l'entità climate basandosi sul coordinator."""
+    """Configure the climate entity based on the coordinator."""
     entry_data = hass.data[DOMAIN][entry.entry_id]
     coordinator = entry_data["coordinator"]
     client = entry_data["client"]
@@ -52,7 +52,7 @@ async def async_setup_entry(
     for aid, data in coordinator.data.items():
         appliance = data.get("appliance")
         _LOGGER.debug(
-            "Climate debug: valuto appliance '%s' id=%s type=%s commands=%s attributes=%d",
+            "Climate debug: evaluating appliance '%s' id=%s type=%s commands=%s attributes=%d",
             data.get("name"),
             aid,
             data.get("type"),
@@ -61,17 +61,16 @@ async def async_setup_entry(
         )
         if data.get("type") == APPLIANCE_AC:
             entities.append(HaierClimateEntity(coordinator, aid, client))
-            _LOGGER.debug("Climate debug: creata entity climate per id=%s", aid)
+            _LOGGER.debug("Climate debug: created climate entity for id=%s", aid)
     async_add_entities(entities)
 
 
 class HaierClimateEntity(HonBaseEntity, ClimateEntity):
-    """Rappresentazione del condizionatore Haier hOn."""
+    """Representation of the Haier hOn air conditioner."""
 
     def __init__(self, coordinator, appliance_id: str, client=None) -> None:
         super().__init__(coordinator, appliance_id, client)
-        device_name = self._appliance_data.get("name", "Condizionatore Haier")
-        self._attr_name = device_name
+        self._attr_name = None
         self._attr_unique_id = f"{appliance_id}_climate"
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._attr_target_temperature_step = 1.0
@@ -83,15 +82,15 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             | ClimateEntityFeature.TURN_ON
             | ClimateEntityFeature.TURN_OFF
         )
-        # Swing: esposto SOLO se il device ha davvero windDirectionVertical tra i
-        # parametri del comando settings (capability-gate). Evita di offrire un
-        # controllo che il modello non supporta.
+        # Swing: exposed ONLY if the device actually has windDirectionVertical among
+        # the settings command parameters (capability-gate). Avoids offering a
+        # control that the model does not support.
         swing_param = settings_param(self._appliance, AC_SWING_V_PARAM)
         self._swing_supported = swing_param is not None
         if self._swing_supported:
             self._attr_supported_features |= ClimateEntityFeature.SWING_MODE
             self._attr_swing_modes = [AC_SWING_MODE_OFF, AC_SWING_MODE_ON]
-        # Forziamo gli Enum nativi di HA per la plancia di comando
+        # Force the native HA enums for the command panel
         self._attr_hvac_modes = [
             HVACMode.OFF,
             HVACMode.AUTO,
@@ -102,8 +101,8 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         ]
         self._attr_fan_modes = list(AC_FAN_MAP_REVERSE.keys())
         _LOGGER.debug(
-            "Climate debug: inizializzato '%s' id=%s hvac_modes=%s fan_modes=%s temp_range=%s-%s",
-            self._attr_name,
+            "Climate debug: initialized '%s' id=%s hvac_modes=%s fan_modes=%s temp_range=%s-%s",
+            self._attr_unique_id,
             appliance_id,
             self._attr_hvac_modes,
             self._attr_fan_modes,
@@ -113,29 +112,29 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
 
     @property
     def hvac_mode(self) -> HVACMode:
-        """Ritorna lo stato HVAC corrente traducendo la stringa di const.py nell'Enum di HA."""
+        """Return the current HVAC state, translating the const.py string into the HA enum."""
         on_off = self._get_attr(AC_ATTR_ON_OFF, "0")
         if str(on_off) == "0":
             _LOGGER.debug(
                 "Climate debug: hvac_mode '%s' id=%s onOffStatus=%s -> OFF",
-                self._attr_name,
+                self._attr_unique_id,
                 self._appliance_id,
                 on_off,
             )
             return HVACMode.OFF
-            
-        # Legge machMode (es. "2") usando la costante da const.py
+
+        # Read machMode (e.g. "2") using the constant from const.py
         mode_val = str(self._get_attr(AC_ATTR_MODE, "1"))
-        
-        # Recupera il testo dal tuo const.py (es. "cool")
+
+        # Retrieve the text from const.py (e.g. "cool")
         mode_str = AC_MODE_MAP.get(mode_val, "cool")
-        
-        # Converte la stringa nell'Enum corretto di Home Assistant
+
+        # Convert the string into the correct Home Assistant enum
         try:
             mode = HVACMode(str(mode_str).lower())
             _LOGGER.debug(
                 "Climate debug: hvac_mode '%s' id=%s onOffStatus=%s machMode=%s -> %s",
-                self._attr_name,
+                self._attr_unique_id,
                 self._appliance_id,
                 on_off,
                 mode_val,
@@ -144,7 +143,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             return mode
         except ValueError:
             _LOGGER.debug(
-                "Climate debug: machMode=%s tradotto in mode_str=%s non valido, fallback COOL",
+                "Climate debug: machMode=%s translated to mode_str=%s invalid, fallback COOL",
                 mode_val,
                 mode_str,
             )
@@ -152,31 +151,31 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
 
     @property
     def target_temperature(self) -> float | None:
-        """Ritorna la temperatura impostata. None se non disponibile."""
+        """Return the set temperature. None if not available."""
         val = self._get_attr(AC_ATTR_TEMP)
         try:
             result = float(val) if val is not None else None
             _LOGGER.debug("Climate debug: target_temperature raw=%r -> %s", val, result)
             return result
         except (ValueError, TypeError):
-            _LOGGER.debug("Climate debug: target_temperature non numerica raw=%r", val)
+            _LOGGER.debug("Climate debug: target_temperature not numeric raw=%r", val)
             return None
 
     @property
     def current_temperature(self) -> float | None:
-        """Ritorna la temperatura della stanza."""
+        """Return the room temperature."""
         val = self._get_attr(AC_ATTR_CURRENT_TEMP)
         try:
             result = float(val) if val is not None else None
             _LOGGER.debug("Climate debug: current_temperature raw=%r -> %s", val, result)
             return result
         except (ValueError, TypeError):
-            _LOGGER.debug("Climate debug: current_temperature non numerica raw=%r", val)
+            _LOGGER.debug("Climate debug: current_temperature not numeric raw=%r", val)
             return None
 
     @property
     def fan_mode(self) -> str | None:
-        """Ritorna la velocità della ventilazione basata sulla mappa invertita."""
+        """Return the fan speed based on the reversed map."""
         val = str(self._get_attr(AC_ATTR_FAN_SPEED, "0"))
         fan = AC_FAN_MAP.get(val, "auto")
         _LOGGER.debug("Climate debug: fan_mode raw=%s -> %s", val, fan)
@@ -184,7 +183,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
 
     @property
     def swing_mode(self) -> str | None:
-        """Ritorna 'on' se la posizione verticale è SWING (8), altrimenti 'off'."""
+        """Return 'on' if the vertical position is SWING (8), otherwise 'off'."""
         if not getattr(self, "_swing_supported", False):
             return None
         val = self._get_attr(AC_ATTR_SWING_V)
@@ -195,25 +194,29 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         return mode
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Invia il cambio modalità convertendo l'HVACMode nell'esatto codice numerico hOn."""
+        """Send the mode change, converting the HVACMode into the exact hOn numeric code."""
         appliance = self._appliance
         if not appliance:
             raise HomeAssistantError(
-                f"Climate: appliance non disponibile per {self._appliance_id}"
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
             )
         try:
             client = self._hon_client
             if client is None:
-                raise HomeAssistantError("Climate: HonClient non disponibile")
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="appliance_or_client_unavailable",
+                )
 
             if hvac_mode == HVACMode.OFF:
                 _LOGGER.debug("Climate debug: set_hvac_mode OFF -> onOffStatus=0")
                 await self._send_command_in_executor(client, appliance, {"onOffStatus": "0"})
             else:
-                # HVACMode è StrEnum: .value torna direttamente la stringa ("cool", "heat", ecc.)
+                # HVACMode is a StrEnum: .value returns the string directly ("cool", "heat", etc.)
                 mode_str = hvac_mode.value
-                
-                # Cerca il codice numerico in AC_MODE_MAP_REVERSE
+
+                # Look up the numeric code in AC_MODE_MAP_REVERSE
                 mode_key = AC_MODE_MAP_REVERSE.get(mode_str, "1")
                 _LOGGER.debug(
                     "Climate debug: set_hvac_mode %s -> onOffStatus=1 machMode=%s",
@@ -226,64 +229,86 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
                 )
             await self._async_request_command_refresh()
         except Exception as err:
-            _LOGGER.error("Climate: errore set_hvac_mode: %s", err, exc_info=True)
-            raise HomeAssistantError(f"Climate: errore set_hvac_mode: {err}") from err
+            _LOGGER.error("Climate: set_hvac_mode error: %s", err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
     async def async_turn_on(self) -> None:
-        """Accende il condizionatore portandolo in modalità COOL."""
+        """Turn on the air conditioner, putting it in COOL mode."""
         await self.async_set_hvac_mode(HVACMode.COOL)
 
     async def async_turn_off(self) -> None:
-        """Spegne il condizionatore."""
+        """Turn off the air conditioner."""
         await self.async_set_hvac_mode(HVACMode.OFF)
 
     async def async_set_temperature(self, **kwargs) -> None:
-        """Invia la temperatura target."""
+        """Send the target temperature."""
         temp = kwargs.get("temperature")
         if temp is None:
-            _LOGGER.debug("Climate debug: set_temperature ignorato, temperature assente kwargs=%s", kwargs)
+            _LOGGER.debug("Climate debug: set_temperature ignored, temperature absent kwargs=%s", kwargs)
             return
         appliance = self._appliance
         client = self._hon_client
         if not appliance or not client:
-            raise HomeAssistantError("Climate: appliance o client non disponibile")
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
         try:
             _LOGGER.debug("Climate debug: set_temperature %s -> tempSel=%s", temp, int(temp))
             await self._send_command_in_executor(client, appliance, {"tempSel": str(int(temp))})
             await self._async_request_command_refresh()
         except Exception as err:
-            _LOGGER.error("Climate: errore set_temperature: %s", err, exc_info=True)
-            raise HomeAssistantError(f"Climate: errore set_temperature: {err}") from err
+            _LOGGER.error("Climate: set_temperature error: %s", err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        """Invia la velocità ventola basandosi sulla mappa del tuo const.py."""
+        """Send the fan speed based on the map in const.py."""
         appliance = self._appliance
         client = self._hon_client
         if not appliance or not client:
-            raise HomeAssistantError("Climate: appliance o client non disponibile")
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
         try:
             speed_key = AC_FAN_MAP_REVERSE.get(fan_mode, "0")
             _LOGGER.debug("Climate debug: set_fan_mode %s -> windSpeed=%s", fan_mode, speed_key)
             await self._send_command_in_executor(client, appliance, {"windSpeed": speed_key})
             await self._async_request_command_refresh()
         except Exception as err:
-            _LOGGER.error("Climate: errore set_fan_mode: %s", err, exc_info=True)
-            raise HomeAssistantError(f"Climate: errore set_fan_mode: {err}") from err
+            _LOGGER.error("Climate: set_fan_mode error: %s", err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
-        """Attiva/disattiva l'oscillazione verticale (windDirectionVertical).
+        """Enable/disable the vertical oscillation (windDirectionVertical).
 
-        'on' -> 8 (swing). 'off' -> una posizione fissa AMMESSA dal device. Non
-        viene MAI inviato 0: i valori validi sono letti da .values del parametro.
+        'on' -> 8 (swing). 'off' -> a fixed position ALLOWED by the device. 0 is
+        NEVER sent: the valid values are read from the parameter .values.
         """
         appliance = self._appliance
         client = self._hon_client
         if not appliance or not client:
-            raise HomeAssistantError("Climate: appliance o client non disponibile")
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
         param = settings_param(appliance, AC_SWING_V_PARAM)
         if param is None:
             raise HomeAssistantError(
-                "Climate: il dispositivo non espone windDirectionVertical"
+                translation_domain=DOMAIN,
+                translation_key="swing_not_supported",
             )
         allowed = param_allowed_values(param)
         if swing_mode == AC_SWING_MODE_ON:
@@ -292,11 +317,13 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             target = fixed_vertical_value(allowed)
         if allowed and target not in allowed:
             raise HomeAssistantError(
-                f"Climate: posizione swing {target} non ammessa (ammessi: {allowed})"
+                translation_domain=DOMAIN,
+                translation_key="swing_position_not_allowed",
+                translation_placeholders={"position": str(target), "allowed": str(allowed)},
             )
         try:
             _LOGGER.debug(
-                "Climate debug: set_swing_mode %s -> windDirectionVertical=%s (ammessi=%s)",
+                "Climate debug: set_swing_mode %s -> windDirectionVertical=%s (allowed=%s)",
                 swing_mode, target, allowed,
             )
             await self._send_command_in_executor(
@@ -306,12 +333,16 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         except HomeAssistantError:
             raise
         except Exception as err:
-            _LOGGER.error("Climate: errore set_swing_mode: %s", err, exc_info=True)
-            raise HomeAssistantError(f"Climate: errore set_swing_mode: {err}") from err
+            _LOGGER.error("Climate: set_swing_mode error: %s", err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
     async def _send_command_in_executor(self, client, appliance, params: dict) -> None:
-        """Invia il comando settings dell'AC (sanitazione windDirection inclusa).
+        """Send the AC settings command (windDirection sanitation included).
 
-        Delega a ac_command.async_send_settings, condiviso con gli switch AC.
+        Delegates to ac_command.async_send_settings, shared with the AC switches.
         """
         await async_send_settings(self.hass, client, appliance, params)

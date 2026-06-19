@@ -1,4 +1,4 @@
-"""Config flow per Haier hOn Extended."""
+"""Config flow for Haier hOn Extended."""
 from __future__ import annotations
 
 import logging
@@ -34,30 +34,30 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-    """Valida le credenziali hOn."""
-    _LOGGER.debug("ConfigFlow debug: inizio validazione account %s", _redact_email(data.get("email")))
+    """Validate the hOn credentials."""
+    _LOGGER.debug("ConfigFlow debug: starting validation for account %s", _redact_email(data.get("email")))
     client = HonClient(email=data["email"], password=data["password"])
 
     try:
         try:
-            # pyhOn esegue operazioni sincrone in __init__/__aenter__ → usa executor
+            # The client runs synchronous operations in __init__/__aenter__ -> use executor
             _LOGGER.debug("ConfigFlow debug: setup_sync in executor")
             await hass.async_add_executor_job(client.setup_sync)
             await client.async_complete_setup()
-            _LOGGER.debug("ConfigFlow debug: setup client completato")
+            _LOGGER.debug("ConfigFlow debug: client setup completed")
         except ImportError as err:
-            raise CannotConnect("pyhOn non installato") from err
+            raise CannotConnect("required dependency not installed") from err
         except Exception as err:
-            _LOGGER.error("Errore validazione: %s", err)
+            _LOGGER.error("Validation error: %s", err)
             if _requires_reauth(err):
                 raise InvalidAuth(str(err)) from err
             raise CannotConnect(str(err)) from err
 
         try:
-            _LOGGER.debug("ConfigFlow debug: recupero appliance per validazione")
+            _LOGGER.debug("ConfigFlow debug: fetching appliances for validation")
             appliances = await client.async_get_appliances()
             _LOGGER.debug(
-                "ConfigFlow debug: appliance recuperate=%d types=%s",
+                "ConfigFlow debug: appliances fetched=%d types=%s",
                 len(appliances),
                 [
                     str(getattr(appliance, "appliance_type", None)
@@ -69,16 +69,16 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
                 ],
             )
         except Exception as err:
-            _LOGGER.error("Errore recupero appliance durante validazione: %s", err)
+            _LOGGER.error("Error fetching appliances during validation: %s", err)
             if _requires_reauth(err):
                 raise InvalidAuth(str(err)) from err
             raise CannotConnect(str(err)) from err
     finally:
         try:
-            _LOGGER.debug("ConfigFlow debug: chiusura client dopo validazione")
+            _LOGGER.debug("ConfigFlow debug: closing client after validation")
             await client.async_close()
         except Exception as err:
-            _LOGGER.warning("Errore chiusura HonClient dopo validazione: %s", err)
+            _LOGGER.warning("Error closing HonClient after validation: %s", err)
 
     return {
         "title": f"Haier hOn ({data['email']})",
@@ -87,7 +87,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Gestisce il config flow per Haier hOn Extended."""
+    """Handles the config flow for Haier hOn Extended."""
 
     VERSION = 1
 
@@ -95,40 +95,40 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> "OptionsFlowHandler":
-        """Espone il flow Opzioni (i due toggle di debug)."""
-        # NB: niente @callback qui per non dipendere da homeassistant.core.callback
-        # (non richiesto per correttezza; l'harness di test non lo fornisce).
+        """Expose the Options flow (the two debug toggles)."""
+        # NB: no @callback here so as not to depend on homeassistant.core.callback
+        # (not required for correctness; the test harness does not provide it).
         return OptionsFlowHandler()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Gestisce il primo step dell'utente."""
+        """Handle the first user step."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             _LOGGER.debug(
-                "ConfigFlow debug: submit step user per account %s",
+                "ConfigFlow debug: submit user step for account %s",
                 _redact_email(user_input.get("email")),
             )
             try:
                 info = await validate_input(self.hass, user_input)
             except CannotConnect:
-                _LOGGER.debug("ConfigFlow debug: validazione fallita cannot_connect")
+                _LOGGER.debug("ConfigFlow debug: validation failed cannot_connect")
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
-                _LOGGER.debug("ConfigFlow debug: validazione fallita invalid_auth")
+                _LOGGER.debug("ConfigFlow debug: validation failed invalid_auth")
                 errors["base"] = "invalid_auth"
             except Exception:
-                _LOGGER.exception("Errore imprevisto")
+                _LOGGER.exception("Unexpected error")
                 errors["base"] = "unknown"
             else:
-                # Evita entry duplicate per stesso account
+                # Avoid duplicate entries for the same account
                 await self.async_set_unique_id(user_input["email"].lower())
                 self._abort_if_unique_id_configured()
 
                 _LOGGER.debug(
-                    "ConfigFlow debug: creo entry per account %s appliance_count=%s",
+                    "ConfigFlow debug: creating entry for account %s appliance_count=%s",
                     _redact_email(user_input.get("email")),
                     info.get("appliance_count"),
                 )
@@ -149,9 +149,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_reauth(
         self, entry_data: dict[str, Any]
     ) -> FlowResult:
-        """Avvia la ri-autenticazione quando il token hOn non è più valido."""
+        """Start re-authentication when the hOn token is no longer valid."""
         _LOGGER.debug(
-            "ConfigFlow debug: avvio reauth per account %s",
+            "ConfigFlow debug: starting reauth for account %s",
             _redact_email(entry_data.get("email")),
         )
         return await self.async_step_reauth_confirm()
@@ -159,7 +159,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Chiede di nuovo la password (l'email resta quella dell'entry)."""
+        """Ask for the password again (the email stays the entry's one)."""
         errors: dict[str, str] = {}
         reauth_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
@@ -171,23 +171,23 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 await validate_input(self.hass, data)
             except CannotConnect:
-                _LOGGER.debug("ConfigFlow debug: reauth fallito cannot_connect")
+                _LOGGER.debug("ConfigFlow debug: reauth failed cannot_connect")
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
-                _LOGGER.debug("ConfigFlow debug: reauth fallito invalid_auth")
+                _LOGGER.debug("ConfigFlow debug: reauth failed invalid_auth")
                 errors["base"] = "invalid_auth"
             except Exception:
-                _LOGGER.exception("Errore imprevisto durante reauth")
+                _LOGGER.exception("Unexpected error during reauth")
                 errors["base"] = "unknown"
             else:
-                # Le credenziali devono appartenere allo stesso account: l'email
-                # non è modificabile dall'utente, ma verifichiamo comunque lo
-                # unique_id per non riautenticare un'entry con un altro account.
+                # The credentials must belong to the same account: the email is
+                # not editable by the user, but we verify the unique_id anyway so
+                # as not to re-authenticate an entry with a different account.
                 await self.async_set_unique_id(email.lower())
                 if reauth_entry.unique_id and self.unique_id != reauth_entry.unique_id:
                     return self.async_abort(reason="reauth_account_mismatch")
                 _LOGGER.debug(
-                    "ConfigFlow debug: reauth riuscito per %s, aggiorno entry",
+                    "ConfigFlow debug: reauth succeeded for %s, updating entry",
                     _redact_email(email),
                 )
                 return self.async_update_reload_and_abort(reauth_entry, data=data)
@@ -201,14 +201,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Opzioni dell'integrazione: due toggle di debug indipendenti.
+    """Integration options: two independent debug toggles.
 
-    HA 2024.12.0+: NON impostare self.config_entry nell'__init__ (deprecato e
-    iniettato automaticamente). I default sono letti da self.config_entry.options
-    (False sulle installazioni che non hanno mai salvato opzioni). I valori sono
-    applicati a caldo da _apply_debug_options via l'options update listener: NB
-    i logger sono globali al processo, quindi con piu' account vince l'ultimo che
-    cambia (caso tipico = singolo account).
+    HA 2024.12.0+: do NOT set self.config_entry in __init__ (deprecated and
+    injected automatically). The defaults are read from self.config_entry.options
+    (False on installations that never saved options). The values are applied on
+    the fly by _apply_debug_options via the options update listener: NB the loggers
+    are global to the process, so with more than one account the last one that
+    changes wins (typical case = single account).
     """
 
     async def async_step_init(
@@ -244,8 +244,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
 
 class CannotConnect(HomeAssistantError):
-    """Errore di connessione."""
+    """Connection error."""
 
 
 class InvalidAuth(HomeAssistantError):
-    """Credenziali non valide."""
+    """Invalid credentials."""

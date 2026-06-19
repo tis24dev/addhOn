@@ -1,14 +1,14 @@
-"""Eccezioni del motore parser nativo (Fase 4).
+"""Native parser engine exceptions.
 
-Le nostre, non importate da pyhOn (regola di confine: il motore nativo non
-dipende da `_vendor`). Minime: il send-path ne usa due.
+Defined here so the engine stays self-contained (it does not import its exceptions
+from the transport layer or anywhere else). Minimal: the send-path uses two of them.
 """
 from __future__ import annotations
 
 
 class ApiError(Exception):
-    """Il cloud hOn ha rifiutato/non confermato un comando."""
+    """The hOn cloud rejected/did not confirm a command."""
 
 
 class NoAuthenticationException(Exception):
-    """Tentativo di usare l'api senza una sessione autenticata."""
+    """Attempt to use the api without an authenticated session."""

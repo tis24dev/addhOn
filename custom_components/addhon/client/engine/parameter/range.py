@@ -1,9 +1,9 @@
-"""HonParameterRange nativo. Porting fedele di `_vendor/pyhon/parameter/range.py`.
+"""Range parameter (min/max/step) for hOn commands.
 
-min/max/step/default via `str_to_float` (riusa client.helpers). `step` ricade su 1
-se 0. Il setter valida range+step (modulo *100 per evitare l'imprecisione float) e
-solleva ValueError se fuori (le entità ci contano per il rollback). `values` enumera
-min..max a passi di step. Tutto identico a pyhOn (differential test).
+min/max/step/default via `str_to_float` (reuses client.helpers). `step` falls back to 1
+if 0. The setter validates range+step (modulo *100 to avoid float imprecision) and
+raises ValueError if out of bounds (the entities rely on it for the rollback). `values`
+enumerates min..max in steps of step.
 """
 from __future__ import annotations
 

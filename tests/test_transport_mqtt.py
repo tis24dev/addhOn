@@ -1,10 +1,10 @@
-"""Offline test del MQTT nativo (NativeMqttClient, Fase 3 piece 4b).
+"""Offline test of the native MQTT (NativeMqttClient, Phase 3 piece 4b).
 
-awscrt/awsiot sono stubati in sys.modules (il modulo li importa al top): così
-testiamo a secco la logica NOSTRA — `stop()` (cancella+attende il watchdog, ferma
-il client) e `_on_publish_received` (aggiorna parametri/connessione + notify, con i
-rami difensivi) — senza rete né dipendenze native. Le parti che usano l'API awscrt
-(`_start`/`_subscribe`) sono validate live.
+awscrt/awsiot are stubbed in sys.modules (the module imports them at the top): so
+we dry-test OUR logic - `stop()` (cancels+awaits the watchdog, stops the client)
+and `_on_publish_received` (updates parameters/connection + notify, with the
+defensive branches) - without network or native dependencies. The parts that use
+the awscrt API (`_start`/`_subscribe`) are validated live.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _mod(name: str) -> types.ModuleType:
 
 
 def _install_stubs() -> None:
-    # homeassistant (lo importa custom_components/addhon/__init__.py)
+    # homeassistant (imported by custom_components/addhon/__init__.py)
     ce = _mod("homeassistant.config_entries")
     ce.ConfigEntry = getattr(ce, "ConfigEntry", type("ConfigEntry", (), {}))
     core = _mod("homeassistant.core")
@@ -46,7 +46,7 @@ def _install_stubs() -> None:
     ha.config_entries, ha.core, ha.exceptions = ce, core, exc
     ha.helpers = _mod("homeassistant.helpers")
     ha.helpers.update_coordinator = uc
-    # awscrt.mqtt5 + awsiot.mqtt5_client_builder: bastano i nomi per l'import.
+    # awscrt.mqtt5 + awsiot.mqtt5_client_builder: the names are enough for the import.
     awscrt = _mod("awscrt")
     awscrt.mqtt5 = _mod("awscrt.mqtt5")
     awsiot = _mod("awsiot")
@@ -117,7 +117,7 @@ class StopTest(unittest.TestCase):
                     await asyncio.sleep(3600)
 
             m._watchdog_task = asyncio.ensure_future(_forever())
-            await asyncio.sleep(0)  # lascia partire il watchdog
+            await asyncio.sleep(0)  # let the watchdog start
             client = FakeClient()
             m._client = client
             await m.stop()
@@ -130,14 +130,14 @@ class StopTest(unittest.TestCase):
 
     def test_stop_idempotent_no_client_no_task(self) -> None:
         m = NativeMqttClient(FakeHon([]), "MID")
-        _run(m.stop())  # niente client/watchdog -> no-op, non solleva
+        _run(m.stop())  # no client/watchdog -> no-op, does not raise
         _run(m.stop())
 
 
 class CreatePathTest(unittest.TestCase):
-    """Drive il path REALE create()->_start->_subscribe->watchdog con stub awscrt
-    più ricchi: cattura un errore di wiring (builder/subscribe) invisibile agli altri
-    test (che mockano o saltano _start)."""
+    """Drives the REAL path create()->_start->_subscribe->watchdog with richer awscrt
+    stubs: catches a wiring error (builder/subscribe) invisible to the other tests
+    (which mock or skip _start)."""
 
     def test_create_builds_client_and_subscribes(self) -> None:
         import awscrt
@@ -171,7 +171,7 @@ class CreatePathTest(unittest.TestCase):
             calls["builder"] = kwargs
             return fake_client
 
-        # stub runtime dell'API awscrt usata da _start/_subscribe
+        # runtime stub of the awscrt API used by _start/_subscribe
         awsiot.mqtt5_client_builder.websockets_with_custom_authorizer = fake_builder
         awscrt.mqtt5.SubscribePacket = lambda subs: ("pkt", subs)
         awscrt.mqtt5.Subscription = lambda topic: ("sub", topic)
@@ -190,7 +190,7 @@ class CreatePathTest(unittest.TestCase):
         hon.api = FakeApi()
 
         async def body():
-            # create + stop nello STESSO loop (il watchdog task è legato al loop)
+            # create + stop in the SAME loop (the watchdog task is bound to the loop)
             m = NativeMqttClient(hon, "MID")
             await m.create()
             had_watchdog = m._watchdog_task is not None
@@ -198,13 +198,13 @@ class CreatePathTest(unittest.TestCase):
             return m, had_watchdog
 
         m, had_watchdog = _run(body())
-        # builder chiamato con gli arg attesi
+        # builder called with the expected args
         b = calls["builder"]
         self.assertEqual(b["auth_authorizer_signature"], "SIGNED")
         self.assertEqual(b["auth_token_value"], "IDT")
         self.assertEqual(b["auth_token_key_name"], "token")
         self.assertTrue(b["client_id"].startswith("MID_"))
-        # client avviato + subscribe per ogni topic + watchdog creato e poi fermato
+        # client started + subscribe for each topic + watchdog created and then stopped
         self.assertTrue(fake_client.started)
         self.assertEqual(len(fake_client.subscribed), 1)
         self.assertTrue(had_watchdog)
@@ -223,7 +223,7 @@ class PublishReceivedTest(unittest.TestCase):
         m, hon = self._client(app)
         m._on_publish_received(_packet(topic, {"parameters": [
             {"parName": "temp", "parValue": "5"},
-            {"parName": "ignota", "parValue": "x"},  # non in parameters -> skip (difensivo)
+            {"parName": "ignota", "parValue": "x"},  # not in parameters -> skip (defensive)
         ]}))
         self.assertEqual(app.attributes["parameters"]["temp"].updated,
                          {"parName": "temp", "parValue": "5"})
@@ -247,8 +247,8 @@ class PublishReceivedTest(unittest.TestCase):
         self.assertTrue(app.connection)
 
     def test_unknown_topic_no_crash_no_notify(self) -> None:
-        # topic che non corrisponde a nessun appliance -> esce senza crash (difensivo:
-        # pyhOn faceva next(...) -> StopIteration).
+        # topic that matches no appliance -> exits without crashing (defensive:
+        # pyhOn did next(...) -> StopIteration).
         app = FakeAppliance("haier/known/appliancestatus")
         m, hon = self._client(app)
         m._on_publish_received(_packet("haier/UNKNOWN/topic", {"parameters": []}))

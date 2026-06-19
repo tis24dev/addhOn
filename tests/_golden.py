@@ -1,16 +1,17 @@
-"""Helper per i test golden del motore nativo (Fase 4 slice 5b).
+"""Helpers for the native engine golden tests (Phase 4 slice 5b).
 
-Dopo la cancellazione di `_vendor/`, i vecchi differential test (native vs pyhOn)
-diventano golden: si congela l'output NATIVO (provato == pyhOn al checkpoint 5a,
-commit 520f036, refuter-validato) in un JSON e si verifica che il nativo non regredisca.
+After deleting `_vendor/`, the old differential tests (native vs pyhOn) become
+golden tests: the NATIVE output (proven == pyhOn at checkpoint 5a, commit
+520f036, refuter-validated) is frozen into a JSON and we verify the native side
+does not regress.
 
-Uso:
+Usage:
     from _golden import install_stubs, frozen
     install_stubs()
     ...
     self.assertEqual(snapshot, frozen("engine_parameters", snapshot))
 
-Rigenerare i golden (dopo un cambiamento VOLUTO del comportamento nativo):
+Regenerate the golden files (after an INTENTIONAL change of the native behavior):
     GEN_GOLDEN=1 python3 -m pytest tests/test_engine_*.py
 """
 from __future__ import annotations
@@ -34,8 +35,8 @@ def _mod(name: str) -> types.ModuleType:
 
 
 def install_stubs() -> None:
-    """Stub minimi di homeassistant/aiohttp/yarl: l'import del package addhon tira
-    dentro homeassistant; il motore importa senza awscrt."""
+    """Minimal stubs for homeassistant/aiohttp/yarl: importing the addhon package
+    pulls in homeassistant; the engine then imports without awscrt."""
     ce = _mod("homeassistant.config_entries")
     ce.ConfigEntry = getattr(ce, "ConfigEntry", type("ConfigEntry", (), {}))
     core = _mod("homeassistant.core")
@@ -64,17 +65,17 @@ def install_stubs() -> None:
 
 
 def normalize(value):
-    """JSON round-trip per confronti stabili (tuple->list, datetime->str, ecc.).
-    Va applicata anche al lato 'attuale' del confronto, non solo al golden."""
+    """JSON round-trip for stable comparisons (tuple->list, datetime->str, etc.).
+    Must be applied to the 'current' side of the comparison too, not just the golden."""
     return json.loads(json.dumps(value, sort_keys=True, default=str))
 
 
-_normalize = normalize  # alias interno
+_normalize = normalize  # internal alias
 
 
 def frozen(name: str, value):
-    """Ritorna il golden per `name`. Con GEN_GOLDEN scrive `value` come nuovo golden;
-    altrimenti lo carica da disco. Il valore è sempre normalizzato via JSON."""
+    """Return the golden for `name`. With GEN_GOLDEN it writes `value` as the new
+    golden; otherwise it loads it from disk. The value is always normalized via JSON."""
     path = _GOLDEN_DIR / f"{name}.json"
     norm = _normalize(value)
     if os.environ.get("GEN_GOLDEN"):

@@ -1,13 +1,13 @@
-"""Offline test dell'orchestrazione `Hon` nativa (NativeHon, Fase 3 piece 3).
+"""Offline test of the native `Hon` orchestration (NativeHon, Phase 3 piece 3).
 
-Verifica la SEQUENZA di setup fedele a pyhOn `Hon.setup` (load_appliances → per
-appliance load_commands/attributes/statistics → MQTT per ultimo), la gestione zone,
-lo skip su mac vuoto, la tolleranza agli errori per-appliance, il gating MQTT, la
-chiusura e la conformità al Protocol `HonSession`.
+Verifies the setup SEQUENCE faithful to pyhOn `Hon.setup` (load_appliances ->
+per appliance load_commands/attributes/statistics -> MQTT last), zone handling,
+the empty-mac skip, per-appliance error tolerance, MQTT gating, close, and
+conformance to the `HonSession` Protocol.
 
-Il motore pyhOn (HonAppliance) e il MQTT sono mockati via i factory di
-`pyhon_adapter` (l'unico ponte verso `_vendor`): nessun import di `_vendor`,
-nessuna rete, niente awscrt. aiohttp/yarl/homeassistant sono stubati.
+The pyhOn engine (HonAppliance) and MQTT are mocked via the `factory`
+factories (the only bridge to `_vendor`): no `_vendor` import, no network, no
+awscrt. aiohttp/yarl/homeassistant are stubbed.
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def _install_stubs() -> None:
 
 _install_stubs()
 
-from custom_components.addhon.client import pyhon_adapter  # noqa: E402
+from custom_components.addhon.client import factory  # noqa: E402
 from custom_components.addhon.client import session as session_mod  # noqa: E402
 from custom_components.addhon.client.session import NativeHon  # noqa: E402
 from custom_components.addhon.client.interfaces import HonSession  # noqa: E402
@@ -116,7 +116,7 @@ class FakeMqtt:
 
 
 class _Harness:
-    """Patcha create_appliance (pyhon_adapter) + NativeHon._make_mqtt + HonConnection/HonApi."""
+    """Patches create_appliance (factory) + NativeHon._make_mqtt + HonConnection/HonApi."""
 
     def __init__(self, test, appliances, fail_macs=()):
         self.test = test
@@ -129,21 +129,21 @@ class _Harness:
         self.mqtt_instance = None
 
     def install(self):
-        h = self  # harness (evita collisione col self=NativeHon dei metodi patchati)
+        h = self  # harness (avoids collision with self=NativeHon in the patched methods)
         t = self.test
         events = self.events
 
         def fake_create_appliance(api, data, zone=0):
             return FakeAppliance(api, data, zone, events, fail=data.get("macAddress") in h.fail_macs)
 
-        async def fake_make_mqtt(hon):  # hon = istanza NativeHon (metodo bound)
+        async def fake_make_mqtt(hon):  # hon = NativeHon instance (bound method)
             events.append("mqtt")
             m = FakeMqtt(h)
             h.mqtt_calls.append((hon, hon._mobile_id))
             h.mqtt_instance = m
             return m
 
-        t._patch(pyhon_adapter, "create_appliance", fake_create_appliance)
+        t._patch(factory, "create_appliance", fake_create_appliance)
         t._patch(NativeHon, "_make_mqtt", fake_make_mqtt)
 
 
@@ -155,7 +155,7 @@ class NativeSessionSetupTest(unittest.TestCase):
 
     def _nh_with_api(self, harness, **kw):
         nh = NativeHon("u@x", "p", **kw)
-        nh._api = harness.api  # bypassa la creazione connessione, testa setup()
+        nh._api = harness.api  # bypass connection creation, test setup()
         return nh
 
     def test_setup_loads_each_appliance_then_mqtt_last(self) -> None:
@@ -167,11 +167,11 @@ class NativeSessionSetupTest(unittest.TestCase):
         h.install()
         nh = self._nh_with_api(h)
         _run(nh.setup())
-        # 2 appliance costruite + caricate, mqtt per ULTIMO
+        # 2 appliances built + loaded, mqtt LAST
         self.assertEqual([a.mac_address for a in nh.appliances], ["A", "B"])
         self.assertEqual(h.events[0], "load_appliances")
         self.assertEqual(h.events[-1], "mqtt")
-        # per ogni appliance: cmd -> attr -> stat, e tutte PRIMA di mqtt
+        # for each appliance: cmd -> attr -> stat, and all BEFORE mqtt
         self.assertEqual(
             h.events,
             ["load_appliances",
@@ -186,12 +186,12 @@ class NativeSessionSetupTest(unittest.TestCase):
         h.install()
         nh = self._nh_with_api(h)
         _run(nh.setup())
-        # zones=2 -> zone1, zone2, poi base(zone0) = 3 appliance (come pyhOn)
+        # zones=2 -> zone1, zone2, then base(zone0) = 3 appliances (like pyhOn)
         self.assertEqual([a.zone for a in nh.appliances], [1, 2, 0])
 
     def test_zero_appliances_still_creates_mqtt(self) -> None:
-        # 0 appliance: load_appliances (=1 POST autenticato che popola i token) avviene
-        # comunque, poi MQTT parte lo stesso -> auth pronto anche senza appliance.
+        # 0 appliances: load_appliances (=1 authenticated POST that populates the tokens)
+        # still happens, then MQTT still starts -> auth ready even without appliances.
         h = _Harness(self, [])
         h.install()
         nh = self._nh_with_api(h)
@@ -201,7 +201,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         self.assertEqual(len(h.mqtt_calls), 1)
 
     def test_mqtt_created_once_across_two_setups(self) -> None:
-        # il gate `not self._mqtt_client` impedisce una seconda creazione MQTT.
+        # the `not self._mqtt_client` gate prevents a second MQTT creation.
         data = [{"macAddress": "A", "applianceTypeName": "REF"}]
         h = _Harness(self, data)
         h.install()
@@ -212,8 +212,8 @@ class NativeSessionSetupTest(unittest.TestCase):
         self.assertEqual(len(h.mqtt_calls), 1)
 
     def test_mixed_zoned_and_normal_ordering(self) -> None:
-        # un appliance multi-zona seguito da uno normale: zone1,zone2,base(0) poi normale(0),
-        # tutti caricati PRIMA di mqtt (per ultimo).
+        # a multi-zone appliance followed by a normal one: zone1,zone2,base(0) then normal(0),
+        # all loaded BEFORE mqtt (which is last).
         data = [
             {"macAddress": "Z", "applianceTypeName": "AC", "zone": "2"},
             {"macAddress": "N", "applianceTypeName": "WM"},
@@ -228,7 +228,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         )
         self.assertEqual(h.events[0], "load_appliances")
         self.assertEqual(h.events[-1], "mqtt")
-        # nessun load dopo mqtt
+        # no load after mqtt
         self.assertEqual(h.events.index("mqtt"), len(h.events) - 1)
 
     def test_zone_one_not_split(self) -> None:
@@ -249,7 +249,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         nh = self._nh_with_api(h)
         _run(nh.setup())
         self.assertEqual([a.mac_address for a in nh.appliances], ["B"])
-        # l'appliance senza mac non viene caricata
+        # the appliance without a mac is not loaded
         self.assertNotIn("cmd::0", h.events)
 
     def test_appliance_load_error_still_appended(self) -> None:
@@ -258,7 +258,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         h.install()
         nh = self._nh_with_api(h)
         _run(nh.setup())
-        # load_commands lancia KeyError ma l'appliance resta (stato parziale, come pyhOn)
+        # load_commands raises KeyError but the appliance stays (partial state, like pyhOn)
         self.assertEqual([a.mac_address for a in nh.appliances], ["A"])
 
     def test_mqtt_disabled(self) -> None:
@@ -311,7 +311,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         self.assertTrue(h.api.closed)
 
     def test_close_stops_mqtt_then_api(self) -> None:
-        # close() ferma il MQTT (no leak) e poi chiude l'api; _mqtt_client azzerato.
+        # close() stops the MQTT (no leak) and then closes the api; _mqtt_client cleared.
         data = [{"macAddress": "A", "applianceTypeName": "REF"}]
         h = _Harness(self, data)
         h.install()
@@ -325,7 +325,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         self.assertTrue(h.api.closed)
 
     def test_close_without_mqtt_no_stop(self) -> None:
-        # enable_mqtt=False: niente mqtt -> close() non ferma nessun client.
+        # enable_mqtt=False: no mqtt -> close() does not stop any client.
         h = _Harness(self, [])
         h.install()
         nh = self._nh_with_api(h, enable_mqtt=False)
@@ -348,16 +348,16 @@ class NativeSessionSetupTest(unittest.TestCase):
 
     def test_notify_noop_without_subscriber(self) -> None:
         nh = NativeHon("u@x", "p")
-        nh.notify()  # non deve sollevare
+        nh.notify()  # must not raise
 
     def test_satisfies_hon_session_protocol(self) -> None:
         nh = NativeHon("u@x", "p")
         self.assertIsInstance(nh, HonSession)
-        # i membri che il MQTTClient/integrazione leggono (via dir: la property
-        # `api` solleva se valutata prima di create(), che è il comportamento giusto)
+        # the members that the MQTTClient/integration read (via dir: the `api`
+        # property raises if evaluated before create(), which is the right behavior)
         for member in ("api", "appliances", "subscribe_updates", "notify", "close"):
             self.assertIn(member, dir(nh))
-        # appliances è leggibile subito (lista vuota), api no (non creata)
+        # appliances is readable right away (empty list), api is not (not created)
         self.assertEqual(nh.appliances, [])
 
 

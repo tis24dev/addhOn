@@ -1,10 +1,10 @@
-"""Differential test del 3° pezzo del transport: parse_token_fragment.
+"""Differential test of the transport's 3rd piece: parse_token_fragment.
 
-Oracolo = trascrizione VERBATIM di pyhon auth._parse_token_data (la mutazione
-self._auth diventa un dict locale; il metodo è su HonAuth, che tira dentro
-connection/handler/aiohttp, quindi non importabile a sé). Confrontiamo i tre
-token + il flag `complete` su molte redirect, incluse le quirk (unquote solo del
-refresh, token finale senza `&`, valori vuoti, urlencoding).
+Oracle = VERBATIM transcription of pyhon auth._parse_token_data (the self._auth
+mutation becomes a local dict; the method is on HonAuth, which pulls in
+connection/handler/aiohttp, so it is not importable on its own). We compare the
+three tokens + the `complete` flag over many redirects, including the quirks
+(unquote of the refresh only, final token without `&`, empty values, urlencoding).
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _load(path: Path, name: str):
 
 
 def _pyhon_parse(text):
-    """Oracolo: verbatim di pyhon auth._parse_token_data (mutazione -> dict)."""
+    """Oracle: verbatim of pyhon auth._parse_token_data (mutation -> dict)."""
     auth = {"access_token": "", "refresh_token": "", "id_token": ""}
     access_token = re.findall("access_token=(.*?)&", text)
     if access_token:
@@ -44,27 +44,27 @@ def _pyhon_parse(text):
 
 
 _FIXTURES = [
-    # Redirect realistica completa (refresh urlencoded: %2F -> /).
+    # Complete realistic redirect (refresh urlencoded: %2F -> /).
     "blah url='/x' oauth/done#access_token=AAA&refresh_token=r%2Ftok&id_token=CCC&state=z&",
-    # Ordine diverso, altri parametri intorno.
+    # Different order, other parameters around.
     "#token_type=Bearer&id_token=ID1&access_token=AC1&refresh_token=RF1&expires=3600&",
-    # Manca id_token -> incompleto.
+    # Missing id_token -> incomplete.
     "#access_token=AAA&refresh_token=BBB&foo=bar&",
-    # Manca refresh -> incompleto.
+    # Missing refresh -> incomplete.
     "#access_token=AAA&id_token=CCC&",
-    # Token finale SENZA '&' finale: id_token non catturato (quirk regex).
+    # Final token WITHOUT a trailing '&': id_token not captured (regex quirk).
     "#access_token=AAA&refresh_token=BBB&id_token=CCC",
-    # Valore vuoto ma pattern matchato (access_token=&): pyhOn lo conta presente.
+    # Empty value but pattern matched (access_token=&): pyhOn counts it as present.
     "#access_token=&refresh_token=BBB&id_token=CCC&",
-    # refresh con caratteri urlencoded che NON sono separatori (%26 = & letterale nel valore).
+    # refresh with urlencoded characters that are NOT separators (%26 = literal & in the value).
     "#access_token=A&refresh_token=a%26b%3Dc&id_token=I&",
-    # Doppia occorrenza: si usa la prima.
+    # Double occurrence: the first one is used.
     "#access_token=FIRST&x=1&access_token=SECOND&refresh_token=R&id_token=I&",
-    # Nessun token.
+    # No token.
     "completely unrelated text without tokens",
-    # Vuoto.
+    # Empty.
     "",
-    # Solo '&' sparsi.
+    # Only scattered '&'.
     "&&&access_token=ZZ&&&refresh_token=YY&&&id_token=XX&&&",
 ]
 
@@ -88,12 +88,12 @@ class ParseTokenFragmentTest(unittest.TestCase):
             "oauth/done#access_token=AAA&refresh_token=r%2Ftok&id_token=CCC&state=z&"
         )
         self.assertEqual(t.access_token, "AAA")
-        self.assertEqual(t.refresh_token, "r/tok")  # solo refresh decodificato
+        self.assertEqual(t.refresh_token, "r/tok")  # only refresh decoded
         self.assertEqual(t.id_token, "CCC")
         self.assertTrue(t.complete)
 
     def test_only_refresh_is_unquoted(self) -> None:
-        # %2F resta grezzo in access/id, decodificato solo nel refresh.
+        # %2F stays raw in access/id, decoded only in the refresh.
         t = self.parse("#access_token=a%2Fb&refresh_token=c%2Fd&id_token=e%2Ff&")
         self.assertEqual(t.access_token, "a%2Fb")
         self.assertEqual(t.refresh_token, "c/d")

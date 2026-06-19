@@ -1,9 +1,9 @@
-"""Caratterizzazione di str_to_float (client/helpers.py).
+"""Characterization of str_to_float (client/helpers.py).
 
-Era un differential test vs la str_to_float di pyhOn (_vendor/pyhon/helper.py); con
-`_vendor/` cancellato resta la caratterizzazione NATIVA: valori "pinned" che fissano il
-comportamento (incluso il quirk del troncamento int()), provato == pyhOn in migrazione.
-Caricata in isolamento (importlib, niente package __init__, niente aiohttp).
+It used to be a differential test vs pyhOn's str_to_float (_vendor/pyhon/helper.py);
+with `_vendor/` deleted, the NATIVE characterization remains: "pinned" values that
+fix the behavior (including the int() truncation quirk), proven == pyhOn during the
+migration. Loaded in isolation (importlib, no package __init__, no aiohttp).
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ _OUR_HELPER = _ROOT / "custom_components" / "addhon" / "client" / "helpers.py"
 def _load(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"Impossibile caricare il modulo da {path}")
+        raise ImportError(f"Cannot load the module from {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -33,12 +33,12 @@ class StrToFloatCharacterizationTest(unittest.TestCase):
         self.assertEqual(self.ours("0"), 0)
         self.assertEqual(self.ours("-16"), -16)
         self.assertEqual(self.ours("5.5"), 5.5)
-        self.assertEqual(self.ours("5,5"), 5.5)       # virgola decimale
+        self.assertEqual(self.ours("5,5"), 5.5)       # decimal comma
         self.assertEqual(self.ours("-16.5"), -16.5)
         self.assertEqual(self.ours("0.0"), 0.0)
         self.assertEqual(self.ours(5), 5)
-        self.assertEqual(self.ours(5.5), 5)           # QUIRK: float troncato da int()
-        self.assertEqual(self.ours("  3 "), 3)        # int() tollera gli spazi
+        self.assertEqual(self.ours(5.5), 5)           # QUIRK: float truncated by int()
+        self.assertEqual(self.ours("  3 "), 3)        # int() tolerates spaces
         with self.assertRaises(ValueError):
             self.ours("abc")
         with self.assertRaises(ValueError):

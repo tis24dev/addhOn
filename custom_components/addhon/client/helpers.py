@@ -1,29 +1,26 @@
-"""Utility numeriche del client hOn nativo.
+"""Numeric utilities of the native hOn client.
 
-Primo "mattone" portato da pyhOn col loop di migrazione (characterization +
-differential test vs `_vendor/pyhon/helper.py`). Per ora nessun consumatore di
-produzione: i chiamanti di `str_to_float` sono ancora interni a pyhOn (range.py/
-enum.py); questa funzione verrà usata quando porteremo il parser. Tenuta a
-comportamento IDENTICO a pyhOn (il differential test lo verifica), così quando il
-parser passerà a usarla non cambia nulla.
+`str_to_float` converts hOn values (usually strings) to numbers and is used by the
+parser engine (the range/enum parameters and the attributes layer). Its behavior is
+pinned by the golden test, so values parse exactly as the cloud expects.
 """
 from __future__ import annotations
 
 
 def str_to_float(value: str | float) -> float:
-    """Converte un valore hOn (di solito stringa) in numero.
+    """Convert an hOn value (usually a string) into a number.
 
-    Comportamento (identico a pyhOn, verificato col differential test):
-    - prova `int(value)` per primo: "5"->5, "-16"->-16, 5->5;
-    - in caso di ValueError ricade su `float`, normalizzando la virgola
-      decimale: "5.5"->5.5, "5,5"->5.5.
+    Behavior (pinned by the golden test):
+    - tries `int(value)` first: "5"->5, "-16"->-16, 5->5;
+    - on ValueError falls back to `float`, normalizing the decimal
+      comma: "5.5"->5.5, "5,5"->5.5.
 
-    QUIRK noto e VOLUTAMENTE preservato: `int()` viene tentato anche sui float,
-    e `int(5.5)` TRONCA a 5 senza errore (cattura solo ValueError, non gli altri).
-    Quindi va passata una STRINGA per preservare i decimali ("5.5"), mai un float
-    (5.5 -> 5). È la ragione per cui number.py invia i setpoint come stringa.
-    Inoltre input non numerici (es. "abc", None) propagano l'eccezione originale
-    (ValueError / TypeError): non vengono mascherati.
+    Known QUIRK, DELIBERATELY preserved: `int()` is attempted on floats too,
+    and `int(5.5)` TRUNCATES to 5 without error (it only catches ValueError, not the others).
+    So a STRING must be passed to preserve the decimals ("5.5"), never a float
+    (5.5 -> 5). That is the reason number.py sends the setpoints as a string.
+    Also non-numeric inputs (e.g. "abc", None) propagate the original exception
+    (ValueError / TypeError): they are not masked.
     """
     try:
         return int(value)

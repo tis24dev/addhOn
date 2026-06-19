@@ -81,10 +81,12 @@ def _install_homeassistant_stubs() -> None:
     class SensorEntityDescription:
         key: str
         name: str | None = None
+        translation_key: str | None = None
         icon: str | None = None
         native_unit_of_measurement: str | None = None
         device_class: object | None = None
         state_class: object | None = None
+        options: object | None = None
 
     class SensorEntity:
         pass
@@ -99,6 +101,7 @@ def _install_homeassistant_stubs() -> None:
         CO2 = "carbon_dioxide"
         BATTERY = "battery"
         POWER = "power"
+        ENUM = "enum"
 
     class SensorStateClass:
         MEASUREMENT = "measurement"
@@ -117,6 +120,7 @@ def _install_homeassistant_stubs() -> None:
     class BinarySensorEntityDescription:
         key: str
         name: str | None = None
+        translation_key: str | None = None
         icon: str | None = None
         device_class: object | None = None
 
@@ -292,26 +296,28 @@ class Tier2GatingTest(unittest.IsolatedAsyncioTestCase):
     async def test_oven_state_decodes_machine_mode(self) -> None:
         added = await _build_sensors("OV", {"machMode": "2"})
         state = next(e for e in added if e._attr_unique_id == "x-1_state")
-        self.assertEqual(state.native_value, "In esecuzione")
+        self.assertEqual(state.native_value, "running")
 
     async def test_dishwasher_salt_level_decodes(self) -> None:
         added = await _build_sensors("DW", {"saltStatus": "1", "rinseAidStatus": "0"})
         salt = next(e for e in added if e._attr_unique_id == "x-1_salt_level")
         rinse = next(e for e in added if e._attr_unique_id == "x-1_rinse_aid_level")
-        self.assertEqual(salt.native_value, "Basso")
-        self.assertEqual(rinse.native_value, "OK")
+        self.assertEqual(salt.native_value, "low")
+        self.assertEqual(rinse.native_value, "ok")
 
     async def test_vacuum_state_power_battery(self) -> None:
         added = await _build_sensors("RVC", {"prPhase": "6", "power": "1", "batteryStatus": "80"})
         by_id = {e._attr_unique_id: e for e in added}
-        self.assertEqual(by_id["x-1_state"].native_value, "In carica")
-        self.assertEqual(by_id["x-1_power_mode"].native_value, "Turbo")
+        self.assertEqual(by_id["x-1_state"].native_value, "charging")
+        self.assertEqual(by_id["x-1_power_mode"].native_value, "turbo")
         self.assertEqual(by_id["x-1_battery"].native_value, 80.0)
 
-    async def test_unknown_enum_value_falls_back(self) -> None:
+    async def test_unknown_enum_value_is_none(self) -> None:
+        # ENUM sensors must not emit out-of-options values: an unknown code -> None
+        # (the sensor reports "unknown" rather than a raw label).
         added = await _build_sensors("RVC", {"prPhase": "99"})
         state = next(e for e in added if e._attr_unique_id == "x-1_state")
-        self.assertEqual(state.native_value, "Stato 99")
+        self.assertIsNone(state.native_value)
 
 
 class Tier2BinaryGatingTest(unittest.IsolatedAsyncioTestCase):
@@ -340,7 +346,7 @@ class Tier2BinaryGatingTest(unittest.IsolatedAsyncioTestCase):
 
 class ConnectivityBinaryTest(unittest.IsolatedAsyncioTestCase):
     async def _conn(self, attributes):
-        added = await _build_binary("AC", attributes)  # AC: nessun set per-tipo
+        added = await _build_binary("AC", attributes)  # AC: no per-type set
         return next(e for e in added if e._attr_unique_id == "x-1_connectivity")
 
     async def test_created_for_type_without_pertype_set(self) -> None:
@@ -353,7 +359,7 @@ class ConnectivityBinaryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone((await self._conn({})).is_on)
 
     async def test_stays_available_when_device_disconnected(self) -> None:
-        # il sensore connettività deve restare DISPONIBILE per poter dire 'disconnesso'
+        # the connectivity sensor must stay AVAILABLE so it can report 'disconnected'
         conn = await self._conn({"available": False})
         self.assertTrue(conn.available)
         self.assertFalse(conn.is_on)

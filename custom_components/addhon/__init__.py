@@ -7,12 +7,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
 try:
-    # In Home Assistant reale questi simboli esistono sempre. L'import è
-    # tollerante solo per l'harness di test, che stubba homeassistant.core con
-    # il minimo indispensabile (sys.modules condiviso: il primo stub vince,
-    # quindi è più robusto degradare qui che estendere ogni stub).
+    # In real Home Assistant these symbols always exist. The import is tolerant
+    # only for the test harness, which stubs homeassistant.core with the bare
+    # minimum (shared sys.modules: the first stub wins, so it is more robust to
+    # degrade here than to extend every stub).
     from homeassistant.core import ServiceCall, callback
-except ImportError:  # pragma: no cover - solo sotto stub di test
+except ImportError:  # pragma: no cover - only under the test stub
     ServiceCall = object  # type: ignore[assignment,misc]
 
     def callback(func):  # type: ignore[no-redef]
@@ -43,15 +43,15 @@ _LOGGER = logging.getLogger(__name__)
 
 @callback
 def _async_register_services(hass: HomeAssistant) -> None:
-    """Registra (una sola volta) il service per il livello di log MQTT.
+    """Register (only once) the service for the MQTT log level.
 
-    Alla prima registrazione applica anche il silenziamento di default del
-    rumore MQTT realtime di pyhOn. Il service è globale al dominio, non
-    per-entry, quindi è idempotente: se già presente non fa nulla.
+    On the first registration it also applies the default silencing of the
+    realtime MQTT noise. The service is global to the domain, not per-entry, so it
+    is idempotent: if already present it does nothing.
 
-    voluptuous è importato qui (non a livello di modulo) così l'import di
-    __init__ non dipende da voluptuous: l'harness di test importa il package
-    senza fornirne sempre lo stub, mentre questa funzione gira solo in HA reale.
+    voluptuous is imported here (not at module level) so the import of __init__
+    does not depend on voluptuous: the test harness imports the package without
+    always providing its stub, while this function only runs in real HA.
     """
     mqtt_service_exists = hass.services.has_service(DOMAIN, SERVICE_SET_MQTT_LOG_LEVEL)
     log_service_exists = hass.services.has_service(DOMAIN, SERVICE_SET_LOG_LEVEL)
@@ -60,9 +60,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
     import voluptuous as vol
 
-    # Prima registrazione (avvio/riavvio HA): silenzia il rumore di default.
-    # Su un reload di una singola entry il service resta registrato, quindi un
-    # eventuale livello di debug impostato a runtime non viene risilenziato.
+    # First registration (HA start/restart): silence the noise by default.
+    # On a reload of a single entry the service stays registered, so a debug level
+    # possibly set at runtime is not re-silenced.
     if not mqtt_service_exists:
         silence_mqtt_noise()
 
@@ -70,14 +70,14 @@ def _async_register_services(hass: HomeAssistant) -> None:
         level_name = call.data[ATTR_LEVEL]
         apply_mqtt_log_level(MQTT_LOG_LEVELS[level_name])
         _LOGGER.info(
-            "Livello log MQTT realtime pyhOn impostato a %s", level_name.upper()
+            "realtime MQTT log level set to %s", level_name.upper()
         )
 
     async def _handle_set_log_level(call: ServiceCall) -> None:
         level_name = call.data[ATTR_LEVEL]
         apply_integration_log_level(MQTT_LOG_LEVELS[level_name])
         _LOGGER.info(
-            "Livello log diagnostico Haier hOn impostato a %s", level_name.upper()
+            "Haier hOn diagnostic log level set to %s", level_name.upper()
         )
 
     level_schema = vol.Schema(
@@ -103,31 +103,31 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
 @callback
 def _apply_debug_options(entry: ConfigEntry, *, reset_when_off: bool = True) -> None:
-    """Allinea i livelli di log ai due toggle persistiti in entry.options.
+    """Align the log levels to the two toggles persisted in entry.options.
 
-    enable_debug=True  -> logger dell'integrazione a DEBUG; False -> NOTSET
-                          (tornano a ereditare il livello configurato in HA).
-    enable_mqtt_debug=True -> logger MQTT realtime a DEBUG; False -> WARNING
-                          (silenziato).
+    enable_debug=True  -> integration logger to DEBUG; False -> NOTSET
+                          (they go back to inheriting the level configured in HA).
+    enable_mqtt_debug=True -> realtime MQTT logger to DEBUG; False -> WARNING
+                          (silenced).
 
-    Il livello MQTT si applica DOPO quello dell'integrazione, così il livello
-    esplicito del figlio MQTT vince sulla cascata del padre: attivare il DEBUG
-    dell'integrazione NON riaccende il rumore realtime se il toggle MQTT è off.
-    NB i logger sono globali al processo (vedi OptionsFlowHandler): con piu'
-    entry (raro, multi-account) i livelli sono condivisi e cambiare le opzioni di
-    una entry li ri-applica in base a QUELLA entry, potendo azzerare il debug
-    attivo di un'altra. L'installazione tipica e' a singolo account.
+    The MQTT level is applied AFTER the integration's one, so the explicit level
+    of the MQTT child wins over the parent's cascade: enabling the integration's
+    DEBUG does NOT turn the realtime noise back on if the MQTT toggle is off. NB
+    the loggers are global to the process (see OptionsFlowHandler): with more than
+    one entry (rare, multi-account) the levels are shared and changing the options
+    of one entry re-applies them based on THAT entry, possibly resetting another
+    one's active debug. The typical installation has a single account.
 
-    reset_when_off=True (default, usato dal listener delle opzioni): un toggle
-    OFF AZZERA il livello (NOTSET / WARNING), così disattivarlo dalla UI ha
-    effetto immediato e cancella anche un eventuale override manuale fatto col
-    service set_log_level. reset_when_off=False (usato in async_setup_entry): un
-    toggle OFF NON tocca i logger, così un DEBUG dell'integrazione impostato a
-    runtime coi service sopravvive ai re-setup/retry (es. login instabile) invece
-    di essere ri-azzerato a ogni tentativo; il silenziamento MQTT di default alla
-    prima registrazione resta comunque garantito da _async_register_services (che
-    pero', su un reload dell'unica entry che rimuove e ri-registra i service,
-    ri-silenzia anche un eventuale livello MQTT alzato a runtime).
+    reset_when_off=True (default, used by the options listener): an OFF toggle
+    RESETS the level (NOTSET / WARNING), so disabling it from the UI takes effect
+    immediately and also clears any manual override done with the set_log_level
+    service. reset_when_off=False (used in async_setup_entry): an OFF toggle does
+    NOT touch the loggers, so an integration DEBUG set at runtime via the services
+    survives re-setups/retries (e.g. an unstable login) instead of being reset on
+    every attempt; the default MQTT silencing on the first registration is still
+    guaranteed by _async_register_services (which, however, on a reload of the only
+    entry that removes and re-registers the services, also re-silences any MQTT
+    level raised at runtime).
     """
     if entry.options.get(CONF_ENABLE_DEBUG, False):
         apply_integration_log_level(logging.DEBUG)
@@ -140,13 +140,13 @@ def _apply_debug_options(entry: ConfigEntry, *, reset_when_off: bool = True) -> 
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Ri-applica a caldo i livelli di log quando i toggle cambiano (no reload).
+    """Re-apply the log levels on the fly when the toggles change (no reload).
 
-    Un reload butterebbe giù auth e canale MQTT solo per cambiare un livello di
-    log; qui ri-applichiamo i livelli al volo, come fanno i service esistenti.
+    A reload would tear down auth and the MQTT channel just to change a log level;
+    here we re-apply the levels on the fly, as the existing services do.
     """
     _LOGGER.debug(
-        "Options debug: opzioni aggiornate entry=%s enable_debug=%s enable_mqtt_debug=%s",
+        "Options debug: options updated entry=%s enable_debug=%s enable_mqtt_debug=%s",
         entry.entry_id,
         entry.options.get(CONF_ENABLE_DEBUG, False),
         entry.options.get(CONF_ENABLE_MQTT_DEBUG, False),
@@ -173,29 +173,30 @@ def _redact_title(title: str | None) -> str | None:
 
 
 async def _async_close_client(client) -> None:
-    """Chiude HonClient senza mascherare l'errore originale di setup/unload."""
+    """Close HonClient without masking the original setup/unload error."""
     try:
         await client.async_close()
     except Exception as err:
-        _LOGGER.warning("Errore chiusura HonClient: %s", err)
+        _LOGGER.warning("Error closing HonClient: %s", err)
 
 
-# Sensori consumo "washer-only" che venivano creati per errore anche sulle
-# asciugatrici (TD): un'asciugatrice non usa acqua e non espone questi contatori,
-# quindi restavano entità sempre "sconosciute". Dopo il refactor per-tipo non
-# vengono più create: qui ripuliamo quelle già registrate, SOLO sui device TD.
+# "Washer-only" consumption sensors that were mistakenly created on the tumble
+# dryers (TD) too: a tumble dryer does not use water and does not expose these
+# counters, so they stayed forever "unknown" entities. After the per-type refactor
+# they are no longer created: here we clean up the ones already registered, ONLY on
+# TD devices.
 _TD_REMOVED_SUFFIXES = ("_total_water", "_total_energy", "_current_energy", "_current_water")
 
 
 def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Rimuove dal registry le entità legacy non più fornite dall'integrazione.
+    """Remove from the registry the legacy entities no longer provided by the integration.
 
-    - Switch "Alimentazione" (unique_id '<id>_power'), rimosso nel refactor 2.3/2.4.
-    - Sensori consumo washer-only sulle asciugatrici (TD): '<td_id>_total_water',
-      '_total_energy', '_current_energy', '_current_water'. Rimossi SOLO sui
-      device di tipo TD (cross-check col coordinator), mai su WM/WD/AC.
+    - "Power" switch (unique_id '<id>_power'), removed in the 2.3/2.4 refactor.
+    - Washer-only consumption sensors on the tumble dryers (TD): '<td_id>_total_water',
+      '_total_energy', '_current_energy', '_current_water'. Removed ONLY on devices
+      of type TD (cross-checked with the coordinator), never on WM/WD/AC.
 
-    Senza questa pulizia resterebbero entità orfane 'unavailable' col badge '?'.
+    Without this cleanup there would be orphan 'unavailable' entities with the '?' badge.
     """
     from homeassistant.helpers import entity_registry as er
 
@@ -222,15 +223,15 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
         if unique_id.endswith("_power"):
             registry.async_remove(reg_entry.entity_id)
             removed += 1
-            _LOGGER.info("Rimossa entità legacy 'Alimentazione': %s", reg_entry.entity_id)
+            _LOGGER.info("Removed legacy power entity: %s", reg_entry.entity_id)
         elif unique_id in td_orphans:
             registry.async_remove(reg_entry.entity_id)
             removed += 1
             _LOGGER.info(
-                "Rimossa entità consumo non valida per asciugatrice: %s", reg_entry.entity_id
+                "Removed invalid consumption entity for tumble dryer: %s", reg_entry.entity_id
             )
     _LOGGER.debug(
-        "Setup debug: pulizia legacy completata per entry=%s, controllate=%d, rimosse=%d",
+        "Setup debug: legacy cleanup completed for entry=%s, checked=%d, removed=%d",
         entry.entry_id,
         checked,
         removed,
@@ -238,31 +239,31 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Configura l'integrazione Haier hOn partendo da un Config Entry."""
+    """Set up the Haier hOn integration from a Config Entry."""
     from .hon_client import HonClient, _requires_reauth
 
-    # Silenzia di default il rumore dei tentativi MQTT realtime di pyhOn e
-    # registra il service di debug. Fatto PRIMA del setup di pyhOn così il
-    # logger è già a WARNING quando il client MQTT inizia a (ri)connettersi.
+    # Silence by default the noise of the realtime MQTT attempts and register
+    # the debug service. Done BEFORE the client setup so the logger is already at
+    # WARNING when the MQTT client starts to (re)connect.
     _async_register_services(hass)
 
-    # Applica SUBITO i toggle di debug persistiti, ma DOPO _async_register_services
-    # (che alla prima registrazione silenzia il rumore MQTT di default) così il
-    # toggle MQTT persistito, se attivo, vince su quel silenziamento. Applicarli
-    # qui e non a fine setup fa sì che il livello DEBUG copra anche il percorso di
-    # setup (login, discovery, primo refresh): è proprio ciò che si vuole tracciare
-    # quando si attiva il debug per problemi di discovery. reset_when_off=False: un
-    # toggle OFF non deve ri-azzerare un DEBUG impostato a runtime coi service, che
-    # deve sopravvivere ai retry di un setup che fallisce (il silenziamento MQTT di
-    # default resta garantito da _async_register_services).
+    # Apply the persisted debug toggles RIGHT AWAY, but AFTER _async_register_services
+    # (which on the first registration silences the MQTT noise by default) so the
+    # persisted MQTT toggle, if active, wins over that silencing. Applying them here
+    # and not at the end of setup makes the DEBUG level cover the setup path too
+    # (login, discovery, first refresh): that is exactly what one wants to trace when
+    # enabling debug for discovery problems. reset_when_off=False: an OFF toggle must
+    # not reset a DEBUG set at runtime via the services, which must survive the
+    # retries of a failing setup (the default MQTT silencing stays guaranteed by
+    # _async_register_services).
     _apply_debug_options(entry, reset_when_off=False)
 
-    # FIX: la chiave salvata dal config_flow è "email", non "username"
+    # FIX: the key saved by the config_flow is "email", not "username"
     email = entry.data.get("email")
     password = entry.data.get("password")
 
     _LOGGER.debug(
-        "Setup debug: avvio setup entry=%s title=%s email=%s platforms=%s scan_interval=%ss",
+        "Setup debug: starting setup entry=%s title=%s email=%s platforms=%s scan_interval=%ss",
         entry.entry_id,
         _redact_title(getattr(entry, "title", None)),
         _redact_email(email),
@@ -272,32 +273,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not email:
         _LOGGER.error(
-            "Credenziali mancanti nel config entry (chiave 'email' assente). "
-            "Rimuovi e riconfigura l'integrazione."
+            "Missing credentials in the config entry ('email' key absent). "
+            "Remove and reconfigure the integration."
         )
         return False
 
     hon_client = HonClient(email=email, password=password)
 
-    # Setup iniziale di pyhOn in executor (non blocca l'event loop di HA)
+    # Initial client setup in executor (does not block HA's event loop)
     try:
-        _LOGGER.debug("Setup debug: eseguo HonClient.setup_sync in executor")
+        _LOGGER.debug("Setup debug: running HonClient.setup_sync in executor")
         await hass.async_add_executor_job(hon_client.setup_sync)
-        _LOGGER.debug("Setup debug: HonClient.setup_sync completato")
+        _LOGGER.debug("Setup debug: HonClient.setup_sync completed")
     except asyncio.CancelledError:
         await _async_close_client(hon_client)
         raise
     except Exception as err:
-        _LOGGER.error("Impossibile connettersi a hOn: %s", err)
+        _LOGGER.error("Unable to connect to hOn: %s", err)
         await _async_close_client(hon_client)
         if _requires_reauth(err):
-            raise ConfigEntryAuthFailed(f"Credenziali hOn non valide: {err}") from err
-        raise ConfigEntryNotReady(f"Impossibile connettersi a hOn: {err}") from err
+            raise ConfigEntryAuthFailed(f"Invalid hOn credentials: {err}") from err
+        raise ConfigEntryNotReady(f"Unable to connect to hOn: {err}") from err
 
     async def async_update_data() -> dict:
-        """Recupera i dati aggiornati da tutti i dispositivi hOn."""
+        """Fetch the updated data from all the hOn devices."""
         try:
-            _LOGGER.debug("Coordinator debug: inizio aggiornamento dati hOn")
+            _LOGGER.debug("Coordinator debug: starting hOn data update")
             data = await hon_client.async_get_appliances_data()
             summary = [
                 {
@@ -315,16 +316,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 for appliance_id, appliance_data in data.items()
             ]
             _LOGGER.debug(
-                "Coordinator debug: aggiornamento dati hOn completato, dispositivi=%d summary=%s",
+                "Coordinator debug: hOn data update completed, devices=%d summary=%s",
                 len(data),
                 summary,
             )
             return data
         except Exception as err:
-            _LOGGER.debug("Coordinator debug: aggiornamento dati hOn fallito: %s", err, exc_info=True)
+            _LOGGER.debug("Coordinator debug: hOn data update failed: %s", err, exc_info=True)
             if _requires_reauth(err):
-                raise ConfigEntryAuthFailed(f"Credenziali hOn non valide: {err}") from err
-            raise UpdateFailed(f"Errore aggiornamento hOn: {err}") from err
+                raise ConfigEntryAuthFailed(f"Invalid hOn credentials: {err}") from err
+            raise UpdateFailed(f"hOn update error: {err}") from err
 
     stored = False
     try:
@@ -337,35 +338,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             update_interval=timedelta(seconds=SCAN_INTERVAL),
         )
 
-        # Primo fetch
-        _LOGGER.debug("Setup debug: primo refresh coordinator in avvio")
+        # First fetch
+        _LOGGER.debug("Setup debug: first coordinator refresh at startup")
         await coordinator.async_config_entry_first_refresh()
         _LOGGER.debug(
-            "Setup debug: primo refresh completato, last_update_success=%s dispositivi=%d",
+            "Setup debug: first refresh completed, last_update_success=%s devices=%d",
             getattr(coordinator, "last_update_success", None),
             len(coordinator.data) if isinstance(coordinator.data, dict) else 0,
         )
         coordinator.hon_client = hon_client
 
-        # FIX: salva sia il coordinator che il client nella struttura attesa da tutte le piattaforme
+        # FIX: store both the coordinator and the client in the structure expected by all platforms
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN][entry.entry_id] = {
             "coordinator": coordinator,
             "client": hon_client,
         }
         stored = True
-        _LOGGER.debug("Setup debug: coordinator e client salvati in hass.data per entry=%s", entry.entry_id)
+        _LOGGER.debug("Setup debug: coordinator and client stored in hass.data for entry=%s", entry.entry_id)
 
-        # Pulizia entità legacy (es. switch "Alimentazione" rimosso): non deve
-        # mai bloccare il setup, quindi assorbiamo eventuali errori del registry.
+        # Legacy entity cleanup (e.g. the removed "Power" switch): it must never
+        # block the setup, so we absorb any registry errors.
         try:
             _remove_legacy_entities(hass, entry)
         except Exception as err:
-            _LOGGER.debug("Pulizia entità legacy non riuscita: %s", err)
+            _LOGGER.debug("Legacy entity cleanup failed: %s", err)
 
-        _LOGGER.debug("Setup debug: forward piattaforme %s", PLATFORMS)
+        _LOGGER.debug("Setup debug: forwarding platforms %s", PLATFORMS)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-        _LOGGER.debug("Setup debug: forward piattaforme completato")
+        _LOGGER.debug("Setup debug: platform forwarding completed")
     except asyncio.CancelledError:
         if stored:
             unload_platforms = getattr(hass.config_entries, "async_unload_platforms", None)
@@ -373,7 +374,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 try:
                     await unload_platforms(entry, PLATFORMS)
                 except Exception as err:
-                    _LOGGER.warning("Errore unload piattaforme dopo setup annullato: %s", err)
+                    _LOGGER.warning("Error unloading platforms after cancelled setup: %s", err)
             hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
         await _async_close_client(hon_client)
         raise
@@ -384,36 +385,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 try:
                     await unload_platforms(entry, PLATFORMS)
                 except Exception as err:
-                    _LOGGER.warning("Errore unload piattaforme dopo setup fallito: %s", err)
+                    _LOGGER.warning("Error unloading platforms after failed setup: %s", err)
             hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
         await _async_close_client(hon_client)
         raise
 
-    # Setup riuscito: registra un listener che ri-applica a caldo i toggle di
-    # debug quando cambiano (async_on_unload rimuove il listener allo scarico
-    # dell'entry, senza un reload). I livelli sono già stati applicati a inizio
-    # setup; qui resta solo da agganciare l'aggiornamento a caldo.
+    # Setup succeeded: register a listener that re-applies the debug toggles on the
+    # fly when they change (async_on_unload removes the listener when the entry is
+    # unloaded, without a reload). The levels have already been applied at the start
+    # of setup; here it only remains to hook up the on-the-fly update.
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Scarica il config entry quando l'integrazione viene disattivata."""
-    _LOGGER.debug("Unload debug: scarico entry=%s platforms=%s", entry.entry_id, PLATFORMS)
+    """Unload the config entry when the integration is disabled."""
+    _LOGGER.debug("Unload debug: unloading entry=%s platforms=%s", entry.entry_id, PLATFORMS)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    _LOGGER.debug("Unload debug: async_unload_platforms risultato=%s", unload_ok)
+    _LOGGER.debug("Unload debug: async_unload_platforms result=%s", unload_ok)
     if unload_ok:
         entry_data = hass.data.get(DOMAIN, {}).pop(entry.entry_id, {})
         client = entry_data.get("client")
         if client is not None:
-            _LOGGER.debug("Unload debug: chiudo HonClient per entry=%s", entry.entry_id)
+            _LOGGER.debug("Unload debug: closing HonClient for entry=%s", entry.entry_id)
             await _async_close_client(client)
         else:
-            _LOGGER.debug("Unload debug: nessun HonClient da chiudere per entry=%s", entry.entry_id)
-        # Tolta l'ultima entry: rimuovi i service di debug globali.
+            _LOGGER.debug("Unload debug: no HonClient to close for entry=%s", entry.entry_id)
+        # Last entry removed: remove the global debug services.
         if not hass.data.get(DOMAIN):
             for service in (SERVICE_SET_MQTT_LOG_LEVEL, SERVICE_SET_LOG_LEVEL):
                 if hass.services.has_service(DOMAIN, service):
                     hass.services.async_remove(DOMAIN, service)
-                    _LOGGER.debug("Unload debug: rimosso service %s", service)
+                    _LOGGER.debug("Unload debug: removed service %s", service)
     return unload_ok

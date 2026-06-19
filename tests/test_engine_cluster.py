@@ -1,10 +1,11 @@
-"""Golden + behavioral test del CLUSTER motore nativo (commands/command_loader/rules/
-program). Era differential vs pyhOn; con `_vendor/` cancellato è golden (output nativo
-provato == pyhOn al checkpoint 5a) + pin comportamentali.
+"""Golden + behavioral test of the native engine CLUSTER (commands/command_loader/
+rules/program). It used to be differential vs pyhOn; with `_vendor/` deleted it is
+golden (native output proven == pyhOn at checkpoint 5a) + behavioral pins.
 
-Copre: load_commands + sync sul dump reale; send-path (prStr/programRules); dataset
-sintetico ricco (favourites, multi-programma+ids, recover, zone>0, send_specific,
-selezione programma); rules su fixture sintetiche (incl. .triggers); Protocol.
+Covers: load_commands + sync on the real dump; send-path (prStr/programRules); a
+rich synthetic dataset (favourites, multi-program+ids, recover, zone>0,
+send_specific, program selection); rules on synthetic fixtures (incl. .triggers);
+Protocol.
 """
 from __future__ import annotations
 
@@ -20,12 +21,12 @@ from _golden import REPO, frozen, install_stubs, normalize  # noqa: E402
 install_stubs()
 _DUMP = REPO / "tests" / "fixtures" / "ref_10136"
 
-from custom_components.addhon.client import pyhon_adapter  # noqa: E402
+from custom_components.addhon.client import factory  # noqa: E402
 from custom_components.addhon.client.engine.commands import HonCommand as NaCommand  # noqa: E402
 from custom_components.addhon.client.engine.rules import HonRuleSet  # noqa: E402
 from custom_components.addhon.client import interfaces  # noqa: E402
 
-NaAppliance = pyhon_adapter._native_engine_appliance_cls()
+NaAppliance = factory._native_engine_appliance_cls()
 
 
 def _load(name: str):
@@ -128,7 +129,7 @@ def _snap_appliance(a) -> dict:
             "command_parameters": a.command_parameters}
 
 
-# --- dataset sintetico ricco ---
+# --- rich synthetic dataset ---
 def _prog(pr_code: str) -> dict:
     return {"description": "d", "protocolType": "MQTT", "parameters": {
         "prCode": {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": pr_code},
@@ -179,7 +180,7 @@ def _build(cls, api):
 
 def _native_snapshot() -> dict:
     out: dict = {}
-    # end-to-end sul dump reale + sync
+    # end-to-end on the real dump + sync
     app = _build(NaAppliance, FakeApi())
     out["dump_load"] = _snap_appliance(app)
     app2 = _build(NaAppliance, FakeApi())
@@ -192,7 +193,7 @@ def _native_snapshot() -> dict:
     _run(app3.load_attributes())
     _run(app3.commands["settings"].send())
     out["send_settings"] = sa.sent
-    # dataset ricco
+    # rich dataset
     app4 = _build(NaAppliance, DictApi(_RICH_COMMANDS))
     out["rich_load"] = _snap_appliance(app4)
     out["rich_ids"] = dict(app4.commands["startProgram"].parameters["program"].ids)
@@ -211,11 +212,11 @@ def _native_snapshot() -> dict:
         ap = _build(NaAppliance, sapi)
         _run(fn(ap.commands["startProgram"]))
         out[label] = sapi.sent
-    # selezione programma a runtime
+    # runtime program selection
     ap = _build(NaAppliance, DictApi(_RICH_COMMANDS))
     ap.commands["startProgram"].parameters["program"].value = "super_freeze"
     out["program_selection_category"] = ap.commands["startProgram"].category
-    # ids ordinati + prStr upper
+    # sorted ids + prStr upper
     aio_ = _build(NaAppliance, DictApi(_IDS_ORDER_COMMANDS))
     out["ids_order"] = list(aio_.commands["startProgram"].parameters["program"].ids.items())
     smix = DictApi(_MIXEDCASE_COMMANDS)
@@ -227,7 +228,7 @@ def _native_snapshot() -> dict:
     return out
 
 
-# --- rules: fixture sintetiche ---
+# --- rules: synthetic fixtures ---
 class FakeAppliance:
     def __init__(self) -> None:
         self.zone = 0
@@ -248,8 +249,8 @@ def _rule(rule_dict, kind="fixedValue"):
     return {"category": "rule", kind: rule_dict}
 
 
-# Struttura REALE dell'AC (anonimizzata, da apk/dump/ac_live IOT_COOL): condizione-extra
-# annidata ecoMode + machMode. Valida il fix di `_extra_rules_matches` sui dati dell'app.
+# REAL AC structure (anonymized, from apk/dump/ac_live IOT_COOL): nested extra-condition
+# ecoMode + machMode. Validates the `_extra_rules_matches` fix against the app data.
 _AC_IOT_COOL = {
     "parameters": {
         "machMode": {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": "1"},
@@ -277,7 +278,7 @@ _AC_IOT_COOL = {
 
 
 _RULES = {
-    # AC reale: ecoMode=1 (con machMode fisso a 1) DEVE vincolare tempSel/windDir/windSpeed
+    # real AC: ecoMode=1 (with machMode fixed at 1) MUST constrain tempSel/windDir/windSpeed
     "ac_eco_nested": (_AC_IOT_COOL, [("ecoMode", "1")]),
     "fixed_in_range": ({"parameters": {"mode": _enum("cold", ["cold", "hot"]), "temp": _range()},
                         "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "30"}}}})}},
@@ -360,25 +361,25 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertIn("MyFav", _native_snapshot()["rich_favourites_categories"])
 
     def test_favourites_malformed_do_not_crash(self) -> None:
-        # Payload favourites stale/malformati non devono fermare il loader.
+        # Stale/malformed favourites payloads must not stop the loader.
         bad_favs = [
-            {"command": {"commandName": "doesNotExist", "programName": "X"}},  # comando rimosso -> KeyError
-            {"favouriteName": "NoCmd"},  # niente chiave command
-            {"favouriteName": "BadCmd", "command": "not-a-dict"},  # command non-dict
-            {"favouriteName": "BadData",  # data non-dict -> .items() AttributeError
+            {"command": {"commandName": "doesNotExist", "programName": "X"}},  # removed command -> KeyError
+            {"favouriteName": "NoCmd"},  # no command key
+            {"favouriteName": "BadCmd", "command": "not-a-dict"},  # non-dict command
+            {"favouriteName": "BadData",  # non-dict data -> .items() AttributeError
              "command": {"commandName": "startProgram", "programName": "PROGRAMS.REF.SUPER_COOL"},
              "parameters": ["not", "a", "dict"]},
         ]
         app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=bad_favs))
         cats = app.commands["startProgram"].categories
-        self.assertIn("BadData", cats)  # il valido-ma-con-data-sporco viene aggiunto
+        self.assertIn("BadData", cats)  # the valid-but-with-dirty-data one is added
         self.assertNotIn("doesNotExist", cats)
 
     def test_nested_rule_extras_not_cross_contaminated(self) -> None:
-        # ORACOLO: due rami dello stesso trigger (ecoMode 1 e 2), ognuno con una
-        # condizione annidata su machMode, devono restare indipendenti. Bug: `extra`
-        # era mutato e condiviso tra iterazioni -> la rule del ramo ecoMode=1 veniva
-        # corrotta a ecoMode=2, quindi impostando ecoMode=1 non scattava piu'.
+        # ORACLE: two branches of the same trigger (ecoMode 1 and 2), each with a
+        # nested condition on machMode, must stay independent. Bug: `extra` was
+        # mutated and shared across iterations -> the ecoMode=1 branch rule got
+        # corrupted to ecoMode=2, so setting ecoMode=1 no longer fired.
         attrs = {
             "parameters": {
                 "ecoMode": _range(default="0", lo="0", hi="2", inc="1"),
@@ -392,12 +393,12 @@ class ClusterBehaviorTest(unittest.TestCase):
         }
         c1 = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())
         c1.parameters["ecoMode"].value = "1"
-        self.assertEqual(c1.parameters["temp"].value, 25)  # bug: restava 20
+        self.assertEqual(c1.parameters["temp"].value, 25)  # bug: stayed 20
         c2 = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())
         c2.parameters["ecoMode"].value = "2"
         self.assertEqual(c2.parameters["temp"].value, 28)
-        # White-box: i due rule machMode-trigger devono avere extras DISTINTI e con il
-        # valore giusto del proprio ramo (pinna la copia per ramo, non solo l'end-to-end).
+        # White-box: the two machMode-trigger rules must have DISTINCT extras, each with
+        # the right value for its own branch (pins the per-branch copy, not just end-to-end).
         class _Cmd:
             appliance = FakeAppliance()
         rs = HonRuleSet(_Cmd(), {"temp": {"ecoMode": {
@@ -409,10 +410,10 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertIsNot(mach_rules[0].extras, mach_rules[1].extras)
 
     def test_range_rule_preserves_decimal(self) -> None:
-        # ORACOLO: una rule fixedValue decimale ("22.5") su un range con step decimale
-        # deve impostare 22.5, non 22. Bug: _apply_fixed passava float(value) al setter,
-        # che fa str_to_float(22.5)=int(22.5)=22 -> tronca silenziosamente (con step 0.5
-        # il 22 troncato passa pure il check off-step, quindi nessun errore).
+        # ORACLE: a decimal fixedValue rule ("22.5") on a range with a decimal step
+        # must set 22.5, not 22. Bug: _apply_fixed passed float(value) to the setter,
+        # which does str_to_float(22.5)=int(22.5)=22 -> silently truncates (with step 0.5
+        # the truncated 22 also passes the off-step check, so no error).
         attrs = {
             "parameters": {
                 "mode": _enum("cold", ["cold", "hot"]),
@@ -425,9 +426,9 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(c.parameters["temp"].value, 22.5)
 
     def test_ac_eco_nested_rule_fires(self) -> None:
-        # struttura REALE dell'AC (apk/dump/ac_live): ecoMode=1 con machMode fisso=1
-        # deve vincolare tempSel a 26 e le wind-direction (condizione-extra annidata).
-        # Pin del fix `_extra_rules_matches` validato live: pyhOn lasciava tempSel a 22.
+        # REAL AC structure (apk/dump/ac_live): ecoMode=1 with machMode fixed=1
+        # must constrain tempSel to 26 and the wind-direction (nested extra-condition).
+        # Pin of the `_extra_rules_matches` fix validated live: pyhOn left tempSel at 22.
         c = NaCommand("c", json.loads(json.dumps(_AC_IOT_COOL)), FakeAppliance(),
                       category_name="PROGRAMS.AC.IOT_COOL")
         self.assertEqual(c.parameters["tempSel"].value, 22)
@@ -438,8 +439,8 @@ class ClusterBehaviorTest(unittest.TestCase):
 
 
 class NativeEnumEdgeBehaviorTest(unittest.TestCase):
-    """Pin del fix BABYCARE che il cluster espone su favourites/recover/rule-default:
-    il nativo accetta un enum ri-castato e ne tiene il grezzo in intern_value."""
+    """Pin of the BABYCARE fix that the cluster exposes on favourites/recover/rule-default:
+    the native side accepts a re-cased enum and keeps the raw value in intern_value."""
 
     def test_cased_enum_value_accepted(self) -> None:
         from custom_components.addhon.client.engine.parameter.enum import HonParameterEnum as NaEnum
@@ -451,8 +452,8 @@ class NativeEnumEdgeBehaviorTest(unittest.TestCase):
         self.assertEqual(na.intern_value, "DASHBOARD")
 
 
-# Rule `$installationType` REALE (AC IOT_SELF_CLEAN, anonimizzata): config statica del
-# device. Validata sull'AC live (unitConfiguration='1to1' -> inerte) + modello app.
+# REAL `$installationType` rule (AC IOT_SELF_CLEAN, anonymized): static device config.
+# Validated on the live AC (unitConfiguration='1to1' -> inert) + app model.
 _AC_SELF_CLEAN = {
     "description": "d", "protocolType": "MQTT",
     "ancillaryParameters": {
@@ -478,26 +479,26 @@ class _ConfigApp:
 
 
 class ConfigRuleTest(unittest.TestCase):
-    """Rules `$installationType`: config statica del device, modello app risolto contro
-    `appliance.info['unitConfiguration']` (mappa app $installationType->unitConfiguration).
-    AC reale = 1to1 -> nessun ramo -> inerte (corretto); 1toN -> la rule scatta."""
+    """`$installationType` rules: static device config, app model resolved against
+    `appliance.info['unitConfiguration']` (app maps $installationType->unitConfiguration).
+    Real AC = 1to1 -> no branch -> inert (correct); 1toN -> the rule fires."""
 
     def _build(self, unit_config):
         return NaCommand("c", json.loads(json.dumps(_AC_SELF_CLEAN)), _ConfigApp(unit_config),
                          category_name="PROGRAMS.AC.IOT_SELF_CLEAN")
 
     def test_1to1_inert(self) -> None:
-        c = self._build("1to1")  # device reale: solo ramo 1toN -> niente match -> default
+        c = self._build("1to1")  # real device: only the 1toN branch -> no match -> default
         self.assertEqual(c.parameters["remoteActionable"].value, 1)
         self.assertEqual(c.parameters["remoteVisible"].value, 1)
 
     def test_1toN_fires(self) -> None:
-        c = self._build("1toN")  # multi-split: la rule scatta
+        c = self._build("1toN")  # multi-split: the rule fires
         self.assertEqual(c.parameters["remoteActionable"].value, 0)
         self.assertEqual(c.parameters["remoteVisible"].value, 0)
 
     def test_missing_unitconfig_inert(self) -> None:
-        c = self._build(None)  # campo assente -> non scatta (fallback come l'app)
+        c = self._build(None)  # field absent -> does not fire (fallback like the app)
         self.assertEqual(c.parameters["remoteActionable"].value, 1)
 
 
@@ -532,10 +533,10 @@ class _RuleApp:
 
 
 class RollbackAfterRuleCascadeTest(unittest.TestCase):
-    """Se un parametro inviato e' un trigger di rule, l'assegnazione restringe i
-    `.values` di un parametro sibling (cascade). Un send() fallito DEVE riportare
-    lo stato esatto del comando (value E values), non solo i value via setter (che
-    ri-scatenerebbe le rule e lascerebbe values ristretti -> stato corrotto)."""
+    """If a sent parameter is a rule trigger, the assignment narrows the `.values`
+    of a sibling parameter (cascade). A failed send() MUST restore the exact command
+    state (value AND values), not just the values via the setter (which would
+    re-trigger the rules and leave values narrowed -> corrupted state)."""
 
     def test_send_failure_restores_full_param_state(self) -> None:
         from custom_components.addhon.hon_commands import async_send_command
@@ -554,8 +555,8 @@ class RollbackAfterRuleCascadeTest(unittest.TestCase):
             asyncio.run(async_send_command(_HassStub(), _ClientStub(), app, "settings",
                                            {"ecoMode": "1"}))
 
-        # ecoMode=1 aveva ristretto windDirectionHorizontal a ["4"]; dopo il rollback
-        # value E values devono tornare quelli iniziali.
+        # ecoMode=1 had narrowed windDirectionHorizontal to ["4"]; after the rollback
+        # value AND values must go back to the initial ones.
         self.assertEqual(eco.value, eco_before)
         self.assertEqual(wdh.value, wdh_value_before)
         self.assertEqual(list(wdh.values), wdh_values_before)

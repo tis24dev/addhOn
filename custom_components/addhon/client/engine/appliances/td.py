@@ -1,10 +1,10 @@
-"""TD (asciugatrice). Riscrittura di `_vendor/pyhon/appliances/td.py`.
+"""TD (tumble dryer) per-type appliance logic.
 
-`active`/zeroing-offline a parità con pyhOn (funzionavano). `pause` FIX: per valore
-(pyhOn `machMode == "3"` = sempre False; campo non consumato, fix inerte ma corretto).
-`settings`: nasconde `startProgram.dryLevel` quando è un fixed "non selezionato".
-MIGLIORIA app (per-type-derivations.md #4): l'app nasconde per '11' E '0'/vuoto
-(pyhOn solo '11'); il nostro fixed `value` non è mai "" (getter -> "0"), quindi {"0","11"}.
+`active` is derived from `activity`. `pause`: derived by value (machMode == 3); the
+derived attribute is not currently consumed by an entity.
+`settings`: hides `startProgram.dryLevel` when it is an "unselected" fixed value.
+The app hides it for '11' AND '0'/empty (per-type-derivations.md #4); our fixed
+`value` is never "" (getter -> "0"), hence {"0","11"}.
 """
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ class Appliance(ApplianceExtra):
     def attributes(self, data: dict[str, Any]) -> dict[str, Any]:
         data = super().attributes(data)
         params = data.get("parameters", {})
-        # niente zeroing offline: la disponibilità è gestita via `available`
-        # (entità HA -> unavailable se disconnesso), come fa l'app (tiene gli ultimi
-        # valori e segnala la connettività). Vedi base_entity.available.
+        # no offline zeroing: availability is handled via `available`
+        # (HA entity -> unavailable if disconnected), as the app does (it keeps the last
+        # values and signals connectivity). See base_entity.available.
         data["active"] = bool(data.get("activity"))
         data["pause"] = self._is_value(params, "machMode", 3)
         return data

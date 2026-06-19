@@ -1,6 +1,6 @@
-"""WD (lavasciuga). Riscrittura di `_vendor/pyhon/appliances/wd.py`.
+"""WD (washer-dryer) per-type appliance logic.
 
-Come TD ma senza il ritocco dryLevel. `pause` FIX per valore (vedi td.py/base.py).
+Like TD but without the dryLevel tweak. `pause` derived by value (see td.py/base.py).
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ class Appliance(ApplianceExtra):
     def attributes(self, data: dict[str, Any]) -> dict[str, Any]:
         data = super().attributes(data)
         params = data.get("parameters", {})
-        # niente zeroing offline: disponibilità via `available` (vedi td.py/base_entity).
+        # no offline zeroing: availability via `available` (see td.py/base_entity).
         data["active"] = bool(data.get("activity"))
         data["pause"] = self._is_value(params, "machMode", 3)
         return data

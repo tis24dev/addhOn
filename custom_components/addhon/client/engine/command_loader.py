@@ -1,23 +1,20 @@
-"""HonCommandLoader nativo. Porting di `_vendor/pyhon/command_loader.py`.
+"""Command loader.
 
-Carica in parallelo i tre flussi dal cloud (commands / favourites / command-history)
-via l'api nativa, ne costruisce i `HonCommand` nativi, applica i preferiti e
-ripristina l'ultimo stato eseguito di ogni comando.
+Loads the three cloud streams in parallel (commands / favourites / command-history)
+via the api, builds the `HonCommand`s, applies favourites and
+restores the last executed state of each command.
 
-`api`/`appliance` duck-typed. Comportamento ancorato a pyhOn dal differential test
-sui dati reali del frigo (commands.json + command_history.json + favourites).
+`api`/`appliance` duck-typed.
 
-DIVERGENZA enum-casing (da rivalidare LIVE): i path favourites
-(`_update_base_command_with_data`) e recover (`_recover_last_command_states`) scrivono
-nei parametri valori GREZZI (salvati dal cloud/dalla history), che possono avere un
-casing diverso dai `enumValues`. Su un enum il nostro setter accetta il valore se la
-forma normalizzata combacia (fix BABYCARE) e tiene il grezzo in `intern_value`;
-pyhOn+patch invece RIFIUTA un valore ri-castato (e l'errore viene inghiottito dal
-`suppress(ValueError)`), mantenendo il default. Quindi su un favourite/history con un
-enum ri-castato il valore inviato al cloud può differire. Non è validabile offline
-(il frigo non ha favourites, l'AC è offline) e il valore "preservato" di pyhOn è esso
-stesso un artefatto (es. `[dashboard]` con parentesi): si RIMANDA la decisione alla
-validazione live. Sui valori già puliti (caso comune) è identico.
+enum-casing note (to re-validate LIVE): the favourites
+(`_update_base_command_with_data`) and recover (`_recover_last_command_states`) paths
+write RAW values (saved by the cloud/the history) into the parameters, which may have a
+casing different from the `enumValues`. On an enum the setter accepts the value if the
+normalized form matches and keeps the raw one in `intern_value`; the
+`suppress(ValueError)` guards the rare value that cannot be normalized to an allowed
+one (the default is kept). This is not verifiable offline (the fridge has no
+favourites, the AC is offline): the decision is DEFERRED to live validation. On
+already-clean values (the common case) the behavior is unchanged.
 """
 from __future__ import annotations
 
@@ -33,7 +30,7 @@ from .parameter.program import HonParameterProgram
 
 
 class HonCommandLoader:
-    """Carica e parsa i dati comando di hOn."""
+    """Loads and parses the hOn command data."""
 
     def __init__(self, api: Any, appliance: Any) -> None:
         self._api = api
@@ -141,7 +138,7 @@ class HonCommandLoader:
             ):
                 categories[self._clean_name(category)] = command
         if categories:
-            # setParameters deve stare al primo posto
+            # setParameters must come first
             if "setParameters" in categories:
                 return categories["setParameters"]
             return list(categories.values())[0]
@@ -204,7 +201,7 @@ class HonCommandLoader:
         if not command_name:
             return name, "", None
         parent = self.commands.get(command_name)
-        if parent is None:  # favourite stale: comando non piu' disponibile
+        if parent is None:  # stale favourite: command no longer available
             return name, command_name, None
         program_name = self._clean_name(str(command.get("programName", "")))
         base_command = parent.categories.get(program_name)

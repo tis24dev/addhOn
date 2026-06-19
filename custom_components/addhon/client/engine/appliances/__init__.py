@@ -1,11 +1,11 @@
-"""Layer per-tipo nativo.
+"""Native per-type layer.
 
-Riscrive (non copia) le appliance per-tipo di pyhOn (`_vendor/pyhon/appliances/`):
-derivazioni CLIENT-SIDE (programName, modi, active/pause, available) e ritocchi alle
-settings (es. dryLevel). NON vanno al cloud: l'oracolo è app + dump, non i byte.
+Per-type CLIENT-SIDE derivations (programName, modes, active/pause, available) and
+tweaks to the settings (e.g. dryLevel). They do NOT go to the cloud: the oracle is the
+app + dumps, not the bytes.
 
-Modellate sull'app decompilata dove è più ricca/corretta, su pyhOn dove l'app conferma,
-preservando+documentando dove l'app è altitudine-sbagliata o non validabile offline.
-Dettaglio e evidenze: `apk/analysis/per-type-derivations.md`. Selezione via `registry`
-statico (niente import dinamico).
+Modeled on the decompiled app; preserved+documented where the app is altitude-wrong or
+not verifiable offline.
+Detail and evidence: `apk/analysis/per-type-derivations.md`. Selection via a static
+`registry` (no dynamic import).
 """

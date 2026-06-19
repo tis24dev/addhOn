@@ -1,16 +1,16 @@
-"""Differential test dell'api HTTP nativo (transport addhOn, Fase 3 piece 2).
+"""Differential test of the native HTTP api (addhOn transport, Phase 3 piece 2).
 
-I metodi di pyhOn `connection/api.HonAPI` vivono INLINE in metodi async+HTTP, quindi
-non sono importabili a sé: l'oracolo è la loro trascrizione VERBATIM (le `_oracle_*`
-sotto). Per ogni metodo verifichiamo DUE cose:
-  * la RICHIESTA emessa (verbo, path, params/json) = pinnata al contratto pyhOn esatto
-    (quello che va al cloud byte-identico);
-  * il VALORE di ritorno su risposte ben formate = identico all'oracolo pyhOn.
-Più i casi di DIVERGENZA VOLUTA dove pyhOn crasha su risposta malformata
-(KeyError/TypeError/AttributeError) e noi ricadiamo sul default vuoto sicuro.
+pyhOn's `connection/api.HonAPI` methods live INLINE in async+HTTP methods, so they
+are not importable on their own: the oracle is their VERBATIM transcription (the
+`_oracle_*` below). For each method we verify TWO things:
+  * the emitted REQUEST (verb, path, params/json) = pinned to the exact pyhOn
+    contract (what goes to the cloud byte-identical);
+  * the return VALUE on well-formed responses = identical to the pyhOn oracle.
+Plus the INTENTIONAL DIVERGENCE cases where pyhOn crashes on a malformed response
+(KeyError/TypeError/AttributeError) and we fall back to the safe empty default.
 
-aiohttp/yarl/homeassistant sono stubati (nessuna rete): iniettiamo una
-FakeConnection in HonApi, quindi non tocchiamo il transport reale.
+aiohttp/yarl/homeassistant are stubbed (no network): we inject a FakeConnection
+into HonApi, so we do not touch the real transport.
 """
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ from custom_components.addhon.client.transport.api import HonApi, API_URL  # noq
 
 
 # --------------------------------------------------------------------------- #
-# Doppi di test                                                               #
+# Test doubles                                                                #
 # --------------------------------------------------------------------------- #
 class FakeResponse:
     def __init__(self, body, text="<text>") -> None:
@@ -114,7 +114,7 @@ class _ReqCtx:
 
 
 class FakeConnection:
-    """Sostituisce HonConnection: registra le richieste, ritorna un body fisso."""
+    """Replaces HonConnection: records the requests, returns a fixed body."""
 
     def __init__(self, body, text="<text>", mobile_id="pyhOn") -> None:
         self._body = body
@@ -135,8 +135,8 @@ class FakeConnection:
 class FakeAppliance:
     def __init__(self, **info) -> None:
         self.appliance_type = "REF"
-        # Il vero HonAppliance.appliance_model_id ritorna str(self._info.get(...)) -
-        # SEMPRE una stringa; usiamo lo stesso tipo per non dare falsa fiducia.
+        # The real HonAppliance.appliance_model_id returns str(self._info.get(...)) -
+        # ALWAYS a string; we use the same type to avoid giving false confidence.
         self.appliance_model_id = "4321"
         self.mac_address = "AA:BB:CC:DD:EE:FF"
         self.code = "CODE123"
@@ -149,13 +149,13 @@ def _run(coro):
 
 
 def _call(conn):
-    """HonApi su una FakeConnection; il body è clonato a ogni run (i metodi possono
-    mutare il payload via pop)."""
+    """HonApi over a FakeConnection; the body is cloned on each run (the methods can
+    mutate the payload via pop)."""
     return HonApi(conn)
 
 
 # --------------------------------------------------------------------------- #
-# Oracoli VERBATIM: estrazione di pyhOn (solo il ritorno; il logging è omesso)  #
+# VERBATIM oracles: pyhOn extraction (return value only; logging is omitted)    #
 # --------------------------------------------------------------------------- #
 def _oracle_commands(body):
     result = body.get("payload", {})
@@ -200,7 +200,7 @@ def _oracle_aws_token(result):
 
 # --------------------------------------------------------------------------- #
 class ApiRequestShapeTest(unittest.TestCase):
-    """La RICHIESTA emessa deve combaciare col contratto pyhOn esatto."""
+    """The emitted REQUEST must match the exact pyhOn contract."""
 
     def test_load_appliances_posts_unified_api(self) -> None:
         body = {"modules": {"applianceList": {"payload": {"appliances": [{"a": 1}]}}}}
@@ -220,7 +220,7 @@ class ApiRequestShapeTest(unittest.TestCase):
         self.assertEqual(got, [{"a": 1}])
 
     def test_load_appliances_empty_returns_empty_and_warns(self) -> None:
-        # 0 appliance (request OK): ritorna [] e logga il warning diagnostico.
+        # 0 appliances (request OK): returns [] and logs the diagnostic warning.
         body = {"modules": {"applianceList": {"payload": {"appliances": []}}}}
         with self.assertLogs("custom_components.addhon.client.transport.api", level="WARNING") as cm:
             got = _run(_call(FakeConnection(body)).load_appliances())
@@ -258,7 +258,7 @@ class ApiRequestShapeTest(unittest.TestCase):
             self.assertNotIn(absent, params)
 
     def test_load_commands_optional_params_skip_falsy(self) -> None:
-        # pyhOn usa `if value := info.get(...)`: un valore falsy (es. "") NON va nei params.
+        # pyhOn uses `if value := info.get(...)`: a falsy value (e.g. "") does NOT go in params.
         conn = FakeConnection({"payload": {"resultCode": "0"}})
         _run(_call(conn).load_commands(FakeAppliance(eepromId="", fwVersion=0, series="")))
         params = conn.calls[0][2]["params"]
@@ -317,13 +317,13 @@ class ApiRequestShapeTest(unittest.TestCase):
 
 
 class ApiReturnVsOracleTest(unittest.TestCase):
-    """Su risposte ben formate il ritorno deve essere IDENTICO all'oracolo pyhOn."""
+    """On well-formed responses the return value must be IDENTICAL to the pyhOn oracle."""
 
     def test_load_commands(self) -> None:
         body = {"payload": {"resultCode": "0", "settings": {"x": 1}, "startProgram": {}}}
         got = _run(_call(FakeConnection(copy.deepcopy(body))).load_commands(FakeAppliance()))
         self.assertEqual(got, _oracle_commands(copy.deepcopy(body)))
-        # il resultCode è stato rimosso dal dict ritornato (come pyhOn)
+        # the resultCode was removed from the returned dict (like pyhOn)
         self.assertNotIn("resultCode", got)
         self.assertEqual(got, {"settings": {"x": 1}, "startProgram": {}})
 
@@ -379,10 +379,10 @@ class ApiReturnVsOracleTest(unittest.TestCase):
 
 
 class ApiHardeningTest(unittest.TestCase):
-    """Dove pyhOn crasha su risposta malformata, noi ricadiamo sul default sicuro."""
+    """Where pyhOn crashes on a malformed response, we fall back to the safe default."""
 
     def test_commands_missing_result_code_crashes_pyhon_safe_for_us(self) -> None:
-        body = {"payload": {"settings": {}}}  # niente resultCode
+        body = {"payload": {"settings": {}}}  # no resultCode
         with self.assertRaises(KeyError):
             _oracle_commands(copy.deepcopy(body))
         got = _run(_call(FakeConnection(copy.deepcopy(body))).load_commands(FakeAppliance()))
@@ -404,7 +404,7 @@ class ApiHardeningTest(unittest.TestCase):
         self.assertEqual(got, {})
 
     def test_history_payload_without_history_key_safe(self) -> None:
-        body = {"payload": {"other": 1}}  # pyhOn -> KeyError su ["history"]
+        body = {"payload": {"other": 1}}  # pyhOn -> KeyError on ["history"]
         with self.assertRaises(KeyError):
             _oracle_history(copy.deepcopy(body))
         got = _run(
@@ -446,7 +446,7 @@ class ApiHardeningTest(unittest.TestCase):
 
 class SendCommandTest(unittest.TestCase):
     def _patch_clock(self, iso_micro: str):
-        """Fissa il clock di api._command_timestamp a un istante naive noto (datetime reale)."""
+        """Pin api._command_timestamp's clock to a known naive instant (real datetime)."""
         from datetime import datetime as _dt
 
         fixed = _dt.fromisoformat(iso_micro)  # naive
@@ -477,7 +477,7 @@ class SendCommandTest(unittest.TestCase):
         self.assertEqual(verb, "POST")
         self.assertEqual(url, f"{API_URL}/commands/v1/send")
         data = kwargs["json"]
-        ts = "2026-06-18T12:34:56.789Z"  # [:-3] taglia i micro a milli + "Z"
+        ts = "2026-06-18T12:34:56.789Z"  # [:-3] cuts micros to millis + "Z"
         self.assertEqual(data["timestamp"], ts)
         self.assertEqual(data["transactionId"], f"{app.mac_address}_{ts}")
         self.assertEqual(data["macAddress"], app.mac_address)
@@ -492,7 +492,7 @@ class SendCommandTest(unittest.TestCase):
         self.assertEqual(data["ancillaryParameters"], {"anc": 1})
         self.assertEqual(data["parameters"], {"tempSelZ1": 4})
         self.assertEqual(data["applianceType"], "REF")
-        self.assertNotIn("programName", data)  # non startProgram
+        self.assertNotIn("programName", data)  # not startProgram
 
     def test_send_command_start_program_adds_program_name(self) -> None:
         self._patch_clock("2026-06-18T12:34:56.789012")
@@ -528,12 +528,12 @@ class SendCommandTest(unittest.TestCase):
 class CommandTimestampTest(unittest.TestCase):
     def test_format_millis_and_z(self) -> None:
         ts = api_mod._command_timestamp()
-        # ISO con millisecondi (3 cifre) + Z, niente offset timezone
+        # ISO with milliseconds (3 digits) + Z, no timezone offset
         self.assertRegex(ts, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
         self.assertNotIn("+", ts)
 
     def _frozen(self, iso_micro: str):
-        """Patcha il clock perché now(utc).replace(tzinfo=None) abbia microsecondi noti."""
+        """Patch the clock so that now(utc).replace(tzinfo=None) has known microseconds."""
         from datetime import datetime as _dt
 
         fixed = _dt.fromisoformat(iso_micro)  # naive
@@ -548,15 +548,15 @@ class CommandTimestampTest(unittest.TestCase):
         self.addCleanup(lambda: setattr(api_mod, "datetime", real))
 
     def test_identical_to_pyhon_on_common_path(self) -> None:
-        # microsecondi != 0: la nostra uscita e la formula pyhOn [:-3]+"Z" coincidono.
+        # microseconds != 0: our output and the pyhOn formula [:-3]+"Z" coincide.
         self._frozen("2026-06-18T12:34:56.789012")
         pyhon_formula = "2026-06-18T12:34:56.789012"[:-3] + "Z"
         self.assertEqual(api_mod._command_timestamp(), pyhon_formula)
         self.assertEqual(api_mod._command_timestamp(), "2026-06-18T12:34:56.789Z")
 
     def test_truncates_not_rounds_at_boundary(self) -> None:
-        # Guard: timespec="milliseconds" TRONCA (come [:-3] di pyhOn), non arrotonda.
-        # .789999 -> .789Z (non .790Z). Blinda contro un futuro cambio di semantica.
+        # Guard: timespec="milliseconds" TRUNCATES (like pyhOn's [:-3]), it does not round.
+        # .789999 -> .789Z (not .790Z). Hardens against a future change of semantics.
         self._frozen("2026-06-18T12:34:56.789999")
         self.assertEqual(api_mod._command_timestamp(), "2026-06-18T12:34:56.789Z")
         self.assertEqual(
@@ -564,20 +564,20 @@ class CommandTimestampTest(unittest.TestCase):
         )
 
     def test_fixes_pyhon_bug_when_microsecond_zero(self) -> None:
-        # microsecondi == 0: pyhOn produrrebbe "...T12:34Z" (secondi persi); noi no.
+        # microseconds == 0: pyhOn would produce "...T12:34Z" (seconds lost); we do not.
         self._frozen("2026-06-18T12:34:56")
         pyhon_buggy = "2026-06-18T12:34:56"[:-3] + "Z"  # -> "2026-06-18T12:34Z"
-        self.assertEqual(pyhon_buggy, "2026-06-18T12:34Z")  # documenta il bug pyhOn
+        self.assertEqual(pyhon_buggy, "2026-06-18T12:34Z")  # documents the pyhOn bug
         self.assertEqual(api_mod._command_timestamp(), "2026-06-18T12:34:56.000Z")
 
 
 class ApiIntentionalNarrowingTest(unittest.TestCase):
-    """Pinna le DIVERGENZE VOLUTE: su forme malformate dove pyhOn ritornerebbe un
-    valore non-dict/non-list (o crasherebbe a valle), noi narrowiamo al default
-    vuoto sicuro. Test esplicito così un refactor futuro non le cambia in silenzio."""
+    """Pins the INTENTIONAL DIVERGENCES: on malformed shapes where pyhOn would return
+    a non-dict/non-list value (or crash downstream), we narrow to the safe empty
+    default. Explicit test so a future refactor does not change them silently."""
 
     def test_last_activity_non_dict_attributes_narrowed(self) -> None:
-        # pyhOn ritornerebbe il valore grezzo (str/list/int); noi -> {}.
+        # pyhOn would return the raw value (str/list/int); we -> {}.
         for attrs in ("str", [1, 2], 5):
             with self.subTest(attrs=attrs):
                 self.assertEqual(_oracle_last_activity({"attributes": attrs}), attrs)
@@ -607,8 +607,8 @@ class ApiIntentionalNarrowingTest(unittest.TestCase):
         self.assertEqual(got, {})
 
     def test_attributes_inner_non_dict_narrowed(self) -> None:
-        # ramo rilevante per il flusso vivo (appliance.load_attributes fa |= attributes):
-        # pyhOn ritornerebbe None/str/list (e a valle crasherebbe su .pop), noi -> {}.
+        # branch relevant to the live flow (appliance.load_attributes does |= attributes):
+        # pyhOn would return None/str/list (and crash downstream on .pop), we -> {}.
         for payload in (None, "x", [1]):
             with self.subTest(payload=payload):
                 self.assertEqual(_oracle_payload({"payload": payload}), payload)

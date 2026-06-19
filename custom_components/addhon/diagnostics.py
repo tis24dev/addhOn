@@ -40,7 +40,7 @@ async def async_get_config_entry_diagnostics(
     entry_data = domain_data.get(entry.entry_id, {})
     coordinator = entry_data.get("coordinator")
     _LOGGER.debug(
-        "Diagnostics debug: richiesta diagnostics entry=%s title=%s coordinator_present=%s",
+        "Diagnostics debug: diagnostics requested entry=%s title=%s coordinator_present=%s",
         entry.entry_id,
         _redact_title(getattr(entry, "title", None)),
         coordinator is not None,

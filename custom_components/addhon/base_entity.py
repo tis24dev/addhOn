@@ -1,4 +1,4 @@
-"""Entità base per Haier hOn."""
+"""Base entity for Haier hOn."""
 from __future__ import annotations
 
 import logging
@@ -14,7 +14,9 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class HonBaseEntity(CoordinatorEntity):
-    """Entità base per tutti i dispositivi Haier hOn."""
+    """Base entity for all Haier hOn devices."""
+
+    _attr_has_entity_name = True
 
     def __init__(self, coordinator, appliance_id: str, client=None) -> None:
         super().__init__(coordinator)
@@ -23,7 +25,7 @@ class HonBaseEntity(CoordinatorEntity):
 
     @property
     def _hon_client(self):
-        """Ritorna il HonClient per eseguire comandi sul loop dedicato."""
+        """Return the HonClient to run commands on the dedicated loop."""
         return self._client
 
     @property
@@ -43,19 +45,19 @@ class HonBaseEntity(CoordinatorEntity):
         return self._appliance_data.get("appliance")
 
     def _coordinator_store(self, name: str) -> dict:
-        """Store volatile condiviso tra le entità, tenuto sul coordinator.
+        """Volatile store shared between entities, kept on the coordinator.
 
-        A differenza di coordinator.data (ricreato a ogni refresh), un attributo
-        sul coordinator sopravvive agli aggiornamenti, così entità diverse dello
-        stesso device possono condividere stato effimero (es. il programma
-        scelto dal select ma non ancora avviato, letto poi dal button "Avvia").
+        Unlike coordinator.data (recreated on every refresh), an attribute on the
+        coordinator survives updates, so different entities of the same device can
+        share ephemeral state (e.g. the program chosen by the select but not yet
+        started, read later by the "Start" button).
         """
         store = getattr(self.coordinator, name, None)
         if not isinstance(store, dict):
             store = {}
             setattr(self.coordinator, name, store)
             _LOGGER.debug(
-                "BaseEntity debug: creato coordinator store '%s' per appliance=%s",
+                "BaseEntity debug: created coordinator store '%s' for appliance=%s",
                 name,
                 self._appliance_id,
             )
@@ -74,32 +76,32 @@ class HonBaseEntity(CoordinatorEntity):
 
     @property
     def available(self) -> bool:
-        """Disponibilità per-appliance, oltre allo stato globale del coordinator.
+        """Per-appliance availability, beyond the coordinator's global state.
 
-        super().available (CoordinatorEntity) riflette solo l'esito complessivo
-        dell'ultimo refresh (last_update_success): NON copre il caso in cui il
-        refresh va a buon fine ma QUESTO appliance sparisce da coordinator.data
-        (dispositivo rimosso dall'account o temporaneamente non restituito
-        dall'API). Senza questo check l'entità resterebbe "available" mostrando
-        valori di default stantii. Manteniamo l'AND con lo stato del coordinator
-        e una guardia isinstance perché `x in None` solleverebbe TypeError.
+        super().available (CoordinatorEntity) only reflects the overall outcome of
+        the last refresh (last_update_success): it does NOT cover the case where
+        the refresh succeeds but THIS appliance disappears from coordinator.data
+        (device removed from the account or temporarily not returned by the API).
+        Without this check the entity would stay "available" showing stale default
+        values. We keep the AND with the coordinator state and an isinstance guard
+        because `x in None` would raise TypeError.
 
-        Inoltre (modello app): se il DEVICE è disconnesso (`available` derivato dal
-        motore da lastConnEvent.category) l'entità diventa unavailable, invece di
-        mostrare valori stantii. Sostituisce il vecchio zeroing offline lato motore.
-        Default True se l'attributo manca (device che ha errato il primo load): non
-        nascondere a sproposito.
+        In addition (app model): if the DEVICE is disconnected (`available` derived
+        by the engine from lastConnEvent.category) the entity becomes unavailable,
+        instead of showing stale values. This replaces the old engine-side offline
+        zeroing. Default True if the attribute is missing (device that errored on
+        its first load): do not hide it without reason.
 
-        NB: il binary_sensor di connettività esclude il gate `available` (deve restare
-        disponibile per segnalare 'disconnesso'): usa `_present` direttamente.
+        NB: the connectivity binary_sensor excludes the `available` gate (it must
+        stay available to signal 'disconnected'): it uses `_present` directly.
         """
         return self._present and bool(self._attributes.get("available", True))
 
     @property
     def _present(self) -> bool:
-        """Coordinator ok + questo appliance presente nei dati, SENZA il gate di
-        connettività. Base per `available` e per le entità che devono restare
-        disponibili anche offline (connettività)."""
+        """Coordinator ok + this appliance present in the data, WITHOUT the
+        connectivity gate. Basis for `available` and for the entities that must
+        stay available even offline (connectivity)."""
         return (
             super().available
             and isinstance(self.coordinator.data, dict)
@@ -107,22 +109,22 @@ class HonBaseEntity(CoordinatorEntity):
         )
 
     def _get_attr(self, key: str, default=None):
-        """Recupera un attributo del dispositivo.
-        
-        pyhOn restituisce gli attributi come HonAttribute (con .value)
-        oppure come valori raw a seconda della versione. Gestiamo entrambi.
+        """Retrieve a device attribute.
+
+        The client returns attributes as HonAttribute (with .value) or as raw values
+        depending on the version. We handle both.
         """
         def _extract_value(value):
             if value is None:
                 return None
-            # HonAttribute ha .value — nota: value.value può essere 0, "", False (tutti validi!)
+            # HonAttribute has .value, note: value.value can be 0, "", False (all valid!)
             if hasattr(value, "value"):
                 inner = value.value
-                # Stringa vuota = dato non disponibile, trattala come None
+                # Empty string = data not available, treat it as None
                 if inner == "":
                     return None
                 return inner
-            # Stringa vuota raw = dato non disponibile
+            # Raw empty string = data not available
             if value == "":
                 return None
             return value
@@ -144,10 +146,10 @@ class HonBaseEntity(CoordinatorEntity):
             attributes = self._attributes
             settings = self._appliance_data.get("settings")
             _LOGGER.debug(
-                "BaseEntity debug: lookup '%s' per '%s' (id=%s) risolto da %s: "
+                "BaseEntity debug: lookup '%s' for '%s' (id=%s) resolved from %s: "
                 "raw=%r (%s), value=%r; attribute_keys=%d %s; settings_keys=%d %s",
                 key,
-                getattr(self, "_attr_name", self.__class__.__name__),
+                getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
                 self._appliance_id,
                 source,
                 raw_value,
@@ -159,22 +161,22 @@ class HonBaseEntity(CoordinatorEntity):
                 debug_key_sample(settings) if isinstance(settings, dict) else [],
             )
 
-        # 1) lookup diretto (chiavi già "flattened")
+        # 1) direct lookup (already "flattened" keys)
         val = self._attributes.get(key)
         if val is not None:
             extracted = _extract_value(val)
-            _debug_lookup("attributes diretto", val, extracted)
+            _debug_lookup("attributes direct", val, extracted)
             return extracted
 
-        # 1b) lookup nel container statistics separato (es. TD programsCounter).
-        # Normalmente hon_client lo fonde gia' in attributes, ma questo fallback
-        # evita che un payload separato nel coordinator renda il sensore vuoto.
+        # 1b) lookup in the separate statistics container (e.g. TD programsCounter).
+        # Normally hon_client already merges it into attributes, but this fallback
+        # avoids a separate payload in the coordinator leaving the sensor empty.
         statistics = self._statistics
         if isinstance(statistics, dict):
             val = statistics.get(key)
             if val is not None:
                 extracted = _extract_value(val)
-                _debug_lookup("statistics diretto", val, extracted)
+                _debug_lookup("statistics direct", val, extracted)
                 return extracted
 
             val = _deep_get(statistics, key)
@@ -183,19 +185,19 @@ class HonBaseEntity(CoordinatorEntity):
                 _debug_lookup("statistics dotted path", val, extracted)
                 return extracted
 
-        # 2) supporto prefisso "settings." (alcuni modelli/vecchie versioni lo usano)
+        # 2) support for the "settings." prefix (some models/old versions use it)
         if key.startswith("settings."):
             key_no_prefix = key.removeprefix("settings.")
             val = self._attributes.get(key_no_prefix)
             if val is not None:
                 extracted = _extract_value(val)
-                _debug_lookup("attributes senza prefisso settings", val, extracted)
+                _debug_lookup("attributes without settings prefix", val, extracted)
                 return extracted
 
             val = _deep_get(self._attributes, key_no_prefix)
             if val is not None:
                 extracted = _extract_value(val)
-                _debug_lookup("attributes deep senza prefisso settings", val, extracted)
+                _debug_lookup("attributes deep without settings prefix", val, extracted)
                 return extracted
 
             settings = self._appliance_data.get("settings")
@@ -203,7 +205,7 @@ class HonBaseEntity(CoordinatorEntity):
                 val = settings.get(key_no_prefix)
                 if val is not None:
                     extracted = _extract_value(val)
-                    _debug_lookup("settings diretto", val, extracted)
+                    _debug_lookup("settings direct", val, extracted)
                     return extracted
                 val = _deep_get(settings, key_no_prefix)
                 if val is not None:
@@ -211,13 +213,13 @@ class HonBaseEntity(CoordinatorEntity):
                     _debug_lookup("settings deep", val, extracted)
                     return extracted
 
-        # 2b) supporto prefisso "startProgram." (es. ecoMode che vive in startProgram)
+        # 2b) support for the "startProgram." prefix (e.g. ecoMode that lives in startProgram)
         if key.startswith("startProgram."):
             key_no_prefix = key.removeprefix("startProgram.")
             val = self._attributes.get(key_no_prefix)
             if val is not None:
                 extracted = _extract_value(val)
-                _debug_lookup("attributes senza prefisso startProgram", val, extracted)
+                _debug_lookup("attributes without startProgram prefix", val, extracted)
                 return extracted
 
             start_program = self._appliance_data.get("startProgram")
@@ -225,7 +227,7 @@ class HonBaseEntity(CoordinatorEntity):
                 val = start_program.get(key_no_prefix)
                 if val is not None:
                     extracted = _extract_value(val)
-                    _debug_lookup("startProgram diretto", val, extracted)
+                    _debug_lookup("startProgram direct", val, extracted)
                     return extracted
                 val = _deep_get(start_program, key_no_prefix)
                 if val is not None:
@@ -233,7 +235,7 @@ class HonBaseEntity(CoordinatorEntity):
                     _debug_lookup("startProgram deep", val, extracted)
                     return extracted
 
-        # 3) fallback: prova lookup "dotted path" dentro attributes
+        # 3) fallback: try a "dotted path" lookup inside attributes
         val = _deep_get(self._attributes, key)
         if val is not None:
             extracted = _extract_value(val)
@@ -244,10 +246,10 @@ class HonBaseEntity(CoordinatorEntity):
             attributes = self._attributes
             settings = self._appliance_data.get("settings")
             _LOGGER.debug(
-                "BaseEntity debug: lookup '%s' per '%s' (id=%s) non trovato, "
-                "ritorno default=%r; attribute_keys=%d %s; settings_keys=%d %s",
+                "BaseEntity debug: lookup '%s' for '%s' (id=%s) not found, "
+                "returning default=%r; attribute_keys=%d %s; settings_keys=%d %s",
                 key,
-                getattr(self, "_attr_name", self.__class__.__name__),
+                getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
                 self._appliance_id,
                 default,
                 len(attributes) if isinstance(attributes, dict) else 0,
@@ -263,20 +265,27 @@ class HonBaseEntity(CoordinatorEntity):
         if refresh is None:
             refresh = self.coordinator.async_request_refresh
         _LOGGER.debug(
-            "BaseEntity debug: refresh richiesto dopo comando per appliance=%s entity=%s",
+            "BaseEntity debug: refresh requested after command for appliance=%s entity=%s",
             self._appliance_id,
-            getattr(self, "_attr_name", self.__class__.__name__),
+            getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
         )
         await refresh()
         if getattr(self.coordinator, "last_update_success", True) is not False:
             _LOGGER.debug(
-                "BaseEntity debug: refresh dopo comando riuscito per appliance=%s entity=%s",
+                "BaseEntity debug: refresh after command succeeded for appliance=%s entity=%s",
                 self._appliance_id,
-                getattr(self, "_attr_name", self.__class__.__name__),
+                getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
             )
             return
 
         err = getattr(self.coordinator, "last_exception", None)
         if err is None:
-            raise HomeAssistantError("Refresh dopo comando fallito")
-        raise HomeAssistantError(f"Refresh dopo comando fallito: {err}") from err
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="refresh_after_command_failed",
+            )
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="refresh_after_command_failed_error",
+            translation_placeholders={"error": str(err)},
+        ) from err

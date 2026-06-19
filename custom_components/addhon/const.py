@@ -1,106 +1,106 @@
-"""Costanti per l'integrazione Haier hOn Extended."""
+"""Constants for the Haier hOn Extended integration."""
 
 DOMAIN = "addhon"
 
-# Piattaforme supportate
+# Supported platforms
 PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button", "number"]
 
-# Intervallo di aggiornamento in secondi
-# NOTA: il setup iniziale + primo fetch impiega ~22s su cloud lento.
-# 60s garantisce margine sufficiente senza stressare l'API Haier.
+# Update interval in seconds
+# NOTE: the initial setup + first fetch takes ~22s on a slow cloud.
+# 60s gives enough margin without stressing the Haier API.
 SCAN_INTERVAL = 60
 
-# Tipi di appliance hOn
-APPLIANCE_AC = "AC"       # Condizionatore
-APPLIANCE_WM = "WM"       # Lavatrice (Washing Machine)
-APPLIANCE_TD = "TD"       # Asciugatrice (Tumble Dryer)
-APPLIANCE_WD = "WD"       # Lavasciuga
+# hOn appliance types
+APPLIANCE_AC = "AC"       # Air conditioner
+APPLIANCE_WM = "WM"       # Washing Machine
+APPLIANCE_TD = "TD"       # Tumble Dryer
+APPLIANCE_WD = "WD"       # Washer-dryer
 
-# ─── Tier 2: tipi read-only ───────────────────────────────────────────────────
-# Tipi aggiuntivi esposti come sensori in sola lettura. I parametri provengono
-# dalla mappatura della app ufficiale ma NON sono validati su device reali
-# (nessuno tra i dispositivi di test è di questi tipi): per questo i sensori di
-# questi tipi sono CAPABILITY-GATED (vedi sensor.py / binary_sensor.py), così
-# compaiono solo se il device riporta davvero l'attributo. Alcuni codici sono
-# alias dello stesso set (FR/FRE come REF, HOB come IH) perché a seconda del
-# modello/enroll il cloud può restituire l'uno o l'altro.
-APPLIANCE_REF = "REF"     # Frigorifero / frigo-congelatore
-APPLIANCE_FR  = "FR"      # Frigo (alias mappa icone)
-APPLIANCE_FRE = "FRE"     # Congelatore
-APPLIANCE_OV  = "OV"      # Forno
-APPLIANCE_DW  = "DW"      # Lavastoviglie
-APPLIANCE_WC  = "WC"      # Cantinetta vino
-APPLIANCE_IH  = "IH"      # Piano cottura a induzione
-APPLIANCE_HOB = "HOB"     # Piano cottura (alias)
-APPLIANCE_HO  = "HO"      # Cappa
-APPLIANCE_KT  = "KT"      # Macchina caffè / bollitore
-APPLIANCE_WH  = "WH"      # Scaldabagno
-APPLIANCE_RVC = "RVC"     # Robot aspirapolvere
+# --- Tier 2: read-only types --------------------------------------------------
+# Additional types exposed as read-only sensors. The parameters come from the
+# official app mapping but are NOT validated on real devices (none of the test
+# devices are of these types): for this reason the sensors of these types are
+# CAPABILITY-GATED (see sensor.py / binary_sensor.py), so they only show up if the
+# device actually reports the attribute. Some codes are aliases of the same set
+# (FR/FRE as REF, HOB as IH) because, depending on the model/enroll, the cloud may
+# return one or the other.
+APPLIANCE_REF = "REF"     # Refrigerator / fridge-freezer
+APPLIANCE_FR  = "FR"      # Fridge (icon-map alias)
+APPLIANCE_FRE = "FRE"     # Freezer
+APPLIANCE_OV  = "OV"      # Oven
+APPLIANCE_DW  = "DW"      # Dishwasher
+APPLIANCE_WC  = "WC"      # Wine cooler
+APPLIANCE_IH  = "IH"      # Induction hob
+APPLIANCE_HOB = "HOB"     # Hob (alias)
+APPLIANCE_HO  = "HO"      # Hood
+APPLIANCE_KT  = "KT"      # Coffee machine / kettle
+APPLIANCE_WH  = "WH"      # Water heater
+APPLIANCE_RVC = "RVC"     # Robot vacuum cleaner
 
-# Raggruppa tutti gli elettrodomestici lavatrice/asciugatrice/lavasciuga
+# Groups all washing machine/tumble dryer/washer-dryer appliances
 APPLIANCE_WASH_GROUP = (APPLIANCE_WM, APPLIANCE_TD, APPLIANCE_WD)
 
-# Nomi dei parametri che, nei comandi hOn, contengono il codice/nome del
-# programma. Condivisi tra il select (sorgente opzioni + scelta) e il button
-# "Avvia programma" (applica il programma scelto a startProgram).
+# Names of the parameters that, in hOn commands, carry the program code/name.
+# Shared between the select (options source + choice) and the "Start program"
+# button (applies the chosen program to startProgram).
 PROGRAM_PARAM_NAMES = ("program", "prCode")
 
-# Chiave dello store volatile (tenuto sul coordinator) che conserva il programma
-# scelto dal select ma non ancora avviato; il button "Avvia programma" lo applica
-# a startProgram. Unica fonte di verità condivisa tra select.py e button.py.
+# Key of the volatile store (kept on the coordinator) that holds the program
+# chosen by the select but not yet started; the "Start program" button applies it
+# to startProgram. The single shared source of truth between select.py and button.py.
 PROGRAM_PENDING_STORE = "pending_programs"
 
-# Service per cambiare a runtime il livello di log del canale MQTT realtime di
-# pyhOn. Di default il rumore dei tentativi di riconnessione è silenziato (vedi
-# logging_utils); questo service lo riattiva on-demand per il debug. Il nome dei
-# logger e la mappa dei livelli vivono in logging_utils.py (testabile in isolamento).
+# Service to change at runtime the log level of the realtime MQTT channel. By
+# default the reconnection-attempt noise is silenced (see logging_utils); this
+# service re-enables it on demand for debugging. The logger names and the level
+# map live in logging_utils.py (testable in isolation).
 SERVICE_SET_MQTT_LOG_LEVEL = "set_mqtt_log_level"
 
-# Service per alzare/abbassare a runtime il debug dell'integrazione e dei logger
-# pyhOn utili alla discovery/polling. MQTT resta gestito dal service dedicato
-# sopra per non riaccendere il rumore realtime quando si indaga una lista device
-# vuota.
+# Service to raise/lower at runtime the debug of the integration and of the native
+# hOn client loggers useful for discovery/polling. MQTT stays handled by the dedicated
+# service above so as not to turn the realtime noise back on when investigating an
+# empty device list.
 SERVICE_SET_LOG_LEVEL = "set_log_level"
 ATTR_LEVEL = "level"
 
-# Chiavi opzione (entry.options) dei due toggle di debug esposti nella schermata
-# Configura/Opzioni dell'integrazione. Persistono tra i riavvii e vengono applicati
-# a caldo (vedi _apply_debug_options in __init__). enable_debug -> logger
-# dell'integrazione a DEBUG (NOTSET quando off); enable_mqtt_debug -> logger MQTT
-# realtime a DEBUG (silenziato a WARNING quando off). I due toggle sono indipendenti.
+# Option keys (entry.options) of the two debug toggles exposed in the
+# Configure/Options screen of the integration. They persist across restarts and
+# are applied on the fly (see _apply_debug_options in __init__). enable_debug ->
+# integration logger to DEBUG (NOTSET when off); enable_mqtt_debug -> realtime MQTT
+# logger to DEBUG (silenced to WARNING when off). The two toggles are independent.
 CONF_ENABLE_DEBUG = "enable_debug"
 CONF_ENABLE_MQTT_DEBUG = "enable_mqtt_debug"
 
-# ─── Attributi condizionatore ─────────────────────────────────────────────────
-# Confermati dai diagnostics del device AS35PBPHRA-PRE
+# --- Air conditioner attributes -----------------------------------------------
+# Confirmed from the diagnostics of the AS35PBPHRA-PRE device
 AC_ATTR_MODE         = "settings.machMode"
 AC_ATTR_TEMP         = "settings.tempSel"
-# tempIndoor / tempOutdoor sono attributi DIRETTI (non in settings) — confermato da diagnostics
+# tempIndoor / tempOutdoor are DIRECT attributes (not in settings), confirmed from diagnostics
 AC_ATTR_CURRENT_TEMP     = "tempIndoor"
 AC_ATTR_OUTDOOR_TEMP     = "tempOutdoor"
-AC_ATTR_HUMIDITY_INDOOR  = "humidityIndoor"          # Umidità ambiente (lettura sensore)
-AC_ATTR_HUMIDITY_SEL     = "settings.humiditySel"   # Umidità target (setpoint utente)
+AC_ATTR_HUMIDITY_INDOOR  = "humidityIndoor"          # Ambient humidity (sensor reading)
+AC_ATTR_HUMIDITY_SEL     = "settings.humiditySel"   # Target humidity (user setpoint)
 AC_ATTR_FAN_SPEED    = "settings.windSpeed"
-# Swing verticale. windDirectionVertical è un ENUM di POSIZIONI, non un bool:
-# 2,4,5,6,7 = posizioni fisse del deflettore, 8 = SWING (oscillazione). Il device
-# riporta 0 da spento: 0 NON è tra gli enumValues, quindi inviarlo fa sollevare
-# ValueError al setter enum di pyhOn e l'API lo rifiuta — è la causa per cui lo
-# swing era stato disabilitato. Il fix (climate.py): non inviare MAI 0 (sanitazione
-# pre-send) e impostare windDirectionVertical solo a valori ammessi. Gli allowed
-# values reali sono letti a runtime da .values del parametro (per-device), con
-# windDirectionVerticalPositionSequence come sorgente sul device.
+# Vertical swing. windDirectionVertical is an ENUM of POSITIONS, not a bool:
+# 2,4,5,6,7 = fixed louver positions, 8 = SWING (oscillation). The device reports
+# 0 when off: 0 is NOT among the enumValues, so sending it raises a ValueError in
+# the enum setter and the API rejects it, which is the reason swing had been
+# disabled. The fix (climate.py): NEVER send 0 (pre-send sanitization) and set
+# windDirectionVertical only to allowed values. The real allowed values are read
+# at runtime from the parameter's .values (per-device), with
+# windDirectionVerticalPositionSequence as the source on the device.
 AC_ATTR_SWING_V      = "settings.windDirectionVertical"
 AC_ATTR_SWING_H      = "settings.windDirectionHorizontal"
-AC_SWING_V_PARAM     = "windDirectionVertical"   # nome param nel comando "settings"
+AC_SWING_V_PARAM     = "windDirectionVertical"   # param name in the "settings" command
 AC_SWING_H_PARAM     = "windDirectionHorizontal"
-AC_SWING_V_ON        = "8"                        # 8 = oscillazione verticale
+AC_SWING_V_ON        = "8"                        # 8 = vertical oscillation
 AC_SWING_MODE_ON     = "on"
 AC_SWING_MODE_OFF    = "off"
 AC_ATTR_ON_OFF       = "settings.onOffStatus"
-# ecoMode esiste solo in startProgram (NON in settings) — confermato da diagnostics
+# ecoMode exists only in startProgram (NOT in settings), confirmed from diagnostics
 AC_ATTR_ECO          = "startProgram.ecoMode"
 AC_ATTR_RAPID        = "settings.rapidMode"
-# silentSleepStatus è il nome reale — muteStatus è separato (muto display)
+# silentSleepStatus is the real name; muteStatus is separate (display mute)
 AC_ATTR_SLEEP        = "settings.silentSleepStatus"
 AC_ATTR_SILENT       = "settings.muteStatus"
 AC_ATTR_FILTER       = "settings.filterChangeStatusCloud"
@@ -108,23 +108,23 @@ AC_ATTR_SELF_CLEAN   = "settings.selfCleaningStatus"
 AC_ATTR_LIGHT        = "settings.lightStatus"
 AC_ATTR_COMPRESSOR_FREQ = "compressorFrequency"
 AC_ATTR_TOTAL_ENERGY = "totalElectricityUsed"
-# Qualità aria (attributi diretti, confermati sull'AC di Roberto)
-AC_ATTR_PM25        = "pm2p5ValueIndoor"   # PM2.5 interno (µg/m³)
-AC_ATTR_CO2         = "co2ValueIndoor"     # CO2 interna (ppm)
-AC_ATTR_CH2O        = "ch2oValueIndoor"    # formaldeide interna (mg/m³)
+# Air quality (direct attributes, confirmed on Roberto's AC)
+AC_ATTR_PM25        = "pm2p5ValueIndoor"   # Indoor PM2.5 (µg/m³)
+AC_ATTR_CO2         = "co2ValueIndoor"     # Indoor CO2 (ppm)
+AC_ATTR_CH2O        = "ch2oValueIndoor"    # Indoor formaldehyde (mg/m³)
 
-# Mappatura modalità AC -> HA
-# Valori accettati dal device: [0, 1, 2, 4, 6]
+# AC mode mapping -> HA
+# Values accepted by the device: [0, 1, 2, 4, 6]
 AC_MODE_MAP = {
     "0": "auto",
     "1": "cool",
     "2": "dry",
-    "4": "heat",      # CORRETTO: "4"=CALDO confermato da AS35PBPHRA-PRE
-    "6": "fan_only",  # CORRETTO: "6"=VENTILAZIONE confermato da AS35PBPHRA-PRE
+    "4": "heat",      # FIXED: "4"=HEAT confirmed from AS35PBPHRA-PRE
+    "6": "fan_only",  # FIXED: "6"=FAN confirmed from AS35PBPHRA-PRE
 }
 AC_MODE_MAP_REVERSE = {v: k for k, v in AC_MODE_MAP.items()}
 
-# Fan speed map (confermato: windSpeed in settings)
+# Fan speed map (confirmed: windSpeed in settings)
 AC_FAN_MAP = {
     "0": "auto",
     "3": "low",
@@ -133,143 +133,147 @@ AC_FAN_MAP = {
 }
 AC_FAN_MAP_REVERSE = {v: k for k, v in AC_FAN_MAP.items()}
 
-# ─── Attributi lavatrice ──────────────────────────────────────────────────────
-# Confermati dai diagnostics del device HW80-B14959TU1IT
+# --- Washing machine attributes -----------------------------------------------
+# Confirmed from the diagnostics of the HW80-B14959TU1IT device
 WM_ATTR_STATUS        = "machMode"
 WM_ATTR_REMAINING     = "remainingTimeMM"
 WM_ATTR_PROGRAM       = "prCode"
-WM_ATTR_PROGRAM_NAME  = "programName"              # Nome testuale programma (es. "Cotone")
-WM_ATTR_PROGRAM_PHASE = "prPhase"                  # Fase ciclo (prewash/wash/rinse/spin)
-WM_ATTR_TEMP          = "temp"                     # CORRETTO: "tempLevel" NON esiste sul device
+WM_ATTR_PROGRAM_NAME  = "programName"              # Textual program name (e.g. "Cotone")
+WM_ATTR_PROGRAM_PHASE = "prPhase"                  # Cycle phase (prewash/wash/rinse/spin)
+WM_ATTR_TEMP          = "temp"                     # FIXED: "tempLevel" does NOT exist on the device
 WM_ATTR_SPIN_SPEED    = "spinSpeed"
 WM_ATTR_TOTAL_WASH    = "totalWashCycle"
 WM_ATTR_TOTAL_WATER   = "totalWaterUsed"
 WM_ATTR_TOTAL_ENERGY  = "totalElectricityUsed"
-WM_ATTR_CURRENT_ENERGY = "currentElectricityUsed"  # Energia ciclo in corso
-WM_ATTR_CURRENT_WATER  = "currentWaterUsed"         # Acqua ciclo in corso
+WM_ATTR_CURRENT_ENERGY = "currentElectricityUsed"  # Energy of the current cycle
+WM_ATTR_CURRENT_WATER  = "currentWaterUsed"         # Water of the current cycle
 WM_ATTR_ON_OFF        = "onOffStatus"
-WM_ATTR_DOOR          = "doorLockStatus"            # Blocco porta (0=unlocked, 1=locked)
-WM_ATTR_DOOR_OPEN     = "doorStatus"                # Porta fisica (0=chiusa, 1=aperta)
+WM_ATTR_DOOR          = "doorLockStatus"            # Door lock (0=unlocked, 1=locked)
+WM_ATTR_DOOR_OPEN     = "doorStatus"                # Physical door (0=closed, 1=open)
 WM_ATTR_ERRORS        = "errors"
 
-# ─── Attributi asciugatrice (TD) ──────────────────────────────────────────────
-# L'asciugatrice NON espone totalWashCycle; il contatore cicli arriva da
-# programsCounter (container statistics). Confermato sul device HD100-C367GU1-IT.
+# --- Tumble dryer attributes (TD) ---------------------------------------------
+# The tumble dryer does NOT expose totalWashCycle; the cycle counter comes from
+# programsCounter (statistics container). Confirmed on the HD100-C367GU1-IT device.
 TD_ATTR_CYCLES = "programsCounter"
 
-# ─── Stati lavatrice / asciugatrice ──────────────────────────────────────────
+# --- Washing machine / tumble dryer states ------------------------------------
 WM_STATE_MAP = {
-    "0": "In attesa",
-    "1": "In esecuzione",
-    "2": "In pausa",
-    "3": "Completato",
-    "4": "Errore",
-    "5": "Programmato",
-    "6": "Ritardo avvio",
-    "7": "Mezzo carico",
+    "0": "waiting",
+    "1": "running",
+    "2": "paused",
+    "3": "completed",
+    "4": "error",
+    "5": "scheduled",
+    "6": "delayed_start",
+    "7": "half_load",
 }
 
-# ─── Sensori/binary aggiuntivi gruppo lavaggio ────────────────────────────────
-# Chiavi CONFERMATE live sui device di Roberto: lavatrice HW80-B14959TU1IT e
-# asciugatrice HD100-C367GU1-IT. Sono attributi diretti (non in settings).
-WM_ATTR_DIRT_LEVEL       = "dirtyLevel"          # livello sporco selezionato (1..3)
-WM_ATTR_DRY_LEVEL        = "dryLevel"            # livello asciugatura (WD/TD)
-WM_ATTR_LOADING          = "loadingPercentage"  # % carico cestello
-WM_ATTR_DELAY            = "delayTime"           # ritardo avvio impostato (minuti)
-# Binary sensor (0/1). Porta/blocco oblò già definiti sopra: WM_ATTR_DOOR_OPEN
-# (doorStatus, porta aperta) e WM_ATTR_DOOR (doorLockStatus, oblò bloccato).
-WM_ATTR_CHILD_LOCK       = "lockStatus"          # blocco comandi (sicurezza bambini)
-WM_ATTR_DRUM_CLEAN       = "drumCleaning"        # ciclo pulizia cestello consigliato
-WM_ATTR_FILTER_CLEAN     = "filterCleaning"      # pulizia filtro consigliata
-WM_ATTR_DRY_CLEAN_NEEDED = "dryCleaningNeeded"   # pulizia condensatore consigliata
+# --- Additional sensors/binary for the washing group --------------------------
+# Keys CONFIRMED live on Roberto's devices: washing machine HW80-B14959TU1IT and
+# tumble dryer HD100-C367GU1-IT. They are direct attributes (not in settings).
+WM_ATTR_DIRT_LEVEL       = "dirtyLevel"          # selected soil level (1..3)
+WM_ATTR_DRY_LEVEL        = "dryLevel"            # dryness level (WD/TD)
+WM_ATTR_LOADING          = "loadingPercentage"  # drum load %
+WM_ATTR_DELAY            = "delayTime"           # configured start delay (minutes)
+# Binary sensor (0/1). Door/door-lock already defined above: WM_ATTR_DOOR_OPEN
+# (doorStatus, door open) and WM_ATTR_DOOR (doorLockStatus, door locked).
+WM_ATTR_CHILD_LOCK       = "lockStatus"          # control lock (child safety)
+WM_ATTR_DRUM_CLEAN       = "drumCleaning"        # recommended drum-cleaning cycle
+WM_ATTR_FILTER_CLEAN     = "filterCleaning"      # recommended filter cleaning
+WM_ATTR_DRY_CLEAN_NEEDED = "dryCleaningNeeded"   # recommended condenser cleaning
 
-# Fase ciclo (prPhase, attributo grezzo numerico). Le mappe traducono prPhase ->
-# etichetta della fase; lavatrice/lavasciuga e asciugatrice usano tabelle
-# distinte. Valori non in mappa -> "Fase N".
+# Cycle phase (prPhase, raw numeric attribute). The maps translate prPhase ->
+# an ENUM machine key (rendered per-language via the sensor state translations);
+# washing machine/washer-dryer and tumble dryer use distinct tables. Values not
+# in the map -> None (the sensor reports "unknown").
 WASHING_PHASE_MAP = {
-    "0": "Pronto",
-    "1": "Lavaggio",
-    "2": "Lavaggio",
-    "3": "Salto fase",
-    "4": "Risciacquo",
-    "5": "Risciacquo",
-    "6": "Risciacquo",
-    "7": "Asciugatura",
-    "8": "Salto fase",
-    "9": "Vapore",
-    "10": "Pronto",
-    "11": "Centrifuga",
-    "12": "Pesatura",
-    "14": "Lavaggio",
-    "15": "Lavaggio",
-    "16": "Lavaggio",
-    "20": "Avvio rotazione",
-    "24": "Rinfresco",
+    "0": "ready",
+    "1": "washing",
+    "2": "washing",
+    "3": "phase_skip",
+    "4": "rinsing",
+    "5": "rinsing",
+    "6": "rinsing",
+    "7": "drying",
+    "8": "phase_skip",
+    "9": "steam",
+    "10": "ready",
+    "11": "spinning",
+    "12": "weighing",
+    "14": "washing",
+    "15": "washing",
+    "16": "washing",
+    "20": "rotation_start",
+    "24": "refresh",
 }
 TUMBLE_DRYER_PHASE_MAP = {
-    "0": "Pronto",
-    "1": "Riscaldamento",
-    "2": "Asciugatura",
-    "3": "Raffreddamento",
-    "13": "Raffreddamento",
-    "14": "Riscaldamento",
-    "15": "Riscaldamento",
-    "16": "Raffreddamento",
-    "18": "Rotazione",
-    "19": "Asciugatura",
-    "20": "Asciugatura",
+    "0": "ready",
+    "1": "heating",
+    "2": "drying",
+    "3": "cooling",
+    "13": "cooling",
+    "14": "heating",
+    "15": "heating",
+    "16": "cooling",
+    "18": "rotation",
+    "19": "drying",
+    "20": "drying",
 }
 
-# ─── Mappe value→label per i tipi Tier 2 (read-only) ─────────────────────────
-# Decodifiche degli enum hOn per i sensori dei tipi aggiuntivi. Valori non in
-# mappa -> stringa di fallback (gestita dalle value_fn in sensor.py).
+# --- value->machine-key maps for the Tier 2 types (read-only) -----------------
+# Decodings of the hOn enums into ENUM machine keys for the sensors of the
+# additional types (rendered per-language via the sensor state translations).
+# Values not in the map -> None (handled by the value_fn in sensor.py).
 
-# machMode autoritativo della app (0-10), usato dai tipi che condividono
-# MachineMode (forno, lavastoviglie, ...). NOTA: è distinto da WM_STATE_MAP, che
-# resta una mappa 0-7 storica locale del gruppo lavaggio e non va modificata.
+# Authoritative app machMode (0-10), used by the types that share MachineMode
+# (oven, dishwasher, ...). NOTE: distinct from WM_STATE_MAP (the washing group's
+# own 0-7 codes); both now hold ENUM machine keys, exposed under distinct
+# translation_keys ("machine_mode" vs "state") so their state vocabularies stay
+# separate.
 MACHINE_MODE_MAP = {
-    "0": "Inattivo",
-    "1": "Selezione",
-    "2": "In esecuzione",
-    "3": "In pausa",
-    "4": "Avvio ritardato",
-    "5": "Avvio ritardato (in corso)",
-    "6": "Errore",
-    "7": "Terminato",
-    "8": "Test",
-    "9": "Arresto",
-    "10": "Mantieni fresco",
+    "0": "idle",
+    "1": "selection",
+    "2": "running",
+    "3": "paused",
+    "4": "delayed_start",
+    "5": "delayed_start_running",
+    "6": "error",
+    "7": "finished",
+    "8": "test",
+    "9": "stopped",
+    "10": "keep_fresh",
 }
 
-# Livello sale / brillantante lavastoviglie (saltStatus / rinseAidStatus).
+# Dishwasher salt / rinse-aid level (saltStatus / rinseAidStatus).
 DW_LEVEL_MAP = {
-    "0": "OK",
-    "1": "Basso",
-    "2": "Critico",
-    "3": "Non presente",
+    "0": "ok",
+    "1": "low",
+    "2": "critical",
+    "3": "empty",
 }
 
-# Fase scaldabagno (prPhase -> EnumWaterHeaterPhase ridotta).
+# Water heater phase (prPhase -> reduced EnumWaterHeaterPhase).
 WH_PHASE_MAP = {
-    "0": "Pronto",
-    "1": "Riscaldamento",
-    "2": "Mantenimento",
+    "0": "ready",
+    "1": "heating",
+    "2": "holding",
 }
 
-# Stato robot aspirapolvere (prPhase/machMode -> RVCMachModes).
+# Robot vacuum state (prPhase/machMode -> RVCMachModes).
 RVC_STATE_MAP = {
-    "0": "In attesa",
-    "1": "Pulizia automatica",
-    "2": "Pulizia localizzata",
-    "3": "In pausa",
-    "4": "Full & Go",
-    "5": "Pulizia completata",
-    "6": "In carica",
+    "0": "waiting",
+    "1": "auto_cleaning",
+    "2": "spot_cleaning",
+    "3": "paused",
+    "4": "full_and_go",
+    "5": "cleaning_completed",
+    "6": "charging",
 }
 
-# Potenza di aspirazione robot (power).
+# Robot suction power (power).
 RVC_POWER_MAP = {
-    "0": "Auto",
-    "1": "Turbo",
-    "2": "Silenzioso",
+    "0": "auto",
+    "1": "turbo",
+    "2": "quiet",
 }

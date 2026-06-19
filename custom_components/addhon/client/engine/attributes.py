@@ -1,20 +1,18 @@
-"""HonAttribute nativo.
+"""Native HonAttribute.
 
-Porting di `_vendor/pyhon/attributes.HonAttribute`. Un "attribute" è un valore di
-stato che arriva dallo shadow del device (`shadow.parameters.<name> =
-{parNewVal, lastUpdate}`) o da un push MQTT. Comportamento ancorato a pyhOn dal
-differential test (tests/test_engine_attributes.py) sui dati reali del frigo
-(apk/dump/ref_10136/attributes.json).
+hOn attribute: a state value (`HonAttribute`) read from the device shadow
+(`shadow.parameters.<name> = {parNewVal, lastUpdate}`) or from an MQTT push.
+Behavior is pinned by the golden test (tests/test_engine_attributes.py) against
+the real fridge data (tests/fixtures/ref_10136/attributes.json).
 
-UNICA divergenza voluta vs pyhOn = FIX deprecazione: il lock usa
-`datetime.now(timezone.utc)` (aware) invece di `datetime.utcnow()` (naive,
-deprecato da Python 3.12). Il timestamp del lock è scritto e confrontato SOLO qui
-dentro, quindi naive->aware è coerente e non mischia mai aware/naive; il
-comportamento osservabile di `lock` (True entro 10s da uno shield, poi False) è
-identico. `last_update` resta parsato com'è dalla stringa ISO (può essere naive o
-aware) e non viene mai confrontato col lock, quindi nessun rischio di mixing.
+The lock uses `datetime.now(timezone.utc)` (timezone-aware) rather than
+`datetime.utcnow()` (naive, deprecated since Python 3.12). The lock timestamp is
+written and compared ONLY in here, so it is consistent and never mixes aware/naive;
+the observable behavior of `lock` (True within 10s of a shield, then False) is
+unaffected. `last_update` is still parsed as-is from the ISO string (can be naive or
+aware) and is never compared with the lock, so there is no mixing risk.
 
-Riusa il `str_to_float` nostro (client/helpers), identico a quello di pyhOn.
+Reuses our own `str_to_float` (client/helpers).
 """
 from __future__ import annotations
 
@@ -35,7 +33,7 @@ class HonAttribute:
 
     @property
     def value(self) -> float | str:
-        """Valore dell'attributo (numerico se convertibile, altrimenti stringa)."""
+        """Attribute value (numeric if convertible, otherwise a string)."""
         try:
             return str_to_float(self._value)
         except ValueError:
@@ -47,14 +45,14 @@ class HonAttribute:
 
     @property
     def last_update(self) -> Optional[datetime]:
-        """Timestamp dell'ultimo aggiornamento dall'api (None se assente/invalido)."""
+        """Timestamp of the last update from the api (None if absent/invalid)."""
         return self._last_update
 
     @property
     def lock(self) -> bool:
-        """True finché il valore è "schermato" (entro _LOCK_TIMEOUT secondi da uno
-        shield): in quella finestra gli update non-shield vengono ignorati, così un
-        comando appena inviato non viene sovrascritto da uno stato vecchio in arrivo."""
+        """True while the value is "shielded" (within _LOCK_TIMEOUT seconds of a
+        shield): in that window non-shield updates are ignored, so a just-sent
+        command is not overwritten by an old incoming state."""
         if not self._lock_timestamp:
             return False
         lock_until = self._lock_timestamp + timedelta(seconds=self._LOCK_TIMEOUT)
@@ -72,7 +70,7 @@ class HonAttribute:
         if last_update := data.get("lastUpdate"):
             try:
                 self._last_update = datetime.fromisoformat(last_update)
-            except (ValueError, TypeError):  # lastUpdate non-stringa dal cloud
+            except (ValueError, TypeError):  # non-string lastUpdate from the cloud
                 self._last_update = None
         return True
 

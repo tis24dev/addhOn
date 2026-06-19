@@ -1,19 +1,16 @@
-"""HonCommand nativo. Porting di `_vendor/pyhon/commands.py`.
+"""Command.
 
-Un comando = un dict di gruppi di parametri (parameters / ancillaryParameters / ...)
-piu' metadati di categoria/programma. Costruisce i parametri nativi (range/enum/
-fixed/program), raccoglie le rules dai parametri `category=="rule"`, e sa inviarsi
-al cloud via l'api nativa iniettata (appliance.api).
+A command = a dict of parameter groups (parameters / ancillaryParameters / ...)
+plus category/program metadata. It builds the parameters (range/enum/
+fixed/program), collects the rules from the `category=="rule"` parameters, and knows how
+to send itself to the cloud via the injected api (appliance.api).
 
-`appliance` è duck-typed (l'HonAppliance ROOT nativo):
-servono `.api`, `.zone`, `.commands`, `.sync_command_to_params`. Comportamento
-ancorato a pyhOn dal differential test sui comandi reali del frigo.
+`appliance` is duck-typed (the ROOT HonAppliance):
+it needs `.api`, `.zone`, `.commands`, `.sync_command_to_params`.
 
-DIVERGENZA VOLUTA (error-path, documentata): pyhOn su `NoAuthenticationException`
-loggava e ritornava False (il chiamante lo scambiava per successo). Qui lasciamo
-propagare l'errore -> il chiamante (button/switch/hon_commands) lo trasforma in
-HomeAssistantError onesto invece di un falso "inviato". Il path felice (return del
-risultato) e' identico.
+Error-path: on `NoAuthenticationException` the error propagates -> the caller
+(button/switch/hon_commands) turns it into an honest HomeAssistantError instead of a
+false "sent".
 """
 from __future__ import annotations
 
@@ -63,7 +60,7 @@ class HonCommand:
     @property
     def api(self) -> Any:
         if self._api is None and self._appliance is not None:
-            self._api = self._appliance.api  # puo' sollevare se non autenticato
+            self._api = self._appliance.api  # may raise if not authenticated
         if self._api is None:
             raise NoAuthenticationException("Missing hOn login")
         return self._api

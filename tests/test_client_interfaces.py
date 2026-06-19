@@ -1,13 +1,13 @@
-"""Tests del seam di migrazione (client/interfaces.py).
+"""Tests for the migration seam (client/interfaces.py).
 
-interfaces.py è SENZA dipendenze (solo typing): lo carichiamo in totale
-isolamento con importlib (niente package __init__, niente stub Home Assistant,
-niente pyhOn), così questo test non tocca lo stato condiviso del processo pytest
-e resta una verifica pura del contratto.
+interfaces.py has NO dependencies (only typing): we load it in total isolation
+with importlib (no package __init__, no Home Assistant stubs, no pyhOn), so this
+test does not touch the shared state of the pytest process and stays a pure
+contract check.
 
-Verifica che i Protocol siano runtime_checkable e che un oggetto della forma che
-usiamo davvero (value/values, +min/max/step per i range, command con send,
-appliance con commands) sia riconosciuto, mentre uno non conforme no.
+It verifies that the Protocols are runtime_checkable and that an object of the
+shape we actually use (value/values, +min/max/step for ranges, command with
+send, appliance with commands) is recognized, while a non-conforming one is not.
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ class ClientInterfacesTest(unittest.TestCase):
             step = 1.0
 
         self.assertIsInstance(WithBounds(), self.I.RangeParameter)
-        # senza min/max/step NON è un RangeParameter (ma resta un Parameter)
+        # without min/max/step it is NOT a RangeParameter (but stays a Parameter)
         self.assertNotIsInstance(OnlyValue(), self.I.RangeParameter)
         self.assertIsInstance(OnlyValue(), self.I.Parameter)
 
@@ -71,7 +71,7 @@ class ClientInterfacesTest(unittest.TestCase):
 
         self.assertIsInstance(Cmd(), self.I.Command)
 
-        class CmdNoCategories:  # parameters+send ma senza categories/category
+        class CmdNoCategories:  # parameters+send but without categories/category
             def __init__(self) -> None:
                 self.parameters: dict = {}
 
@@ -94,10 +94,10 @@ class ClientInterfacesTest(unittest.TestCase):
         self.assertIsInstance(App(), self.I.Appliance)
 
     def test_session_conformance(self) -> None:
-        # La forma che il vero pyhon.Hon espone (appliances + context manager).
-        # test_session_protocol_live.py verifica che il Hon reale abbia questi
-        # membri; nota: runtime_checkable è presence-only, non garantisce che
-        # __aenter__/__aexit__ siano coroutine (quello lo sappiamo dal codice).
+        # The shape that the real pyhon.Hon exposes (appliances + context manager).
+        # test_session_protocol_live.py verifies that the real Hon has these
+        # members; note: runtime_checkable is presence-only, it does not guarantee
+        # that __aenter__/__aexit__ are coroutines (we know that from the code).
         class Session:
             appliances: list = []
 
@@ -110,13 +110,13 @@ class ClientInterfacesTest(unittest.TestCase):
         self.assertIsInstance(Session(), self.I.HonSession)
 
         class NoCtx:
-            appliances: list = []  # manca __aenter__/__aexit__
+            appliances: list = []  # missing __aenter__/__aexit__
 
         self.assertNotIsInstance(NoCtx(), self.I.HonSession)
 
     def test_module_is_dependency_free(self) -> None:
-        # Controlla gli IMPORT reali (via ast), non il testo: la docstring cita
-        # legittimamente "homeassistant"/"_vendor" spiegando cosa NON importa.
+        # Check the real IMPORTS (via ast), not the text: the docstring legitimately
+        # mentions "homeassistant"/"_vendor" while explaining what it does NOT import.
         tree = ast.parse(_PATH.read_text(encoding="utf-8"))
         imported: set[str] = set()
         for node in ast.walk(tree):
@@ -127,7 +127,7 @@ class ClientInterfacesTest(unittest.TestCase):
         bad = sorted(
             m for m in imported if any(t in m for t in ("homeassistant", "pyhon", "_vendor"))
         )
-        self.assertEqual(bad, [], f"il seam non deve importare {bad}")
+        self.assertEqual(bad, [], f"the seam must not import {bad}")
 
 
 if __name__ == "__main__":
