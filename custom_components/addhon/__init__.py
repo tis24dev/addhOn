@@ -102,7 +102,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
 
 @callback
-def _apply_debug_options(entry: ConfigEntry) -> None:
+def _apply_debug_options(entry: ConfigEntry, *, reset_when_off: bool = True) -> None:
     """Allinea i livelli di log ai due toggle persistiti in entry.options.
 
     enable_debug=True  -> logger dell'integrazione a DEBUG; False -> NOTSET
@@ -114,16 +114,28 @@ def _apply_debug_options(entry: ConfigEntry) -> None:
     esplicito del figlio MQTT vince sulla cascata del padre: attivare il DEBUG
     dell'integrazione NON riaccende il rumore realtime se il toggle MQTT è off.
     NB i logger sono globali al processo (vedi OptionsFlowHandler): con piu'
-    entry vince l'ultima che cambia. Disattivare enable_debug azzera anche un
-    eventuale override manuale fatto col service set_log_level.
+    entry (raro, multi-account) i livelli sono condivisi e cambiare le opzioni di
+    una entry li ri-applica in base a QUELLA entry, potendo azzerare il debug
+    attivo di un'altra. L'installazione tipica e' a singolo account.
+
+    reset_when_off=True (default, usato dal listener delle opzioni): un toggle
+    OFF AZZERA il livello (NOTSET / WARNING), così disattivarlo dalla UI ha
+    effetto immediato e cancella anche un eventuale override manuale fatto col
+    service set_log_level. reset_when_off=False (usato in async_setup_entry): un
+    toggle OFF NON tocca i logger, così un DEBUG dell'integrazione impostato a
+    runtime coi service sopravvive ai re-setup/retry (es. login instabile) invece
+    di essere ri-azzerato a ogni tentativo; il silenziamento MQTT di default alla
+    prima registrazione resta comunque garantito da _async_register_services (che
+    pero', su un reload dell'unica entry che rimuove e ri-registra i service,
+    ri-silenzia anche un eventuale livello MQTT alzato a runtime).
     """
     if entry.options.get(CONF_ENABLE_DEBUG, False):
         apply_integration_log_level(logging.DEBUG)
-    else:
+    elif reset_when_off:
         reset_integration_log_level()
     if entry.options.get(CONF_ENABLE_MQTT_DEBUG, False):
         apply_mqtt_log_level(logging.DEBUG)
-    else:
+    elif reset_when_off:
         silence_mqtt_noise()
 
 
@@ -233,6 +245,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # registra il service di debug. Fatto PRIMA del setup di pyhOn così il
     # logger è già a WARNING quando il client MQTT inizia a (ri)connettersi.
     _async_register_services(hass)
+
+    # Applica SUBITO i toggle di debug persistiti, ma DOPO _async_register_services
+    # (che alla prima registrazione silenzia il rumore MQTT di default) così il
+    # toggle MQTT persistito, se attivo, vince su quel silenziamento. Applicarli
+    # qui e non a fine setup fa sì che il livello DEBUG copra anche il percorso di
+    # setup (login, discovery, primo refresh): è proprio ciò che si vuole tracciare
+    # quando si attiva il debug per problemi di discovery. reset_when_off=False: un
+    # toggle OFF non deve ri-azzerare un DEBUG impostato a runtime coi service, che
+    # deve sopravvivere ai retry di un setup che fallisce (il silenziamento MQTT di
+    # default resta garantito da _async_register_services).
+    _apply_debug_options(entry, reset_when_off=False)
 
     # FIX: la chiave salvata dal config_flow è "email", non "username"
     email = entry.data.get("email")
@@ -366,10 +389,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _async_close_client(hon_client)
         raise
 
-    # Setup riuscito: applica i toggle di debug persistiti e registra un listener
-    # che li ri-applica a caldo quando cambiano (async_on_unload rimuove il
-    # listener allo scarico dell'entry, senza un reload).
-    _apply_debug_options(entry)
+    # Setup riuscito: registra un listener che ri-applica a caldo i toggle di
+    # debug quando cambiano (async_on_unload rimuove il listener allo scarico
+    # dell'entry, senza un reload). I livelli sono già stati applicati a inizio
+    # setup; qui resta solo da agganciare l'aggiornamento a caldo.
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 

@@ -98,6 +98,7 @@ def _install_stubs() -> None:
                 self.default = kwargs.get("default")
 
         vol.Required = Required
+        vol.In = lambda container=None, *args, **kwargs: container
         vol._addhon_capturing = True
 
 
@@ -127,11 +128,29 @@ class _FakeEntry:
         self.options = options or {}
 
 
+class _FakeServices:
+    """Minimal hass.services for exercising _async_register_services."""
+
+    def __init__(self) -> None:
+        self._registered: set[tuple[str, str]] = set()
+
+    def has_service(self, domain, service) -> bool:
+        return (domain, service) in self._registered
+
+    def async_register(self, domain, service, handler, schema=None) -> None:
+        self._registered.add((domain, service))
+
+
+class _FakeHass:
+    def __init__(self) -> None:
+        self.services = _FakeServices()
+
+
 def _make_options_flow(entry):
     from custom_components.addhon.config_flow import OptionsFlowHandler
 
     flow = OptionsFlowHandler()
-    flow.config_entry = entry  # in HA 2024.11+ this is auto-provided; set it for tests
+    flow.config_entry = entry  # in HA 2024.12.0+ this is auto-provided; set it for tests
     flow.calls = {}
 
     def _show_form(*, step_id, data_schema=None, **kwargs):
@@ -280,6 +299,103 @@ class ResetHelperTest(unittest.TestCase):
             self.assertEqual(logging.getLogger(name).level, logging.NOTSET)
 
 
+class RegisterThenApplyOrderTest(unittest.TestCase):
+    """Helper-composition guard (NOT the production-order guard): proves that
+    _async_register_services default-silences the MQTT logger on first
+    registration, and that a LATER _apply_debug_options with the MQTT toggle ON
+    overrides it back to DEBUG. The PRODUCTION call order inside async_setup_entry
+    is pinned separately and behaviorally by SetupEntryOrderingTest and (in
+    source) by WiringTest.test_debug_options_applied_before_setup_path.
+    """
+
+    def setUp(self) -> None:
+        names = ("custom_components.addhon", "custom_components.addhon.client.transport.mqtt")
+        self._saved = {n: logging.getLogger(n).level for n in names}
+
+    def tearDown(self) -> None:
+        for name, level in self._saved.items():
+            logging.getLogger(name).setLevel(level)
+
+    def test_register_silences_then_apply_on_overrides(self) -> None:
+        from custom_components.addhon import (
+            _apply_debug_options,
+            _async_register_services,
+        )
+
+        mqtt_logger = logging.getLogger(
+            "custom_components.addhon.client.transport.mqtt"
+        )
+        mqtt_logger.setLevel(logging.DEBUG)  # start dirty to prove the silence ran
+
+        hass = _FakeHass()
+        # First registration silences MQTT to WARNING.
+        _async_register_services(hass)
+        self.assertEqual(mqtt_logger.level, logging.WARNING)
+
+        # A later apply with MQTT debug ON overrides back to DEBUG.
+        _apply_debug_options(_FakeEntry({CONF_ENABLE_MQTT_DEBUG: True}))
+        self.assertEqual(mqtt_logger.level, logging.DEBUG)
+
+
+class SetupEntryOrderingTest(unittest.IsolatedAsyncioTestCase):
+    """Behavioral guard that drives the REAL async_setup_entry far enough to
+    observe production behavior. async_setup_entry bails at the missing-email
+    check (returns False) AFTER _async_register_services + the early
+    _apply_debug_options run, so HonClient is imported but never constructed and
+    no login happens. The real .hon_client is NOT stubbed: importing it is part of
+    what this exercises (a stub would mask an import-time regression there).
+    """
+
+    def setUp(self) -> None:
+        names = ("custom_components.addhon", "custom_components.addhon.client.transport.mqtt")
+        self._saved = {n: logging.getLogger(n).level for n in names}
+
+    def tearDown(self) -> None:
+        for name, level in self._saved.items():
+            logging.getLogger(name).setLevel(level)
+
+    async def test_setup_escalates_toggles_after_default_silence(self) -> None:
+        # PRODUCTION-ORDER guard: with both toggles ON, async_setup_entry must end
+        # with MQTT at DEBUG. That only holds if register-services (default silence
+        # -> WARNING) runs BEFORE the early apply (-> DEBUG). A swapped order would
+        # leave MQTT at WARNING. This is exactly what RegisterThenApplyOrderTest
+        # CANNOT catch (it sequences the calls itself).
+        from custom_components.addhon import async_setup_entry
+
+        mqtt_logger = logging.getLogger("custom_components.addhon.client.transport.mqtt")
+        intg_logger = logging.getLogger("custom_components.addhon")
+        mqtt_logger.setLevel(logging.NOTSET)
+        intg_logger.setLevel(logging.NOTSET)
+
+        entry = _FakeEntry({CONF_ENABLE_DEBUG: True, CONF_ENABLE_MQTT_DEBUG: True})
+        entry.data = {}  # no email -> returns False right after the early apply
+
+        result = await async_setup_entry(_FakeHass(), entry)
+        self.assertFalse(result)
+        self.assertEqual(mqtt_logger.level, logging.DEBUG)
+        self.assertEqual(intg_logger.level, logging.DEBUG)
+
+    async def test_setup_off_does_not_clobber_runtime_debug(self) -> None:
+        # Regression guard (refuter HIGH): with the persisted toggle OFF, a re-setup
+        # (HA retry / reload) must NOT reset a DEBUG level set at runtime via the
+        # addhon.set_log_level service. The setup-path apply uses reset_when_off=False
+        # so an OFF toggle only leaves the logger alone. The OLD full-reset behavior
+        # would clobber it to NOTSET on every retry.
+        from custom_components.addhon import async_setup_entry, _async_register_services
+
+        intg_logger = logging.getLogger("custom_components.addhon")
+
+        hass = _FakeHass()
+        _async_register_services(hass)  # services already exist (a prior attempt)
+        intg_logger.setLevel(logging.DEBUG)  # user ran set_log_level: debug at runtime
+
+        entry = _FakeEntry({CONF_ENABLE_DEBUG: False, CONF_ENABLE_MQTT_DEBUG: False})
+        entry.data = {}
+        await async_setup_entry(hass, entry)
+
+        self.assertEqual(intg_logger.level, logging.DEBUG)  # survived the re-setup
+
+
 class WiringTest(unittest.TestCase):
     """Source-level guards for the live-apply listener wiring in __init__.py."""
 
@@ -291,6 +407,55 @@ class WiringTest(unittest.TestCase):
         self.assertIn("reset_integration_log_level", src)
         self.assertIn("CONF_ENABLE_DEBUG", src)
         self.assertIn("CONF_ENABLE_MQTT_DEBUG", src)
+
+    def test_debug_options_applied_before_setup_path(self) -> None:
+        # The persisted toggles must be applied at the TOP of async_setup_entry so
+        # DEBUG covers the setup path (login/discovery/first refresh), and AFTER
+        # _async_register_services so its default MQTT silence does not clobber the
+        # MQTT toggle. Pin both orderings in source. (Match "(entry" without the
+        # closing paren so the reset_when_off kwarg does not break the search.)
+        src = INIT.read_text(encoding="utf-8")
+        setup_idx = src.index("async def async_setup_entry")
+        register_idx = src.index("_async_register_services(hass)", setup_idx)
+        apply_idx = src.index("_apply_debug_options(entry", setup_idx)
+        client_setup_idx = src.index("hon_client.setup_sync", setup_idx)
+        self.assertLess(
+            register_idx,
+            apply_idx,
+            "register services (default MQTT silence) must precede applying toggles",
+        )
+        self.assertLess(
+            apply_idx,
+            client_setup_idx,
+            "debug options must be applied before the hOn setup path",
+        )
+
+    def test_setup_applies_debug_options_exactly_once(self) -> None:
+        # The move replaced the end-of-setup call; there must be exactly ONE apply
+        # inside async_setup_entry (no leftover double-apply). Ignore comment lines
+        # so a comment mentioning the call cannot skew the count.
+        src = INIT.read_text(encoding="utf-8")
+        start = src.index("async def async_setup_entry")
+        end = src.index("async def async_unload_entry", start)
+        code = "\n".join(
+            ln for ln in src[start:end].splitlines() if not ln.lstrip().startswith("#")
+        )
+        self.assertEqual(code.count("_apply_debug_options("), 1)
+
+    def test_setup_apply_disables_reset_when_off(self) -> None:
+        # The setup-path apply must pass reset_when_off=False so an OFF toggle does
+        # not clobber a runtime-set debug level across retries (the listener path
+        # keeps the default reset semantics). Match the kwarg anywhere in the setup
+        # span to stay robust to reformatting (e.g. a trailing comma), but strip
+        # comment lines so the explanatory comment mentioning the kwarg cannot make
+        # this guard vacuous.
+        src = INIT.read_text(encoding="utf-8")
+        start = src.index("async def async_setup_entry")
+        end = src.index("async def async_unload_entry", start)
+        code = "\n".join(
+            ln for ln in src[start:end].splitlines() if not ln.lstrip().startswith("#")
+        )
+        self.assertIn("reset_when_off=False", code)
 
     def test_hacs_declares_min_ha_for_options_flow(self) -> None:
         # The OptionsFlow relies on HA auto-injecting self.config_entry, which only

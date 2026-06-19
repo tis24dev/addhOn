@@ -203,7 +203,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Opzioni dell'integrazione: due toggle di debug indipendenti.
 
-    HA 2024.11+: NON impostare self.config_entry nell'__init__ (deprecato e
+    HA 2024.12.0+: NON impostare self.config_entry nell'__init__ (deprecato e
     iniettato automaticamente). I default sono letti da self.config_entry.options
     (False sulle installazioni che non hanno mai salvato opzioni). I valori sono
     applicati a caldo da _apply_debug_options via l'options update listener: NB
