@@ -309,6 +309,41 @@ class NumberSetpointTest(unittest.TestCase):
         self.assertEqual(commands["settings"].parameters["tempSel"].value, 10)  # rollback
         self.assertEqual(commands["settings"].send_calls, 0)
 
+    def test_rollback_on_send_failure(self) -> None:
+        # send() falliva FUORI dal try -> i parametri restavano alterati. Ora il send
+        # e' nel try e un suo fallimento ripristina lo stato.
+        from custom_components.addhon.hon_commands import async_send_command
+
+        class _FailSend(RecordingCommand):
+            async def send(self) -> None:
+                self.send_calls += 1
+                raise RuntimeError("send boom")
+
+        cmd = _FailSend({"tempSel": RangeParam(10, 5, 20, 1)})
+        app = FakeAppliance({"settings": cmd})
+        with self.assertRaises(RuntimeError):
+            asyncio.run(async_send_command(FakeHass(), FakeClient(), app, "settings", {"tempSel": 15}))
+        self.assertEqual(cmd.parameters["tempSel"].value, 10)  # rollback (era 15)
+
+    def test_rollback_on_presend_failure(self) -> None:
+        # pre_send girava PRIMA del try: se mutava un parametro e poi falliva, la
+        # mutazione restava. Ora pre_send e' nel try e viene ripristinato.
+        from custom_components.addhon.hon_commands import async_send_command
+
+        cmd = RecordingCommand({"a": RangeParam(1, 0, 5, 1), "b": RangeParam(2, 0, 5, 1)})
+        app = FakeAppliance({"settings": cmd})
+
+        def bad_presend(cp) -> None:
+            cp["b"].value = 4  # muta un parametro non in `params`
+            raise RuntimeError("presend boom")
+
+        with self.assertRaises(RuntimeError):
+            asyncio.run(async_send_command(FakeHass(), FakeClient(), app, "settings",
+                                           {"a": 3}, pre_send=bad_presend))
+        self.assertEqual(cmd.parameters["b"].value, 2)  # mutazione di pre_send annullata
+        self.assertEqual(cmd.parameters["a"].value, 1)  # mai cambiato
+        self.assertEqual(cmd.send_calls, 0)
+
     def test_fourth_zone_appears_when_present(self) -> None:
         commands = _fridge_commands()
         commands["settings"].parameters["tempSelZ4"] = RangeParam(0, -2, 4, 1)

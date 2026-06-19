@@ -196,18 +196,25 @@ class HonCommandLoader:
     def _get_favourite_info(
         self, favourite: dict[str, Any]
     ) -> tuple[str, str, HonCommand | None]:
-        name: str = favourite.get("favouriteName", {})
+        name = str(favourite.get("favouriteName", ""))
         command = favourite.get("command", {})
-        command_name: str = command.get("commandName", "")
-        program_name = self._clean_name(command.get("programName", ""))
-        base_command = self.commands[command_name].categories.get(program_name)
+        if not isinstance(command, dict):
+            return name, "", None
+        command_name = str(command.get("commandName", ""))
+        if not command_name:
+            return name, "", None
+        parent = self.commands.get(command_name)
+        if parent is None:  # favourite stale: comando non piu' disponibile
+            return name, command_name, None
+        program_name = self._clean_name(str(command.get("programName", "")))
+        base_command = parent.categories.get(program_name)
         return name, command_name, base_command
 
     def _update_base_command_with_data(
         self, base_command: HonCommand, command: dict[str, Any]
     ) -> None:
         for data in command.values():
-            if isinstance(data, str):
+            if not isinstance(data, dict):
                 continue
             for key, value in data.items():
                 if not (parameter := base_command.parameters.get(key)):

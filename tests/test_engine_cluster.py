@@ -355,6 +355,21 @@ class ClusterBehaviorTest(unittest.TestCase):
     def test_favourite_added(self) -> None:
         self.assertIn("MyFav", _native_snapshot()["rich_favourites_categories"])
 
+    def test_favourites_malformed_do_not_crash(self) -> None:
+        # Payload favourites stale/malformati non devono fermare il loader.
+        bad_favs = [
+            {"command": {"commandName": "doesNotExist", "programName": "X"}},  # comando rimosso -> KeyError
+            {"favouriteName": "NoCmd"},  # niente chiave command
+            {"favouriteName": "BadCmd", "command": "not-a-dict"},  # command non-dict
+            {"favouriteName": "BadData",  # data non-dict -> .items() AttributeError
+             "command": {"commandName": "startProgram", "programName": "PROGRAMS.REF.SUPER_COOL"},
+             "parameters": ["not", "a", "dict"]},
+        ]
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=bad_favs))
+        cats = app.commands["startProgram"].categories
+        self.assertIn("BadData", cats)  # il valido-ma-con-data-sporco viene aggiunto
+        self.assertNotIn("doesNotExist", cats)
+
     def test_nested_rule_extras_not_cross_contaminated(self) -> None:
         # ORACOLO: due rami dello stesso trigger (ecoMode 1 e 2), ognuno con una
         # condizione annidata su machMode, devono restare indipendenti. Bug: `extra`
@@ -480,6 +495,66 @@ class ConfigRuleTest(unittest.TestCase):
     def test_missing_unitconfig_inert(self) -> None:
         c = self._build(None)  # campo assente -> non scatta (fallback come l'app)
         self.assertEqual(c.parameters["remoteActionable"].value, 1)
+
+
+class _HassStub:
+    async def async_add_executor_job(self, fn, *a):
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(fn, *a).result(timeout=5)
+
+
+class _ClientStub:
+    def run_command_sync(self, coro) -> None:
+        asyncio.run(coro)
+
+
+class _FailApi:
+    async def send_command(self, *a, **k):
+        raise RuntimeError("send boom")
+
+
+class _RuleApp:
+    zone = 0
+
+    def __init__(self) -> None:
+        self.options: dict = {}
+        self.info: dict = {}
+        self.api = _FailApi()
+        self.commands: dict = {}
+
+    def sync_command_to_params(self, name) -> None:
+        pass
+
+
+class RollbackAfterRuleCascadeTest(unittest.TestCase):
+    """Se un parametro inviato e' un trigger di rule, l'assegnazione restringe i
+    `.values` di un parametro sibling (cascade). Un send() fallito DEVE riportare
+    lo stato esatto del comando (value E values), non solo i value via setter (che
+    ri-scatenerebbe le rule e lascerebbe values ristretti -> stato corrotto)."""
+
+    def test_send_failure_restores_full_param_state(self) -> None:
+        from custom_components.addhon.hon_commands import async_send_command
+
+        app = _RuleApp()
+        cmd = NaCommand("settings", json.loads(json.dumps(_AC_IOT_COOL)), app,
+                        category_name="PROGRAMS.AC.IOT_COOL")
+        app.commands["settings"] = cmd
+        wdh = cmd.parameters["windDirectionHorizontal"]
+        eco = cmd.parameters["ecoMode"]
+        eco_before = eco.value
+        wdh_value_before = wdh.value
+        wdh_values_before = list(wdh.values)
+
+        with self.assertRaises(RuntimeError):
+            asyncio.run(async_send_command(_HassStub(), _ClientStub(), app, "settings",
+                                           {"ecoMode": "1"}))
+
+        # ecoMode=1 aveva ristretto windDirectionHorizontal a ["4"]; dopo il rollback
+        # value E values devono tornare quelli iniziali.
+        self.assertEqual(eco.value, eco_before)
+        self.assertEqual(wdh.value, wdh_value_before)
+        self.assertEqual(list(wdh.values), wdh_values_before)
 
 
 class ProtocolConformanceTest(unittest.TestCase):

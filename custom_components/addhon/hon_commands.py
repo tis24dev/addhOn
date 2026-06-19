@@ -124,35 +124,35 @@ async def async_send_command(
                     f"Parametro/i non trovato/i nel comando {command_name}: "
                     + ", ".join(missing)
                 )
-            if pre_send is not None:
-                pre_send(command_params)
-            previous: dict = {}
-            assigned: list[str] = []
+            # Snapshot dello stato interno completo di OGNI parametro PRIMA di pre_send.
+            # Assegnare un parametro-trigger fa scattare le rule, che mutano i sibling
+            # (value E values/min/max). Su un fallimento di pre_send o di send()
+            # ripristiniamo copiando __dict__ DIRETTAMENTE, senza passare dai setter:
+            # cosi' NON ri-scateniamo le rule e ripristiniamo anche values/min/max. Un
+            # rollback via setter lascerebbe i .values ristretti e solleverebbe in
+            # rivalidazione -> stato corrotto che contaminerebbe gli invii successivi.
+            # I parametri SOSTITUISCONO le liste (mai mutate in-place), quindi una copia
+            # shallow di __dict__ e' sufficiente.
+            snapshots: dict = {
+                key: dict(attr.__dict__)
+                for key, attr in command_params.items()
+                if hasattr(attr, "__dict__")
+            }
             try:
+                if pre_send is not None:
+                    pre_send(command_params)
                 for key, value in params.items():
-                    previous[key] = command_params[key].value
-                    assigned.append(key)
                     command_params[key].value = value
-                    _LOGGER.debug(
-                        "Comando %s: '%s' = %s (previous=%s)",
-                        command_name,
-                        key,
-                        value,
-                        previous[key],
-                    )
+                    _LOGGER.debug("Comando %s: '%s' = %s", command_name, key, value)
+                await command.send()
             except Exception:
-                for key in reversed(assigned):
-                    try:
-                        command_params[key].value = previous[key]
-                    except Exception as rollback_err:  # pragma: no cover - difensivo
-                        _LOGGER.warning(
-                            "Comando %s: rollback '%s' fallito: %s",
-                            command_name,
-                            key,
-                            rollback_err,
-                        )
+                for key, snap in snapshots.items():
+                    attr = command_params.get(key)
+                    if attr is None or not hasattr(attr, "__dict__"):
+                        continue
+                    attr.__dict__.clear()
+                    attr.__dict__.update(snap)
                 raise
-            await command.send()
             _LOGGER.debug(
                 "Comando %s: send completato (params=%s)", command_name, list(params)
             )
