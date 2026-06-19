@@ -16,6 +16,8 @@ _LOGGER = logging.getLogger(__name__)
 class HonBaseEntity(CoordinatorEntity):
     """Base entity for all Haier hOn devices."""
 
+    _attr_has_entity_name = True
+
     def __init__(self, coordinator, appliance_id: str, client=None) -> None:
         super().__init__(coordinator)
         self._appliance_id = appliance_id
@@ -147,7 +149,7 @@ class HonBaseEntity(CoordinatorEntity):
                 "BaseEntity debug: lookup '%s' for '%s' (id=%s) resolved from %s: "
                 "raw=%r (%s), value=%r; attribute_keys=%d %s; settings_keys=%d %s",
                 key,
-                getattr(self, "_attr_name", self.__class__.__name__),
+                getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
                 self._appliance_id,
                 source,
                 raw_value,
@@ -247,7 +249,7 @@ class HonBaseEntity(CoordinatorEntity):
                 "BaseEntity debug: lookup '%s' for '%s' (id=%s) not found, "
                 "returning default=%r; attribute_keys=%d %s; settings_keys=%d %s",
                 key,
-                getattr(self, "_attr_name", self.__class__.__name__),
+                getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
                 self._appliance_id,
                 default,
                 len(attributes) if isinstance(attributes, dict) else 0,
@@ -265,14 +267,14 @@ class HonBaseEntity(CoordinatorEntity):
         _LOGGER.debug(
             "BaseEntity debug: refresh requested after command for appliance=%s entity=%s",
             self._appliance_id,
-            getattr(self, "_attr_name", self.__class__.__name__),
+            getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
         )
         await refresh()
         if getattr(self.coordinator, "last_update_success", True) is not False:
             _LOGGER.debug(
                 "BaseEntity debug: refresh after command succeeded for appliance=%s entity=%s",
                 self._appliance_id,
-                getattr(self, "_attr_name", self.__class__.__name__),
+                getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
             )
             return
 

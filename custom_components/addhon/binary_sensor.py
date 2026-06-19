@@ -62,37 +62,31 @@ class HonBinarySensorEntityDescription(BinarySensorEntityDescription):
 
 _DOOR_OPEN = HonBinarySensorEntityDescription(
     key="door_open",
-    name="Porta",
     attr_key=WM_ATTR_DOOR_OPEN,           # doorStatus: 1 = open
     device_class=BinarySensorDeviceClass.DOOR,
 )
 _DOOR_LOCK = HonBinarySensorEntityDescription(
     key="door_lock",
-    name="Oblò Bloccato",
     icon="mdi:lock",
     attr_key=WM_ATTR_DOOR,                # doorLockStatus: 1 = locked
 )
 _CHILD_LOCK = HonBinarySensorEntityDescription(
     key="child_lock",
-    name="Blocco Comandi",
     icon="mdi:lock-alert",
     attr_key=WM_ATTR_CHILD_LOCK,         # lockStatus: 1 = active
 )
 _DRUM_CLEAN = HonBinarySensorEntityDescription(
     key="drum_clean_needed",
-    name="Pulizia Cestello",
     attr_key=WM_ATTR_DRUM_CLEAN,
     device_class=BinarySensorDeviceClass.PROBLEM,
 )
 _FILTER_CLEAN = HonBinarySensorEntityDescription(
     key="filter_clean_needed",
-    name="Pulizia Filtro",
     attr_key=WM_ATTR_FILTER_CLEAN,
     device_class=BinarySensorDeviceClass.PROBLEM,
 )
 _DRY_CLEAN = HonBinarySensorEntityDescription(
     key="dry_clean_needed",
-    name="Pulizia Condensatore",
     attr_key=WM_ATTR_DRY_CLEAN_NEEDED,
     device_class=BinarySensorDeviceClass.PROBLEM,
 )
@@ -102,7 +96,6 @@ _DRY_CLEAN = HonBinarySensorEntityDescription(
 # lastConnEvent.category). on = connected.
 _CONNECTIVITY = HonBinarySensorEntityDescription(
     key="connectivity",
-    name="Connettività",
     attr_key="available",
     device_class=BinarySensorDeviceClass.CONNECTIVITY,
 )
@@ -122,34 +115,32 @@ _DRY_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
 # automatically drops those that a given model does not report.
 
 
-def _door(key: str, name: str, attr: str) -> HonBinarySensorEntityDescription:
+def _door(key: str, attr: str, translation_key=None) -> HonBinarySensorEntityDescription:
     return HonBinarySensorEntityDescription(
-        key=key, name=name, attr_key=attr, device_class=BinarySensorDeviceClass.DOOR,
+        key=key, attr_key=attr, translation_key=translation_key,
+        device_class=BinarySensorDeviceClass.DOOR,
     )
 
 
 # Fridge / fridge-freezer / freezer (REF/FR/FRE).
 _COOLING_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
-    _door("door_zone1", "Porta Zona 1", "doorStatusZ1"),
-    _door("door2_zone1", "Porta 2 Zona 1", "door2StatusZ1"),
-    _door("door_zone2", "Porta Zona 2", "doorStatusZ2"),
-    _door("door_zone3", "Porta Zona 3", "doorStatusZ3"),
+    _door("door_zone1", "doorStatusZ1"),
+    _door("door2_zone1", "door2StatusZ1"),
+    _door("door_zone2", "doorStatusZ2"),
+    _door("door_zone3", "doorStatusZ3"),
     HonBinarySensorEntityDescription(
         key="ice_maker",
-        name="Produzione Ghiaccio",
         icon="mdi:snowflake",
         attr_key="icemakerOnOffStatus",
         device_class=BinarySensorDeviceClass.RUNNING,
     ),
     HonBinarySensorEntityDescription(
         key="ice_box_full",
-        name="Contenitore Ghiaccio Pieno",
         attr_key="icemakerIceboxFullStatus",
         device_class=BinarySensorDeviceClass.PROBLEM,
     ),
     HonBinarySensorEntityDescription(
         key="energy_saving",
-        name="Risparmio Energetico",
         icon="mdi:leaf",
         attr_key="energySavingStatus",
     ),
@@ -157,27 +148,25 @@ _COOLING_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
 
 # Oven (OV).
 _OVEN_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
-    _door("door_open", "Porta", "doorStatus"),
-    _door("door_zone1", "Porta Cavità 1", "doorStatusZ1"),
-    _door("door_zone2", "Porta Cavità 2", "doorStatusZ2"),
+    _door("door_open", "doorStatus"),
+    _door("door_zone1", "doorStatusZ1", translation_key="door_cavity1"),
+    _door("door_zone2", "doorStatusZ2", translation_key="door_cavity2"),
 )
 
 # Dishwasher (DW).
 _DISHWASHER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
-    _door("door_open", "Porta", "doorStatus"),
+    _door("door_open", "doorStatus"),
 )
 
 # Wine cellar (WC).
 _WINE_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     HonBinarySensorEntityDescription(
         key="light",
-        name="Luce",
         attr_key="lightStatus",
         device_class=BinarySensorDeviceClass.LIGHT,
     ),
     HonBinarySensorEntityDescription(
         key="presence",
-        name="Presenza",
         attr_key="humanSensingResult",
         device_class=BinarySensorDeviceClass.OCCUPANCY,
     ),
@@ -187,7 +176,6 @@ _WINE_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
 _HOB_BINARY: tuple[HonBinarySensorEntityDescription, ...] = tuple(
     HonBinarySensorEntityDescription(
         key=f"pan_zone{z}",
-        name=f"Pentola Zona {z}",
         icon="mdi:pot-steam",
         attr_key=f"panStatusZ{z}",
     )
@@ -198,13 +186,11 @@ _HOB_BINARY: tuple[HonBinarySensorEntityDescription, ...] = tuple(
 _HOOD_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     HonBinarySensorEntityDescription(
         key="light",
-        name="Luce",
         attr_key="lightStatus",
         device_class=BinarySensorDeviceClass.LIGHT,
     ),
     HonBinarySensorEntityDescription(
         key="filter_clean_needed",
-        name="Pulizia Filtro",
         attr_key="filterCleaningAlarmStatus",
         device_class=BinarySensorDeviceClass.PROBLEM,
     ),
@@ -214,13 +200,12 @@ _HOOD_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
 _WATER_HEATER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     HonBinarySensorEntityDescription(
         key="light",
-        name="Spia",
+        translation_key="indicator_light",
         attr_key="lightStatus",
         device_class=BinarySensorDeviceClass.LIGHT,
     ),
     HonBinarySensorEntityDescription(
         key="child_lock",
-        name="Blocco Comandi",
         icon="mdi:lock-alert",
         attr_key="lockStatus",
     ),
@@ -288,8 +273,7 @@ class HonBinarySensor(HonBaseEntity, BinarySensorEntity):
     ) -> None:
         super().__init__(coordinator, appliance_id)
         self.entity_description = description
-        device_name = self._appliance_data.get("name", "Haier")
-        self._attr_name = f"{device_name} - {description.name}"
+        self._attr_translation_key = description.translation_key or description.key
         self._attr_unique_id = f"{appliance_id}_{description.key}"
 
     @property

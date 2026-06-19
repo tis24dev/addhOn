@@ -78,6 +78,7 @@ def _install_homeassistant_stubs() -> None:
     class NumberEntityDescription:
         key: str
         name: str | None = None
+        translation_key: str | None = None
         icon: str | None = None
         device_class: object | None = None
         native_unit_of_measurement: str | None = None

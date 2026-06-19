@@ -70,8 +70,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
 
     def __init__(self, coordinator, appliance_id: str, client=None) -> None:
         super().__init__(coordinator, appliance_id, client)
-        device_name = self._appliance_data.get("name", "Condizionatore Haier")
-        self._attr_name = device_name
+        self._attr_name = None
         self._attr_unique_id = f"{appliance_id}_climate"
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._attr_target_temperature_step = 1.0
@@ -103,7 +102,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         self._attr_fan_modes = list(AC_FAN_MAP_REVERSE.keys())
         _LOGGER.debug(
             "Climate debug: initialized '%s' id=%s hvac_modes=%s fan_modes=%s temp_range=%s-%s",
-            self._attr_name,
+            self._attr_unique_id,
             appliance_id,
             self._attr_hvac_modes,
             self._attr_fan_modes,
@@ -118,7 +117,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         if str(on_off) == "0":
             _LOGGER.debug(
                 "Climate debug: hvac_mode '%s' id=%s onOffStatus=%s -> OFF",
-                self._attr_name,
+                self._attr_unique_id,
                 self._appliance_id,
                 on_off,
             )
@@ -135,7 +134,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             mode = HVACMode(str(mode_str).lower())
             _LOGGER.debug(
                 "Climate debug: hvac_mode '%s' id=%s onOffStatus=%s machMode=%s -> %s",
-                self._attr_name,
+                self._attr_unique_id,
                 self._appliance_id,
                 on_off,
                 mode_val,

@@ -278,7 +278,7 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         await select.async_setup_entry(hass, FakeEntry(), added.extend)
 
         self.assertEqual(1, len(added))
-        self.assertEqual("Washer - Programma", added[0]._attr_name)
+        self.assertEqual("program", added[0]._attr_translation_key)
         self.assertEqual(["Cotone", "Sintetici"], added[0]._attr_options)
 
     async def test_select_option_records_pending_without_starting(self) -> None:
@@ -315,7 +315,7 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
             FakeClient(),
             command_name="startProgram",
             unique_suffix="start_program",
-            name_suffix="Avvia programma",
+            translation_key="start_program",
             icon="mdi:play-circle",
         )
         self._attach(button)
@@ -342,7 +342,7 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
             FakeClient(),
             command_name="stopProgram",
             unique_suffix="stop_program",
-            name_suffix="Ferma programma",
+            translation_key="stop_program",
             icon="mdi:stop-circle",
             command_parameters={"onOffStatus": "0"},
         )
@@ -431,7 +431,7 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
             FakeClient(),
             command_name="startProgram",
             unique_suffix="start_program",
-            name_suffix="Avvia programma",
+            translation_key="start_program",
             icon="mdi:play-circle",
         )
         self._attach(button)
@@ -697,7 +697,7 @@ class DebugLoggingGuardTest(unittest.IsolatedAsyncioTestCase):
             FakeClient(),
             command_name="startProgram",
             unique_suffix="start_program",
-            name_suffix="Avvia programma",
+            translation_key="start_program",
             icon="mdi:play-circle",
         )
         self._attach(entity)

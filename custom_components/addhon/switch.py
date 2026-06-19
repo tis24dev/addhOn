@@ -26,7 +26,6 @@ class HonAcSwitchDescription:
     """
 
     key: str            # unique_id suffix
-    name: str
     param: str
     icon: str | None = None
 
@@ -34,22 +33,22 @@ class HonAcSwitchDescription:
 # AC switches: 0/1 parameters confirmed in the settings command of Roberto's AC.
 # Capability-gated: each is created only if the device actually exposes the parameter.
 _AC_SWITCHES: tuple[HonAcSwitchDescription, ...] = (
-    HonAcSwitchDescription(key="sleep", name="Modalità Notte", param="silentSleepStatus", icon="mdi:power-sleep"),
-    HonAcSwitchDescription(key="mute", name="Muto", param="muteStatus", icon="mdi:volume-off"),
-    HonAcSwitchDescription(key="eco", name="Eco", param="echoStatus", icon="mdi:leaf"),
-    HonAcSwitchDescription(key="rapid", name="Rapido", param="rapidMode", icon="mdi:fan-plus"),
-    HonAcSwitchDescription(key="health", name="Health", param="healthMode", icon="mdi:heart-pulse"),
-    HonAcSwitchDescription(key="self_clean", name="Autopulizia", param="selfCleaningStatus", icon="mdi:spray-bottle"),
-    HonAcSwitchDescription(key="self_clean_56", name="Autopulizia 56°C", param="selfCleaning56Status", icon="mdi:spray"),
-    HonAcSwitchDescription(key="display", name="Display", param="screenDisplayStatus", icon="mdi:monitor"),
-    HonAcSwitchDescription(key="light", name="Luce", param="lightStatus", icon="mdi:lightbulb"),
-    HonAcSwitchDescription(key="ten_degree_heating", name="Riscaldamento 10°C", param="10degreeHeatingStatus", icon="mdi:snowflake-melt"),
-    HonAcSwitchDescription(key="child_lock", name="Blocco Bambini", param="lockStatus", icon="mdi:lock"),
-    HonAcSwitchDescription(key="human_sensing", name="Sensore Presenza", param="humanSensingStatus", icon="mdi:motion-sensor"),
-    HonAcSwitchDescription(key="electric_heating", name="Riscaldamento Elettrico", param="electricHeatingStatus", icon="mdi:radiator"),
-    HonAcSwitchDescription(key="fresh_air", name="Aria Fresca", param="freshAirStatus", icon="mdi:air-filter"),
-    HonAcSwitchDescription(key="half_degree", name="Mezzo Grado", param="halfDegreeSettingStatus", icon="mdi:thermometer-lines"),
-    HonAcSwitchDescription(key="energy_saving", name="Risparmio Energetico", param="energySavingStatus", icon="mdi:meter-electric"),
+    HonAcSwitchDescription(key="sleep", param="silentSleepStatus", icon="mdi:power-sleep"),
+    HonAcSwitchDescription(key="mute", param="muteStatus", icon="mdi:volume-off"),
+    HonAcSwitchDescription(key="eco", param="echoStatus", icon="mdi:leaf"),
+    HonAcSwitchDescription(key="rapid", param="rapidMode", icon="mdi:fan-plus"),
+    HonAcSwitchDescription(key="health", param="healthMode", icon="mdi:heart-pulse"),
+    HonAcSwitchDescription(key="self_clean", param="selfCleaningStatus", icon="mdi:spray-bottle"),
+    HonAcSwitchDescription(key="self_clean_56", param="selfCleaning56Status", icon="mdi:spray"),
+    HonAcSwitchDescription(key="display", param="screenDisplayStatus", icon="mdi:monitor"),
+    HonAcSwitchDescription(key="light", param="lightStatus", icon="mdi:lightbulb"),
+    HonAcSwitchDescription(key="ten_degree_heating", param="10degreeHeatingStatus", icon="mdi:snowflake-melt"),
+    HonAcSwitchDescription(key="child_lock", param="lockStatus", icon="mdi:lock"),
+    HonAcSwitchDescription(key="human_sensing", param="humanSensingStatus", icon="mdi:motion-sensor"),
+    HonAcSwitchDescription(key="electric_heating", param="electricHeatingStatus", icon="mdi:radiator"),
+    HonAcSwitchDescription(key="fresh_air", param="freshAirStatus", icon="mdi:air-filter"),
+    HonAcSwitchDescription(key="half_degree", param="halfDegreeSettingStatus", icon="mdi:thermometer-lines"),
+    HonAcSwitchDescription(key="energy_saving", param="energySavingStatus", icon="mdi:meter-electric"),
 )
 
 
@@ -123,10 +122,9 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
 
     def __init__(self, coordinator, appliance_id: str, client=None) -> None:
         super().__init__(coordinator, appliance_id, client)
-        device_name = self._appliance_data.get("name", "Lavatrice")
         self._attr_unique_id = f"{appliance_id}_pause"
-        self._attr_name = f"{device_name} - Pausa"
-        _LOGGER.debug("Switch debug: initialized '%s' id=%s", self._attr_name, appliance_id)
+        self._attr_translation_key = "pause"
+        _LOGGER.debug("Switch debug: initialized '%s' id=%s", self._attr_unique_id, appliance_id)
 
     @property
     def is_on(self) -> bool:
@@ -134,7 +132,7 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
         is_paused = str(val) == "2"
         _LOGGER.debug(
             "Switch debug: is_on '%s' id=%s machMode=%s -> %s",
-            self._attr_name,
+            self._attr_unique_id,
             self._appliance_id,
             val,
             is_paused,
@@ -204,14 +202,13 @@ class HonAcSwitch(HonBaseEntity, SwitchEntity):
     def __init__(self, coordinator, appliance_id: str, description: HonAcSwitchDescription, client=None) -> None:
         super().__init__(coordinator, appliance_id, client)
         self._desc = description
-        device_name = self._appliance_data.get("name", "Condizionatore")
-        self._attr_name = f"{device_name} - {description.name}"
+        self._attr_translation_key = description.key
         self._attr_unique_id = f"{appliance_id}_{description.key}"
         if description.icon:
             self._attr_icon = description.icon
         _LOGGER.debug(
             "Switch debug: initialized AC switch '%s' id=%s param=%s",
-            self._attr_name, appliance_id, description.param,
+            self._attr_unique_id, appliance_id, description.param,
         )
 
     @property

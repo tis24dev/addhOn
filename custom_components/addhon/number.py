@@ -67,12 +67,12 @@ class HonNumberEntityDescription(NumberEntityDescription):
     fallback_step: float = 1.0
 
 
-def _temp(key: str, name: str, param: str) -> HonNumberEntityDescription:
+def _temp(key: str, param: str, translation_key=None) -> HonNumberEntityDescription:
     """Temperature setpoint (C)."""
     return HonNumberEntityDescription(
         key=key,
-        name=name,
         param=param,
+        translation_key=translation_key,
         device_class=NumberDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         mode=NumberMode.BOX,
@@ -83,24 +83,24 @@ def _temp(key: str, name: str, param: str) -> HonNumberEntityDescription:
 # Fridge family (REF/FR/FRE): zone superset S7. On the real fridge Z1/Z2/Z3 appear;
 # Z4/UZ/LZ appear only on the models that expose them (gate).
 _COOLING_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
-    _temp("target_temp_zone1", "Temperatura Zona 1", "tempSelZ1"),
-    _temp("target_temp_zone2", "Temperatura Zona 2", "tempSelZ2"),
-    _temp("target_temp_zone3", "Temperatura Zona 3", "tempSelZ3"),
-    _temp("target_temp_zone4", "Temperatura Zona 4", "tempSelZ4"),
-    _temp("target_temp_upper", "Temperatura Zona Superiore", "tempSelUZ"),
-    _temp("target_temp_lower", "Temperatura Zona Inferiore", "tempSelLZ"),
+    _temp("target_temp_zone1", "tempSelZ1"),
+    _temp("target_temp_zone2", "tempSelZ2"),
+    _temp("target_temp_zone3", "tempSelZ3"),
+    _temp("target_temp_zone4", "tempSelZ4"),
+    _temp("target_temp_upper", "tempSelUZ"),
+    _temp("target_temp_lower", "tempSelLZ"),
 )
 
 # Wine cellar (WC): per-zone target + generic (S7).
 _WINE_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
-    _temp("target_temp", "Temperatura", "tempSel"),
-    _temp("target_temp_zone2", "Temperatura Zona 2", "tempSelZ2"),
-    _temp("target_temp_zone3", "Temperatura Zona 3", "tempSelZ3"),
+    _temp("target_temp", "tempSel"),
+    _temp("target_temp_zone2", "tempSelZ2"),
+    _temp("target_temp_zone3", "tempSelZ3"),
 )
 
 # Oven (OV): cavity target (S7).
 _OVEN_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
-    _temp("target_temp", "Temperatura Forno", "tempSel"),
+    _temp("target_temp", "tempSel", translation_key="target_temp_oven"),
 )
 
 NUMBERS: dict[str, tuple[HonNumberEntityDescription, ...]] = {
@@ -163,8 +163,7 @@ class HonNumber(HonBaseEntity, NumberEntity):
         self.entity_description = description
         self._command_name = command_name
         self._param = param
-        device_name = self._appliance_data.get("name", "Haier")
-        self._attr_name = f"{device_name} - {description.name}"
+        self._attr_translation_key = description.translation_key or description.key
         self._attr_unique_id = f"{appliance_id}_{description.key}"
         # Range snapshot used as fallback; the live bounds are re-read from the
         # parameter on each access (the pyhOn rules can change them at runtime).
@@ -175,7 +174,7 @@ class HonNumber(HonBaseEntity, NumberEntity):
         )
         _LOGGER.debug(
             "Number debug: init '%s' id=%s param=%s cmd=%s range=%s",
-            self._attr_name, appliance_id, description.param, command_name, self._live_range,
+            self._attr_unique_id, appliance_id, description.param, command_name, self._live_range,
         )
 
     @property

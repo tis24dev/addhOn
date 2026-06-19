@@ -83,9 +83,8 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
 
     def __init__(self, coordinator, appliance_id: str, client=None) -> None:
         super().__init__(coordinator, appliance_id, client)
-        device_name = self._appliance_data.get("name", "Lavatrice")
         self._attr_unique_id = f"{appliance_id}_program"
-        self._attr_name = f"{device_name} - Programma"
+        self._attr_translation_key = "program"
 
         self._program_map: dict[str, str] = {}
         appliance = self._appliance
@@ -96,7 +95,7 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         self._attr_options = list(self._program_reverse.keys())
         _LOGGER.debug(
             "Select debug: initialized '%s' id=%s programs=%d map=%s",
-            self._attr_name,
+            self._attr_unique_id,
             appliance_id,
             len(self._program_map),
             self._program_map,

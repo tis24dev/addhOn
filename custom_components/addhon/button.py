@@ -55,7 +55,7 @@ async def async_setup_entry(
                     client,
                     command_name="startProgram",
                     unique_suffix="start_program",
-                    name_suffix="Avvia programma",
+                    translation_key="start_program",
                     icon="mdi:play-circle",
                 )
             )
@@ -68,7 +68,7 @@ async def async_setup_entry(
                     client,
                     command_name="stopProgram",
                     unique_suffix="stop_program",
-                    name_suffix="Ferma programma",
+                    translation_key="stop_program",
                     icon="mdi:stop-circle",
                     command_parameters={"onOffStatus": "0"},
                 )
@@ -87,20 +87,19 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
         *,
         command_name: str,
         unique_suffix: str,
-        name_suffix: str,
+        translation_key: str,
         icon: str,
         command_parameters: dict[str, str] | None = None,
     ) -> None:
         super().__init__(coordinator, appliance_id, client)
-        device_name = self._appliance_data.get("name", "Lavatrice")
         self._command_name = command_name
         self._command_parameters = command_parameters or {}
         self._attr_unique_id = f"{appliance_id}_{unique_suffix}"
-        self._attr_name = f"{device_name} - {name_suffix}"
+        self._attr_translation_key = translation_key
         self._attr_icon = icon
         _LOGGER.debug(
             "Button debug: initialized '%s' id=%s command=%s fixed_params=%s",
-            self._attr_name,
+            self._attr_unique_id,
             appliance_id,
             command_name,
             self._command_parameters,

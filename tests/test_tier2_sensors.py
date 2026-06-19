@@ -81,6 +81,7 @@ def _install_homeassistant_stubs() -> None:
     class SensorEntityDescription:
         key: str
         name: str | None = None
+        translation_key: str | None = None
         icon: str | None = None
         native_unit_of_measurement: str | None = None
         device_class: object | None = None
@@ -117,6 +118,7 @@ def _install_homeassistant_stubs() -> None:
     class BinarySensorEntityDescription:
         key: str
         name: str | None = None
+        translation_key: str | None = None
         icon: str | None = None
         device_class: object | None = None
 
