@@ -1,10 +1,8 @@
 """Test of the native device descriptor: `client/transport/device.HonDevice`.
 
-Originally a DIFFERENTIAL test against pyhOn's real `HonDevice` (loaded in a
-subprocess). In piece 4b the pyhOn transport (`_vendor/connection/device.py`) was
-DELETED: the oracle no longer exists. The expected values below ARE the contract
-(they were byte-identical to pyhOn, validated by the differential before the
-cutover): now we pin the cloud payload directly.
+Pins the identity payload sent to the hOn cloud (appVersion/mobileId/os/osVersion/
+deviceModel) so it does not drift unintentionally. See
+apk/analysis/device-identity.md for where these values come from.
 """
 from __future__ import annotations
 
@@ -16,19 +14,19 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _OUR_DEVICE = _ROOT / "custom_components" / "addhon" / "client" / "transport" / "device.py"
 
-# Device payload contract towards the hOn cloud (ex-pyhOn oracle, now frozen).
+# Device payload contract towards the hOn cloud.
 _DEFAULT = {
-    "appVersion": "2.6.5",
-    "mobileId": "pyhOn",
+    "appVersion": "2.27.9",
+    "mobileId": "addhon",
     "os": "android",
-    "osVersion": 999,
-    "deviceModel": "pyhOn",
+    "osVersion": 34,
+    "deviceModel": "addhon",
 }
 _DEFAULT_MOBILE = {
-    "appVersion": "2.6.5",
-    "mobileId": "pyhOn",
-    "osVersion": 999,
-    "deviceModel": "pyhOn",
+    "appVersion": "2.27.9",
+    "mobileId": "addhon",
+    "osVersion": 34,
+    "deviceModel": "addhon",
     "mobileOs": "android",
 }
 _CUSTOM = {**_DEFAULT, "mobileId": "ABC123"}
@@ -61,7 +59,7 @@ class TransportDeviceTest(unittest.TestCase):
         self.assertEqual(mobile["mobileOs"], "android")
 
     def test_empty_mobile_id_falls_back_to_default(self) -> None:
-        self.assertEqual(self.our("").mobile_id, "pyhOn")
+        self.assertEqual(self.our("").mobile_id, "addhon")
 
 
 if __name__ == "__main__":

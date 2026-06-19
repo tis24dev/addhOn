@@ -1,25 +1,22 @@
 """Client device descriptor for the addhOn transport.
 
-Native rewrite of pyhOn's `connection/device.HonDevice`: the "who am I"
-(app version, OS, model, mobileId) sent to the hOn cloud on every request.
-
-The values below mirror pyhOn's TODAY, so the payload is identical and
-the differential test (tests/test_transport_device.py) verifies it against the
-real pyhOn class. When we have the real app flow/identity (see APK
-reverse: appVersion 2.x, deviceModel "BVL", osVersion 34, real mobileId) those
-values will go here, as a separate and validated step.
+Builds the "who am I" identity (app version, OS, model, mobileId) sent to the hOn
+cloud on every request. The official app fills these from the running device
+(model, OS level, a per-device unique id); addhOn runs headless, so it sends a fixed
+identity that presents as addhOn while reporting the current app version, so the
+cloud sees an up-to-date client.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Client identity (data values that today mirror pyhOn; single point to
-# update to impersonate the real app).
-APP_VERSION = "2.6.5"
-OS_VERSION = 999
+# Fixed client identity sent to the cloud (single point to update). APP_VERSION
+# tracks the current hOn app version.
+APP_VERSION = "2.27.9"
+OS_VERSION = 34
 OS = "android"
-DEVICE_MODEL = "pyhOn"
-MOBILE_ID = "pyhOn"
+DEVICE_MODEL = "addhon"
+MOBILE_ID = "addhon"
 
 
 @dataclass(frozen=True)
@@ -35,8 +32,8 @@ class HonDevice:
     def payload(self, mobile: bool = False) -> dict[str, str | int]:
         """The identity dictionary sent to the cloud.
 
-        With `mobile=True` the `os` key becomes `mobileOs` (as the app does for the
-        "mobile" calls); it is the same transformation as pyhOn.
+        With `mobile=True` the `os` key becomes `mobileOs`, used for the cloud's
+        "mobile" calls.
         """
         data: dict[str, str | int] = {
             "appVersion": APP_VERSION,
