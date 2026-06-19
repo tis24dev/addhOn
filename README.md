@@ -1,6 +1,11 @@
+<div align="center">
 # addhOn
 
-A custom Home Assistant integration for controlling Haier appliances via the hOn cloud API. Supports air conditioning units and washing machines with full entity discovery and command routing.
+### 
+
+***A custom Home Assistant integration for controlling Haier appliances via the hOn cloud API. It discovers your paired appliances, exposes them as Home Assistant entities, and routes control commands to the supported types (see [Supported Devices](#supported-devices)).
+
+</div>
 
 ## Features
 
@@ -12,33 +17,9 @@ A custom Home Assistant integration for controlling Haier appliances via the hOn
 - **Smart attribute mapping** — device-specific attribute keys extracted from real diagnostics
 - **Full Lovelace support** — integrates seamlessly with Home Assistant UI and automations
 
-## Supported Devices
-
-### Tested & Working
-
-- **AC Unit:** Haier AS35PBPHRA-PRE
-- **Washing Machine:** Haier HW80-B14959TU1IT
-
-Other hOn-compatible Haier appliances should work — feel free to test and report.
-
-## Localization
-
-The user interface is multi-language. Entity names, the config and options
-screens, service names and descriptions, and user-facing error messages are
-provided as translations (currently English and Italian) and follow Home
-Assistant's configured language. The code, comments and log messages are
-English-only.
-
-> **Upgrading to v5.0.0:** entity *friendly names* are now localized and use Home
-> Assistant's `has_entity_name` format (`<device> <entity>`), so the displayed
-> names change. Entity IDs are unchanged, so dashboards and automations that
-> reference `entity_id` keep working.
-
 ## Prerequisites
 
 - Home Assistant 2024.12.0 or newer
-- Python 3.11+
-- Internet connection (cloud API only, no local option)
 - Haier hOn app account credentials
 
 ## Installation
@@ -60,39 +41,59 @@ mkdir -p /path/to/config/custom_components
 
 2. **Restart Home Assistant** to load the integration.
 
-3. **Add the integration** via Settings → Devices & Services → Create Automation → Haier hOn, or manually add to `configuration.yaml`:
-
-```yaml
-addhon:
-  username: your-haier-email@example.com
-  password: your-haier-password
-```
+3. **Add the integration** via Settings → Devices & Services → **Add Integration**, search for **addhOn**, then enter your Haier hOn email and password in the dialog. All configuration happens in the UI; there is no `configuration.yaml` setup.
 
 ### Method 2: HACS (if available)
 
 Add this repository to HACS as a custom integration and install from the UI.
 
-## Configuration
+### Initial setup
 
-### Basic Setup
+1. Go to Settings → Devices & Services → **Add Integration**.
+2. Search for **addhOn** and select it.
+3. Enter your Haier hOn account email and password and submit. The credentials
+   are validated against the hOn cloud and stored in the config entry.
 
-Edit your `configuration.yaml`:
+If your hOn session later expires, Home Assistant shows a **Reconfigure**
+(re-authentication) prompt asking only for the password again; no need to remove
+and re-add the integration.
 
-```yaml
-addhon:
-  username: your-haier-email@example.com
-  password: your-haier-password
-```
+### Options
 
-### Advanced Options
+Open the integration entry and choose **Configure** to toggle:
 
-```yaml
-addhon:
-  username: your-haier-email@example.com
-  password: your-haier-password
-  scan_interval: 60          # Update interval in seconds (default: 60)
-  timeout: 10                # API request timeout in seconds (default: 10)
-```
+- **Enable debug logging** — verbose integration logs.
+- **Enable MQTT realtime debug** — verbose logs for the live MQTT stream.
+
+Both persist across restarts. The polling interval is fixed at 60 seconds.
+
+## Supported Devices
+
+### Supported appliance types
+
+Air conditioners (AC), washing machines (WM), tumble dryers (TD), washer-dryers
+(WD), refrigerators and freezers (REF/FR/FRE), ovens (OV), dishwashers (DW), wine
+coolers (WC), hobs (IH/HOB), hoods (HO), coffee machines/kettles (KT), water
+heaters (WH) and robot vacuums (RVC). Air conditioners and laundry appliances have
+full control; the other types are exposed mainly as read-only sensors, with a few
+controls where they have been mapped.
+
+### Tested on real hardware
+
+- **AC Unit:** Haier AS35PBPHRA-PRE
+- **Washing Machine:** Haier HW80-B14959TU1IT
+- **Tumble Dryer:** Haier HD100-C367GU1-IT
+- **Refrigerator:** Haier HDPW5620CNPK
+
+Other hOn-compatible Haier appliances should work; feel free to test and report.
+
+## Localization
+
+The user interface is multi-language. Entity names, the config and options
+screens, service names and descriptions, and user-facing error messages are
+provided as translations (currently English and Italian) and follow Home
+Assistant's configured language. The code, comments and log messages are
+English-only.
 
 ## How It Works
 
@@ -125,39 +126,56 @@ The backend cloud service that handles:
 
 ## Entities
 
-### Climate Entity (AC Unit)
+Each discovered appliance becomes a Home Assistant **device**; the entities it
+exposes depend on its type. A **connectivity** binary sensor is always present and
+stays available even when the appliance is offline, so you can tell whether it is
+reachable (all other entities become *unavailable* while it is offline).
 
-- **Entity ID:** `climate.bedroom_ac` (example)
-- **Attributes:**
-  - `hvac_mode` — off, cool, heat, auto, dry, fan_only
-  - `current_temperature` — indoor temp
-  - `target_temperature` — set point
-  - `fan_mode` — auto, low, medium, high, highest
-  - `swing_mode` — off, vertical, horizontal, both
+### Climate (AC)
 
-### Washing Machine
+- **HVAC modes:** off, auto, cool, dry, heat, fan_only
+- **Fan modes:** auto, low, medium, high
+- **Swing:** off / on (vertical swing), when the device exposes it
+- **Temperature:** current temperature and target set point (16-30 °C)
 
-- **Entity ID:** `sensor.washing_machine_status` (example)
-- **Attributes:**
-  - `program` — current or last run program name
-  - `duration` — remaining time in minutes
-  - `cycle_status` — running, finished, error
-  - Temperature, spin speed, and other cycle parameters
+### Laundry (washing machine, tumble dryer, washer-dryer)
+
+- **Sensors:** state, program name, program phase, remaining time and, depending
+  on the model, wash temperature, spin speed, dry level, delay time, plus energy
+  and water counters
+- **Controls:** start/stop and the available programs and options, via switch,
+  select, number and button entities
+
+### Other appliances
+
+Refrigerators, ovens, dishwashers, water heaters, robot vacuums and the remaining
+types are exposed mainly through sensors (and a few controls where they have been
+mapped).
 
 ## Services
 
-### `addhon.send_command`
+Device control is done through the normal entities (climate, switch, number,
+select, button), not through a service call. The integration exposes only two
+diagnostic services (also available from Developer Tools → Actions):
 
-Send a raw command to a device.
+### `addhon.set_log_level`
+
+Set the integration's diagnostic log level at runtime.
 
 ```yaml
-service: addhon.send_command
+action: addhon.set_log_level
 data:
-  device_id: "AC_UNIT_ID"
-  command: "startProgram"
-  parameters:
-    temperature: 22
-    mode: "cool"
+  level: debug   # one of: debug, info, warning, error
+```
+
+### `addhon.set_mqtt_log_level`
+
+Set the verbosity of the realtime MQTT stream logger at runtime.
+
+```yaml
+action: addhon.set_mqtt_log_level
+data:
+  level: warning   # one of: debug, info, warning, error
 ```
 
 ## Troubleshooting
@@ -170,7 +188,7 @@ data:
 
 ### Authentication Failed
 
-- Check your Haier email and password in `configuration.yaml`
+- Re-enter your Haier email and password via the integration's re-authentication prompt (or remove and re-add the integration)
 - Verify the account is active in the Haier hOn app
 - If 2FA is enabled, disable it temporarily for the integration account
 
@@ -178,19 +196,13 @@ data:
 
 - Ensure the device is paired in the Haier hOn app
 - Check internet connectivity
-- Restart Home Assistant after adding credentials
+- After pairing a new device in the app, reload the integration (or restart Home Assistant)
 
-### Slow Updates / Timeouts
+### HVAC Mode / Fan Mode Issues
 
-- Increase the `timeout` value in configuration
-- Increase `scan_interval` to reduce polling frequency
-- Check your ISP connection (hOn API is cloud-hosted)
-
-### HVAC Mode Map Issues
-
-The integration auto-detects supported modes per device. If your AC doesn't respond to a mode:
-- Check `climate.{name}_debug_modes` in Home Assistant Developer Tools → States
-- Report unsupported modes on GitHub issues
+The integration auto-detects the modes each AC supports. If your AC does not respond to a mode:
+- Enable debug logging (see above); the climate entity logs its detected `hvac_modes` and `fan_modes` at startup
+- Report the unsupported mode on GitHub issues
 
 ## Development Notes
 
@@ -207,14 +219,7 @@ To add support for a new Haier device:
 1. Pair it in the Haier hOn app
 2. Enable debug logging and capture the device diagnostics (see [`docs/discovery-debugging.md`](docs/discovery-debugging.md))
 3. Add or extend the relevant platform file (`sensor.py`, `binary_sensor.py`, `number.py`, `select.py`, `switch.py`, ...) and, if the device type needs it, its capability map
-4. Test with your device and submit a pull request
-
-## Limitations
-
-- **Cloud-only** — requires internet connection; no local fallback
-- **Rate limiting** — the Haier API has undocumented rate limits; avoid polling faster than every 30 seconds
-- **Token expiry** — sessions expire after ~7 days of inactivity; the integration auto-refreshes on first use
-- **Brand-specific** — only works with Haier devices using the hOn API; other brands (Candy, Arçelik) use different APIs
+4. Test with your device, then open a pull request (or an issue with the captured diagnostics)
 
 ## License
 
@@ -232,7 +237,7 @@ Issues and pull requests are welcome! Please include:
 
 - **Issues:** GitHub Issues
 - **Discussions:** GitHub Discussions
-- **Documentation:** Check the wiki for detailed guides
+- **Documentation:** see the [`docs/`](docs/) folder
 
 ---
 
