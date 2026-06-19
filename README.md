@@ -1,10 +1,17 @@
 <div align="center">
-   
+
 # addhOn
 
 ### Add your Haier devices to your home automation system
 
 **A custom Home Assistant integration for controlling Haier appliances via the hOn cloud API. It discovers your paired appliances, exposes them as Home Assistant entities, and routes control commands to the supported types**
+
+[![Release](https://img.shields.io/github/v/release/telard-pixel/addhOn?logo=github&label=release)](https://github.com/telard-pixel/addhOn/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/telard-pixel/addhOn/ci.yml?branch=dev&label=CI&logo=github)](https://github.com/telard-pixel/addhOn/actions/workflows/ci.yml)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?logo=homeassistant&logoColor=white)](https://hacs.xyz/)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.12%2B-41BDF5.svg?logo=homeassistant&logoColor=white)](https://www.home-assistant.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Last commit](https://img.shields.io/github/last-commit/telard-pixel/addhOn?logo=github)](https://github.com/telard-pixel/addhOn/commits)
 
 </div>
 
