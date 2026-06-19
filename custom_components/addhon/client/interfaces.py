@@ -53,6 +53,8 @@ class Command(Protocol):
     """
 
     parameters: Mapping[str, Parameter]
+    categories: Mapping[str, "Command"]
+    category: str
 
     def send(self) -> Awaitable[bool]: ...
 

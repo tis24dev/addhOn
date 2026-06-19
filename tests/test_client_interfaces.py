@@ -62,11 +62,21 @@ class ClientInterfacesTest(unittest.TestCase):
     def test_command_and_appliance_shape(self) -> None:
         class Cmd:
             parameters: dict = {}
+            categories: dict = {}
+            category = ""
 
             def send(self):  # noqa: D401 - shape only
                 return None
 
         self.assertIsInstance(Cmd(), self.I.Command)
+
+        class CmdNoCategories:  # parameters+send ma senza categories/category
+            parameters: dict = {}
+
+            def send(self):
+                return None
+
+        self.assertNotIsInstance(CmdNoCategories(), self.I.Command)
 
         class App:
             commands: dict = {}

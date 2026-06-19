@@ -72,7 +72,7 @@ class HonAttribute:
         if last_update := data.get("lastUpdate"):
             try:
                 self._last_update = datetime.fromisoformat(last_update)
-            except ValueError:
+            except (ValueError, TypeError):  # lastUpdate non-stringa dal cloud
                 self._last_update = None
         return True
 

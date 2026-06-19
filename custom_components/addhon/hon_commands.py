@@ -86,6 +86,8 @@ def param_range(param) -> tuple[float, float, float] | None:
         return None
     if hi < lo:
         return None
+    if step <= 0:  # incremento non positivo: range incoerente per un controllo numerico
+        return None
     return lo, hi, step
 
 

@@ -352,6 +352,13 @@ class NumberSetpointTest(unittest.TestCase):
         keys = sorted(e.entity_description.key for e in added)
         self.assertIn("target_temp_zone4", keys)
 
+    def test_param_range_rejects_negative_step(self) -> None:
+        import types as _t
+
+        from custom_components.addhon.hon_commands import param_range
+        self.assertIsNone(param_range(_t.SimpleNamespace(min=2, max=8, step=-1)))
+        self.assertEqual(param_range(_t.SimpleNamespace(min=2, max=8, step=1)), (2.0, 8.0, 1.0))
+
     def test_other_types_use_their_own_candidates(self) -> None:
         # Forno: solo tempSel generico (gated).
         app = FakeAppliance({"settings": RecordingCommand({"tempSel": RangeParam(180, 30, 250, 5)})})

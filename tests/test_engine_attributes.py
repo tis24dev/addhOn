@@ -66,6 +66,12 @@ class NativeAttributeBehaviorTest(unittest.TestCase):
         a.update({"parNewVal": "2", "lastUpdate": "garbage"})
         self.assertIsNone(a.last_update)
 
+    def test_nonstring_last_update_no_crash(self) -> None:
+        # lastUpdate non-stringa dal cloud: fromisoformat solleva TypeError, che ora
+        # viene gestito (last_update=None) invece di propagare in costruzione.
+        a = NaAttr({"parNewVal": "5", "lastUpdate": 1717000000})
+        self.assertIsNone(a.last_update)
+
     def test_missing_parnewval_on_update_resets(self) -> None:
         a = NaAttr({"parNewVal": "5", "lastUpdate": "2024-01-01T00:00:00"})
         a.update({"lastUpdate": "2024-02-02T00:00:00"})  # niente parNewVal
