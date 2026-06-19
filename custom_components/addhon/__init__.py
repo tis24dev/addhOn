@@ -22,6 +22,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     APPLIANCE_TD,
     ATTR_LEVEL,
+    CONF_ENABLE_DEBUG,
+    CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
     PLATFORMS,
     SCAN_INTERVAL,
@@ -32,6 +34,7 @@ from .logging_utils import (
     MQTT_LOG_LEVELS,
     apply_integration_log_level,
     apply_mqtt_log_level,
+    reset_integration_log_level,
     silence_mqtt_noise,
 )
 
@@ -96,6 +99,47 @@ def _async_register_services(hass: HomeAssistant) -> None:
             _handle_set_log_level,
             schema=level_schema,
         )
+
+
+@callback
+def _apply_debug_options(entry: ConfigEntry) -> None:
+    """Allinea i livelli di log ai due toggle persistiti in entry.options.
+
+    enable_debug=True  -> logger dell'integrazione a DEBUG; False -> NOTSET
+                          (tornano a ereditare il livello configurato in HA).
+    enable_mqtt_debug=True -> logger MQTT realtime a DEBUG; False -> WARNING
+                          (silenziato).
+
+    Il livello MQTT si applica DOPO quello dell'integrazione, così il livello
+    esplicito del figlio MQTT vince sulla cascata del padre: attivare il DEBUG
+    dell'integrazione NON riaccende il rumore realtime se il toggle MQTT è off.
+    NB i logger sono globali al processo (vedi OptionsFlowHandler): con piu'
+    entry vince l'ultima che cambia. Disattivare enable_debug azzera anche un
+    eventuale override manuale fatto col service set_log_level.
+    """
+    if entry.options.get(CONF_ENABLE_DEBUG, False):
+        apply_integration_log_level(logging.DEBUG)
+    else:
+        reset_integration_log_level()
+    if entry.options.get(CONF_ENABLE_MQTT_DEBUG, False):
+        apply_mqtt_log_level(logging.DEBUG)
+    else:
+        silence_mqtt_noise()
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Ri-applica a caldo i livelli di log quando i toggle cambiano (no reload).
+
+    Un reload butterebbe giù auth e canale MQTT solo per cambiare un livello di
+    log; qui ri-applichiamo i livelli al volo, come fanno i service esistenti.
+    """
+    _LOGGER.debug(
+        "Options debug: opzioni aggiornate entry=%s enable_debug=%s enable_mqtt_debug=%s",
+        entry.entry_id,
+        entry.options.get(CONF_ENABLE_DEBUG, False),
+        entry.options.get(CONF_ENABLE_MQTT_DEBUG, False),
+    )
+    _apply_debug_options(entry)
 
 
 def _redact_email(email: str | None) -> str | None:
@@ -321,6 +365,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
         await _async_close_client(hon_client)
         raise
+
+    # Setup riuscito: applica i toggle di debug persistiti e registra un listener
+    # che li ri-applica a caldo quando cambiano (async_on_unload rimuove il
+    # listener allo scarico dell'entry, senza un reload).
+    _apply_debug_options(entry)
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
 

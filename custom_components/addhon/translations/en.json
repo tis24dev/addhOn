@@ -27,5 +27,20 @@
       "reauth_successful": "Re-authentication was successful.",
       "reauth_account_mismatch": "The new credentials must belong to the same hOn account."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Debug options",
+        "data": {
+          "enable_debug": "Enable debug logging",
+          "enable_mqtt_debug": "Enable MQTT realtime debug"
+        },
+        "data_description": {
+          "enable_debug": "Raise this integration's log level to DEBUG (sign in, device discovery, polling, commands). Turn off to return to Home Assistant's configured level. MQTT realtime noise stays suppressed unless its own toggle is on.",
+          "enable_mqtt_debug": "Make the MQTT realtime channel very verbose. Normally keep this off; it only covers this integration's MQTT logger, not the underlying AWS IoT libraries (use Home Assistant's logger config for those)."
+        }
+      }
+    }
   }
 }

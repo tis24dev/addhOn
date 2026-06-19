@@ -5,7 +5,14 @@ devices, or existing devices disappear after a reload.
 
 ## Enable integration debug logs
 
-From Home Assistant Developer Tools -> Actions:
+The simplest, persistent way is the UI toggle: open the integration, choose
+**Configure**, and turn on **Enable debug logging**. It survives restarts and
+raises the integration loggers to DEBUG (MQTT realtime noise stays suppressed
+unless you also enable its own toggle). Turn it off to return to Home
+Assistant's configured level.
+
+For a one-off (non-persistent) change instead, use the service from Developer
+Tools -> Actions:
 
 ```yaml
 action: addhon.set_log_level

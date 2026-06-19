@@ -27,5 +27,20 @@
       "reauth_successful": "Ri-autenticazione completata.",
       "reauth_account_mismatch": "Le nuove credenziali devono appartenere allo stesso account hOn."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opzioni di debug",
+        "data": {
+          "enable_debug": "Abilita log di debug",
+          "enable_mqtt_debug": "Abilita debug MQTT realtime"
+        },
+        "data_description": {
+          "enable_debug": "Porta il livello di log dell'integrazione a DEBUG (accesso, rilevamento dispositivi, polling, comandi). Disattiva per tornare al livello configurato in Home Assistant. Il rumore MQTT realtime resta silenziato a meno che non attivi il suo toggle.",
+          "enable_mqtt_debug": "Rende molto verboso il canale MQTT realtime. Di norma tienilo disattivato; copre solo il logger MQTT di questa integrazione, non le librerie AWS IoT sottostanti (per quelle usa la configurazione logger di Home Assistant)."
+        }
+      }
+    }
   }
 }

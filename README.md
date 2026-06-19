@@ -23,7 +23,7 @@ Other hOn-compatible Haier appliances should work — feel free to test and repo
 
 ## Prerequisites
 
-- Home Assistant 2024.1 or newer
+- Home Assistant 2024.12.0 or newer
 - Python 3.11+
 - Internet connection (cloud API only, no local option)
 - Haier hOn app account credentials
@@ -148,6 +148,12 @@ data:
 ```
 
 ## Troubleshooting
+
+> **Debug logging:** open the integration and choose **Configure** to toggle
+> **Enable debug logging** (integration) and **Enable MQTT realtime debug**
+> independently. Both persist across restarts. See
+> [`docs/discovery-debugging.md`](docs/discovery-debugging.md) and
+> [`docs/mqtt-realtime-logging.md`](docs/mqtt-realtime-logging.md).
 
 ### Authentication Failed
 

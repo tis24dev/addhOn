@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN
+from .const import CONF_ENABLE_DEBUG, CONF_ENABLE_MQTT_DEBUG, DOMAIN
 from .hon_client import HonClient, _requires_reauth
 
 _LOGGER = logging.getLogger(__name__)
@@ -90,6 +90,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Gestisce il config flow per Haier hOn Extended."""
 
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> "OptionsFlowHandler":
+        """Espone il flow Opzioni (i due toggle di debug)."""
+        # NB: niente @callback qui per non dipendere da homeassistant.core.callback
+        # (non richiesto per correttezza; l'harness di test non lo fornisce).
+        return OptionsFlowHandler()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -188,6 +197,49 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema({vol.Required("password"): str}),
             errors=errors,
             description_placeholders={"email": email},
+        )
+
+
+class OptionsFlowHandler(config_entries.OptionsFlow):
+    """Opzioni dell'integrazione: due toggle di debug indipendenti.
+
+    HA 2024.11+: NON impostare self.config_entry nell'__init__ (deprecato e
+    iniettato automaticamente). I default sono letti da self.config_entry.options
+    (False sulle installazioni che non hanno mai salvato opzioni). I valori sono
+    applicati a caldo da _apply_debug_options via l'options update listener: NB
+    i logger sono globali al processo, quindi con piu' account vince l'ultimo che
+    cambia (caso tipico = singolo account).
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={
+                    CONF_ENABLE_DEBUG: bool(user_input.get(CONF_ENABLE_DEBUG, False)),
+                    CONF_ENABLE_MQTT_DEBUG: bool(
+                        user_input.get(CONF_ENABLE_MQTT_DEBUG, False)
+                    ),
+                },
+            )
+
+        options = self.config_entry.options
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ENABLE_DEBUG,
+                        default=options.get(CONF_ENABLE_DEBUG, False),
+                    ): bool,
+                    vol.Required(
+                        CONF_ENABLE_MQTT_DEBUG,
+                        default=options.get(CONF_ENABLE_MQTT_DEBUG, False),
+                    ): bool,
+                }
+            ),
         )
 
 

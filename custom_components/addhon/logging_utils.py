@@ -62,3 +62,15 @@ def apply_integration_log_level(level: int) -> None:
 def silence_mqtt_noise() -> None:
     """Applica il livello di default: silenzia i tentativi di riconnessione."""
     apply_mqtt_log_level(DEFAULT_MQTT_LOG_LEVEL)
+
+
+def reset_integration_log_level() -> None:
+    """Riporta i logger dell'integrazione a NOTSET (ereditano il livello di HA).
+
+    Usato quando il toggle "Abilita log di debug" viene disattivato: invece di
+    forzare un livello fisso (es. WARNING) si rimuove l'override, così i logger
+    tornano a ereditare il livello configurato da Home Assistant. NON tocca i
+    logger MQTT (restano gestiti da silence_mqtt_noise / set_mqtt_log_level).
+    """
+    for name in INTEGRATION_DEBUG_LOGGERS:
+        logging.getLogger(name).setLevel(logging.NOTSET)

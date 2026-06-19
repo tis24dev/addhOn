@@ -63,6 +63,14 @@ SERVICE_SET_MQTT_LOG_LEVEL = "set_mqtt_log_level"
 SERVICE_SET_LOG_LEVEL = "set_log_level"
 ATTR_LEVEL = "level"
 
+# Chiavi opzione (entry.options) dei due toggle di debug esposti nella schermata
+# Configura/Opzioni dell'integrazione. Persistono tra i riavvii e vengono applicati
+# a caldo (vedi _apply_debug_options in __init__). enable_debug -> logger
+# dell'integrazione a DEBUG (NOTSET quando off); enable_mqtt_debug -> logger MQTT
+# realtime a DEBUG (silenziato a WARNING quando off). I due toggle sono indipendenti.
+CONF_ENABLE_DEBUG = "enable_debug"
+CONF_ENABLE_MQTT_DEBUG = "enable_mqtt_debug"
+
 # ─── Attributi condizionatore ─────────────────────────────────────────────────
 # Confermati dai diagnostics del device AS35PBPHRA-PRE
 AC_ATTR_MODE         = "settings.machMode"
