@@ -2,12 +2,12 @@
   "domain": "addhon",
   "name": "addhOn",
   "codeowners": [
-    "@telard-pixel"
+    "@tis24dev"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/telard-pixel/addhOn",
+  "documentation": "https://github.com/tis24dev/addhOn",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/telard-pixel/addhOn/issues",
+  "issue_tracker": "https://github.com/tis24dev/addhOn/issues",
   "requirements": [
     "awsiotsdk>=1.21.0",
     "yarl>=1.8",
