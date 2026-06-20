@@ -103,7 +103,6 @@ AC_ATTR_RAPID        = "settings.rapidMode"
 # silentSleepStatus is the real name; muteStatus is separate (display mute)
 AC_ATTR_SLEEP        = "settings.silentSleepStatus"
 AC_ATTR_SILENT       = "settings.muteStatus"
-AC_ATTR_FILTER       = "settings.filterChangeStatusCloud"
 AC_ATTR_SELF_CLEAN   = "settings.selfCleaningStatus"
 AC_ATTR_LIGHT        = "settings.lightStatus"
 AC_ATTR_COMPRESSOR_FREQ = "compressorFrequency"
