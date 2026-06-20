@@ -97,14 +97,6 @@ AC_SWING_V_ON        = "8"                        # 8 = vertical oscillation
 AC_SWING_MODE_ON     = "on"
 AC_SWING_MODE_OFF    = "off"
 AC_ATTR_ON_OFF       = "settings.onOffStatus"
-# ecoMode exists only in startProgram (NOT in settings), confirmed from diagnostics
-AC_ATTR_ECO          = "startProgram.ecoMode"
-AC_ATTR_RAPID        = "settings.rapidMode"
-# silentSleepStatus is the real name; muteStatus is separate (display mute)
-AC_ATTR_SLEEP        = "settings.silentSleepStatus"
-AC_ATTR_SILENT       = "settings.muteStatus"
-AC_ATTR_SELF_CLEAN   = "settings.selfCleaningStatus"
-AC_ATTR_LIGHT        = "settings.lightStatus"
 AC_ATTR_COMPRESSOR_FREQ = "compressorFrequency"
 AC_ATTR_TOTAL_ENERGY = "totalElectricityUsed"
 # Air quality (direct attributes, confirmed on Roberto's AC)
