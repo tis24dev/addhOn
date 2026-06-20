@@ -140,6 +140,38 @@
       "dirty_level": {
         "name": "Livello Sporco"
       },
+      "stain_type": {
+        "name": "Tipo Macchia",
+        "state": {
+          "none": "Nessuna",
+          "wine": "Vino",
+          "grass": "Erba",
+          "soil": "Terra",
+          "blood": "Sangue",
+          "milk": "Latte",
+          "cooking_oil": "Olio da cucina",
+          "tea": "Tè",
+          "coffee": "Caffè",
+          "ice_cream": "Gelato",
+          "lip_gloss": "Lucidalabbra",
+          "curry": "Curry",
+          "milk_tea": "Tè al latte",
+          "rust": "Ruggine",
+          "blue_ink": "Inchiostro blu",
+          "perfume": "Profumo",
+          "shoe_cream": "Lucido da scarpe",
+          "oil_pastel": "Pastello a olio",
+          "blueberry": "Mirtillo",
+          "sweat": "Sudore",
+          "egg": "Uovo",
+          "ketchup": "Ketchup",
+          "baby_food": "Pappa",
+          "soy_sauce": "Salsa di soia",
+          "bean_paste": "Pasta di fagioli",
+          "chili_sauce": "Salsa piccante",
+          "fruit": "Frutta"
+        }
+      },
       "temp_indoor": {
         "name": "Temperatura Interna"
       },

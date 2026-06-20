@@ -186,18 +186,18 @@ class PerTypeTableTest(unittest.TestCase):
         self.assertEqual(
             self._keys("WM"),
             ["state", "remaining_time", "program_name", "program_phase", "spin_speed",
-             "wash_temperature", "dirty_level", "loading_percentage", "delay_time",
-             "errors", "total_washes", "total_water", "total_energy", "current_energy",
-             "current_water"],
+             "wash_temperature", "dirty_level", "stain_type", "loading_percentage",
+             "delay_time", "errors", "total_washes", "total_water", "total_energy",
+             "current_energy", "current_water"],
         )
 
     def test_wd_is_wm_plus_dry_level(self) -> None:
         self.assertEqual(
             self._keys("WD"),
             ["state", "remaining_time", "program_name", "program_phase", "spin_speed",
-             "wash_temperature", "dirty_level", "dry_level", "loading_percentage",
-             "delay_time", "errors", "total_washes", "total_water", "total_energy",
-             "current_energy", "current_water"],
+             "wash_temperature", "dirty_level", "stain_type", "dry_level",
+             "loading_percentage", "delay_time", "errors", "total_washes", "total_water",
+             "total_energy", "current_energy", "current_water"],
         )
 
     def test_td_keys(self) -> None:

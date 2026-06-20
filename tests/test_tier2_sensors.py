@@ -325,6 +325,13 @@ class Tier2GatingTest(unittest.IsolatedAsyncioTestCase):
         tl = next(e for e in added if e._attr_unique_id == "x-1_temp_level")
         self.assertEqual(tl.native_value, 4.0)
 
+    async def test_washer_stain_type_decodes(self) -> None:
+        # WM stain_type ENUM: code -> machine key, 0 -> none, unknown -> None.
+        for raw, expected in (("1", "wine"), ("0", "none"), ("26", "fruit"), ("99", None)):
+            added = await _build_sensors("WM", {"stainType": raw})
+            st = next(e for e in added if e._attr_unique_id == "x-1_stain_type")
+            self.assertEqual(st.native_value, expected)
+
 
 class Tier2BinaryGatingTest(unittest.IsolatedAsyncioTestCase):
     async def test_cooling_binary_gating(self) -> None:

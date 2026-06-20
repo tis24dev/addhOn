@@ -63,6 +63,7 @@ from .const import (
     MACHINE_MODE_MAP,
     RVC_POWER_MAP,
     RVC_STATE_MAP,
+    STAIN_TYPE_MAP,
     TD_ATTR_CYCLES,
     TUMBLE_DRYER_PHASE_MAP,
     WASHING_PHASE_MAP,
@@ -190,6 +191,13 @@ def _phase_dry(raw) -> str | None:
     return TUMBLE_DRYER_PHASE_MAP.get(str(raw))
 
 
+def _stain(raw) -> str | None:
+    """stainType -> stain ENUM key (None if missing/unknown)."""
+    if raw is None:
+        return None
+    return STAIN_TYPE_MAP.get(str(raw))
+
+
 _PROGRAM_NAME = HonSensorEntityDescription(
     key="program_name",
     icon="mdi:format-list-bulleted",
@@ -258,6 +266,14 @@ _WASH_EXTRA: tuple[HonSensorEntityDescription, ...] = (
         key="dirty_level",
         icon="mdi:liquid-spot",
         attr_key=WM_ATTR_DIRT_LEVEL,
+    ),
+    HonSensorEntityDescription(
+        key="stain_type",
+        icon="mdi:liquid-spot",
+        attr_key="stainType",
+        device_class=SensorDeviceClass.ENUM,
+        options=sorted(set(STAIN_TYPE_MAP.values())),
+        value_fn=_stain,
     ),
 )
 

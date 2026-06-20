@@ -140,6 +140,38 @@
       "dirty_level": {
         "name": "Soil level"
       },
+      "stain_type": {
+        "name": "Stain type",
+        "state": {
+          "none": "None",
+          "wine": "Wine",
+          "grass": "Grass",
+          "soil": "Soil",
+          "blood": "Blood",
+          "milk": "Milk",
+          "cooking_oil": "Cooking oil",
+          "tea": "Tea",
+          "coffee": "Coffee",
+          "ice_cream": "Ice cream",
+          "lip_gloss": "Lip gloss",
+          "curry": "Curry",
+          "milk_tea": "Milk tea",
+          "rust": "Rust",
+          "blue_ink": "Blue ink",
+          "perfume": "Perfume",
+          "shoe_cream": "Shoe cream",
+          "oil_pastel": "Oil pastel",
+          "blueberry": "Blueberry",
+          "sweat": "Sweat",
+          "egg": "Egg",
+          "ketchup": "Ketchup",
+          "baby_food": "Baby food",
+          "soy_sauce": "Soy sauce",
+          "bean_paste": "Bean paste",
+          "chili_sauce": "Chili sauce",
+          "fruit": "Fruit"
+        }
+      },
       "temp_indoor": {
         "name": "Indoor temperature"
       },
