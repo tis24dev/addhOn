@@ -101,9 +101,23 @@ _CONNECTIVITY = HonBinarySensorEntityDescription(
     device_class=BinarySensorDeviceClass.CONNECTIVITY,
 )
 
+def _g_running(key: str, attr: str) -> "HonBinarySensorEntityDescription":
+    """Gated read-only RUNNING binary for an `option engaged` (0/1) flag."""
+    return HonBinarySensorEntityDescription(
+        key=key, attr_key=attr, device_class=BinarySensorDeviceClass.RUNNING,
+    )
+
+
 # Per-type sets (candidates; the capability-gate drops those not present on the device).
+# The option flags (night_wash/steam/energy_saving) are gvigroux-live-tested 0/1
+# params, gated by the universal binary gate so they appear only where reported.
 _WASH_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     _DOOR_OPEN, _DOOR_LOCK, _CHILD_LOCK, _DRUM_CLEAN, _FILTER_CLEAN, _DRY_CLEAN,
+    _g_running("night_wash", "nightWashStatus"),
+    _g_running("steam", "steamStatus"),
+    HonBinarySensorEntityDescription(
+        key="energy_saving", attr_key="energySavingStatus", icon="mdi:leaf",
+    ),
 )
 _DRY_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     _DOOR_OPEN, _DOOR_LOCK, _CHILD_LOCK,
@@ -187,9 +201,13 @@ _OVEN_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     ),
 )
 
-# Dishwasher (DW).
+# Dishwasher (DW): door + program-option flags (live-confirmed on real DW, gated).
 _DISHWASHER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     _door("door_open", "doorStatus"),
+    _g_running("extra_dry", "extraDry"),
+    _g_running("half_load", "halfLoad"),
+    _g_running("auto_open_door", "openDoor"),
+    _g_running("eco_express", "ecoExpress"),
 )
 
 # Wine cellar (WC).

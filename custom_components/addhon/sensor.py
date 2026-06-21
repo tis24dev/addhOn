@@ -26,6 +26,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     UnitOfEnergy,
+    UnitOfMass,
     UnitOfTemperature,
     UnitOfTime,
     UnitOfVolume,
@@ -276,6 +277,23 @@ def _loading_pct(raw) -> float | None:
     return round(sum(ratios) / len(ratios), 1)
 
 
+def _g_grams(key: str, attr: str) -> "HonSensorEntityDescription":
+    """Gated mass sensor in grams (e.g. auto-dosed detergent/softener weight)."""
+    return HonSensorEntityDescription(
+        key=key,
+        attr_key=attr,
+        native_unit_of_measurement=UnitOfMass.GRAMS,
+        device_class=SensorDeviceClass.WEIGHT,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    )
+
+
+def _g_int(key: str, attr: str, icon: str | None = None) -> "HonSensorEntityDescription":
+    """Gated plain-integer sensor: no device_class/unit, default float() render."""
+    return HonSensorEntityDescription(key=key, attr_key=attr, icon=icon, gated=True)
+
+
 _PROGRAM_NAME = HonSensorEntityDescription(
     key="program_name",
     icon="mdi:format-list-bulleted",
@@ -356,15 +374,35 @@ _WASH_EXTRA: tuple[HonSensorEntityDescription, ...] = (
     ),
 )
 
-# Washer (WM): state/time + program + wash extras + load/delay + consumption.
+# Auto-dose / cycle telemetry (premium features, not on every model). gated=True so
+# they self-suppress where absent. currentWashCycle/remainingRinseIterations are
+# gvigroux-live-tested bare params (the decomp has only the WM-prefixed statistics
+# form), so gating is essential.
+_WASH_DOSE: tuple[HonSensorEntityDescription, ...] = (
+    _g_int("current_wash_cycle", "currentWashCycle", icon="mdi:counter"),
+    _g_int("remaining_rinses", "remainingRinseIterations", icon="mdi:water-sync"),
+    HonSensorEntityDescription(
+        # Auto-dose strength relative to a standard dose (0=off/70=eco/100=std/
+        # 120=boost), not a continuous tank level: keep the "%" but no state_class
+        # (it is a stepped setpoint, not a quantity to graph).
+        key="detergent_level",
+        attr_key="detergentPercent",
+        native_unit_of_measurement="%",
+        icon="mdi:cup-water",
+        gated=True,
+    ),
+    _g_grams("detergent_weight", "haier_DetergentWeight"),
+    _g_grams("softener_weight", "haier_SoftenerWeight"),
+)
+# Washer (WM): state/time + program + wash extras + load/delay + consumption + dose.
 _WASHER: tuple[HonSensorEntityDescription, ...] = (
     _STATE, _REMAINING, _PROGRAM_NAME, _PHASE_WASH, *_WASH_EXTRA, _LOADING, _DELAY,
-    _ERRORS, *_WASH_CONSUMPTION,
+    _ERRORS, *_WASH_CONSUMPTION, *_WASH_DOSE,
 )
 # Washer-dryer (WD = WM + drying): like the washer + dry level.
 _WASHER_DRYER: tuple[HonSensorEntityDescription, ...] = (
     _STATE, _REMAINING, _PROGRAM_NAME, _PHASE_WASH, *_WASH_EXTRA, _DRY_LEVEL, _LOADING,
-    _DELAY, _ERRORS, *_WASH_CONSUMPTION,
+    _DELAY, _ERRORS, *_WASH_CONSUMPTION, *_WASH_DOSE,
 )
 
 # Tumble dryer: no water/energy (hOn does not expose them for the TD). The cycles
@@ -454,6 +492,23 @@ _AC: tuple[HonSensorEntityDescription, ...] = (
         native_unit_of_measurement="mg/m³",
         state_class=SensorStateClass.MEASUREMENT,
     ),
+    # Air-quality sensors on air-quality-capable AC / air-sensor units (gvigroux
+    # live). gated=True (unlike the always-present AC sensors) so a model without
+    # them shows nothing. pm10 is a real mass concentration (ug/m3, like pm25);
+    # voc/coLevel/airQuality are small LEVEL indexes in the app (L1..L4 / 0..3),
+    # NOT ppb/ppm/0-500 AQI, so they are bare integers (class-less AND unit-less)
+    # to avoid asserting a concentration the device does not report.
+    HonSensorEntityDescription(
+        key="pm10",
+        attr_key="pm10ValueIndoor",
+        native_unit_of_measurement="µg/m³",
+        device_class=SensorDeviceClass.PM10,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+    _g_int("voc", "vocValueIndoor", icon="mdi:molecule"),
+    _g_int("co", "coLevel", icon="mdi:molecule"),
+    _g_int("air_quality", "airQuality", icon="mdi:air-filter"),
 )
 
 # --- Tier 2: read-only sensors (capability-gated) ----------------------------
@@ -563,6 +618,16 @@ _OVEN: tuple[HonSensorEntityDescription, ...] = (
     _g_temp("temp_cavity", "temp"),
     _g_minutes("remaining_time", "remainingTimeMM"),
     _g_minutes("delay_time", "delayTime"),
+    # prTime is the configured cook duration in SECONDS (range 1..86395), not
+    # minutes; map it as a seconds duration so the magnitude is correct.
+    HonSensorEntityDescription(
+        key="program_duration",
+        attr_key="prTime",
+        icon="mdi:timer-outline",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        gated=True,
+    ),
     _g_temp("probe_temp_1", "tempEmployedProbe1"),
     _g_temp("probe_temp_2", "tempEmployedProbe2"),
     _g_text("errors", "errors", icon="mdi:alert-circle-outline"),
@@ -575,9 +640,11 @@ _DISHWASHER: tuple[HonSensorEntityDescription, ...] = (
             translation_key="machine_mode", icon="mdi:dishwasher"),
     _g_text("program_name", "programName", icon="mdi:format-list-bulleted"),
     _g_minutes("remaining_time", "remainingTimeMM"),
+    _g_minutes("delay_time", "delayTime"),
     _g_enum("salt_level", "saltStatus", DW_LEVEL_MAP, icon="mdi:shaker-outline"),
     _g_enum("rinse_aid_level", "rinseAidStatus", DW_LEVEL_MAP,
             icon="mdi:water-opacity"),
+    _g_int("water_hardness", "waterHard", icon="mdi:water-opacity"),
     HonSensorEntityDescription(
         key="wash_temperature",
         # Dishwashers report the wash temperature under `temp` (live-confirmed on
@@ -596,12 +663,16 @@ _DISHWASHER: tuple[HonSensorEntityDescription, ...] = (
 # actual temperature is reported under `temp` (live-confirmed on HWS42/HWS77).
 # Light/presence are binary.
 _WINE: tuple[HonSensorEntityDescription, ...] = (
+    _g_enum("state", "machMode", MACHINE_MODE_MAP,
+            translation_key="machine_mode", icon="mdi:thermometer-wine"),
+    _g_text("program_name", "programName", icon="mdi:format-list-bulleted"),
     _g_temp("temp_ambient", "tempEnv"),
     _g_temp("temp_zone1", "temp"),
     _g_temp("temp_zone2", "tempZ2"),
     _g_humidity("humidity_zone1", "humidityZ1"),
     _g_humidity("humidity_zone2", "humidityZ2"),
     _g_minutes("remaining_time", "remainingTimeMM"),
+    _g_text("errors", "errors", icon="mdi:alert-circle-outline"),
 )
 
 # Induction hob (IH/HOB): temperature per cooking zone. Pan detection

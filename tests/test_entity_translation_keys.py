@@ -70,10 +70,11 @@ def _install_stubs() -> None:
     uc.UpdateFailed = getattr(uc, "UpdateFailed", type("UpdateFailed", (Exception,), {}))
 
     const = _mod("homeassistant.const")
-    for unit_cls in ("UnitOfTemperature", "UnitOfEnergy", "UnitOfTime", "UnitOfVolume"):
+    for unit_cls in ("UnitOfTemperature", "UnitOfEnergy", "UnitOfTime", "UnitOfVolume", "UnitOfMass"):
         if not hasattr(const, unit_cls):
             setattr(const, unit_cls, type(unit_cls, (), {
                 "CELSIUS": "C", "KILO_WATT_HOUR": "kWh", "MINUTES": "min", "LITERS": "L",
+                "GRAMS": "g", "SECONDS": "s",
             }))
 
     components = _mod("homeassistant.components")
@@ -97,6 +98,9 @@ def _install_stubs() -> None:
     sensor_mod.SensorDeviceClass = getattr(sensor_mod, "SensorDeviceClass", type("SensorDeviceClass", (), {
         "TEMPERATURE": "temperature", "HUMIDITY": "humidity", "ENERGY": "energy",
         "WATER": "water", "DURATION": "duration", "PM25": "pm25", "CO2": "co2",
+        "PM10": "pm10", "CO": "carbon_monoxide", "AQI": "aqi",
+        "VOLATILE_ORGANIC_COMPOUNDS_PARTS": "volatile_organic_compounds_parts",
+        "WEIGHT": "weight",
         "BATTERY": "battery", "POWER": "power", "ENUM": "enum",
     }))
     sensor_mod.SensorStateClass = getattr(sensor_mod, "SensorStateClass", type("SensorStateClass", (), {

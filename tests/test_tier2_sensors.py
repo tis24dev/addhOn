@@ -68,7 +68,13 @@ def _install_homeassistant_stubs() -> None:
         def async_write_ha_state(self) -> None:
             self.state_writes = getattr(self, "state_writes", 0) + 1
 
-    update_coordinator.CoordinatorEntity = getattr(update_coordinator, "CoordinatorEntity", CoordinatorEntity)
+    # Force-assign (not getattr-default): another test module may have already
+    # registered a CoordinatorEntity WITHOUT `available`, and ConnectivityBinaryTest
+    # relies on super().available resolving regardless of suite order. This stub is a
+    # superset of the minimal ones in test_program_select / test_number_setpoints /
+    # test_entity_translation_keys, so taking over the shared class is safe (mirrors
+    # test_entity_availability.py).
+    update_coordinator.CoordinatorEntity = CoordinatorEntity
     update_coordinator.DataUpdateCoordinator = getattr(update_coordinator, "DataUpdateCoordinator", type("DataUpdateCoordinator", (), {}))
     update_coordinator.UpdateFailed = getattr(update_coordinator, "UpdateFailed", type("UpdateFailed", (Exception,), {}))
 
@@ -98,7 +104,12 @@ def _install_homeassistant_stubs() -> None:
         WATER = "water"
         DURATION = "duration"
         PM25 = "pm25"
+        PM10 = "pm10"
         CO2 = "carbon_dioxide"
+        CO = "carbon_monoxide"
+        AQI = "aqi"
+        VOLATILE_ORGANIC_COMPOUNDS_PARTS = "volatile_organic_compounds_parts"
+        WEIGHT = "weight"
         BATTERY = "battery"
         POWER = "power"
         ENUM = "enum"
@@ -180,14 +191,19 @@ def _install_homeassistant_stubs() -> None:
 
     class UnitOfTime:
         MINUTES = "min"
+        SECONDS = "s"
 
     class UnitOfTemperature:
         CELSIUS = "°C"
+
+    class UnitOfMass:
+        GRAMS = "g"
 
     const.UnitOfEnergy = getattr(const, "UnitOfEnergy", UnitOfEnergy)
     const.UnitOfVolume = getattr(const, "UnitOfVolume", UnitOfVolume)
     const.UnitOfTime = getattr(const, "UnitOfTime", UnitOfTime)
     const.UnitOfTemperature = getattr(const, "UnitOfTemperature", UnitOfTemperature)
+    const.UnitOfMass = getattr(const, "UnitOfMass", UnitOfMass)
 
     ha.config_entries = config_entries
     ha.core = core
@@ -275,22 +291,23 @@ class Tier2TableTest(unittest.TestCase):
     def test_dishwasher_full_keys(self) -> None:
         self.assertEqual(
             _sensor_keys("DW"),
-            ["state", "program_name", "remaining_time", "salt_level",
-             "rinse_aid_level", "wash_temperature", "errors"],
+            ["state", "program_name", "remaining_time", "delay_time", "salt_level",
+             "rinse_aid_level", "water_hardness", "wash_temperature", "errors"],
         )
 
     def test_oven_full_keys(self) -> None:
         self.assertEqual(
             _sensor_keys("OV"),
             ["state", "program_name", "temp_cavity", "remaining_time",
-             "delay_time", "probe_temp_1", "probe_temp_2", "errors"],
+             "delay_time", "program_duration", "probe_temp_1", "probe_temp_2",
+             "errors"],
         )
 
     def test_wine_full_keys(self) -> None:
         self.assertEqual(
             _sensor_keys("WC"),
-            ["temp_ambient", "temp_zone1", "temp_zone2", "humidity_zone1",
-             "humidity_zone2", "remaining_time"],
+            ["state", "program_name", "temp_ambient", "temp_zone1", "temp_zone2",
+             "humidity_zone1", "humidity_zone2", "remaining_time", "errors"],
         )
 
     def test_fr_and_fre_alias_cooling(self) -> None:
@@ -308,12 +325,22 @@ class Tier2TableTest(unittest.TestCase):
             for d in SENSORS[app_type]:
                 self.assertTrue(d.gated, f"{app_type}/{d.key} must be gated")
 
-    def test_historic_types_not_gated(self) -> None:
+    def test_historic_core_not_gated_only_optionals_gated(self) -> None:
         from custom_components.addhon.sensor import SENSORS
 
-        for app_type in ("AC", "WM", "WD", "TD"):
-            for d in SENSORS[app_type]:
-                self.assertFalse(d.gated, f"{app_type}/{d.key} must NOT be gated")
+        # Historic types keep their CORE sensors always-created (gated=False); only
+        # the optional gvigroux-harvested add-ons (air-quality / auto-dose) are gated.
+        expected_gated = {
+            "AC": {"pm10", "voc", "co", "air_quality"},
+            "WM": {"current_wash_cycle", "remaining_rinses", "detergent_level",
+                   "detergent_weight", "softener_weight"},
+            "WD": {"current_wash_cycle", "remaining_rinses", "detergent_level",
+                   "detergent_weight", "softener_weight"},
+            "TD": set(),
+        }
+        for app_type, gated_keys in expected_gated.items():
+            actual = {d.key for d in SENSORS[app_type] if d.gated}
+            self.assertEqual(actual, gated_keys, f"{app_type} gated set mismatch")
 
     def test_hob_binary_has_six_pan_zones(self) -> None:
         self.assertEqual(
@@ -587,6 +614,119 @@ class GvigrouxImportTest(unittest.IsolatedAsyncioTestCase):
         # zone1 actual temp is `temp`, not `tempZ1` (which does not exist for WC).
         added = await _build_sensors("WC", {"tempZ1": 99})
         self.assertNotIn("x-1_temp_zone1", {e._attr_unique_id for e in added})
+
+    # --- gvigroux P1 harvest: air-quality / auto-dose / options (all gated) ---
+
+    async def test_ac_air_quality_appears_only_when_reported(self) -> None:
+        added = await _build_sensors("AC", {
+            "pm10ValueIndoor": "6", "vocValueIndoor": "1", "coLevel": "0",
+            "airQuality": "2",
+        })
+        by_uid = {e._attr_unique_id: e for e in added}
+        for k in ("pm10", "voc", "co", "air_quality"):
+            self.assertIn(f"x-1_{k}", by_uid)
+        self.assertEqual(by_uid["x-1_air_quality"].native_value, 2.0)
+        # absent when the device does not report them (gated)
+        uids2 = {e._attr_unique_id for e in await _build_sensors("AC", {})}
+        for k in ("pm10", "voc", "co", "air_quality"):
+            self.assertNotIn(f"x-1_{k}", uids2)
+
+    def test_ac_air_quality_device_classes(self) -> None:
+        # pm10 is a real mass concentration; voc/co/air_quality are level indexes
+        # surfaced as plain integers (no misleading device_class/unit).
+        from homeassistant.components.sensor import SensorDeviceClass
+
+        from custom_components.addhon.const import APPLIANCE_AC
+        from custom_components.addhon.sensor import SENSORS
+
+        ac = {d.key: d for d in SENSORS[APPLIANCE_AC]}
+        self.assertEqual(ac["pm10"].device_class, SensorDeviceClass.PM10)
+        self.assertEqual(ac["pm10"].native_unit_of_measurement, "µg/m³")
+        for k in ("voc", "co", "air_quality"):
+            self.assertIsNone(ac[k].device_class, f"{k} must be class-less")
+            self.assertIsNone(ac[k].native_unit_of_measurement, f"{k} must be unitless")
+
+    async def test_dishwasher_delay_hardness_and_option_binaries(self) -> None:
+        added = await _build_sensors("DW", {"delayTime": "30", "waterHard": "3"})
+        uids = {e._attr_unique_id for e in added}
+        self.assertIn("x-1_delay_time", uids)
+        hard = next(e for e in added if e._attr_unique_id == "x-1_water_hardness")
+        self.assertEqual(hard.native_value, 3.0)
+        bins = await _build_binary("DW", {
+            "extraDry": "1", "halfLoad": "0", "openDoor": "1", "ecoExpress": "0",
+        })
+        buids = {e._attr_unique_id for e in bins}
+        for k in ("extra_dry", "half_load", "auto_open_door", "eco_express"):
+            self.assertIn(f"x-1_{k}", buids)
+        extra = next(e for e in bins if e._attr_unique_id == "x-1_extra_dry")
+        self.assertTrue(extra.is_on)
+
+    async def test_washer_dose_sensors_and_option_binaries(self) -> None:
+        added = await _build_sensors("WM", {
+            "currentWashCycle": "2", "remainingRinseIterations": "1",
+            "detergentPercent": "80", "haier_DetergentWeight": "35",
+            "haier_SoftenerWeight": "20",
+        })
+        by_uid = {e._attr_unique_id: e for e in added}
+        for k in ("current_wash_cycle", "remaining_rinses", "detergent_level",
+                  "detergent_weight", "softener_weight"):
+            self.assertIn(f"x-1_{k}", by_uid)
+        self.assertEqual(by_uid["x-1_detergent_weight"].native_value, 35.0)
+        self.assertEqual(by_uid["x-1_softener_weight"].native_value, 20.0)
+        bins = {e._attr_unique_id: e for e in await _build_binary("WM", {
+            "nightWashStatus": "1", "steamStatus": "0", "energySavingStatus": "1",
+        })}
+        self.assertTrue(bins["x-1_night_wash"].is_on)
+        self.assertFalse(bins["x-1_steam"].is_on)
+        self.assertTrue(bins["x-1_energy_saving"].is_on)
+
+    async def test_wine_cooler_state_program_errors(self) -> None:
+        added = await _build_sensors("WC", {
+            "machMode": "2", "programName": "RED", "errors": "00",
+        })
+        by_uid = {e._attr_unique_id: e for e in added}
+        self.assertEqual(by_uid["x-1_state"].native_value, "running")  # MACHINE_MODE_MAP
+        self.assertEqual(by_uid["x-1_program_name"].native_value, "RED")
+        self.assertEqual(by_uid["x-1_errors"].native_value, "00")
+
+    async def test_wine_cooler_state_absent_when_unreported(self) -> None:
+        uids = {e._attr_unique_id for e in await _build_sensors("WC", {})}
+        for k in ("state", "program_name", "errors"):
+            self.assertNotIn(f"x-1_{k}", uids)
+
+    async def test_oven_program_duration(self) -> None:
+        added = await _build_sensors("OV", {"prTime": "2700"})
+        pd = next(e for e in added if e._attr_unique_id == "x-1_program_duration")
+        self.assertEqual(pd.native_value, 2700.0)
+
+    def test_oven_program_duration_is_seconds(self) -> None:
+        # prTime is seconds (range 1..86395), NOT minutes.
+        from homeassistant.components.sensor import SensorDeviceClass
+        from homeassistant.const import UnitOfTime
+
+        from custom_components.addhon.const import APPLIANCE_OV
+        from custom_components.addhon.sensor import SENSORS
+
+        pd = {d.key: d for d in SENSORS[APPLIANCE_OV]}["program_duration"]
+        self.assertEqual(pd.native_unit_of_measurement, UnitOfTime.SECONDS)
+        self.assertEqual(pd.device_class, SensorDeviceClass.DURATION)
+
+    async def test_dishwasher_options_absent_when_unreported(self) -> None:
+        uids = {e._attr_unique_id for e in await _build_sensors("DW", {})}
+        for k in ("delay_time", "water_hardness"):
+            self.assertNotIn(f"x-1_{k}", uids)
+        buids = {e._attr_unique_id for e in await _build_binary("DW", {})}
+        for k in ("extra_dry", "half_load", "auto_open_door", "eco_express"):
+            self.assertNotIn(f"x-1_{k}", buids)
+
+    async def test_washer_dose_absent_when_unreported(self) -> None:
+        uids = {e._attr_unique_id for e in await _build_sensors("WM", {})}
+        for k in ("current_wash_cycle", "remaining_rinses", "detergent_level",
+                  "detergent_weight", "softener_weight"):
+            self.assertNotIn(f"x-1_{k}", uids)
+        buids = {e._attr_unique_id for e in await _build_binary("WM", {})}
+        for k in ("night_wash", "steam", "energy_saving"):
+            self.assertNotIn(f"x-1_{k}", buids)
 
 
 if __name__ == "__main__":

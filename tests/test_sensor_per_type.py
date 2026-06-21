@@ -103,7 +103,12 @@ def _install_homeassistant_stubs() -> None:
         WATER = "water"
         DURATION = "duration"
         PM25 = "pm25"
+        PM10 = "pm10"
         CO2 = "carbon_dioxide"
+        CO = "carbon_monoxide"
+        AQI = "aqi"
+        VOLATILE_ORGANIC_COMPOUNDS_PARTS = "volatile_organic_compounds_parts"
+        WEIGHT = "weight"
         BATTERY = "battery"
         POWER = "power"
         ENUM = "enum"
@@ -128,14 +133,19 @@ def _install_homeassistant_stubs() -> None:
 
     class UnitOfTime:
         MINUTES = "min"
+        SECONDS = "s"
 
     class UnitOfTemperature:
         CELSIUS = "°C"
+
+    class UnitOfMass:
+        GRAMS = "g"
 
     const.UnitOfEnergy = getattr(const, "UnitOfEnergy", UnitOfEnergy)
     const.UnitOfVolume = getattr(const, "UnitOfVolume", UnitOfVolume)
     const.UnitOfTime = getattr(const, "UnitOfTime", UnitOfTime)
     const.UnitOfTemperature = getattr(const, "UnitOfTemperature", UnitOfTemperature)
+    const.UnitOfMass = getattr(const, "UnitOfMass", UnitOfMass)
 
     ha.config_entries = config_entries
     ha.core = core
@@ -179,7 +189,8 @@ class PerTypeTableTest(unittest.TestCase):
         self.assertEqual(
             self._keys("AC"),
             ["temp_indoor", "temp_outdoor", "humidity_indoor", "compressor_freq",
-             "total_energy", "pm25", "co2", "ch2o"],
+             "total_energy", "pm25", "co2", "ch2o", "pm10", "voc", "co",
+             "air_quality"],
         )
 
     def test_wm_keys(self) -> None:
@@ -188,7 +199,9 @@ class PerTypeTableTest(unittest.TestCase):
             ["state", "remaining_time", "program_name", "program_phase", "spin_speed",
              "wash_temperature", "dirty_level", "stain_type", "loading_percentage",
              "delay_time", "errors", "total_washes", "total_water", "total_energy",
-             "current_energy", "current_water"],
+             "current_energy", "current_water", "current_wash_cycle",
+             "remaining_rinses", "detergent_level", "detergent_weight",
+             "softener_weight"],
         )
 
     def test_wd_is_wm_plus_dry_level(self) -> None:
@@ -197,7 +210,9 @@ class PerTypeTableTest(unittest.TestCase):
             ["state", "remaining_time", "program_name", "program_phase", "spin_speed",
              "wash_temperature", "dirty_level", "stain_type", "dry_level",
              "loading_percentage", "delay_time", "errors", "total_washes", "total_water",
-             "total_energy", "current_energy", "current_water"],
+             "total_energy", "current_energy", "current_water", "current_wash_cycle",
+             "remaining_rinses", "detergent_level", "detergent_weight",
+             "softener_weight"],
         )
 
     def test_td_keys(self) -> None:

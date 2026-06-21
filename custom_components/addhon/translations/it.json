@@ -199,6 +199,39 @@
       "ch2o": {
         "name": "Formaldeide"
       },
+      "pm10": {
+        "name": "PM10"
+      },
+      "voc": {
+        "name": "COV"
+      },
+      "co": {
+        "name": "Monossido di carbonio"
+      },
+      "air_quality": {
+        "name": "Qualità dell'aria"
+      },
+      "water_hardness": {
+        "name": "Durezza dell'acqua"
+      },
+      "current_wash_cycle": {
+        "name": "Ciclo corrente"
+      },
+      "remaining_rinses": {
+        "name": "Risciacqui rimanenti"
+      },
+      "detergent_level": {
+        "name": "Dose detersivo"
+      },
+      "detergent_weight": {
+        "name": "Detersivo erogato"
+      },
+      "softener_weight": {
+        "name": "Ammorbidente erogato"
+      },
+      "program_duration": {
+        "name": "Durata programma"
+      },
       "temp_zone1": {
         "name": "Temperatura Zona 1"
       },
@@ -377,6 +410,24 @@
       },
       "preheat": {
         "name": "Preriscaldamento"
+      },
+      "extra_dry": {
+        "name": "Asciugatura extra"
+      },
+      "half_load": {
+        "name": "Mezzo carico"
+      },
+      "auto_open_door": {
+        "name": "Apertura automatica porta"
+      },
+      "eco_express": {
+        "name": "Eco express"
+      },
+      "night_wash": {
+        "name": "Lavaggio notturno"
+      },
+      "steam": {
+        "name": "Vapore"
       },
       "door_zone1": {
         "name": "Porta Zona 1"
