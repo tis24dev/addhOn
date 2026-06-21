@@ -123,7 +123,7 @@
         "name": "Start delay"
       },
       "loading_percentage": {
-        "name": "Load"
+        "name": "Average load"
       },
       "dry_level": {
         "name": "Dry level"

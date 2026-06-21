@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
+import math
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -198,6 +199,79 @@ def _stain(raw) -> str | None:
     return STAIN_TYPE_MAP.get(str(raw))
 
 
+def _loading_pct(raw) -> float | None:
+    """Average drum-load percentage from the loadingPercentage attribute.
+
+    Laundry devices report loadingPercentage as a history LIST of
+    {"current", "max", "date"} records (load vs drum capacity over past cycles),
+    not a scalar, so the generic float() path would raise on the list and the
+    sensor would stay unknown. Following the official app's "Loading Percentage"
+    statistic, a record whose own max is 0/missing borrows the largest max in the
+    list, each record's current is clamped to its max, and the load percent
+    (current / max * 100) is averaged across the records. The clamp keeps the
+    result within 0..100. A plain scalar / numeric string is passed through
+    unchanged for forward/backward compatibility.
+
+    The app limits the average to the five most recent records by `date`. We
+    deliberately average ALL records instead and ignore `date`: its serialization
+    is not verified against a live washer (the only known sample is the app's mock
+    of JS Date objects), so any ordering would be unreliable, and the app's own
+    backfill reducer is buggy. Real statistics lists observed so far are short
+    (<= 5), where averaging all and "the most recent five" are identical. Revisit
+    the windowing once a washer is available to validate the `date` shape live.
+
+    Returns None (sensor "unknown", not a crash) when the value is missing, the
+    list is empty/malformed, or no usable max can be derived (e.g. a device with
+    no completed cycle yet, whose records all report max == 0 so drum capacity is
+    unknown).
+    """
+    if raw is None:
+        return None
+    # Scalar / numeric-string passthrough (a model that ever reports a plain value).
+    if not isinstance(raw, (list, tuple)):
+        try:
+            value = float(raw)
+        except (ValueError, TypeError):
+            return None
+        return value if math.isfinite(value) else None
+    records = [r for r in raw if isinstance(r, dict) and r.get("current") is not None]
+    if not records:
+        return None
+    # Fleet-wide fallback for records whose own max is 0/missing: borrow the
+    # largest known drum capacity (a clean global max, unlike the app's reducer).
+    valid_maxes = []
+    for record in records:
+        try:
+            candidate = float(record["max"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if math.isfinite(candidate) and candidate > 0:
+            valid_maxes.append(candidate)
+    fallback_max = max(valid_maxes) if valid_maxes else None
+    ratios = []
+    for record in records:
+        try:
+            current = float(record["current"])
+        except (ValueError, TypeError):
+            continue
+        try:
+            maximum = float(record.get("max"))
+        except (ValueError, TypeError):
+            maximum = 0.0
+        # A non-finite/non-positive own max is unusable; borrow the fleet capacity.
+        usable_max = maximum if (math.isfinite(maximum) and maximum > 0) else None
+        denom = usable_max if usable_max else fallback_max
+        if not denom or denom <= 0:
+            continue
+        current = min(current, denom)  # clamp like the app's Math.min(current, max)
+        ratio = current / denom * 100.0
+        if math.isfinite(ratio) and ratio >= 0:
+            ratios.append(ratio)
+    if not ratios:
+        return None
+    return round(sum(ratios) / len(ratios), 1)
+
+
 _PROGRAM_NAME = HonSensorEntityDescription(
     key="program_name",
     icon="mdi:format-list-bulleted",
@@ -240,6 +314,7 @@ _LOADING = HonSensorEntityDescription(
     attr_key=WM_ATTR_LOADING,
     native_unit_of_measurement="%",
     state_class=SensorStateClass.MEASUREMENT,
+    value_fn=_loading_pct,
 )
 _DRY_LEVEL = HonSensorEntityDescription(
     key="dry_level",

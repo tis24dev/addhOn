@@ -362,5 +362,156 @@ class TdLegacyCleanupTest(unittest.TestCase):
         self.assertNotIn("sensor.washer_total_water", registry.removed)
 
 
+class LoadingPercentageValueFnTest(unittest.TestCase):
+    """A-001: loadingPercentage is a history list, not a scalar."""
+
+    def _fn(self):
+        from custom_components.addhon.sensor import _loading_pct
+
+        return _loading_pct
+
+    def test_none_returns_none(self) -> None:
+        self.assertIsNone(self._fn()(None))
+
+    def test_empty_list_returns_none(self) -> None:
+        self.assertIsNone(self._fn()([]))
+
+    def test_app_mock_fixture_matches_app_average(self) -> None:
+        # The official app's own loadingPercentage mock (decomp.txt:3560687); the
+        # app KPI = mean of the clamped ratios = mean(90, 71.4, 60, 60) = 70.4.
+        raw = [
+            {"current": 0.9, "max": 1, "date": "2026-06-20"},
+            {"current": 5, "max": 7, "date": "2026-06-19"},
+            {"current": 0.6, "max": 1, "date": "2026-06-18"},
+            {"current": 0.6, "max": 1, "date": "2026-06-17"},
+        ]
+        self.assertEqual(self._fn()(raw), 70.4)
+
+    def test_average_of_records(self) -> None:
+        raw = [
+            {"current": 4, "max": 8, "date": "2026-06-10"},
+            {"current": 6, "max": 8, "date": "2026-06-20"},
+        ]
+        self.assertEqual(self._fn()(raw), 62.5)  # mean(50.0, 75.0)
+
+    def test_max_zero_backfilled_from_fleet(self) -> None:
+        # The max==0 record borrows the largest max (6); mean(50.0, 16.7) = 33.3.
+        raw = [
+            {"current": 3, "max": 6, "date": "2026-06-10"},
+            {"current": 1, "max": 0, "date": "2026-06-20"},
+        ]
+        self.assertEqual(self._fn()(raw), 33.3)
+
+    def test_all_max_zero_returns_none(self) -> None:
+        # The exact offline-shadow HW80 payload: no usable normalizer anywhere.
+        raw = [
+            {"current": 1, "max": 0, "date": "2026-06-20"},
+            {"current": 2, "max": 0, "date": "2026-06-19"},
+        ]
+        self.assertIsNone(self._fn()(raw))
+
+    def test_clamp_keeps_result_within_100(self) -> None:
+        # current > max must be clamped (Math.min in the app), never exceed 100%.
+        self.assertEqual(self._fn()([{"current": 9, "max": 5}]), 100.0)
+        # Cross-scale fleet fallback would overflow without the clamp.
+        raw = [
+            {"current": 0.6, "max": 1, "date": "2026-06-10"},
+            {"current": 9, "max": 0, "date": "2026-06-20"},
+        ]
+        # mean(60.0, clamp(9->1)/1*100=100.0) = 80.0; never 9/1*100 = 900.
+        self.assertEqual(self._fn()(raw), 80.0)
+
+    def test_averages_all_records(self) -> None:
+        # No date windowing: every valid record contributes to the mean.
+        raw = [{"current": 8, "max": 8}] * 3 + [{"current": 0, "max": 8}] * 3
+        self.assertEqual(self._fn()(raw), 50.0)  # mean(100, 100, 100, 0, 0, 0)
+
+    def test_order_independent(self) -> None:
+        raw = [
+            {"current": 2, "max": 8, "date": "a"},
+            {"current": 6, "max": 8, "date": "b"},
+            {"current": 8, "max": 8, "date": "c"},
+        ]
+        self.assertEqual(self._fn()(raw), self._fn()(list(reversed(raw))))
+
+    def test_full_drum(self) -> None:
+        self.assertEqual(self._fn()([{"current": 8, "max": 8}]), 100.0)
+
+    def test_current_zero_preserved(self) -> None:
+        self.assertEqual(self._fn()([{"current": 0, "max": 8}]), 0.0)
+
+    def test_non_dict_entries_ignored(self) -> None:
+        self.assertEqual(self._fn()(["garbage", 3, {"current": 4, "max": 8}]), 50.0)
+
+    def test_missing_or_non_numeric_keys_return_none(self) -> None:
+        self.assertIsNone(self._fn()([{"max": 8}]))
+        self.assertIsNone(self._fn()([{"current": "abc", "max": 8}]))
+
+    def test_scalar_passthrough(self) -> None:
+        self.assertEqual(self._fn()(55), 55.0)
+        self.assertEqual(self._fn()("55"), 55.0)
+
+    def test_non_numeric_scalar_returns_none(self) -> None:
+        self.assertIsNone(self._fn()("abc"))
+
+    def test_non_finite_scalar_returns_none(self) -> None:
+        self.assertIsNone(self._fn()(float("nan")))
+        self.assertIsNone(self._fn()(float("inf")))
+
+    def test_non_finite_max_is_unusable(self) -> None:
+        # inf/nan max must not act as a denominator (would inject a bogus 0.0).
+        self.assertIsNone(self._fn()([{"current": 4, "max": float("inf")}]))
+        self.assertIsNone(self._fn()([{"current": 4, "max": float("nan")}]))
+        # With a sibling that has a real max, the bad-max record borrows it (8).
+        raw = [{"current": 8, "max": 8}, {"current": 4, "max": float("inf")}]
+        self.assertEqual(self._fn()(raw), 75.0)  # mean(100.0, clamp(4/8)=50.0)
+
+
+class LoadingPercentageBuildTest(unittest.IsolatedAsyncioTestCase):
+    """End-to-end: the value_fn is wired through native_value for WM/WD/TD."""
+
+    async def _native_value(self, app_type: str, loading) -> object:
+        from custom_components.addhon import sensor
+        from custom_components.addhon.const import DOMAIN
+
+        uid = f"{app_type.lower()}-1"
+        data = {
+            uid: {
+                "type": app_type,
+                "name": app_type,
+                "attributes": {"loadingPercentage": loading},
+                "settings": {},
+            }
+        }
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator}}})
+        added: list = []
+        await sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+        entity = next(
+            e for e in added if e._attr_unique_id == f"{uid}_loading_percentage"
+        )
+        return entity.native_value
+
+    async def test_wm_list_does_not_crash_and_computes_pct(self) -> None:
+        value = await self._native_value(
+            "WM", [{"current": 6, "max": 8, "date": "2026-06-20"}]
+        )
+        self.assertEqual(value, 75.0)
+
+    async def test_wm_offline_shadow_payload_is_none(self) -> None:
+        value = await self._native_value("WM", [{"current": 1, "max": 0, "date": "x"}])
+        self.assertIsNone(value)
+
+    async def test_wd_uses_same_value_fn(self) -> None:
+        value = await self._native_value(
+            "WD", [{"current": 4, "max": 8, "date": "2026-06-20"}]
+        )
+        self.assertEqual(value, 50.0)
+
+    async def test_td_uses_same_value_fn(self) -> None:
+        value = await self._native_value("TD", [{"current": 8, "max": 8}])
+        self.assertEqual(value, 100.0)
+
+
 if __name__ == "__main__":
     unittest.main()
