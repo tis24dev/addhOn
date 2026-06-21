@@ -248,6 +248,20 @@ class Tier2TableTest(unittest.TestCase):
              "rinse_aid_level", "wash_temperature", "errors"],
         )
 
+    def test_oven_full_keys(self) -> None:
+        self.assertEqual(
+            _sensor_keys("OV"),
+            ["state", "program_name", "temp_cavity", "remaining_time",
+             "delay_time", "probe_temp_1", "probe_temp_2", "errors"],
+        )
+
+    def test_wine_full_keys(self) -> None:
+        self.assertEqual(
+            _sensor_keys("WC"),
+            ["temp_ambient", "temp_zone1", "temp_zone2", "humidity_zone1",
+             "humidity_zone2", "remaining_time"],
+        )
+
     def test_fr_and_fre_alias_cooling(self) -> None:
         self.assertEqual(_sensor_keys("REF"), _sensor_keys("FR"))
         self.assertEqual(_sensor_keys("REF"), _sensor_keys("FRE"))
@@ -471,6 +485,55 @@ class ConnectivityBinaryTest(unittest.IsolatedAsyncioTestCase):
         conn = await self._conn({"available": False})
         self.assertTrue(conn.available)
         self.assertFalse(conn.is_on)
+
+
+class GvigrouxImportTest(unittest.IsolatedAsyncioTestCase):
+    """Live-tested mapping items adopted from gvigroux/hon (real-device evidence)."""
+
+    async def test_oven_gains_program_delay_errors(self) -> None:
+        added = await _build_sensors("OV", {
+            "machMode": "2", "programName": "PIZZA", "delayTime": 30,
+            "errors": "00", "temp": 180, "remainingTimeMM": 20,
+        })
+        uids = {e._attr_unique_id for e in added}
+        self.assertIn("x-1_program_name", uids)
+        self.assertIn("x-1_delay_time", uids)
+        self.assertIn("x-1_errors", uids)
+
+    async def test_oven_preheat_binary(self) -> None:
+        added = await _build_binary("OV", {"preheatStatus": "1"})
+        preheat = next(e for e in added if e._attr_unique_id == "x-1_preheat")
+        self.assertTrue(preheat.is_on)
+
+    def test_oven_number_fallback_is_oven_range(self) -> None:
+        from custom_components.addhon.const import APPLIANCE_OV
+        from custom_components.addhon.number import NUMBERS
+
+        target = {d.key: d for d in NUMBERS[APPLIANCE_OV]}["target_temp"]
+        self.assertEqual(
+            (target.fallback_min, target.fallback_max, target.fallback_step),
+            (50.0, 280.0, 5.0),
+        )
+
+    async def test_dishwasher_reads_temp_not_temperature(self) -> None:
+        added = await _build_sensors("DW", {"temp": "45"})
+        wt = next(e for e in added if e._attr_unique_id == "x-1_wash_temperature")
+        self.assertEqual(wt.native_value, 45.0)
+        # The old `temperature` key no longer builds the sensor.
+        added2 = await _build_sensors("DW", {"temperature": "45"})
+        self.assertNotIn(
+            "x-1_wash_temperature", {e._attr_unique_id for e in added2}
+        )
+
+    async def test_wine_cooler_zone1_temp_and_humidity(self) -> None:
+        added = await _build_sensors("WC", {
+            "temp": 12, "tempZ2": 8, "humidityZ1": 60, "humidityZ2": 65,
+        })
+        uids = {e._attr_unique_id for e in added}
+        self.assertIn("x-1_temp_zone1", uids)
+        self.assertIn("x-1_temp_zone2", uids)
+        self.assertIn("x-1_humidity_zone1", uids)
+        self.assertIn("x-1_humidity_zone2", uids)
 
 
 if __name__ == "__main__":

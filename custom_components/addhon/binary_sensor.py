@@ -177,6 +177,12 @@ _OVEN_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     _door("door_open", "doorStatus"),
     _door("door_zone1", "doorStatusZ1", translation_key="door_cavity1"),
     _door("door_zone2", "doorStatusZ2", translation_key="door_cavity2"),
+    HonBinarySensorEntityDescription(
+        key="preheat",
+        icon="mdi:thermometer-chevron-up",
+        attr_key="preheatStatus",
+        device_class=BinarySensorDeviceClass.RUNNING,
+    ),
 )
 
 # Dishwasher (DW).

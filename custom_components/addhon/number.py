@@ -98,9 +98,22 @@ _WINE_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
     _temp("target_temp_zone3", "tempSelZ3"),
 )
 
-# Oven (OV): cavity target (S7).
+# Oven (OV): cavity target (S7). Oven-appropriate fallback range (50-280 C step 5,
+# from the app device dictionary) used only when the device does not expose its own
+# range at runtime; a 0-100 default would be wrong for an oven.
 _OVEN_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
-    _temp("target_temp", "tempSel", translation_key="target_temp_oven"),
+    HonNumberEntityDescription(
+        key="target_temp",
+        param="tempSel",
+        translation_key="target_temp_oven",
+        device_class=NumberDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        mode=NumberMode.BOX,
+        icon="mdi:thermometer",
+        fallback_min=50.0,
+        fallback_max=280.0,
+        fallback_step=5.0,
+    ),
 )
 
 NUMBERS: dict[str, tuple[HonNumberEntityDescription, ...]] = {

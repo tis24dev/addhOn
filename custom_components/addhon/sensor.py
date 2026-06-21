@@ -496,6 +496,17 @@ def _g_minutes(key: str, attr: str) -> HonSensorEntityDescription:
     )
 
 
+def _g_humidity(key: str, attr: str) -> HonSensorEntityDescription:
+    return HonSensorEntityDescription(
+        key=key,
+        attr_key=attr,
+        native_unit_of_measurement="%",
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    )
+
+
 def _g_text(key: str, attr: str, icon: str | None = None,
             value_fn: Callable[[object], object] | None = _as_text) -> HonSensorEntityDescription:
     return HonSensorEntityDescription(
@@ -544,10 +555,13 @@ _COOLING: tuple[HonSensorEntityDescription, ...] = (
 _OVEN: tuple[HonSensorEntityDescription, ...] = (
     _g_enum("state", "machMode", MACHINE_MODE_MAP,
             translation_key="machine_mode", icon="mdi:stove"),
+    _g_text("program_name", "programName", icon="mdi:format-list-bulleted"),
     _g_temp("temp_cavity", "temp"),
     _g_minutes("remaining_time", "remainingTimeMM"),
+    _g_minutes("delay_time", "delayTime"),
     _g_temp("probe_temp_1", "tempEmployedProbe1"),
     _g_temp("probe_temp_2", "tempEmployedProbe2"),
+    _g_text("errors", "errors", icon="mdi:alert-circle-outline"),
 )
 
 # Dishwasher (DW): state, program, time, salt/rinse-aid levels,
@@ -562,7 +576,9 @@ _DISHWASHER: tuple[HonSensorEntityDescription, ...] = (
             icon="mdi:water-opacity"),
     HonSensorEntityDescription(
         key="wash_temperature",
-        attr_key="temperature",
+        # The dishwasher reports the wash temperature under `temp` (live-confirmed
+        # on real DW; `temperature` is not a DW parameter in the app schema).
+        attr_key="temp",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
@@ -571,10 +587,15 @@ _DISHWASHER: tuple[HonSensorEntityDescription, ...] = (
     _g_text("errors", "errors", icon="mdi:alert-circle-outline"),
 )
 
-# Wine cellar (WC): ambient + zone temperature. Light/presence are binary.
+# Wine cellar (WC): ambient + per-zone temperature + per-zone humidity. Zone 1
+# actual temperature is reported under `temp` (live-confirmed on HWS42/HWS77).
+# Light/presence are binary.
 _WINE: tuple[HonSensorEntityDescription, ...] = (
     _g_temp("temp_ambient", "tempEnv"),
+    _g_temp("temp_zone1", "temp"),
     _g_temp("temp_zone2", "tempZ2"),
+    _g_humidity("humidity_zone1", "humidityZ1"),
+    _g_humidity("humidity_zone2", "humidityZ2"),
     _g_minutes("remaining_time", "remainingTimeMM"),
 )
 

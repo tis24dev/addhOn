@@ -226,6 +226,12 @@
       "humidity_ambient": {
         "name": "Umidità Ambiente"
       },
+      "humidity_zone1": {
+        "name": "Umidità Zona 1"
+      },
+      "humidity_zone2": {
+        "name": "Umidità Zona 2"
+      },
       "temp_cavity": {
         "name": "Temperatura Forno"
       },
@@ -368,6 +374,9 @@
       },
       "connectivity": {
         "name": "Connettività"
+      },
+      "preheat": {
+        "name": "Preriscaldamento"
       },
       "door_zone1": {
         "name": "Porta Zona 1"

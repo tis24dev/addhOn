@@ -226,6 +226,12 @@
       "humidity_ambient": {
         "name": "Ambient humidity"
       },
+      "humidity_zone1": {
+        "name": "Zone 1 humidity"
+      },
+      "humidity_zone2": {
+        "name": "Zone 2 humidity"
+      },
       "temp_cavity": {
         "name": "Oven temperature"
       },
@@ -368,6 +374,9 @@
       },
       "connectivity": {
         "name": "Connectivity"
+      },
+      "preheat": {
+        "name": "Preheating"
       },
       "door_zone1": {
         "name": "Zone 1 door"
