@@ -229,6 +229,12 @@
       "softener_weight": {
         "name": "Ammorbidente erogato"
       },
+      "estimated_weight": {
+        "name": "Peso stimato"
+      },
+      "mean_water_consumption": {
+        "name": "Consumo idrico medio"
+      },
       "program_duration": {
         "name": "Durata programma"
       },
@@ -407,6 +413,9 @@
       },
       "connectivity": {
         "name": "Connettività"
+      },
+      "remote_control": {
+        "name": "Controllo remoto"
       },
       "preheat": {
         "name": "Preriscaldamento"

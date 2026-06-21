@@ -101,6 +101,19 @@ _CONNECTIVITY = HonBinarySensorEntityDescription(
     device_class=BinarySensorDeviceClass.CONNECTIVITY,
 )
 
+# Universal capability-gated binaries: candidates on ANY appliance type, created
+# only where the device reports the attribute (unlike _CONNECTIVITY, which is
+# always created so it can signal 'disconnected'). remoteCtrValid = whether remote
+# control is currently authorized; distinct from `available` (network reachability).
+_REMOTE_CONTROL = HonBinarySensorEntityDescription(
+    key="remote_control",
+    icon="mdi:remote",
+    attr_key="remoteCtrValid",            # "1" = remote control authorized
+    device_class=BinarySensorDeviceClass.CONNECTIVITY,
+)
+_UNIVERSAL_GATED: tuple["HonBinarySensorEntityDescription", ...] = (_REMOTE_CONTROL,)
+
+
 def _g_running(key: str, attr: str) -> "HonBinarySensorEntityDescription":
     """Gated read-only RUNNING binary for an `option engaged` (0/1) flag."""
     return HonBinarySensorEntityDescription(
@@ -316,6 +329,12 @@ async def async_setup_entry(
                     "Binary debug: skip '%s' on '%s' id=%s (key '%s' absent)",
                     description.key, data.get("name"), appliance_id, description.attr_key,
                 )
+                continue
+            entities.append(HonBinarySensor(coordinator, appliance_id, description))
+            created.append(description.key)
+        # Universal capability-gated binaries (any type that reports the attr).
+        for description in _UNIVERSAL_GATED:
+            if description.attr_key not in attributes:
                 continue
             entities.append(HonBinarySensor(coordinator, appliance_id, description))
             created.append(description.key)

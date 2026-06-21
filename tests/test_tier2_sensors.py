@@ -198,6 +198,7 @@ def _install_homeassistant_stubs() -> None:
 
     class UnitOfMass:
         GRAMS = "g"
+        KILOGRAMS = "kg"
 
     const.UnitOfEnergy = getattr(const, "UnitOfEnergy", UnitOfEnergy)
     const.UnitOfVolume = getattr(const, "UnitOfVolume", UnitOfVolume)
@@ -333,9 +334,9 @@ class Tier2TableTest(unittest.TestCase):
         expected_gated = {
             "AC": {"pm10", "voc", "co", "air_quality"},
             "WM": {"current_wash_cycle", "remaining_rinses", "detergent_level",
-                   "detergent_weight", "softener_weight"},
+                   "detergent_weight", "softener_weight", "estimated_weight"},
             "WD": {"current_wash_cycle", "remaining_rinses", "detergent_level",
-                   "detergent_weight", "softener_weight"},
+                   "detergent_weight", "softener_weight", "estimated_weight"},
             "TD": set(),
         }
         for app_type, gated_keys in expected_gated.items():
@@ -727,6 +728,65 @@ class GvigrouxImportTest(unittest.IsolatedAsyncioTestCase):
         buids = {e._attr_unique_id for e in await _build_binary("WM", {})}
         for k in ("night_wash", "steam", "energy_saving"):
             self.assertNotIn(f"x-1_{k}", buids)
+
+    # --- Wave 1/2 harvest: estimated weight / remote control / mean water
+    #     consumption (all gated) ---
+
+    async def test_estimated_weight_gated_with_fallback(self) -> None:
+        # actualWeight builds it; the `weight` fallback also builds it; absent when
+        # neither is reported. WM and WD both carry it.
+        for app_type in ("WM", "WD"):
+            added = await _build_sensors(app_type, {"actualWeight": "3.5"})
+            ew = next(e for e in added if e._attr_unique_id == "x-1_estimated_weight")
+            self.assertEqual(ew.native_value, 3.5)
+            added = await _build_sensors(app_type, {"weight": "4"})
+            ew = next(e for e in added if e._attr_unique_id == "x-1_estimated_weight")
+            self.assertEqual(ew.native_value, 4.0)  # reads the `weight` fallback
+            uids = {e._attr_unique_id for e in await _build_sensors(app_type, {})}
+            self.assertNotIn("x-1_estimated_weight", uids)
+
+    def test_estimated_weight_device_class_kg(self) -> None:
+        from homeassistant.components.sensor import SensorDeviceClass
+        from homeassistant.const import UnitOfMass
+
+        from custom_components.addhon.const import APPLIANCE_WM
+        from custom_components.addhon.sensor import SENSORS
+
+        d = {x.key: x for x in SENSORS[APPLIANCE_WM]}["estimated_weight"]
+        self.assertEqual(d.device_class, SensorDeviceClass.WEIGHT)
+        self.assertEqual(d.native_unit_of_measurement, UnitOfMass.KILOGRAMS)
+        self.assertEqual(d.attr_fallbacks, ("weight",))
+
+    async def test_remote_control_universal_gated(self) -> None:
+        # Present on ANY type that reports remoteCtrValid (AC has no per-type set;
+        # REF is a Tier-2 type) and absent otherwise. is_on follows "1".
+        for app_type in ("AC", "REF"):
+            added = await _build_binary(app_type, {"remoteCtrValid": "1"})
+            rc = next(e for e in added if e._attr_unique_id == "x-1_remote_control")
+            self.assertTrue(rc.is_on)
+            uids = {e._attr_unique_id for e in await _build_binary(app_type, {})}
+            self.assertNotIn("x-1_remote_control", uids)
+
+    async def test_mean_water_consumption(self) -> None:
+        # WM/WD only, gated on BOTH source attrs; value = water/(cycles-1).
+        for app_type in ("WM", "WD"):
+            added = await _build_sensors(
+                app_type, {"totalWaterUsed": "100", "totalWashCycle": "6"})
+            mw = next(e for e in added if e._attr_unique_id == "x-1_mean_water_consumption")
+            self.assertEqual(mw.native_value, 20.0)  # 100 / (6-1)
+        # <=0 denominator (first cycle) -> None, not a divide-by-zero
+        added = await _build_sensors("WM", {"totalWaterUsed": "100", "totalWashCycle": "1"})
+        mw = next(e for e in added if e._attr_unique_id == "x-1_mean_water_consumption")
+        self.assertIsNone(mw.native_value)
+
+    async def test_mean_water_absent_without_both_attrs_or_on_dryer(self) -> None:
+        # Needs BOTH attrs; the tumble dryer never builds it (no water).
+        for attrs in ({"totalWaterUsed": "100"}, {"totalWashCycle": "6"}):
+            uids = {e._attr_unique_id for e in await _build_sensors("WM", attrs)}
+            self.assertNotIn("x-1_mean_water_consumption", uids)
+        uids = {e._attr_unique_id for e in await _build_sensors(
+            "TD", {"totalWaterUsed": "100", "totalWashCycle": "6"})}
+        self.assertNotIn("x-1_mean_water_consumption", uids)
 
 
 if __name__ == "__main__":

@@ -140,6 +140,7 @@ def _install_homeassistant_stubs() -> None:
 
     class UnitOfMass:
         GRAMS = "g"
+        KILOGRAMS = "kg"
 
     const.UnitOfEnergy = getattr(const, "UnitOfEnergy", UnitOfEnergy)
     const.UnitOfVolume = getattr(const, "UnitOfVolume", UnitOfVolume)
@@ -201,7 +202,7 @@ class PerTypeTableTest(unittest.TestCase):
              "delay_time", "errors", "total_washes", "total_water", "total_energy",
              "current_energy", "current_water", "current_wash_cycle",
              "remaining_rinses", "detergent_level", "detergent_weight",
-             "softener_weight"],
+             "softener_weight", "estimated_weight"],
         )
 
     def test_wd_is_wm_plus_dry_level(self) -> None:
@@ -212,7 +213,7 @@ class PerTypeTableTest(unittest.TestCase):
              "loading_percentage", "delay_time", "errors", "total_washes", "total_water",
              "total_energy", "current_energy", "current_water", "current_wash_cycle",
              "remaining_rinses", "detergent_level", "detergent_weight",
-             "softener_weight"],
+             "softener_weight", "estimated_weight"],
         )
 
     def test_td_keys(self) -> None:

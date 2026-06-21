@@ -229,6 +229,12 @@
       "softener_weight": {
         "name": "Softener dispensed"
       },
+      "estimated_weight": {
+        "name": "Estimated weight"
+      },
+      "mean_water_consumption": {
+        "name": "Mean water consumption"
+      },
       "program_duration": {
         "name": "Program duration"
       },
@@ -407,6 +413,9 @@
       },
       "connectivity": {
         "name": "Connectivity"
+      },
+      "remote_control": {
+        "name": "Remote control"
       },
       "preheat": {
         "name": "Preheating"

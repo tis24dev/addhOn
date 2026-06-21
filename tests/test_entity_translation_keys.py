@@ -74,7 +74,7 @@ def _install_stubs() -> None:
         if not hasattr(const, unit_cls):
             setattr(const, unit_cls, type(unit_cls, (), {
                 "CELSIUS": "C", "KILO_WATT_HOUR": "kWh", "MINUTES": "min", "LITERS": "L",
-                "GRAMS": "g", "SECONDS": "s",
+                "GRAMS": "g", "KILOGRAMS": "kg", "SECONDS": "s",
             }))
 
     components = _mod("homeassistant.components")
@@ -179,10 +179,15 @@ def _collect_code_keys() -> dict[str, set[str]]:
     used["sensor"] = {
         _tk(d) for descs in sensor.SENSORS.values() for d in descs
     }
+    # Derived custom-class sensor (not a description-table row).
+    used["sensor"].add(sensor.HonMeanWaterConsumption._attr_translation_key)
     used["binary_sensor"] = {
         _tk(d) for descs in binary_sensor.BINARY_SENSORS.values() for d in descs
     }
     used["binary_sensor"].add(_tk(binary_sensor._CONNECTIVITY))
+    # Universal capability-gated binaries (not in the per-type table).
+    for d in binary_sensor._UNIVERSAL_GATED:
+        used["binary_sensor"].add(_tk(d))
     used["number"] = {
         _tk(d) for descs in number.NUMBERS.values() for d in descs
     }

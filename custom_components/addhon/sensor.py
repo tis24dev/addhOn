@@ -394,15 +394,29 @@ _WASH_DOSE: tuple[HonSensorEntityDescription, ...] = (
     _g_grams("detergent_weight", "haier_DetergentWeight"),
     _g_grams("softener_weight", "haier_SoftenerWeight"),
 )
+# Drum-load estimate (kg) the machine derives before/after a cycle. gvigroux-live
+# on WM/WD; gated (not every model auto-weighs). `weight` is the cross-model
+# fallback attribute name (gvigroux sensor.py:181 reads `weight` when `actualWeight`
+# is absent).
+_ESTIMATED_WEIGHT = HonSensorEntityDescription(
+    key="estimated_weight",
+    icon="mdi:weight-kilogram",
+    attr_key="actualWeight",
+    attr_fallbacks=("weight",),
+    native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+    device_class=SensorDeviceClass.WEIGHT,
+    state_class=SensorStateClass.MEASUREMENT,
+    gated=True,
+)
 # Washer (WM): state/time + program + wash extras + load/delay + consumption + dose.
 _WASHER: tuple[HonSensorEntityDescription, ...] = (
     _STATE, _REMAINING, _PROGRAM_NAME, _PHASE_WASH, *_WASH_EXTRA, _LOADING, _DELAY,
-    _ERRORS, *_WASH_CONSUMPTION, *_WASH_DOSE,
+    _ERRORS, *_WASH_CONSUMPTION, *_WASH_DOSE, _ESTIMATED_WEIGHT,
 )
 # Washer-dryer (WD = WM + drying): like the washer + dry level.
 _WASHER_DRYER: tuple[HonSensorEntityDescription, ...] = (
     _STATE, _REMAINING, _PROGRAM_NAME, _PHASE_WASH, *_WASH_EXTRA, _DRY_LEVEL, _LOADING,
-    _DELAY, _ERRORS, *_WASH_CONSUMPTION, *_WASH_DOSE,
+    _DELAY, _ERRORS, *_WASH_CONSUMPTION, *_WASH_DOSE, _ESTIMATED_WEIGHT,
 )
 
 # Tumble dryer: no water/energy (hOn does not expose them for the TD). The cycles
@@ -827,6 +841,16 @@ async def async_setup_entry(
                 continue
             entities.append(HonSensor(coordinator, appliance_id, description))
             created.append(description.key)
+        # Derived sensors combine MULTIPLE attributes, so they cannot be a
+        # description-table row (those read a single attr_key). Mean water per
+        # cycle: WM/WD only (the dryer has no water), gated on both source attrs.
+        if (
+            app_type in (APPLIANCE_WM, APPLIANCE_WD)
+            and "totalWaterUsed" in attributes
+            and "totalWashCycle" in attributes
+        ):
+            entities.append(HonMeanWaterConsumption(coordinator, appliance_id))
+            created.append("mean_water_consumption")
         _LOGGER.debug(
             "Sensor debug: '%s' (type=%s, id=%s) -> %d/%d sensors %s",
             data.get("name", "Haier"),
@@ -871,3 +895,45 @@ class HonSensor(HonBaseEntity, SensorEntity):
             return float(raw)
         except (ValueError, TypeError):
             return None
+
+
+class HonMeanWaterConsumption(HonBaseEntity, SensorEntity):
+    """Average water used per wash cycle = totalWaterUsed / (totalWashCycle - 1).
+
+    DERIVED from two attributes, so it cannot be a description-table row (those
+    read a single attr_key). Washer / washer-dryer only (the tumble dryer has no
+    water). Created only when the device reports BOTH source attributes
+    (capability-gated, like every other harvested item). The `-1` matches the
+    app's cycle counter, which starts at 1; the `<= 0 -> None` guard yields
+    "unknown" on a device with no completed cycle yet instead of dividing by zero.
+    Mirrors gvigroux sensor.py:534-548.
+
+    NOTE: the divisor is `totalWashCycle - 1` (completed cycles), while our
+    `total_washes` sensor renders the RAW `totalWashCycle`, so this mean is NOT
+    exactly `total_water / total_washes`. The `-1` is intentional: gvigroux (the
+    only party with real washer hardware) uses it, and it makes the guard above
+    suppress the sensor on a factory-fresh machine (counter == 1) instead of
+    dividing lifetime water by a bogus 1.
+    """
+
+    _attr_translation_key = "mean_water_consumption"
+    _attr_icon = "mdi:water-sync"
+    _attr_device_class = SensorDeviceClass.WATER
+    _attr_native_unit_of_measurement = UnitOfVolume.LITERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, appliance_id: str) -> None:
+        super().__init__(coordinator, appliance_id)
+        self._attr_unique_id = f"{appliance_id}_mean_water_consumption"
+
+    @property
+    def native_value(self):
+        try:
+            cycles = float(self._get_attr(WM_ATTR_TOTAL_WASH))
+            water = float(self._get_attr(WM_ATTR_TOTAL_WATER))
+        except (ValueError, TypeError):
+            return None
+        denom = cycles - 1
+        if denom <= 0:
+            return None
+        return round(water / denom, 2)
