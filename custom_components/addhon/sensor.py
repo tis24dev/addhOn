@@ -366,14 +366,15 @@ _WASHER_DRYER: tuple[HonSensorEntityDescription, ...] = (
 # Tumble dryer: no water/energy (hOn does not expose them for the TD). The cycles
 # reuse the "total_washes" suffix but read programsCounter, so the already-
 # registered entity (previously always empty on totalWashCycle) is re-pointed to a
-# real value without changing entity_id.
+# real value without changing entity_id. No loading_percentage: the app gates the
+# Loading Percentage statistic to WM/WD only (TD uses loadEfficiency instead), so
+# the sensor would be perpetually unknown on a dryer.
 _DRYER: tuple[HonSensorEntityDescription, ...] = (
     _STATE,
     _REMAINING,
     _PROGRAM_NAME,
     _PHASE_DRY,
     _DRY_LEVEL,
-    _LOADING,
     _DELAY,
     _ERRORS,
     HonSensorEntityDescription(

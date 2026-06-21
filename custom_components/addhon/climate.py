@@ -279,7 +279,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
                 translation_key="appliance_or_client_unavailable",
             )
         try:
-            speed_key = AC_FAN_MAP_REVERSE.get(fan_mode, "0")
+            speed_key = AC_FAN_MAP_REVERSE.get(fan_mode, "5")
             _LOGGER.debug("Climate debug: set_fan_mode %s -> windSpeed=%s", fan_mode, speed_key)
             await self._send_command_in_executor(client, appliance, {"windSpeed": speed_key})
             await self._async_request_command_refresh()

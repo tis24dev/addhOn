@@ -116,8 +116,10 @@ AC_MODE_MAP = {
 AC_MODE_MAP_REVERSE = {v: k for k, v in AC_MODE_MAP.items()}
 
 # Fan speed map (confirmed: windSpeed in settings)
+# windSpeed enum (app mapFanSpeedTitle): 1=high, 2=medium(mid), 3=low, 5=auto.
+# There is NO value 0 (the device rejects writing 0); auto is 5.
 AC_FAN_MAP = {
-    "0": "auto",
+    "5": "auto",
     "3": "low",
     "2": "medium",
     "1": "high",
@@ -149,15 +151,22 @@ WM_ATTR_ERRORS        = "errors"
 TD_ATTR_CYCLES = "programsCounter"
 
 # --- Washing machine / tumble dryer states ------------------------------------
+# Authoritative MachineMode enum from the app (decomp `MachineMode`): the washing
+# group uses the same codes as MACHINE_MODE_MAP below. The previous table here was
+# miscoded (e.g. 2->"paused" while 2 is EXECUTION/running, and "half_load" is a
+# program option, not a machine state). Translation namespace stays "state".
 WM_STATE_MAP = {
-    "0": "waiting",
-    "1": "running",
-    "2": "paused",
-    "3": "completed",
-    "4": "error",
-    "5": "scheduled",
-    "6": "delayed_start",
-    "7": "half_load",
+    "0": "idle",
+    "1": "selection",
+    "2": "running",
+    "3": "paused",
+    "4": "delayed_start",
+    "5": "delayed_start_running",
+    "6": "error",
+    "7": "finished",
+    "8": "test",
+    "9": "stopped",
+    "10": "keep_fresh",
 }
 
 # --- Additional sensors/binary for the washing group --------------------------
@@ -218,10 +227,9 @@ TUMBLE_DRYER_PHASE_MAP = {
 # Values not in the map -> None (handled by the value_fn in sensor.py).
 
 # Authoritative app machMode (0-10), used by the types that share MachineMode
-# (oven, dishwasher, ...). NOTE: distinct from WM_STATE_MAP (the washing group's
-# own 0-7 codes); both now hold ENUM machine keys, exposed under distinct
-# translation_keys ("machine_mode" vs "state") so their state vocabularies stay
-# separate.
+# (oven, dishwasher, ...). Kept as a SEPARATE dict from WM_STATE_MAP (currently
+# identical content) so the two stay on distinct translation_keys ("machine_mode"
+# vs "state") and can diverge per appliance family without affecting each other.
 MACHINE_MODE_MAP = {
     "0": "idle",
     "1": "selection",
@@ -282,13 +290,13 @@ STAIN_TYPE_MAP = {
     "6": "cooking_oil",
     "7": "tea",
     "8": "coffee",
-    "9": "ice_cream",
+    "9": "chocolate",
     "10": "lip_gloss",
     "11": "curry",
     "12": "milk_tea",
-    "13": "rust",
+    "13": "chili_oil",
     "14": "blue_ink",
-    "15": "perfume",
+    "15": "color_pencil",
     "16": "shoe_cream",
     "17": "oil_pastel",
     "18": "blueberry",

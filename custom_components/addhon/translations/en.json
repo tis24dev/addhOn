@@ -70,14 +70,17 @@
       "state": {
         "name": "Status",
         "state": {
-          "waiting": "Waiting",
+          "idle": "Idle",
+          "selection": "Selection",
           "running": "Running",
           "paused": "Paused",
-          "completed": "Completed",
-          "error": "Error",
-          "scheduled": "Scheduled",
           "delayed_start": "Delayed start",
-          "half_load": "Half load"
+          "delayed_start_running": "Delayed start (running)",
+          "error": "Error",
+          "finished": "Finished",
+          "test": "Test",
+          "stopped": "Stopped",
+          "keep_fresh": "Keep fresh"
         }
       },
       "remaining_time": {
@@ -152,13 +155,13 @@
           "cooking_oil": "Cooking oil",
           "tea": "Tea",
           "coffee": "Coffee",
-          "ice_cream": "Ice cream",
+          "chocolate": "Chocolate",
           "lip_gloss": "Lip gloss",
           "curry": "Curry",
           "milk_tea": "Milk tea",
-          "rust": "Rust",
+          "chili_oil": "Chili oil",
           "blue_ink": "Blue ink",
-          "perfume": "Perfume",
+          "color_pencil": "Color pencil",
           "shoe_cream": "Shoe cream",
           "oil_pastel": "Oil pastel",
           "blueberry": "Blueberry",

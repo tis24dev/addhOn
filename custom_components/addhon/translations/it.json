@@ -70,14 +70,17 @@
       "state": {
         "name": "Stato",
         "state": {
-          "waiting": "In attesa",
+          "idle": "Inattivo",
+          "selection": "Selezione",
           "running": "In esecuzione",
           "paused": "In pausa",
-          "completed": "Completato",
+          "delayed_start": "Avvio ritardato",
+          "delayed_start_running": "Avvio ritardato (in corso)",
           "error": "Errore",
-          "scheduled": "Programmato",
-          "delayed_start": "Ritardo avvio",
-          "half_load": "Mezzo carico"
+          "finished": "Terminato",
+          "test": "Test",
+          "stopped": "Arresto",
+          "keep_fresh": "Mantieni fresco"
         }
       },
       "remaining_time": {
@@ -152,13 +155,13 @@
           "cooking_oil": "Olio da cucina",
           "tea": "Tè",
           "coffee": "Caffè",
-          "ice_cream": "Gelato",
+          "chocolate": "Cioccolato",
           "lip_gloss": "Lucidalabbra",
           "curry": "Curry",
           "milk_tea": "Tè al latte",
-          "rust": "Ruggine",
+          "chili_oil": "Olio di peperoncino",
           "blue_ink": "Inchiostro blu",
-          "perfume": "Profumo",
+          "color_pencil": "Matita colorata",
           "shoe_cream": "Lucido da scarpe",
           "oil_pastel": "Pastello a olio",
           "blueberry": "Mirtillo",

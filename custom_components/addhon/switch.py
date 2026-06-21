@@ -129,7 +129,8 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         val = self._get_attr(WM_ATTR_STATUS, "0")
-        is_paused = str(val) == "2"
+        # machMode 3 = PAUSE_MODE (2 = EXECUTION/running) per the app's MachineMode enum.
+        is_paused = str(val) == "3"
         _LOGGER.debug(
             "Switch debug: is_on '%s' id=%s machMode=%s -> %s",
             self._attr_unique_id,

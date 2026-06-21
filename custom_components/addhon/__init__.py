@@ -180,21 +180,28 @@ async def _async_close_client(client) -> None:
         _LOGGER.warning("Error closing HonClient: %s", err)
 
 
-# "Washer-only" consumption sensors that were mistakenly created on the tumble
-# dryers (TD) too: a tumble dryer does not use water and does not expose these
-# counters, so they stayed forever "unknown" entities. After the per-type refactor
-# they are no longer created: here we clean up the ones already registered, ONLY on
-# TD devices.
-_TD_REMOVED_SUFFIXES = ("_total_water", "_total_energy", "_current_energy", "_current_water")
+# "Washer-only" sensors that were mistakenly created on the tumble dryers (TD)
+# too: a tumble dryer does not use water and does not report loadingPercentage
+# (the app gates that statistic to WM/WD), so they stayed forever "unknown"
+# entities. After the per-type refactor they are no longer created: here we clean
+# up the ones already registered, ONLY on TD devices.
+_TD_REMOVED_SUFFIXES = (
+    "_total_water",
+    "_total_energy",
+    "_current_energy",
+    "_current_water",
+    "_loading_percentage",
+)
 
 
 def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Remove from the registry the legacy entities no longer provided by the integration.
 
     - "Power" switch (unique_id '<id>_power'), removed in the 2.3/2.4 refactor.
-    - Washer-only consumption sensors on the tumble dryers (TD): '<td_id>_total_water',
-      '_total_energy', '_current_energy', '_current_water'. Removed ONLY on devices
-      of type TD (cross-checked with the coordinator), never on WM/WD/AC.
+    - Washer-only sensors on the tumble dryers (TD): '<td_id>_total_water',
+      '_total_energy', '_current_energy', '_current_water', '_loading_percentage'.
+      Removed ONLY on devices of type TD (cross-checked with the coordinator),
+      never on WM/WD/AC.
 
     Without this cleanup there would be orphan 'unavailable' entities with the '?' badge.
     """

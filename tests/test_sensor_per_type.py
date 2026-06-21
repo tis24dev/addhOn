@@ -204,7 +204,7 @@ class PerTypeTableTest(unittest.TestCase):
         self.assertEqual(
             self._keys("TD"),
             ["state", "remaining_time", "program_name", "program_phase", "dry_level",
-             "loading_percentage", "delay_time", "errors", "temp_level", "total_washes"],
+             "delay_time", "errors", "temp_level", "total_washes"],
         )
 
     def test_td_has_no_water_or_energy(self) -> None:
@@ -249,13 +249,13 @@ class SensorBuildTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {e._attr_unique_id for e in added},
             {"td-1_state", "td-1_remaining_time", "td-1_program_name",
-             "td-1_program_phase", "td-1_dry_level", "td-1_loading_percentage",
+             "td-1_program_phase", "td-1_dry_level",
              "td-1_delay_time", "td-1_errors", "td-1_temp_level", "td-1_total_washes"},
         )
         cycles = next(e for e in added if e._attr_unique_id == "td-1_total_washes")
         self.assertEqual(cycles.native_value, 42.0)  # reads programsCounter
         state = next(e for e in added if e._attr_unique_id == "td-1_state")
-        self.assertEqual(state.native_value, "running")  # WM_STATE_MAP["1"]
+        self.assertEqual(state.native_value, "selection")  # WM_STATE_MAP["1"]
 
     async def test_td_cycles_can_read_programscounter_from_statistics(self) -> None:
         from custom_components.addhon import sensor
@@ -328,9 +328,11 @@ class TdLegacyCleanupTest(unittest.TestCase):
             RegEntry("sensor.dryer_total_energy", "td-1_total_energy"),     # remove
             RegEntry("sensor.dryer_current_energy", "td-1_current_energy"), # remove
             RegEntry("sensor.dryer_current_water", "td-1_current_water"),   # remove
+            RegEntry("sensor.dryer_load", "td-1_loading_percentage"),       # remove (TD has no loading)
             RegEntry("sensor.dryer_cycles", "td-1_total_washes"),           # KEEP (dryer)
             RegEntry("sensor.dryer_state", "td-1_state"),                   # KEEP
             RegEntry("sensor.washer_total_water", "wm-1_total_water"),      # KEEP (WM, not TD)
+            RegEntry("sensor.washer_load", "wm-1_loading_percentage"),      # KEEP (WM keeps loading)
             RegEntry("switch.washer_power", "wm-1_power"),                  # remove (legacy power)
         ])
         self.addCleanup(setattr, er, "async_get", er.async_get)
@@ -353,13 +355,15 @@ class TdLegacyCleanupTest(unittest.TestCase):
                 "sensor.dryer_total_energy",
                 "sensor.dryer_current_energy",
                 "sensor.dryer_current_water",
+                "sensor.dryer_load",
                 "switch.washer_power",
             ]),
         )
-        # The dryer cycles/state and the washer's real water sensor survive.
+        # The dryer cycles/state and the washer's real water/loading sensors survive.
         self.assertNotIn("sensor.dryer_cycles", registry.removed)
         self.assertNotIn("sensor.dryer_state", registry.removed)
         self.assertNotIn("sensor.washer_total_water", registry.removed)
+        self.assertNotIn("sensor.washer_load", registry.removed)
 
 
 class LoadingPercentageValueFnTest(unittest.TestCase):
@@ -508,9 +512,26 @@ class LoadingPercentageBuildTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(value, 50.0)
 
-    async def test_td_uses_same_value_fn(self) -> None:
-        value = await self._native_value("TD", [{"current": 8, "max": 8}])
-        self.assertEqual(value, 100.0)
+    async def test_td_has_no_loading_sensor(self) -> None:
+        # The app gates loadingPercentage to WM/WD only; TD must not build it.
+        from custom_components.addhon import sensor
+        from custom_components.addhon.const import DOMAIN
+
+        data = {
+            "td-1": {
+                "type": "TD",
+                "name": "TD",
+                "attributes": {"loadingPercentage": [{"current": 8, "max": 8}]},
+                "settings": {},
+            }
+        }
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator}}})
+        added: list = []
+        await sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+        self.assertNotIn(
+            "td-1_loading_percentage", {e._attr_unique_id for e in added}
+        )
 
 
 if __name__ == "__main__":

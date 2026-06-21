@@ -327,10 +327,76 @@ class Tier2GatingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_washer_stain_type_decodes(self) -> None:
         # WM stain_type ENUM: code -> machine key, 0 -> none, unknown -> None.
-        for raw, expected in (("1", "wine"), ("0", "none"), ("26", "fruit"), ("99", None)):
+        # 9/13/15 corrected to the app's stainOptions (were ice_cream/rust/perfume).
+        cases = (
+            ("1", "wine"), ("0", "none"), ("26", "fruit"), ("99", None),
+            ("9", "chocolate"), ("13", "chili_oil"), ("15", "color_pencil"),
+        )
+        for raw, expected in cases:
             added = await _build_sensors("WM", {"stainType": raw})
             st = next(e for e in added if e._attr_unique_id == "x-1_stain_type")
             self.assertEqual(st.native_value, expected)
+
+    async def test_washer_state_decodes(self) -> None:
+        # WM state ENUM uses the authoritative MachineMode: 2=running, 3=paused.
+        for raw, expected in (
+            ("0", "idle"), ("1", "selection"), ("2", "running"),
+            ("3", "paused"), ("7", "finished"), ("99", None),
+        ):
+            added = await _build_sensors("WM", {"machMode": raw})
+            st = next(e for e in added if e._attr_unique_id == "x-1_state")
+            self.assertEqual(st.native_value, expected)
+
+
+class ConstMapTest(unittest.TestCase):
+    def test_ac_fan_map_auto_is_5(self) -> None:
+        from custom_components.addhon.const import AC_FAN_MAP, AC_FAN_MAP_REVERSE
+
+        self.assertEqual(AC_FAN_MAP.get("5"), "auto")
+        self.assertNotIn("0", AC_FAN_MAP)  # the device rejects windSpeed 0
+        self.assertEqual(AC_FAN_MAP_REVERSE["auto"], "5")
+        self.assertEqual(AC_FAN_MAP_REVERSE["high"], "1")
+
+    def test_wm_state_map_authoritative_codes(self) -> None:
+        from custom_components.addhon.const import WM_STATE_MAP
+
+        # Authoritative MachineMode semantics (decomp): 1=selection, 2=running,
+        # 3=paused, 7=finished; "half_load" is a program option, never a state.
+        self.assertEqual(WM_STATE_MAP["1"], "selection")
+        self.assertEqual(WM_STATE_MAP["2"], "running")
+        self.assertEqual(WM_STATE_MAP["3"], "paused")
+        self.assertEqual(WM_STATE_MAP["7"], "finished")
+        self.assertNotIn("half_load", WM_STATE_MAP.values())
+
+    def test_stain_map_full_table(self) -> None:
+        from custom_components.addhon.const import STAIN_TYPE_MAP
+
+        # Locks the entire app stainOptions table (decomp.txt:977322-977422).
+        self.assertEqual(STAIN_TYPE_MAP, {
+            "0": "none", "1": "wine", "2": "grass", "3": "soil", "4": "blood",
+            "5": "milk", "6": "cooking_oil", "7": "tea", "8": "coffee",
+            "9": "chocolate", "10": "lip_gloss", "11": "curry", "12": "milk_tea",
+            "13": "chili_oil", "14": "blue_ink", "15": "color_pencil",
+            "16": "shoe_cream", "17": "oil_pastel", "18": "blueberry", "19": "sweat",
+            "20": "egg", "21": "ketchup", "22": "baby_food", "23": "soy_sauce",
+            "24": "bean_paste", "25": "chili_sauce", "26": "fruit",
+        })
+
+
+class PauseSwitchTest(unittest.IsolatedAsyncioTestCase):
+    def _switch(self, mach_mode: str):
+        sw = _mod("homeassistant.components.switch")
+        sw.SwitchEntity = getattr(sw, "SwitchEntity", type("SwitchEntity", (), {}))
+        from custom_components.addhon.switch import HonWashingMachinePauseSwitch
+
+        data = {"x-1": {"type": "WM", "name": "Dev",
+                        "attributes": {"machMode": mach_mode}, "settings": {}}}
+        return HonWashingMachinePauseSwitch(FakeCoordinator(data), "x-1", None)
+
+    def test_is_on_only_when_paused(self) -> None:
+        self.assertTrue(self._switch("3").is_on)   # 3 = PAUSE_MODE
+        self.assertFalse(self._switch("2").is_on)  # 2 = EXECUTION (running)
+        self.assertFalse(self._switch("0").is_on)
 
 
 class Tier2BinaryGatingTest(unittest.IsolatedAsyncioTestCase):
