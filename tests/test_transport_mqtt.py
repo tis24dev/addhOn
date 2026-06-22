@@ -417,6 +417,46 @@ class StaleLifecycleCallbackTest(unittest.TestCase):
         self.assertFalse(m._connection)
 
 
+class PublishReceivedRobustnessTest(unittest.TestCase):
+    """ITEM B: a VALID dict payload that makes the engine raise (param.update,
+    sync_params_to_command, or notify) must NOT propagate out of _on_publish_received
+    (it runs on the awscrt callback thread, where a raise would silence every later
+    push), and the failure must be logged at WARNING so it stays diagnosable."""
+
+    _LOGGER_NAME = "custom_components.addhon.client.transport.mqtt"
+
+    def test_raising_param_update_is_swallowed_and_warned(self) -> None:
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        app = FakeAppliance(topic)
+
+        def boom(_value) -> None:
+            raise RuntimeError("engine update failed")
+
+        app.attributes["parameters"]["temp"].update = boom
+        hon = FakeHon([app])
+        m = NativeMqttClient(hon, "MID")
+        with self.assertLogs(self._LOGGER_NAME, level="WARNING") as cm:
+            m._on_publish_received(_packet(topic, {"parameters": [
+                {"parName": "temp", "parValue": "5"},
+            ]}))  # must NOT raise
+        self.assertEqual(hon.notified, 0)  # raised before notify()
+        self.assertTrue(any("handler failed" in r.getMessage() for r in cm.records))
+
+    def test_raising_notify_is_swallowed_and_warned(self) -> None:
+        topic = "haier/things/MAC/event/connected"
+        app = FakeAppliance(topic)
+        hon = FakeHon([app])
+
+        def boom() -> None:
+            raise RuntimeError("notify failed")
+
+        hon.notify = boom
+        m = NativeMqttClient(hon, "MID")
+        with self.assertLogs(self._LOGGER_NAME, level="WARNING") as cm:
+            m._on_publish_received(_packet(topic, {}))  # must NOT raise
+        self.assertTrue(any("handler failed" in r.getMessage() for r in cm.records))
+
+
 class StartGenerationWiringTest(unittest.TestCase):
     """Covers the _start <-> guard wiring: _start must bind the state-mutating lifecycle
     callbacks to the CURRENT generation via functools.partial, so awscrt (which calls

@@ -158,5 +158,42 @@ class NativeEnumEdgeBehaviorTest(unittest.TestCase):
             na.value = "A|B|C"
 
 
+class RangeSetterHardeningTest(unittest.TestCase):
+    """ITEM A: a fractional float assigned DIRECTLY to the range setter must not be
+    truncated. The setter delegated to str_to_float, whose int()-first quirk turned a
+    raw 22.5 into 22 silently (the golden never hit this: range.values yields strings).
+    Integer-valued inputs must stay int so intern_value is clean ("24", never "24.0")."""
+
+    def _range(self, lo="20", hi="25", step="0.5"):
+        return NaRange("temp", {"category": "command", "typology": "range",
+                                "mandatory": 0, "minimumValue": lo, "maximumValue": hi,
+                                "incrementValue": step, "defaultValue": lo}, "grp")
+
+    def test_fractional_float_not_truncated(self) -> None:
+        p = self._range()
+        p.value = 22.5  # FLOAT passed directly, not the documented string
+        self.assertEqual(p.value, 22.5)
+        self.assertEqual(p.intern_value, "22.5")
+
+    def test_integer_valued_inputs_stay_int_and_clean(self) -> None:
+        # str "24", int 24 and float 24.0 must all store int 24 -> intern "24", no "24.0".
+        for v in ("24", 24, 24.0):
+            p = self._range()
+            p.value = v
+            self.assertEqual(p.value, 24)
+            self.assertEqual(p.intern_value, "24")
+
+    def test_off_grid_float_raises_instead_of_truncating(self) -> None:
+        # 22.3 is off the 0.5 grid: it must raise, not be truncated to 22 and accepted.
+        p = self._range()
+        with self.assertRaises(ValueError):
+            p.value = 22.3
+
+    def test_decimal_comma_string_still_preserved(self) -> None:
+        p = self._range()
+        p.value = "22,5"  # cloud decimal comma -> 22.5 (string path unchanged)
+        self.assertEqual(p.value, 22.5)
+
+
 if __name__ == "__main__":
     unittest.main()

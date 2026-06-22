@@ -164,42 +164,55 @@ class NativeMqttClient:
         if not isinstance(payload, dict):
             _LOGGER.debug("MQTT: non-object payload on %s: %r", topic, payload)
             return
-        # Defensive: appliance not found for this topic -> exit.
-        appliance = next(
-            (
-                a
-                for a in self._appliances
-                if topic in a.info.get("topics", {}).get("subscribe", [])
-            ),
-            None,
-        )
-        if appliance is None:
-            _LOGGER.debug("MQTT: topic with no matching appliance: %s", topic)
-            return
-        if topic and "appliancestatus" in topic:
-            params = appliance.attributes.get("parameters", {})
-            for parameter in payload.get("parameters", []):
-                name = parameter.get("parName")
-                # Only already-known parameters (seeded by load_attributes). A new
-                # parName is recovered at the next HTTP poll; creating it here would
-                # couple this transport module to the engine's HonAttribute.
-                if name in params:
-                    params[name].update(parameter)
-            appliance.sync_params_to_command("settings")
-        elif topic and "disconnected" in topic:
-            _LOGGER.info(
-                "Disconnected %s: %s",
-                appliance.nick_name,
-                payload.get("disconnectReason"),
+        # The rest also runs on the awscrt callback thread: a VALID dict payload can
+        # still make the engine raise (params[name].update, sync_params_to_command, or
+        # self._hon.notify -> an arbitrary HA callback). An unhandled exception here
+        # would crash the callback and silence every later push, so the whole body is
+        # wrapped: log at WARNING (the MQTT logger defaults to WARNING, so debug/info
+        # would be muted and would mask real engine bugs) and drop just this message.
+        # State is reconciled at the next HTTP poll, so skipping is safe and idempotent.
+        try:
+            # Defensive: appliance not found for this topic -> exit.
+            appliance = next(
+                (
+                    a
+                    for a in self._appliances
+                    if topic in a.info.get("topics", {}).get("subscribe", [])
+                ),
+                None,
             )
-            appliance.connection = False
-        elif topic and "connected" in topic:
-            appliance.connection = True
-            _LOGGER.info("Connected %s", appliance.nick_name)
-        elif topic and "discovery" in topic:
-            _LOGGER.info("Discovered %s", appliance.nick_name)
-        self._hon.notify()
-        _LOGGER.info("%s - %s", topic, payload)
+            if appliance is None:
+                _LOGGER.debug("MQTT: topic with no matching appliance: %s", topic)
+                return
+            if topic and "appliancestatus" in topic:
+                params = appliance.attributes.get("parameters", {})
+                for parameter in payload.get("parameters", []):
+                    name = parameter.get("parName")
+                    # Only already-known parameters (seeded by load_attributes). A new
+                    # parName is recovered at the next HTTP poll; creating it here would
+                    # couple this transport module to the engine's HonAttribute.
+                    if name in params:
+                        params[name].update(parameter)
+                appliance.sync_params_to_command("settings")
+            elif topic and "disconnected" in topic:
+                _LOGGER.info(
+                    "Disconnected %s: %s",
+                    appliance.nick_name,
+                    payload.get("disconnectReason"),
+                )
+                appliance.connection = False
+            elif topic and "connected" in topic:
+                appliance.connection = True
+                _LOGGER.info("Connected %s", appliance.nick_name)
+            elif topic and "discovery" in topic:
+                _LOGGER.info("Discovered %s", appliance.nick_name)
+            self._hon.notify()
+            _LOGGER.info("%s - %s", topic, payload)
+        except Exception:
+            # Broad on purpose: the body spans transport -> engine -> HA coordinator and
+            # may raise arbitrary types; we must never let one reach the awscrt thread.
+            _LOGGER.warning("MQTT: handler failed on %s", topic, exc_info=True)
+            return
 
     # -- connection / subscribe / watchdog -------------------------------------
     async def _start(self) -> None:

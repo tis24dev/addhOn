@@ -66,7 +66,16 @@ class HonParameterRange(HonParameter):
 
     @value.setter
     def value(self, value: str | float) -> None:
-        value = str_to_float(value)
+        # A fractional float passed directly (instead of the documented string) would be
+        # truncated by str_to_float's int()-first quirk (22.5 -> 22) and then silently
+        # accepted, so route only non-integer floats through str() to keep the decimals.
+        # Integer-valued inputs (str "4", int 4, float 4.0) stay int -> clean
+        # intern_value "4" (never "4.0"). str_to_float is golden-pinned, so the fix lives
+        # here in the write path, not in the helper.
+        if isinstance(value, float) and not value.is_integer():
+            value = str_to_float(str(value))
+        else:
+            value = str_to_float(value)
         if self.min <= value <= self.max and not ((value - self.min) * 100) % (
             self.step * 100
         ):
