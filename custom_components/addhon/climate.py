@@ -44,6 +44,17 @@ from .hon_commands import param_range
 
 _LOGGER = logging.getLogger(__name__)
 
+# Full HA mode list, used as the fallback when the device's machMode enum is not
+# readable (so a device we cannot introspect keeps offering every mode, as before).
+_DEFAULT_HVAC_MODES = [
+    HVACMode.OFF,
+    HVACMode.AUTO,
+    HVACMode.COOL,
+    HVACMode.DRY,
+    HVACMode.HEAT,
+    HVACMode.FAN_ONLY,
+]
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -99,16 +110,14 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         if self._swing_supported:
             self._attr_supported_features |= ClimateEntityFeature.SWING_MODE
             self._attr_swing_modes = [AC_SWING_MODE_OFF, AC_SWING_MODE_ON]
-        # Force the native HA enums for the command panel
-        self._attr_hvac_modes = [
-            HVACMode.OFF,
-            HVACMode.AUTO,
-            HVACMode.COOL,
-            HVACMode.DRY,
-            HVACMode.HEAT,
-            HVACMode.FAN_ONLY,
-        ]
-        self._attr_fan_modes = list(AC_FAN_MAP_REVERSE.keys())
+        # hvac_modes / fan_modes derived from the device's real machMode/windSpeed
+        # enum (capability-gate, like swing above): the UI must not offer a mode
+        # the device would reject at runtime. When the enum is NOT readable (param
+        # absent or no values, e.g. a model ported without a runtime schema) we
+        # fall back to the full HA list to avoid hiding modes a device supports but
+        # does not expose -- the engine enum setter still rejects an invalid value.
+        self._attr_hvac_modes = self._derive_hvac_modes()
+        self._attr_fan_modes = self._derive_fan_modes()
         _LOGGER.debug(
             "Climate debug: initialized '%s' id=%s hvac_modes=%s fan_modes=%s temp_range=%s-%s",
             self._attr_unique_id,
@@ -118,6 +127,43 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             self.min_temp,
             self.max_temp,
         )
+
+    def _derive_hvac_modes(self) -> list[HVACMode]:
+        """Supported HVAC modes from the device's machMode enum (OFF always present).
+
+        Falls back to the full HA list when the enum is unreadable (param absent or
+        empty values), to avoid regressing devices we cannot introspect.
+        """
+        param = settings_param(self._appliance, AC_MODE_PARAM)
+        values = param_allowed_values(param) if param is not None else []
+        if not values:
+            return list(_DEFAULT_HVAC_MODES)
+        modes = [HVACMode.OFF]  # OFF is onOffStatus, never a machMode value
+        for code in values:  # keep the device's enum order (stable)
+            name = AC_MODE_MAP.get(str(code))
+            if name is None:
+                continue
+            try:
+                mode = HVACMode(name)
+            except ValueError:
+                continue
+            if mode not in modes:
+                modes.append(mode)
+        # Only OFF resolved (enum present but none mapped): keep the full list.
+        return modes if len(modes) > 1 else list(_DEFAULT_HVAC_MODES)
+
+    def _derive_fan_modes(self) -> list[str]:
+        """Supported fan modes from the device's windSpeed enum, full list as fallback."""
+        param = settings_param(self._appliance, AC_FAN_PARAM)
+        values = param_allowed_values(param) if param is not None else []
+        if not values:
+            return list(AC_FAN_MAP_REVERSE.keys())
+        modes: list[str] = []
+        for code in values:
+            name = AC_FAN_MAP.get(str(code))
+            if name and name not in modes:
+                modes.append(name)
+        return modes or list(AC_FAN_MAP_REVERSE.keys())
 
     @property
     def _live_temp_range(self) -> tuple[float, float, float]:

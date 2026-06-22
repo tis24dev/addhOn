@@ -372,6 +372,49 @@ class AcClimateWritePathTest(unittest.IsolatedAsyncioTestCase):
         # No refresh after a failed command.
         self.assertEqual(0, coord.refreshes)
 
+    async def test_hvac_modes_derived_from_enum(self) -> None:
+        # Device exposes only auto+cool: HEAT/DRY/FAN_ONLY must NOT be offered.
+        entity, _, _ = _climate({"machMode": Param("0", values=["0", "1"])})
+        self.assertEqual([HVACMode.OFF, HVACMode.AUTO, HVACMode.COOL], entity._attr_hvac_modes)
+        self.assertNotIn(HVACMode.HEAT, entity._attr_hvac_modes)
+
+    async def test_hvac_modes_full_when_all_enum_values(self) -> None:
+        entity, _, _ = _climate(
+            {"machMode": Param("1", values=["0", "1", "2", "4", "6"])}
+        )
+        self.assertEqual(
+            [
+                HVACMode.OFF,
+                HVACMode.AUTO,
+                HVACMode.COOL,
+                HVACMode.DRY,
+                HVACMode.HEAT,
+                HVACMode.FAN_ONLY,
+            ],
+            entity._attr_hvac_modes,
+        )
+
+    async def test_hvac_modes_fallback_when_enum_absent(self) -> None:
+        # machMode present but no enum values -> full HA list (no regression).
+        entity, _, _ = _climate({"machMode": Param("0")})
+        self.assertEqual(6, len(entity._attr_hvac_modes))
+        self.assertIn(HVACMode.HEAT, entity._attr_hvac_modes)
+
+    async def test_hvac_modes_fallback_when_param_missing(self) -> None:
+        entity, _, _ = _climate({"onOffStatus": Param("0")})  # no machMode
+        self.assertIn(HVACMode.OFF, entity._attr_hvac_modes)
+        self.assertIn(HVACMode.HEAT, entity._attr_hvac_modes)
+
+    async def test_fan_modes_derived_from_enum(self) -> None:
+        # windSpeed exposes only auto+high (enum order preserved).
+        entity, _, _ = _climate({"windSpeed": Param("5", values=["5", "1"])})
+        self.assertEqual(["auto", "high"], entity._attr_fan_modes)
+        self.assertNotIn("medium", entity._attr_fan_modes)
+
+    async def test_fan_modes_fallback_when_param_missing(self) -> None:
+        entity, _, _ = _climate({"onOffStatus": Param("0")})  # no windSpeed
+        self.assertEqual({"auto", "low", "medium", "high"}, set(entity._attr_fan_modes))
+
     async def test_appliance_unavailable_raises(self) -> None:
         coordinator = FakeCoordinator({})  # no appliance data
         entity = climate.HaierClimateEntity(coordinator, "ac-1", FakeClient())
