@@ -21,7 +21,6 @@ from .command_loader import HonCommandLoader
 from .commands import HonCommand
 from .exceptions import NoAuthenticationException
 from .parameter.base import HonParameter
-from .parameter.range import HonParameterRange
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -247,12 +246,15 @@ class HonAppliance:
                 new := self.attributes.get("parameters", {}).get(key)
             ) is None or new.value == "":
                 continue
-            setting = command.settings[key]
             try:
-                if not isinstance(setting, HonParameterRange):
-                    command.settings[key].value = str(new.value)
-                else:
-                    command.settings[key].value = float(new.value)
+                # Always assign as a STRING (range params included): the range
+                # setter runs str_to_float, which tries int() first, so a float
+                # like 22.5 would be TRUNCATED to 22 without error (see
+                # helpers.str_to_float, and the same note in number.py /
+                # rules.py._apply_fixed). A string preserves the decimals, so a
+                # half-degree setpoint is not silently rounded when synced into
+                # the command and later re-sent to the cloud.
+                command.settings[key].value = str(new.value)
             except ValueError as error:
                 _LOGGER.info("Can't set %s - %s", key, error)
                 continue

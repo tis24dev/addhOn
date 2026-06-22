@@ -260,6 +260,85 @@ class PublishReceivedTest(unittest.TestCase):
         m._on_publish_received(types.SimpleNamespace(publish_packet=None))
         self.assertEqual(hon.notified, 0)
 
+    def test_non_json_payload_skipped_no_crash(self) -> None:
+        # Undecodable / non-JSON bytes -> skipped, not raised (the callback runs on
+        # an awscrt thread, a raise there would silence every later push).
+        app = FakeAppliance("t/appliancestatus")
+        m, hon = self._client(app)
+        bad = types.SimpleNamespace(
+            publish_packet=types.SimpleNamespace(
+                topic="t/appliancestatus", payload=b"not json {"
+            )
+        )
+        m._on_publish_received(bad)  # must not raise
+        self.assertEqual(hon.notified, 0)
+
+    def test_valid_json_but_non_object_skipped_no_crash(self) -> None:
+        # Valid JSON that is NOT an object (a bare list): json.loads succeeds, but the
+        # later payload.get(...) would raise AttributeError -> must be skipped.
+        app = FakeAppliance("t/appliancestatus")
+        m, hon = self._client(app)
+        pkt = types.SimpleNamespace(
+            publish_packet=types.SimpleNamespace(
+                topic="t/appliancestatus", payload=json.dumps([1, 2, 3]).encode()
+            )
+        )
+        m._on_publish_received(pkt)  # must not raise
+        self.assertEqual(hon.notified, 0)
+
+
+class StartReconnectTest(unittest.TestCase):
+    """Covers the watchdog leak fix: a second _start() (reconnect) must stop the
+    previous awscrt client before building a new one, instead of leaking it."""
+
+    def test_start_stops_previous_client_before_rebuild(self) -> None:
+        import awscrt
+        import awsiot
+
+        built: list = []
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.started = False
+                self.stopped = False
+
+            def start(self) -> None:
+                self.started = True
+
+            def stop(self) -> None:
+                self.stopped = True
+
+        def fake_builder(**kwargs):
+            client = FakeClient()
+            built.append(client)
+            return client
+
+        awsiot.mqtt5_client_builder.websockets_with_custom_authorizer = fake_builder
+
+        class FakeAuth:
+            id_token = "IDT"
+
+        class FakeApi:
+            auth = FakeAuth()
+
+            async def load_aws_token(self):
+                return "SIGNED"
+
+        hon = FakeHon([])
+        hon.api = FakeApi()
+
+        async def body():
+            m = NativeMqttClient(hon, "MID")
+            await m._start()  # first client
+            await m._start()  # reconnect: must stop the first
+            return m
+
+        m = _run(body())
+        self.assertEqual(len(built), 2)
+        self.assertTrue(built[0].stopped)  # previous client stopped
+        self.assertFalse(built[1].stopped)  # current client still alive
+        self.assertIs(m._client, built[1])
+
 
 if __name__ == "__main__":
     unittest.main()

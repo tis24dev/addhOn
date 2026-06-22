@@ -41,6 +41,11 @@ AWS_AUTHORIZER = "candy-iot-authorizer"
 
 _WATCHDOG_INTERVAL = 5  # seconds
 _SUBSCRIBE_TIMEOUT = 10  # seconds
+# Consecutive down ticks before the watchdog forces a full client rebuild. awscrt's
+# mqtt5 client auto-reconnects on its own (with backoff); rebuilding every tick would
+# tear that down and re-hit the AWS authorizer-token endpoint each cycle. Waiting for
+# sustained downtime lets the native reconnect recover first.
+_RECONNECT_AFTER_FAILED_TICKS = 3
 
 
 class NativeMqttClient:
@@ -115,8 +120,21 @@ class NativeMqttClient:
     def _on_publish_received(self, data: "mqtt5.PublishReceivedData") -> None:
         if not (data and data.publish_packet and data.publish_packet.payload):
             return
-        payload = json.loads(data.publish_packet.payload.decode())
         topic = data.publish_packet.topic
+        # Defensive (this runs on an awscrt callback thread): a malformed payload
+        # must be skipped, not raised, or it would crash the callback and silence
+        # every later push instead of just dropping this one. Two cases:
+        #   1. not decodable / not JSON -> json.loads raises;
+        #   2. valid JSON but not an object (e.g. a bare list/scalar) -> the later
+        #      payload.get(...) calls would raise AttributeError.
+        try:
+            payload = json.loads(data.publish_packet.payload.decode())
+        except (ValueError, UnicodeDecodeError) as err:
+            _LOGGER.debug("MQTT: undecodable payload on %s: %s", topic, err)
+            return
+        if not isinstance(payload, dict):
+            _LOGGER.debug("MQTT: non-object payload on %s: %r", topic, payload)
+            return
         # Defensive: appliance not found for this topic -> exit.
         appliance = next(
             (
@@ -156,6 +174,16 @@ class NativeMqttClient:
 
     # -- connection / subscribe / watchdog -------------------------------------
     async def _start(self) -> None:
+        # The watchdog calls _start() to reconnect: overwriting self._client
+        # without stopping the previous one leaks its native AWS IoT connection
+        # (socket + worker threads are NOT released by GC, only by .stop()), so a
+        # sustained disconnection would spawn a new orphan client every cycle.
+        if self._client is not None:
+            try:
+                self._client.stop()
+            except Exception as err:  # pragma: no cover - defensive
+                _LOGGER.debug("addhOn: stopping previous MQTT client failed: %s", err)
+            self._client = None
         self._client = mqtt5_client_builder.websockets_with_custom_authorizer(
             endpoint=AWS_ENDPOINT,
             auth_authorizer_name=AWS_AUTHORIZER,
@@ -188,9 +216,18 @@ class NativeMqttClient:
             self._watchdog_task = asyncio.create_task(self._watchdog())
 
     async def _watchdog(self) -> None:
+        failed_ticks = 0
         while True:
             await asyncio.sleep(_WATCHDOG_INTERVAL)
-            if not self._connection:
-                _LOGGER.info("Restart mqtt connection")
-                await self._start()
-                self._subscribe_appliances()
+            if self._connection:
+                failed_ticks = 0
+                continue
+            # Sustained downtime only: give awscrt's own auto-reconnect a chance
+            # before forcing a rebuild (see _RECONNECT_AFTER_FAILED_TICKS).
+            failed_ticks += 1
+            if failed_ticks < _RECONNECT_AFTER_FAILED_TICKS:
+                continue
+            failed_ticks = 0
+            _LOGGER.info("Restart mqtt connection")
+            await self._start()
+            self._subscribe_appliances()
