@@ -51,6 +51,10 @@ def _install_stubs() -> None:
     helpers = _mod("homeassistant.helpers")
     entity = _mod("homeassistant.helpers.entity")
     entity.DeviceInfo = getattr(entity, "DeviceInfo", dict)
+    dr = _mod("homeassistant.helpers.device_registry")
+    dr.DeviceEntryType = getattr(
+        dr, "DeviceEntryType", type("DeviceEntryType", (), {"SERVICE": "service"})
+    )
     ep = _mod("homeassistant.helpers.entity_platform")
     ep.AddEntitiesCallback = getattr(ep, "AddEntitiesCallback", object)
     er = _mod("homeassistant.helpers.entity_registry")
@@ -75,6 +79,9 @@ def _install_stubs() -> None:
                 "CELSIUS": "C", "KILO_WATT_HOUR": "kWh", "MINUTES": "min", "LITERS": "L",
                 "GRAMS": "g", "KILOGRAMS": "kg", "SECONDS": "s",
             }))
+    const.EntityCategory = getattr(
+        const, "EntityCategory", type("EntityCategory", (), {"CONFIG": "config", "DIAGNOSTIC": "diagnostic"})
+    )
 
     components = _mod("homeassistant.components")
 
@@ -99,6 +106,7 @@ def _install_stubs() -> None:
         "PM10": "pm10", "CO": "carbon_monoxide", "AQI": "aqi",
         "VOLATILE_ORGANIC_COMPOUNDS_PARTS": "volatile_organic_compounds_parts",
         "WEIGHT": "weight", "BATTERY": "battery", "POWER": "power", "ENUM": "enum",
+        "TIMESTAMP": "timestamp",
     }))
     sensor_mod.SensorStateClass = getattr(sensor_mod, "SensorStateClass", type("SensorStateClass", (), {
         "MEASUREMENT": "measurement", "TOTAL": "total", "TOTAL_INCREASING": "total_increasing",
@@ -353,11 +361,14 @@ class DiagnosticsCoverageTest(unittest.TestCase):
         self.assertNotIn("settings.spinSpeed", blocks["WD"]["coverage"]["attributes_unmapped"])
 
     def test_statistics_unmapped_split_out(self):
+        # statistics keys are carved OUT of the signal into their own list (the signal
+        # `attributes_unmapped` is pure telemetry candidates).
         _, blocks = _entry_diag()
         cov = blocks["WD"]["coverage"]
-        self.assertIn("programsCounter", cov["attributes_unmapped"])
+        self.assertNotIn("programsCounter", cov["attributes_unmapped"])
         self.assertIn("programsCounter", cov["attributes_unmapped_statistics"])
-        # real telemetry stays out of the statistics bucket
+        # real telemetry is signal, not statistics
+        self.assertIn("weirdNewSensor", cov["attributes_unmapped"])
         self.assertNotIn("weirdNewSensor", cov["attributes_unmapped_statistics"])
 
     def test_unmapped_writable_params(self):
@@ -382,15 +393,15 @@ class DiagnosticsCoverageTest(unittest.TestCase):
         self.assertNotIn("tempSel", ac_unmapped)
         self.assertNotIn("machMode", ac_unmapped)
 
-    def test_attributes_total_excludes_writable_mirrors(self):
-        # `attributes_total` is the read-only-axis denominator: it must NOT count the
-        # bare writable mirrors (tempSel/machMode), and unmapped is a subset of it.
+    def test_attributes_total_is_telemetry_axis_denominator(self):
+        # `attributes_total` = mapped telemetry + signal; it excludes writable mirrors,
+        # statistics AND meta, so `unmapped / total` reads as a real coverage gap.
         _, blocks = _entry_diag()
         cov = blocks["AC"]["coverage"]
         # AC bare keys: tempIndoor, available, weirdAcSensor, macAddress, tempSel,
-        # machMode, liveParam, opaqueObj, commandHistory (9); minus 2 writable
-        # mirrors (tempSel, machMode) -> 7.
-        self.assertEqual(cov["attributes_total"], 7)
+        # machMode, liveParam, opaqueObj, commandHistory (9); minus 2 writable mirrors
+        # (tempSel, machMode) and 1 meta (commandHistory, dict-valued) -> 6.
+        self.assertEqual(cov["attributes_total"], 6)
         self.assertLessEqual(len(cov["attributes_unmapped"]), cov["attributes_total"])
 
 
@@ -495,6 +506,115 @@ class DiagnosticsDriftGuardTest(unittest.TestCase):
             diagnostics._AC_CLIMATE_PARAMS,
             frozenset({"onOffStatus", "machMode", "tempSel", "windSpeed", "windDirectionVertical"}),
         )
+
+    def test_coverage_meta_denylists_pinned(self):
+        # Editing the noise denylists must be a deliberate, reviewed change.
+        self.assertEqual(
+            diagnostics._COVERAGE_META_ATTRS,
+            frozenset({
+                "resultcode", "debugenabled", "hightransrate",
+                "statussyncrate", "stdtransrate", "transmode",
+                "programstats", "cloudprogid", "cloudprogsrc",
+                "forcedelete", "testcmdreceivestatus",
+            }),
+        )
+        self.assertEqual(
+            diagnostics._COVERAGE_META_PARAMS,
+            frozenset({
+                "category", "httpendpoint", "mqttendpoint", "resw", "operationname",
+                "programrules", "remoteactionable", "remotevisible",
+                "winddirectionverticalpositionsequence",
+            }),
+        )
+        self.assertEqual(
+            [p.pattern for p in diagnostics._COVERAGE_META_ATTR_PATTERNS],
+            [r"(?i)^program\d+$"],
+        )
+
+
+class DiagnosticsCoverageMetaTest(unittest.TestCase):
+    """Coverage noise partition: value-type envelope + scalar denylist + program slots
+    move to *_meta; genuine signal stays in *_unmapped; nothing is dropped."""
+
+    def _coverage_ac(self):
+        app = FakeAppliance(commands={"settings": FakeCommand({
+            # genuine writable control (no entity) -> command-param signal
+            "humiditySel": FakeParam(value="50", typology="range", rng=(30, 70, 5)),
+            # command plumbing -> command-param meta
+            "category": FakeParam(value="setParameters", typology="enum", values=["setConfig", "setParameters"]),
+            "httpEndpoint": FakeParam(value="x", typology="fixed"),
+            "operationName": FakeParam(value="x", typology="fixed"),
+        })})
+        attrs = {
+            # signal (scalar telemetry candidates)
+            "errors": 0,
+            "programName": "auto_set",
+            "weirdSensor": 7,
+            # near-misses that must STAY signal (regex/name must not catch them)
+            "programsCounter": 3,
+            "programClass": "eco",
+            # structural envelope (dict/list value) -> meta, no name list needed
+            "commandHistory": {"command": {"transactionId": "y"}},
+            "lastConnEvent": {"category": "CONNECTED"},
+            "mostUsedPrograms": [],
+            # scalar protocol/debug noise -> meta (name denylist)
+            "debugEnabled": 0,
+            "transMode": 0,
+            "resultCode": "0",
+            "highTransRate": 1,
+            "programStats": "a7;1b0;;;",  # scalar stats blob -> meta (denylist)
+            "cloudProgId": "x",           # cloud plumbing -> meta (denylist)
+            "forceDelete": "0",           # command plumbing -> meta (denylist)
+            # program-definition slots -> meta (regex)
+            "program7": "x",
+            "program19": "y",
+            # dotted writable mirror -> excluded from the attribute axis entirely
+            "settings.machMode": "1",
+        }
+        return diagnostics._coverage("AC", attrs, {}, app)
+
+    def test_signal_keeps_genuine_telemetry(self):
+        cov = self._coverage_ac()
+        for k in ("errors", "programName", "weirdSensor", "programsCounter", "programClass"):
+            self.assertIn(k, cov["attributes_unmapped"], k)
+            self.assertNotIn(k, cov["attributes_unmapped_meta"], k)
+
+    def test_value_type_envelope_is_meta(self):
+        cov = self._coverage_ac()
+        for k in ("commandHistory", "lastConnEvent", "mostUsedPrograms"):
+            self.assertIn(k, cov["attributes_unmapped_meta"], k)
+            self.assertNotIn(k, cov["attributes_unmapped"], k)
+
+    def test_scalar_meta_and_program_slots_are_meta(self):
+        cov = self._coverage_ac()
+        for k in ("debugEnabled", "transMode", "resultCode", "highTransRate",
+                  "programStats", "cloudProgId", "forceDelete", "program7", "program19"):
+            self.assertIn(k, cov["attributes_unmapped_meta"], k)
+            self.assertNotIn(k, cov["attributes_unmapped"], k)
+
+    def test_partition_is_lossless_and_disjoint(self):
+        cov = self._coverage_ac()
+        signal = set(cov["attributes_unmapped"])
+        meta = set(cov["attributes_unmapped_meta"])
+        stats = set(cov["attributes_unmapped_statistics"])
+        self.assertEqual(signal & meta, set())
+        self.assertEqual(signal & stats, set())
+        self.assertEqual(meta & stats, set())
+
+    def test_command_param_meta_split(self):
+        cov = self._coverage_ac()
+        self.assertIn("humiditySel", cov["command_params_unmapped"])
+        for k in ("category", "httpEndpoint", "operationName"):
+            self.assertIn(k, cov["command_params_unmapped_meta"], k)
+            self.assertNotIn(k, cov["command_params_unmapped"], k)
+
+    def test_command_param_total_excludes_meta(self):
+        # Symmetric with attributes_total: denominator = mapped controls + signal, not
+        # inflated by meta params. settings has 4 params (humiditySel + 3 meta), none
+        # mapped -> total 4 - 3 meta = 1, equal to the signal count.
+        cov = self._coverage_ac()
+        self.assertEqual(cov["command_params_total"], 1)
+        self.assertEqual(len(cov["command_params_unmapped"]), cov["command_params_total"])
 
 
 if __name__ == "__main__":

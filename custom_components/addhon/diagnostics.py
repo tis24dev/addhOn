@@ -20,6 +20,7 @@ appliance.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping
 
 from homeassistant.config_entries import ConfigEntry
@@ -89,6 +90,62 @@ _CUSTOM_MAPPED_ATTRS: dict[str, frozenset[str]] = {
 _AC_CLIMATE_PARAMS = frozenset(
     {"onOffStatus", "machMode", "tempSel", "windSpeed", "windDirectionVertical"}
 )
+
+# Coverage noise: keys that are technically "unmapped" but are never mappable
+# telemetry/controls, so they bury the real signal. Two mechanisms, complementary:
+#   1. VALUE-TYPE (no list to maintain): a bare attribute whose VALUE is a dict/list is
+#      a protocol envelope blob (commandHistory, lastConnEvent, activity, parameters,
+#      mostUsedPrograms, ...). Validated on 4 live appliances: dict/list-valued bare
+#      keys partition exactly into envelope + statistics, with zero genuine-signal loss.
+#      This auto-catches future envelope blobs without a name list.
+#   2. NAME DENYLIST (the scalar residue value-type can't see): protocol/debug scalars
+#      and the program1..N definition slots. Matched lowercased, like _TO_REDACT.
+_COVERAGE_META_ATTRS = frozenset(
+    {
+        "resultcode",
+        "debugenabled",
+        "hightransrate",
+        "statussyncrate",
+        "stdtransrate",
+        "transmode",
+        # Scalar stats/protocol/test blobs the value-type rule can't see (they are
+        # strings, not dict/list): programStats is a packed counter blob (sibling of
+        # the already-carved programsCounter); the cloud-program ids and the test/force
+        # flags are pure plumbing. Conservative: warning-ish flags (softWarn/detWarn)
+        # and the program code (prCode) are deliberately KEPT as signal.
+        "programstats",
+        "cloudprogid",
+        "cloudprogsrc",
+        "forcedelete",
+        "testcmdreceivestatus",
+    }
+)
+_COVERAGE_META_ATTR_PATTERNS = (re.compile(r"(?i)^program\d+$"),)  # program1..N slots
+
+# Coverage noise on the command-param axis: settings-command plumbing that is never a
+# user-controllable function (the command selector, cloud endpoints, rule/visibility
+# flags). Matched lowercased. Genuine controls (humiditySel, windDirectionHorizontal,
+# specialMode, ...) are deliberately NOT here.
+_COVERAGE_META_PARAMS = frozenset(
+    {
+        "category",
+        "httpendpoint",
+        "mqttendpoint",
+        "resw",
+        "operationname",
+        "programrules",
+        "remoteactionable",
+        "remotevisible",
+        "winddirectionverticalpositionsequence",
+    }
+)
+
+
+def _is_meta_attr(name: str) -> bool:
+    """True if a bare attribute name is protocol/debug noise (scalar residue)."""
+    return name.lower() in _COVERAGE_META_ATTRS or any(
+        pattern.match(name) for pattern in _COVERAGE_META_ATTR_PATTERNS
+    )
 
 
 def _redact_title(title: str | None) -> str | None:
@@ -246,9 +303,15 @@ def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> 
     """What the device exposes with no addhon entity (the gold signal).
 
     Attribute axis: only BARE keys (no dot) are considered; dotted ``settings.*``
-    keys mirror command parameters and belong to the command-param axis instead.
-    Unmapped attribute keys that come from the statistics container are split out so
-    real unmapped telemetry stays legible.
+    keys mirror command parameters and belong to the command-param axis instead. The
+    unmapped set is partitioned so the maintainer reads pure signal first; nothing is
+    dropped:
+      * ``attributes_unmapped``            - mappable telemetry candidates (the gold);
+      * ``attributes_unmapped_statistics`` - keys from the statistics container;
+      * ``attributes_unmapped_meta``       - protocol envelope blobs (dict/list-valued)
+                                             + scalar debug/protocol noise + program slots.
+    The command-param axis is split the same way (``command_params_unmapped`` vs
+    ``command_params_unmapped_meta``).
     """
     mapped_attrs, mapped_params = _mapped_sets(app_type)
     settings_params = _settings_param_names(appliance)
@@ -263,17 +326,41 @@ def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> 
     # command-param axis, so exclude them from BOTH the unmapped list and the total
     # (otherwise `total` overstates this axis' denominator).
     read_only_bare = bare - settings_params
-    unmapped_attrs = sorted(read_only_bare - mapped_attrs)
+    unmapped = read_only_bare - mapped_attrs
     stats_keys = set(statistics) if isinstance(statistics, Mapping) else set()
 
+    # Partition: statistics carve-out first (unchanged contract), then meta/noise
+    # (value-type envelope OR scalar denylist OR program slot), the rest is signal.
+    unmapped_statistics = sorted(k for k in unmapped if k in stats_keys)
+    rest = unmapped - set(unmapped_statistics)
+    unmapped_meta = sorted(
+        k
+        for k in rest
+        if isinstance(attributes.get(k), (Mapping, list)) or _is_meta_attr(k)
+    )
+    unmapped_signal = sorted(rest - set(unmapped_meta))
+
+    params_unmapped = settings_params - mapped_params
+    params_meta = sorted(k for k in params_unmapped if k.lower() in _COVERAGE_META_PARAMS)
+    params_signal = sorted(params_unmapped - set(params_meta))
+
+    # `attributes_total` is the telemetry-axis denominator: mapped telemetry + signal.
+    # Exclude statistics and meta (like writable mirrors already are) so that
+    # `len(attributes_unmapped) / attributes_total` reads as a real coverage gap and
+    # not a figure inflated by protocol/debug blobs.
+    attributes_total = len(read_only_bare) - len(unmapped_statistics) - len(unmapped_meta)
+
     return {
-        "attributes_total": len(read_only_bare),
-        "attributes_unmapped": unmapped_attrs,
-        "attributes_unmapped_statistics": sorted(
-            k for k in unmapped_attrs if k in stats_keys
-        ),
-        "command_params_total": len(settings_params),
-        "command_params_unmapped": sorted(settings_params - mapped_params),
+        "attributes_total": attributes_total,
+        "attributes_unmapped": unmapped_signal,
+        "attributes_unmapped_statistics": unmapped_statistics,
+        "attributes_unmapped_meta": unmapped_meta,
+        # Symmetric with attributes_total: exclude the meta params (plumbing) so the
+        # param-axis denominator is mapped controls + signal, not inflated by category/
+        # endpoints/rule flags.
+        "command_params_total": len(settings_params) - len(params_meta),
+        "command_params_unmapped": params_signal,
+        "command_params_unmapped_meta": params_meta,
     }
 
 
