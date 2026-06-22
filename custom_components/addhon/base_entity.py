@@ -27,9 +27,13 @@ def account_device_info(entry, sw_version: str | None = None) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, f"{entry.entry_id}_diagnostics")},
         entry_type=DeviceEntryType.SERVICE,
-        name="addhOn diagnostica",
+        # Name is translated (device.diagnostics.name in en/it.json) via
+        # translation_key, so it follows the UI language like the entity names
+        # instead of being a hardcoded string. model has no translation hook in HA,
+        # so it stays English.
+        translation_key="diagnostics",
         manufacturer="addhOn",
-        model="Diagnostica & debug",
+        model="Diagnostics & debug",
         sw_version=sw_version,
         configuration_url="https://github.com/tis24dev/addhOn",
     )

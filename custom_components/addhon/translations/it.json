@@ -65,6 +65,11 @@
       }
     }
   },
+  "device": {
+    "diagnostics": {
+      "name": "addhOn diagnostica"
+    }
+  },
   "entity": {
     "sensor": {
       "state": {

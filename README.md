@@ -63,7 +63,7 @@ Open the integration entry and choose **Configure** to toggle:
 
 Both persist across restarts. The polling interval is fixed at 60 seconds.
 
-These toggles are also exposed as switches on a dedicated **addhOn diagnostica**
+These toggles are also exposed as switches on a dedicated **addhOn diagnostics**
 device (Settings > Devices & Services > addhOn), alongside read-only diagnostics
 and quick-action buttons (refresh now, reset debug). A ready-to-paste dashboard
 card is in [`docs/debug-device.md`](docs/debug-device.md).
@@ -181,11 +181,22 @@ data:
 
 ## Troubleshooting
 
-> **Debug logging:** open the integration and choose **Configure** to toggle
-> **Enable debug logging** (integration) and **Enable MQTT realtime debug**
-> independently. Both persist across restarts. See
-> [`docs/discovery-debugging.md`](docs/discovery-debugging.md) and
-> [`docs/mqtt-realtime-logging.md`](docs/mqtt-realtime-logging.md).
+### Capture debug logs
+
+1. **Enable** — open **addhOn diagnostics** (Settings → Devices & Services →
+   addhOn) and turn on **Debug logging**. Add **MQTT realtime debug** only when
+   investigating push/MQTT updates. *(Same as integration → Configure → Enable
+   debug logging.)*
+2. **Reproduce** — trigger the problem; press **Refresh now** to force an
+   immediate poll for discovery/polling issues.
+3. **Download** — Settings → System → Logs → **Download full log**, then attach
+   the `home-assistant.log` to your GitHub issue.
+4. **Disable** — press **Reset debug** on the same device (turns both toggles off
+   and restores the default log levels), or just switch them off.
+
+Both toggles persist across restarts. Details:
+[`docs/discovery-debugging.md`](docs/discovery-debugging.md) and
+[`docs/mqtt-realtime-logging.md`](docs/mqtt-realtime-logging.md).
 
 ### Authentication Failed
 

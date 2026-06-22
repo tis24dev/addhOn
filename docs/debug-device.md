@@ -1,12 +1,12 @@
 # Debug device
 
-Every configured hOn account gets a dedicated **addhOn diagnostica** device: a
+Every configured hOn account gets a dedicated **addhOn diagnostics** device: a
 Home Assistant *service* device that collects the integration's debug controls in
 one place, so you can flip them from a dashboard without opening the **Configure**
 dialog. It stays out of your room dashboards because it is a service device, not a
 physical appliance.
 
-Find it under **Settings -> Devices & Services -> addhOn -> addhOn diagnostica**.
+Find it under **Settings -> Devices & Services -> addhOn -> addhOn diagnostics**.
 
 ## What it exposes
 
@@ -34,9 +34,10 @@ the other). The realtime services `addhon.set_log_level` and
 
 ## Dashboard card (core cards, no extra HACS frontend)
 
-The entity ids below assume Home Assistant's default slug for the device name
-(`addhon_diagnostica`). Confirm the real ids in **Developer Tools -> States** (they
-change if you rename the device).
+The device name is translated, so its entity-id slug follows your Home Assistant
+language: the ids below assume an English instance (`addhon_diagnostics`), while an
+Italian one yields `addhon_diagnostica`. Confirm the real ids in **Developer Tools
+-> States** (they also change if you rename the device).
 
 ### Entities card
 
@@ -49,28 +50,28 @@ state_color: true
 entities:
   - type: section
     label: Toggles
-  - entity: switch.addhon_diagnostica_debug_logging
+  - entity: switch.addhon_diagnostics_debug_logging
     name: Debug logging
-  - entity: switch.addhon_diagnostica_mqtt_realtime_debug
+  - entity: switch.addhon_diagnostics_mqtt_realtime_debug
     name: MQTT realtime debug
   - type: section
     label: Status
-  - entity: sensor.addhon_diagnostica_debug_status
+  - entity: sensor.addhon_diagnostics_debug_status
     name: Debug status
-  - entity: sensor.addhon_diagnostica_integration_log_level
+  - entity: sensor.addhon_diagnostics_integration_log_level
     name: Integration log level
-  - entity: sensor.addhon_diagnostica_mqtt_log_level
+  - entity: sensor.addhon_diagnostics_mqtt_log_level
     name: MQTT log level
-  - entity: sensor.addhon_diagnostica_appliances_discovered
+  - entity: sensor.addhon_diagnostics_appliances_discovered
     name: Appliances discovered
-  - entity: sensor.addhon_diagnostica_last_refresh
+  - entity: sensor.addhon_diagnostics_last_refresh
     name: Last refresh
-  - entity: binary_sensor.addhon_diagnostica_update_ok
+  - entity: binary_sensor.addhon_diagnostics_update_ok
     name: Update OK
   - type: divider
-  - entity: button.addhon_diagnostica_refresh_now
+  - entity: button.addhon_diagnostics_refresh_now
     name: Refresh now
-  - entity: button.addhon_diagnostica_reset_debug
+  - entity: button.addhon_diagnostics_reset_debug
     name: Reset debug
 ```
 
@@ -82,28 +83,28 @@ columns: 2
 square: false
 cards:
   - type: tile
-    entity: switch.addhon_diagnostica_debug_logging
+    entity: switch.addhon_diagnostics_debug_logging
     name: Debug logging
     color: red
     tap_action:
       action: toggle
   - type: tile
-    entity: switch.addhon_diagnostica_mqtt_realtime_debug
+    entity: switch.addhon_diagnostics_mqtt_realtime_debug
     name: MQTT realtime
     color: amber
     tap_action:
       action: toggle
   - type: tile
-    entity: sensor.addhon_diagnostica_debug_status
+    entity: sensor.addhon_diagnostics_debug_status
     name: Status
   - type: tile
-    entity: button.addhon_diagnostica_refresh_now
+    entity: button.addhon_diagnostics_refresh_now
     name: Refresh now
     tap_action:
       action: perform-action
       perform_action: button.press
       target:
-        entity_id: button.addhon_diagnostica_refresh_now
+        entity_id: button.addhon_diagnostics_refresh_now
 ```
 
 Remove the lines for any entity you do not use; the cards degrade gracefully.

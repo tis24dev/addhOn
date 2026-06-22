@@ -267,7 +267,10 @@ class CodeTranslationKeyLiteralsTest(unittest.TestCase):
             data = json.loads((COMPONENT / "translations" / f"{lang}.json").read_text(encoding="utf-8"))
             entity_keys = {k for plat in data.get("entity", {}).values() for k in plat}
             exc_keys = set(data.get("exceptions", {}))
-            missing = used - (entity_keys | exc_keys)
+            # The device-name translation_key (the "addhOn diagnostica" service
+            # device) lives under the top-level "device" section, not under entity.
+            device_keys = set(data.get("device", {}))
+            missing = used - (entity_keys | exc_keys | device_keys)
             self.assertFalse(
                 missing,
                 f"[{lang}] translation_key literals used in code with no entity/exceptions "
