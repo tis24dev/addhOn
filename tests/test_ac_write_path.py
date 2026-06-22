@@ -177,15 +177,25 @@ def _climate_failing(params: dict):
 class AcClimateWritePathTest(unittest.IsolatedAsyncioTestCase):
     """climate.HaierClimateEntity send semantics."""
 
-    async def test_turn_on_sends_cool(self) -> None:
-        # machMode seeded with a junk value to prove the code overwrites it.
-        entity, settings, coord = _climate(
-            {"onOffStatus": Param("0"), "machMode": Param("9")}
-        )
+    async def test_turn_on_sends_only_onoff_preserving_mode(self) -> None:
+        # No machMode in the command: turn_on must send ONLY onOffStatus=1 so the
+        # device keeps its last mode. If it tried to send machMode, async_send_command
+        # would raise "Parameter(s) not found" and the assert would fail.
+        entity, settings, coord = _climate({"onOffStatus": Param("0")})
         await entity.async_turn_on()
-        self.assertEqual({"onOffStatus": "1", "machMode": "1"}, settings.sent)
+        self.assertEqual({"onOffStatus": "1"}, settings.sent)
         self.assertEqual(1, settings.send_calls)
         self.assertEqual(1, coord.refreshes)
+
+    async def test_turn_on_does_not_force_cool(self) -> None:
+        # Regression on #16: with a machMode present, turn_on must NOT overwrite it
+        # (old code forced COOL="1"). Sending only onOffStatus leaves machMode as-is.
+        entity, settings, _ = _climate(
+            {"onOffStatus": Param("0"), "machMode": Param("4")}
+        )
+        await entity.async_turn_on()
+        self.assertEqual("4", settings.sent["machMode"])
+        self.assertEqual("1", settings.sent["onOffStatus"])
 
     async def test_turn_off_sends_only_onoff(self) -> None:
         # No machMode in the command: if turn_off tried to send it, async_send_command

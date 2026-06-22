@@ -309,8 +309,30 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             ) from err
 
     async def async_turn_on(self) -> None:
-        """Turn on the air conditioner, putting it in COOL mode."""
-        await self.async_set_hvac_mode(HVACMode.COOL)
+        """Turn the AC back on, restoring its last mode.
+
+        HA convention for TURN_ON is to resume the previous operating state, not
+        force a fixed mode. We send only onOffStatus=1: the device keeps its stored
+        machMode, so it resumes the last mode (the old code forced COOL).
+        """
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        try:
+            _LOGGER.debug("Climate debug: turn_on -> onOffStatus=1 (mode preserved)")
+            await self._send_command_in_executor(client, appliance, {"onOffStatus": "1"})
+            await self._async_request_command_refresh()
+        except Exception as err:
+            _LOGGER.error("Climate: turn_on error: %s", err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
     async def async_turn_off(self) -> None:
         """Turn off the air conditioner."""
