@@ -110,6 +110,34 @@ class HonClientRealtimeTest(unittest.TestCase):
         c = HonClient(email="e@x", password="p")  # _hon_instance is None
         self.assertEqual(c.build_realtime_snapshot(), {})
 
+    def test_build_realtime_snapshot_skips_raising_appliance(self) -> None:
+        # Runs on the awscrt thread: one appliance raising must be skipped, never
+        # take down the whole snapshot.
+        class BadAppliance:
+            unique_id = "bad"
+            nick_name = "x"
+            statistics = {}
+
+            @property
+            def attributes(self):
+                raise RuntimeError("boom")
+
+        good = FakeAppliance("good")
+        c = _client([BadAppliance(), good])
+        snap = c.build_realtime_snapshot()
+        self.assertIn("good", snap)
+        self.assertNotIn("bad", snap)
+
+    def test_build_appliance_entry_has_all_keys(self) -> None:
+        # Pin the shared shape so the realtime snapshot and the HTTP poll never
+        # diverge (the reason _build_appliance_entry was extracted).
+        entry = HonClient._build_appliance_entry(FakeAppliance("x"))
+        self.assertEqual(
+            set(entry),
+            {"appliance", "type", "name", "model", "serial", "mac",
+             "attributes", "statistics", "settings"},
+        )
+
     def test_notify_roundtrip_invokes_callback(self) -> None:
         # subscribe_updates registers on the session; session.notify() (called by the
         # MQTT push) must invoke the callback.

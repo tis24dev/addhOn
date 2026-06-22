@@ -652,6 +652,23 @@ class WatchdogResilienceTest(unittest.TestCase):
         self.assertIn(base * 3, intervals)   # grew again
         self.assertEqual(intervals[-1], base)  # reset after the recovery tick
 
+    def test_watchdog_backoff_resets_after_successful_rebuild(self) -> None:
+        # The backoff must reset when a rebuild SUCCEEDS (distinct from the
+        # connection-up branch): _start may return OK while self._connection is
+        # still False (the awscrt connection-success callback fires later).
+        from custom_components.addhon.client.transport.mqtt import _WATCHDOG_INTERVAL
+        calls = {"n": 0}
+
+        async def flaky_start():
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise RuntimeError("transient")
+
+        intervals = self._drive([False] * 14, flaky_start)  # connection never comes up
+        base = _WATCHDOG_INTERVAL
+        self.assertIn(base * 3, intervals)     # backoff grew during the failures
+        self.assertEqual(intervals[-1], base)  # ...and reset after the successful rebuild
+
     def test_watchdog_backoff_caps(self) -> None:
         from custom_components.addhon.client.transport.mqtt import (
             _WATCHDOG_INTERVAL,
