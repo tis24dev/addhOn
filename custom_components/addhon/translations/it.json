@@ -390,6 +390,27 @@
           "heating": "Riscaldamento",
           "holding": "Mantenimento"
         }
+      },
+      "debug_status": {
+        "name": "Stato debug",
+        "state": {
+          "off": "Disattivo",
+          "integration": "Integrazione",
+          "mqtt": "MQTT realtime",
+          "full": "Integrazione + MQTT"
+        }
+      },
+      "integration_log_level": {
+        "name": "Livello log integrazione"
+      },
+      "mqtt_log_level": {
+        "name": "Livello log MQTT"
+      },
+      "appliances_discovered": {
+        "name": "Dispositivi rilevati"
+      },
+      "last_refresh": {
+        "name": "Ultimo aggiornamento"
       }
     },
     "binary_sensor": {
@@ -509,6 +530,9 @@
       },
       "indicator_light": {
         "name": "Spia"
+      },
+      "update_ok": {
+        "name": "Aggiornamento OK"
       }
     },
     "switch": {
@@ -562,6 +586,12 @@
       },
       "pause": {
         "name": "Pausa"
+      },
+      "debug_logging": {
+        "name": "Log di debug"
+      },
+      "mqtt_realtime_debug": {
+        "name": "Debug MQTT realtime"
       }
     },
     "number": {
@@ -601,6 +631,12 @@
       },
       "stop_program": {
         "name": "Ferma programma"
+      },
+      "force_refresh": {
+        "name": "Aggiorna ora"
+      },
+      "reset_debug": {
+        "name": "Reset debug"
       }
     }
   },

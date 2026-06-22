@@ -5,18 +5,22 @@ import logging
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .base_entity import HonBaseEntity
+from .base_entity import HonAccountEntity, HonBaseEntity
 from .const import (
     APPLIANCE_WASH_GROUP,
+    CONF_ENABLE_DEBUG,
+    CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_STORE,
 )
 from .debug_utils import command_names, param_snapshot
+from .logging_utils import reset_integration_log_level, silence_mqtt_noise
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +77,10 @@ async def async_setup_entry(
                     command_parameters={"onOffStatus": "0"},
                 )
             )
+    # Account-level debug action buttons (one set per config entry).
+    sw_version = entry_data.get("integration_version")
+    entities.append(HonForceRefreshButton(coordinator, entry, sw_version))
+    entities.append(HonResetDebugButton(entry, sw_version))
     async_add_entities(entities)
 
 
@@ -225,3 +233,56 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                 translation_key="command_error",
                 translation_placeholders={"error": str(err)},
             ) from err
+
+
+class HonForceRefreshButton(HonAccountEntity, ButtonEntity):
+    """Force an immediate coordinator refresh (debug polling/discovery)."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:refresh"
+    _attr_translation_key = "force_refresh"
+
+    def __init__(self, coordinator, entry, sw_version: str | None = None) -> None:
+        super().__init__(entry, "force_refresh", sw_version)
+        self._coordinator = coordinator
+
+    async def async_press(self) -> None:
+        _LOGGER.debug(
+            "Button debug: force refresh requested (entry=%s)",
+            getattr(self._entry, "entry_id", None),
+        )
+        await self._coordinator.async_request_refresh()
+
+
+class HonResetDebugButton(HonAccountEntity, ButtonEntity):
+    """Turn both debug toggles off and restore the default log levels.
+
+    Always resets the loggers (clears any runtime ``set_log_level`` override) and,
+    if either toggle is on, persists them off via ``async_update_entry`` (which the
+    options listener then re-applies).
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:restart"
+    _attr_translation_key = "reset_debug"
+
+    def __init__(self, entry, sw_version: str | None = None) -> None:
+        super().__init__(entry, "reset_debug", sw_version)
+
+    async def async_press(self) -> None:
+        _LOGGER.debug(
+            "Button debug: reset debug requested (entry=%s)",
+            getattr(self._entry, "entry_id", None),
+        )
+        reset_integration_log_level()
+        silence_mqtt_noise()
+        options = self._entry_options
+        if options.get(CONF_ENABLE_DEBUG) or options.get(CONF_ENABLE_MQTT_DEBUG):
+            self.hass.config_entries.async_update_entry(
+                self._entry,
+                options={
+                    **options,
+                    CONF_ENABLE_DEBUG: False,
+                    CONF_ENABLE_MQTT_DEBUG: False,
+                },
+            )

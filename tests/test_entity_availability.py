@@ -53,6 +53,10 @@ def _install_homeassistant_stubs() -> None:
     helpers = _mod("homeassistant.helpers")
     entity = _mod("homeassistant.helpers.entity")
     entity.DeviceInfo = getattr(entity, "DeviceInfo", dict)
+    device_registry = _mod("homeassistant.helpers.device_registry")
+    device_registry.DeviceEntryType = getattr(
+        device_registry, "DeviceEntryType", type("DeviceEntryType", (), {"SERVICE": "service"})
+    )
 
     update_coordinator = _mod("homeassistant.helpers.update_coordinator")
 
@@ -87,6 +91,7 @@ def _install_homeassistant_stubs() -> None:
     ha.helpers = helpers
     helpers.entity = entity
     helpers.update_coordinator = update_coordinator
+    helpers.device_registry = device_registry
 
 
 _install_homeassistant_stubs()

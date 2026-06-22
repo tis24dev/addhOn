@@ -54,6 +54,10 @@ def _install_homeassistant_stubs() -> None:
     helpers = _mod("homeassistant.helpers")
     entity = _mod("homeassistant.helpers.entity")
     entity.DeviceInfo = getattr(entity, "DeviceInfo", dict)
+    device_registry = _mod("homeassistant.helpers.device_registry")
+    device_registry.DeviceEntryType = getattr(
+        device_registry, "DeviceEntryType", type("DeviceEntryType", (), {"SERVICE": "service"})
+    )
     entity_platform = _mod("homeassistant.helpers.entity_platform")
     entity_platform.AddEntitiesCallback = getattr(entity_platform, "AddEntitiesCallback", object)
 
@@ -109,6 +113,9 @@ def _install_homeassistant_stubs() -> None:
         CELSIUS = "°C"
 
     const.UnitOfTemperature = getattr(const, "UnitOfTemperature", UnitOfTemperature)
+    const.EntityCategory = getattr(
+        const, "EntityCategory", type("EntityCategory", (), {"CONFIG": "config", "DIAGNOSTIC": "diagnostic"})
+    )
 
     ha.config_entries = config_entries
     ha.core = core
@@ -119,6 +126,7 @@ def _install_homeassistant_stubs() -> None:
     helpers.entity = entity
     helpers.entity_platform = entity_platform
     helpers.update_coordinator = update_coordinator
+    helpers.device_registry = device_registry
     components.number = number_mod
 
 

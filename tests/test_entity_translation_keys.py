@@ -52,6 +52,10 @@ def _install_stubs() -> None:
     helpers = _mod("homeassistant.helpers")
     entity = _mod("homeassistant.helpers.entity")
     entity.DeviceInfo = getattr(entity, "DeviceInfo", dict)
+    dr = _mod("homeassistant.helpers.device_registry")
+    dr.DeviceEntryType = getattr(
+        dr, "DeviceEntryType", type("DeviceEntryType", (), {"SERVICE": "service"})
+    )
     ep = _mod("homeassistant.helpers.entity_platform")
     ep.AddEntitiesCallback = getattr(ep, "AddEntitiesCallback", object)
     er = _mod("homeassistant.helpers.entity_registry")
@@ -76,6 +80,9 @@ def _install_stubs() -> None:
                 "CELSIUS": "C", "KILO_WATT_HOUR": "kWh", "MINUTES": "min", "LITERS": "L",
                 "GRAMS": "g", "KILOGRAMS": "kg", "SECONDS": "s",
             }))
+    const.EntityCategory = getattr(
+        const, "EntityCategory", type("EntityCategory", (), {"CONFIG": "config", "DIAGNOSTIC": "diagnostic"})
+    )
 
     components = _mod("homeassistant.components")
 
@@ -102,6 +109,7 @@ def _install_stubs() -> None:
         "VOLATILE_ORGANIC_COMPOUNDS_PARTS": "volatile_organic_compounds_parts",
         "WEIGHT": "weight",
         "BATTERY": "battery", "POWER": "power", "ENUM": "enum",
+        "TIMESTAMP": "timestamp",
     }))
     sensor_mod.SensorStateClass = getattr(sensor_mod, "SensorStateClass", type("SensorStateClass", (), {
         "MEASUREMENT": "measurement", "TOTAL": "total", "TOTAL_INCREASING": "total_increasing",
@@ -159,6 +167,7 @@ def _install_stubs() -> None:
     helpers.entity_platform = ep
     helpers.entity_registry = er
     helpers.update_coordinator = uc
+    helpers.device_registry = dr
     components.sensor = sensor_mod
     components.binary_sensor = binary_mod
     components.number = number_mod
@@ -181,6 +190,11 @@ def _collect_code_keys() -> dict[str, set[str]]:
     }
     # Derived custom-class sensor (not a description-table row).
     used["sensor"].add(sensor.HonMeanWaterConsumption._attr_translation_key)
+    # Account-level diagnostic sensors (fixed-key, not in the per-type table).
+    used["sensor"].update(
+        {"debug_status", "integration_log_level", "mqtt_log_level",
+         "appliances_discovered", "last_refresh"}
+    )
     used["binary_sensor"] = {
         _tk(d) for descs in binary_sensor.BINARY_SENSORS.values() for d in descs
     }
@@ -188,14 +202,18 @@ def _collect_code_keys() -> dict[str, set[str]]:
     # Universal capability-gated binaries (not in the per-type table).
     for d in binary_sensor._UNIVERSAL_GATED:
         used["binary_sensor"].add(_tk(d))
+    # Account-level diagnostic binary (fixed key).
+    used["binary_sensor"].add("update_ok")
     used["number"] = {
         _tk(d) for descs in number.NUMBERS.values() for d in descs
     }
-    # HonAcSwitch names from description.key; the pause switch uses a fixed key.
-    used["switch"] = {d.key for d in switch._AC_SWITCHES} | {"pause"}
+    # HonAcSwitch names from description.key; the pause + debug switches use fixed keys.
+    used["switch"] = {d.key for d in switch._AC_SWITCHES} | {
+        "pause", "debug_logging", "mqtt_realtime_debug"
+    }
     # Fixed-key entities (no description table).
     used["select"] = {"program"}
-    used["button"] = {"start_program", "stop_program"}
+    used["button"] = {"start_program", "stop_program", "force_refresh", "reset_debug"}
     return used
 
 

@@ -355,11 +355,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         coordinator.hon_client = hon_client
 
+        # Integration version, for the diagnostics device's sw_version ("Firmware:"
+        # row on the device card). Lazy import so the test stubs that import this
+        # package do not need to stub homeassistant.loader; tolerant if unavailable.
+        integration_version: str | None = None
+        try:
+            from homeassistant.loader import async_get_integration
+
+            integration = await async_get_integration(hass, DOMAIN)
+            integration_version = str(integration.version)
+        except Exception as err:  # pragma: no cover - non-critical, cosmetic only
+            _LOGGER.debug("Setup debug: could not resolve integration version: %s", err)
+
         # FIX: store both the coordinator and the client in the structure expected by all platforms
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN][entry.entry_id] = {
             "coordinator": coordinator,
             "client": hon_client,
+            "integration_version": integration_version,
         }
         stored = True
         _LOGGER.debug("Setup debug: coordinator and client stored in hass.data for entry=%s", entry.entry_id)

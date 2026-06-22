@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -11,6 +12,70 @@ from .const import DOMAIN
 from .debug_utils import debug_key_sample
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def account_device_info(entry, sw_version: str | None = None) -> DeviceInfo:
+    """DeviceInfo for the synthetic per-account "diagnostics" device.
+
+    One device per config entry groups the integration's debug controls (the
+    process-global loggers are shared, so these are NOT per appliance). The
+    identifier suffix keeps it from ever colliding with an appliance device
+    (those use ``{(DOMAIN, appliance_id)}``). ``DeviceEntryType.SERVICE`` renders
+    it as a service helper, distinct from the physical appliances and out of the
+    room dashboards.
+    """
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"{entry.entry_id}_diagnostics")},
+        entry_type=DeviceEntryType.SERVICE,
+        name="addhOn diagnostica",
+        manufacturer="addhOn",
+        model="Diagnostica & debug",
+        sw_version=sw_version,
+        configuration_url="https://github.com/tis24dev/addhOn",
+    )
+
+
+class HonAccountEntity:
+    """Mixin for entities bound to the per-account "diagnostics" device.
+
+    Unlike :class:`HonBaseEntity` these are NOT appliance/coordinator bound: they
+    belong to one synthetic device per config entry that collects the debug
+    controls. The ``_addhon_account`` marker lets the test helpers tell them apart
+    from the appliance entities built by the same platform setup.
+    """
+
+    _attr_has_entity_name = True
+    _addhon_account = True
+
+    def __init__(self, entry, key: str, sw_version: str | None = None) -> None:
+        self._entry = entry
+        self._sw_version = sw_version
+        entry_id = getattr(entry, "entry_id", "") or ""
+        self._attr_unique_id = f"{entry_id}_diag_{key}"
+
+    @property
+    def _entry_options(self) -> dict:
+        return getattr(self._entry, "options", None) or {}
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return account_device_info(self._entry, self._sw_version)
+
+
+class HonAccountCoordinatorEntity(HonAccountEntity, CoordinatorEntity):
+    """Account-device entity that also reads the coordinator state (diagnostics)."""
+
+    def __init__(self, coordinator, entry, key: str, sw_version: str | None = None) -> None:
+        CoordinatorEntity.__init__(self, coordinator)
+        HonAccountEntity.__init__(self, entry, key, sw_version)
+
+    @property
+    def available(self) -> bool:
+        """Always available: these are diagnostics that must keep reporting through
+        a failed refresh (e.g. the "Update OK" sensor must be able to show OFF, and
+        "Last refresh" must keep its last-good value). CoordinatorEntity.available
+        would hide them exactly when they are most useful."""
+        return True
 
 
 class HonBaseEntity(CoordinatorEntity):

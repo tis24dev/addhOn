@@ -25,6 +25,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    EntityCategory,
     UnitOfEnergy,
     UnitOfMass,
     UnitOfTemperature,
@@ -34,7 +35,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .base_entity import HonBaseEntity
+from .base_entity import HonAccountCoordinatorEntity, HonAccountEntity, HonBaseEntity
 from .const import (
     APPLIANCE_AC,
     APPLIANCE_DW,
@@ -53,6 +54,8 @@ from .const import (
     APPLIANCE_WH,
     APPLIANCE_WM,
     AC_ATTR_CH2O,
+    CONF_ENABLE_DEBUG,
+    CONF_ENABLE_MQTT_DEBUG,
     AC_ATTR_CO2,
     AC_ATTR_COMPRESSOR_FREQ,
     AC_ATTR_CURRENT_TEMP,
@@ -821,7 +824,8 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Create the sensors based on the type of each appliance."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry_data["coordinator"]
     entities: list[SensorEntity] = []
     for appliance_id, data in coordinator.data.items():
         app_type = data.get("type", "")
@@ -860,6 +864,27 @@ async def async_setup_entry(
             len(descriptions),
             created,
         )
+    # Account-level diagnostic sensors (one set per config entry).
+    sw_version = entry_data.get("integration_version")
+    entities.extend(
+        [
+            HonDebugStatusSensor(entry, sw_version),
+            HonLogLevelSensor(
+                entry,
+                sw_version,
+                logger_name="custom_components.addhon",
+                translation_key="integration_log_level",
+            ),
+            HonLogLevelSensor(
+                entry,
+                sw_version,
+                logger_name="custom_components.addhon.client.transport.mqtt",
+                translation_key="mqtt_log_level",
+            ),
+            HonAppliancesCountSensor(coordinator, entry, sw_version),
+            HonLastRefreshSensor(coordinator, entry, sw_version),
+        ]
+    )
     async_add_entities(entities)
 
 
@@ -937,3 +962,124 @@ class HonMeanWaterConsumption(HonBaseEntity, SensorEntity):
         if denom <= 0:
             return None
         return round(water / denom, 2)
+
+
+class HonDebugStatusSensor(HonAccountEntity, SensorEntity):
+    """At-a-glance summary of the debug toggles: off / integration / mqtt / full."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:bug-check"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["off", "integration", "mqtt", "full"]
+    _attr_translation_key = "debug_status"
+    # Driven by the entry update listener (async_added_to_hass), not polling.
+    _attr_should_poll = False
+
+    def __init__(self, entry, sw_version: str | None = None) -> None:
+        super().__init__(entry, "debug_status", sw_version)
+
+    @property
+    def native_value(self) -> str:
+        options = self._entry_options
+        debug = bool(options.get(CONF_ENABLE_DEBUG, False))
+        mqtt = bool(options.get(CONF_ENABLE_MQTT_DEBUG, False))
+        return {
+            (False, False): "off",
+            (True, False): "integration",
+            (False, True): "mqtt",
+            (True, True): "full",
+        }[(debug, mqtt)]
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self._entry.add_update_listener(self._async_entry_updated)
+        )
+
+    async def _async_entry_updated(self, hass, entry) -> None:
+        self.async_write_ha_state()
+
+
+class HonLogLevelSensor(HonAccountEntity, SensorEntity):
+    """Effective level of a logger (reflects toggles AND runtime service overrides).
+
+    Plain string sensor (no ENUM device_class). The value is the EFFECTIVE level
+    (debug/info/warning/error): the logger's own level, or the inherited one when it
+    has none (getEffectiveLevel never returns "notset"). For "is OUR debug on" use
+    the Debug status sensor, which reads the options. Polled by HA (should_poll
+    default), so a level changed via the set_log_level service shows up without an
+    entry update.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:gauge"
+
+    def __init__(
+        self,
+        entry,
+        sw_version: str | None = None,
+        *,
+        logger_name: str,
+        translation_key: str,
+    ) -> None:
+        super().__init__(entry, translation_key, sw_version)
+        self._logger_name = logger_name
+        self._attr_translation_key = translation_key
+
+    @property
+    def native_value(self) -> str:
+        level = logging.getLogger(self._logger_name).getEffectiveLevel()
+        return logging.getLevelName(level).lower()
+
+
+class HonAppliancesCountSensor(HonAccountCoordinatorEntity, SensorEntity):
+    """Number of appliances returned by the last refresh (helps debug discovery)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:counter"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "appliances_discovered"
+
+    def __init__(self, coordinator, entry, sw_version: str | None = None) -> None:
+        super().__init__(coordinator, entry, "appliances_discovered", sw_version)
+
+    @property
+    def native_value(self) -> int:
+        data = getattr(self.coordinator, "data", None)
+        return len(data) if isinstance(data, dict) else 0
+
+
+class HonLastRefreshSensor(HonAccountCoordinatorEntity, SensorEntity):
+    """Timestamp of the last successful coordinator refresh."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:update"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_translation_key = "last_refresh"
+
+    def __init__(self, coordinator, entry, sw_version: str | None = None) -> None:
+        super().__init__(coordinator, entry, "last_refresh", sw_version)
+        self._attr_native_value = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # The first refresh ran (in async_setup_entry) BEFORE this entity was added,
+        # and _handle_coordinator_update only fires on subsequent cycles. Seed the
+        # timestamp now so the card does not show "unknown" for a whole poll cycle.
+        if self._attr_native_value is None and getattr(
+            self.coordinator, "last_update_success", False
+        ):
+            self._attr_native_value = self._now()
+
+    def _handle_coordinator_update(self) -> None:
+        if getattr(self.coordinator, "last_update_success", True):
+            self._attr_native_value = self._now()
+        super()._handle_coordinator_update()
+
+    @staticmethod
+    def _now():
+        # Lazy dt import: keeps the test stubs (which import this module but never
+        # drive a coordinator update) free of a homeassistant.util.dt stub.
+        from homeassistant.util import dt as dt_util
+
+        return dt_util.utcnow()

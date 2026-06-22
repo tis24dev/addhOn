@@ -50,6 +50,10 @@ def _install_homeassistant_stubs() -> None:
     helpers = _mod("homeassistant.helpers")
     entity = _mod("homeassistant.helpers.entity")
     entity.DeviceInfo = getattr(entity, "DeviceInfo", dict)
+    device_registry = _mod("homeassistant.helpers.device_registry")
+    device_registry.DeviceEntryType = getattr(
+        device_registry, "DeviceEntryType", type("DeviceEntryType", (), {"SERVICE": "service"})
+    )
     entity_platform = _mod("homeassistant.helpers.entity_platform")
     entity_platform.AddEntitiesCallback = getattr(entity_platform, "AddEntitiesCallback", object)
 
@@ -112,6 +116,7 @@ def _install_homeassistant_stubs() -> None:
         BATTERY = "battery"
         POWER = "power"
         ENUM = "enum"
+        TIMESTAMP = "timestamp"
 
     class SensorStateClass:
         MEASUREMENT = "measurement"
@@ -147,6 +152,9 @@ def _install_homeassistant_stubs() -> None:
     const.UnitOfTime = getattr(const, "UnitOfTime", UnitOfTime)
     const.UnitOfTemperature = getattr(const, "UnitOfTemperature", UnitOfTemperature)
     const.UnitOfMass = getattr(const, "UnitOfMass", UnitOfMass)
+    const.EntityCategory = getattr(
+        const, "EntityCategory", type("EntityCategory", (), {"CONFIG": "config", "DIAGNOSTIC": "diagnostic"})
+    )
 
     ha.config_entries = config_entries
     ha.core = core
@@ -157,6 +165,7 @@ def _install_homeassistant_stubs() -> None:
     helpers.entity_platform = entity_platform
     helpers.update_coordinator = update_coordinator
     helpers.entity_registry = entity_registry
+    helpers.device_registry = device_registry
     components.sensor = sensor_mod
 
 
@@ -261,6 +270,8 @@ class SensorBuildTest(unittest.IsolatedAsyncioTestCase):
         added: list = []
 
         await sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+        # Ignore the account-level diagnostic sensors added once per entry.
+        added = [e for e in added if not getattr(e, "_addhon_account", False)]
 
         self.assertEqual(
             {e._attr_unique_id for e in added},

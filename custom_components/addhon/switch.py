@@ -6,13 +6,21 @@ import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .ac_command import async_send_settings, settings_param
-from .base_entity import HonBaseEntity
-from .const import APPLIANCE_AC, APPLIANCE_WASH_GROUP, DOMAIN, WM_ATTR_STATUS
+from .base_entity import HonAccountEntity, HonBaseEntity
+from .const import (
+    APPLIANCE_AC,
+    APPLIANCE_WASH_GROUP,
+    CONF_ENABLE_DEBUG,
+    CONF_ENABLE_MQTT_DEBUG,
+    DOMAIN,
+    WM_ATTR_STATUS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -113,6 +121,27 @@ async def async_setup_entry(
             )
         else:
             _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", appliance_id, app_type)
+    # Account-level debug switches (one set per config entry, independent of the
+    # appliances): they mirror the two persisted toggles of the Options flow.
+    sw_version = entry_data.get("integration_version")
+    entities.append(
+        HonDebugSwitch(
+            entry,
+            CONF_ENABLE_DEBUG,
+            sw_version,
+            translation_key="debug_logging",
+            icon="mdi:bug",
+        )
+    )
+    entities.append(
+        HonDebugSwitch(
+            entry,
+            CONF_ENABLE_MQTT_DEBUG,
+            sw_version,
+            translation_key="mqtt_realtime_debug",
+            icon="mdi:radio-tower",
+        )
+    )
     async_add_entities(entities)
 
 class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
@@ -254,3 +283,64 @@ class HonAcSwitch(HonBaseEntity, SwitchEntity):
                 translation_key="command_error",
                 translation_placeholders={"error": str(err)},
             ) from err
+
+
+class HonDebugSwitch(HonAccountEntity, SwitchEntity):
+    """Persistent debug toggle, mirrored to ``entry.options``.
+
+    ``is_on`` reads ``entry.options`` (single source of truth); turning it on/off
+    persists the option via ``async_update_entry``, which fires the options update
+    listener in ``__init__`` so the log levels are re-applied live (no reload). An
+    entry update listener keeps the switch in sync when the same option is changed
+    from the Options flow or the Reset button.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        entry,
+        option_key: str,
+        sw_version: str | None = None,
+        *,
+        translation_key: str,
+        icon: str,
+    ) -> None:
+        super().__init__(entry, translation_key, sw_version)
+        self._option_key = option_key
+        self._attr_translation_key = translation_key
+        self._attr_icon = icon
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._entry_options.get(self._option_key, False))
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._async_set(False)
+
+    async def _async_set(self, value: bool) -> None:
+        options = self._entry_options
+        if bool(options.get(self._option_key, False)) == value:
+            return
+        _LOGGER.debug(
+            "Switch debug: debug toggle '%s' -> %s (entry=%s)",
+            self._option_key,
+            value,
+            getattr(self._entry, "entry_id", None),
+        )
+        self.hass.config_entries.async_update_entry(
+            self._entry, options={**options, self._option_key: value}
+        )
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self._entry.add_update_listener(self._async_entry_updated)
+        )
+
+    async def _async_entry_updated(self, hass, entry) -> None:
+        self.async_write_ha_state()

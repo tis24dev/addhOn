@@ -77,6 +77,11 @@ def _install_homeassistant_stubs() -> None:
     entity = _ensure_module("homeassistant.helpers.entity")
     entity.DeviceInfo = getattr(entity, "DeviceInfo", dict)
 
+    device_registry = _ensure_module("homeassistant.helpers.device_registry")
+    device_registry.DeviceEntryType = getattr(
+        device_registry, "DeviceEntryType", type("DeviceEntryType", (), {"SERVICE": "service"})
+    )
+
     entity_platform = _ensure_module("homeassistant.helpers.entity_platform")
     entity_platform.AddEntitiesCallback = getattr(
         entity_platform, "AddEntitiesCallback", object
@@ -165,6 +170,9 @@ def _install_homeassistant_stubs() -> None:
     const_module.UnitOfTemperature = getattr(
         const_module, "UnitOfTemperature", UnitOfTemperature
     )
+    const_module.EntityCategory = getattr(
+        const_module, "EntityCategory", type("EntityCategory", (), {"CONFIG": "config", "DIAGNOSTIC": "diagnostic"})
+    )
 
     homeassistant.config_entries = config_entries
     homeassistant.const = const_module
@@ -176,6 +184,7 @@ def _install_homeassistant_stubs() -> None:
     helpers.entity_platform = entity_platform
     helpers.entity_registry = entity_registry
     helpers.update_coordinator = update_coordinator
+    helpers.device_registry = device_registry
     components.button = button_module
     components.climate = climate_module
     components.switch = switch_module
@@ -648,6 +657,8 @@ class SwitchLoggingTest(unittest.IsolatedAsyncioTestCase):
         with self.assertNoLogs(switch._LOGGER.name, level="INFO"):
             await switch.async_setup_entry(hass, FakeEntry(), added.extend)
 
+        # Ignore the account-level debug switches added once per entry.
+        added = [e for e in added if not getattr(e, "_addhon_account", False)]
         self.assertEqual([], added)
 
         complete_commands = {
@@ -663,6 +674,7 @@ class SwitchLoggingTest(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(switch._LOGGER.name, level="INFO") as logs:
             await switch.async_setup_entry(hass, FakeEntry(), added.extend)
 
+        added = [e for e in added if not getattr(e, "_addhon_account", False)]
         self.assertEqual(1, len(added))
         self.assertIn("Added switch: Washer", "\n".join(logs.output))
 

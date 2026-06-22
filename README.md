@@ -63,6 +63,11 @@ Open the integration entry and choose **Configure** to toggle:
 
 Both persist across restarts. The polling interval is fixed at 60 seconds.
 
+These toggles are also exposed as switches on a dedicated **addhOn diagnostica**
+device (Settings > Devices & Services > addhOn), alongside read-only diagnostics
+and quick-action buttons (refresh now, reset debug). A ready-to-paste dashboard
+card is in [`docs/debug-device.md`](docs/debug-device.md).
+
 ## Supported Devices
 
 ### Supported appliance types

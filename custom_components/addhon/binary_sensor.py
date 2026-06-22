@@ -17,10 +17,11 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .base_entity import HonBaseEntity
+from .base_entity import HonAccountCoordinatorEntity, HonBaseEntity
 from .const import (
     APPLIANCE_AC,
     APPLIANCE_DW,
@@ -316,7 +317,8 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Create the binary sensors only for the keys actually exposed by the device."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry_data["coordinator"]
     entities: list[BinarySensorEntity] = []
     for appliance_id, data in coordinator.data.items():
         app_type = data.get("type", "")
@@ -346,6 +348,9 @@ async def async_setup_entry(
             "Binary debug: '%s' (type=%s, id=%s) -> %d binary sensors %s",
             data.get("name"), app_type, appliance_id, len(created), created,
         )
+    # Account-level diagnostic binary sensor (one per config entry).
+    sw_version = entry_data.get("integration_version")
+    entities.append(HonUpdateOkBinarySensor(coordinator, entry, sw_version))
     async_add_entities(entities)
 
 
@@ -388,3 +393,18 @@ class HonConnectivityBinarySensor(HonBinarySensor):
         # `available` is a bool (from the engine), not a raw "1"/"0": read it directly
         val = self._attributes.get("available")
         return None if val is None else bool(val)
+
+
+class HonUpdateOkBinarySensor(HonAccountCoordinatorEntity, BinarySensorEntity):
+    """Whether the last coordinator refresh succeeded (account diagnostics)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_translation_key = "update_ok"
+
+    def __init__(self, coordinator, entry, sw_version: str | None = None) -> None:
+        super().__init__(coordinator, entry, "update_ok", sw_version)
+
+    @property
+    def is_on(self) -> bool:
+        return bool(getattr(self.coordinator, "last_update_success", True))
