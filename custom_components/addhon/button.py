@@ -185,6 +185,20 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                                 f"'{self._command_name}': no parameter "
                                 f"{PROGRAM_PARAM_NAMES} among {available}"
                             )
+                    # Applying a program parameter can SWAP the active command in the
+                    # appliance dict: a HonParameterProgram setter does
+                    # command.category = value -> appliance.commands[name] =
+                    # categories[selected], replacing the object. Re-read the now active
+                    # command so the fixed parameters AND send() target the selected
+                    # program's command, not the stale pre-swap object. (#6)
+                    refreshed = commands.get(self._command_name)
+                    if refreshed is not None and refreshed is not command:
+                        _LOGGER.debug(
+                            "Button debug: active command '%s' swapped after program apply",
+                            self._command_name,
+                        )
+                        command = refreshed
+                        params = getattr(command, "parameters", {})
                     for name, value in self._command_parameters.items():
                         if name in params:
                             previous = getattr(params[name], "value", None)
