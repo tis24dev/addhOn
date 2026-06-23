@@ -112,10 +112,12 @@ class HonApi:
         # below REMOVES resultCode from the returned dict (the parser does not want it
         # in the command entries) while validating it.
         if not isinstance(payload, dict) or not payload:
-            _LOGGER.error("hOn load_commands: invalid payload: %s", data)
+            # data is the raw cloud response (mirrors the device context: macAddress,
+            # etc.) and this ERROR is never gated -> redact identity before logging.
+            _LOGGER.error("hOn load_commands: invalid payload: %s", redact_identity(data))
             return {}
         if payload.pop("resultCode", None) != "0":
-            _LOGGER.error("hOn load_commands: resultCode != 0: %s", data)
+            _LOGGER.error("hOn load_commands: resultCode != 0: %s", redact_identity(data))
             return {}
         return payload
 

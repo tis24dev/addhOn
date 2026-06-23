@@ -398,6 +398,27 @@ class ApiHardeningTest(unittest.TestCase):
                 )
                 self.assertEqual(got, {})
 
+    def test_load_commands_failure_redacts_identity_in_log(self) -> None:
+        # #33: both failure branches log the raw cloud response at ERROR (never
+        # gated); identity in the body must be redacted.
+        mac = "AA:BB:CC:DD:EE:FF"
+        logger = "custom_components.addhon.client.transport.api"
+        for body in (
+            {"macAddress": mac, "payload": {}},                   # invalid-payload branch
+            {"macAddress": mac, "payload": {"resultCode": "1"}},  # resultCode != 0 branch
+            {"meta": {"macAddress": mac}, "payload": {}},         # nested mac (recursion)
+            {"payload": {"resultCode": "1", "dev": {"macAddress": mac}}},  # nested mac
+        ):
+            with self.subTest(body=body):
+                with self.assertLogs(logger, level="ERROR") as cm:
+                    got = _run(
+                        _call(FakeConnection(copy.deepcopy(body))).load_commands(FakeAppliance())
+                    )
+                self.assertEqual(got, {})
+                blob = "\n".join(cm.output)
+                self.assertNotIn(mac, blob)
+                self.assertIn("***", blob)
+
     def test_commands_result_code_nonzero(self) -> None:
         body = {"payload": {"resultCode": "1", "settings": {}}}
         self.assertEqual(_oracle_commands(copy.deepcopy(body)), {})
