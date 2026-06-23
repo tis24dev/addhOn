@@ -259,6 +259,13 @@ class HonClient:
         self._hon_loop: asyncio.AbstractEventLoop | None = None
         self._hon_thread: threading.Thread | None = None
         self._lifecycle_lock = threading.RLock()
+        # Flipped True after the first poll that returns data. Until then the poll is
+        # STRICT (any per-appliance error re-raises -> ConfigEntryNotReady -> HA retries
+        # setup), because platform setup iterates the FIRST snapshot once and there is
+        # no dynamic discovery: an appliance missing from that snapshot would get NO
+        # entities until a reload. Steady-state polls are resilient (skip the failed
+        # appliance, keep the others).
+        self._first_poll_done = False
 
     # -- Dedicated loop management ---------------------------------------------
 
@@ -622,6 +629,7 @@ class HonClient:
 
         while True:
             data: dict[str, Any] = {}
+            failed_appliances: list[str] = []
             retry_after_reauth = False
             try:
                 appliances = await self.async_get_appliances()
@@ -725,14 +733,51 @@ class HonClient:
                         reauth_attempted = True
                         retry_after_reauth = True
                         break
-                    raise RuntimeError(
-                        f"Error updating '{_get_name(appliance)}': {err}"
-                    ) from err
+                    # FIRST poll: STRICT. Platform setup iterates this snapshot once and
+                    # there is no dynamic-discovery path, so an appliance absent from the
+                    # first snapshot would get NO entities until a reload. Re-raise so the
+                    # first refresh fails -> ConfigEntryNotReady -> HA retries setup until
+                    # the full inventory loads. (Also surfaces genuine setup-time bugs.)
+                    if not self._first_poll_done:
+                        raise RuntimeError(
+                            f"Error updating '{_get_name(appliance)}': {err}"
+                        ) from err
+                    # Steady state: per-appliance resilience. A non-auth failure on ONE
+                    # appliance (a transient cloud 5xx that outlived the retries, a
+                    # malformed payload, ...) must NOT blank EVERY device. Record it and
+                    # move on: this appliance is simply absent from the snapshot (its
+                    # entities go unavailable until the next poll succeeds) while the
+                    # others stay live. A TOTAL failure (all errored -> empty data) is
+                    # re-raised below so the coordinator marks the cycle failed instead of
+                    # publishing an empty snapshot that silently blanks everything.
+                    failed_appliances.append(_get_name(appliance))
+                    continue
 
             if retry_after_reauth:
                 continue
 
+            if appliances and not data and failed_appliances:
+                # Every appliance failed this cycle: surface a failed update (the
+                # coordinator keeps its last good snapshot and retries) instead of
+                # returning an empty one that would blank all devices at once.
+                raise RuntimeError(
+                    "Update failed for all appliances: "
+                    + ", ".join(failed_appliances)
+                )
+
+            if failed_appliances:
+                _LOGGER.warning(
+                    "Partial update: %d/%d appliances updated this cycle, "
+                    "skipped (unavailable until next poll): %s",
+                    len(data),
+                    len(appliances),
+                    ", ".join(failed_appliances),
+                )
+
             _LOGGER.info("Loaded %d hOn devices with data", len(data))
+            # From now on the poll is resilient (skip a failed appliance, keep the rest):
+            # all entities have been created from this first complete snapshot.
+            self._first_poll_done = True
             return data
 
     # -- Closing ---------------------------------------------------------------
