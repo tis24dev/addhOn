@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import re
 import sys
 import types
@@ -523,6 +524,25 @@ class SendCommandTest(unittest.TestCase):
                 conn = FakeConnection(body)
                 ok = _run(_call(conn).send_command(FakeAppliance(), "x", {}, {}))
                 self.assertFalse(ok)
+
+    def test_send_command_failure_redacts_identity_in_logs(self) -> None:
+        # #23: on failure the request payload (macAddress, transactionId=MAC,
+        # device.mobileId) must NOT be logged in cleartext; only command+resultCode
+        # at ERROR, the redacted payload at DEBUG.
+        self._patch_clock("2026-06-18T12:34:56.789012")
+        conn = FakeConnection({"payload": {"resultCode": "7"}}, mobile_id="SECRET_MOBILE")
+        app = FakeAppliance()  # mac_address = "AA:BB:CC:DD:EE:FF"
+        logger = "custom_components.addhon.client.transport.api"
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            ok = _run(_call(conn).send_command(app, "setParameters", {"tempSelZ1": 4}, {}))
+        self.assertFalse(ok)
+        blob = "\n".join(cm.output)
+        self.assertNotIn(app.mac_address, blob)   # mac (also covers transactionId=<mac>_<ts>)
+        self.assertNotIn("SECRET_MOBILE", blob)   # device.mobileId (nested)
+        errors = "\n".join(r.getMessage() for r in cm.records if r.levelno == logging.ERROR)
+        self.assertIn("setParameters", errors)    # command in the ERROR line
+        self.assertIn("7", errors)                # resultCode in the ERROR line
+        self.assertIn("***", blob)                # redaction marker
 
 
 class CommandTimestampTest(unittest.TestCase):

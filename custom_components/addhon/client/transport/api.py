@@ -23,12 +23,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from pprint import pformat
 from typing import Any
 
 from . import device as _device
 from .connection import HonConnection
 from .parse import parse_appliance_list
+from ...debug_utils import redact_identity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ class HonApi:
                 sorted(result.keys()) if isinstance(result, dict) else "n/a",
                 sorted(modules.keys()) if isinstance(modules, dict) else "n/a",
             )
-            _LOGGER.debug("hOn raw appliance response: %s", result)
+            _LOGGER.debug("hOn raw appliance response: %s", redact_identity(result))
         return appliances
 
     async def load_commands(self, appliance: Any) -> dict:
@@ -234,8 +234,19 @@ class HonApi:
             payload = json_data.get("payload") if isinstance(json_data, dict) else None
             if isinstance(payload, dict) and payload.get("resultCode") == "0":
                 return True
-            _LOGGER.error("hOn send_command failed: %s", await response.text())
-            _LOGGER.error("%s - Payload:\n%s", url, pformat(data))
+            # The request payload (data) carries macAddress, transactionId (= MAC)
+            # and device.mobileId; the response may echo them too. Log only the
+            # command + resultCode at ERROR (no identity, always emitted), and the
+            # full REDACTED payload/response at DEBUG (gated) for troubleshooting.
+            result_code = payload.get("resultCode") if isinstance(payload, dict) else None
+            _LOGGER.error(
+                "hOn send_command failed: command=%s resultCode=%s", command, result_code
+            )
+            _LOGGER.debug(
+                "hOn send_command failed payload (redacted)=%s response=%s",
+                redact_identity(data),
+                redact_identity(json_data),
+            )
         return False
 
     async def close(self) -> None:

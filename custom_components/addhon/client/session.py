@@ -26,6 +26,7 @@ from . import factory
 from .transport.api import HonApi
 from .transport.auth import NativeAuthError
 from .transport.connection import HonConnection
+from ..debug_utils import redact_identity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,9 +109,14 @@ class NativeHon:
             await appliance.load_statistics()
         except (KeyError, ValueError, IndexError) as error:
             # An appliance with malformed data must not break the others; it is
-            # kept anyway (partial state) and logged.
+            # kept anyway (partial state) and logged. appliance_data is the RAW
+            # device dict (macAddress/serialNumber in cleartext) and this ERROR is
+            # never gated by the debug toggles -> it lands in home-assistant.log,
+            # the file users attach to issues. Redact identity before logging (the
+            # traceback carries no credentials, so _LOGGER.exception stays). The
+            # full (redacted) dict is available via Download Diagnostics.
             _LOGGER.exception(error)
-            _LOGGER.error("Device data - %s", appliance_data)
+            _LOGGER.error("Device data - %s", redact_identity(appliance_data))
         self._appliances.append(appliance)
 
     async def setup(self) -> None:

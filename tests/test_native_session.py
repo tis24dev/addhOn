@@ -261,6 +261,28 @@ class NativeSessionSetupTest(unittest.TestCase):
         # load_commands raises KeyError but the appliance stays (partial state, like pyhOn)
         self.assertEqual([a.mac_address for a in nh.appliances], ["A"])
 
+    def test_appliance_load_error_redacts_identity_in_log(self) -> None:
+        # #19: the except path logs the RAW appliance dict at ERROR (never gated by
+        # the debug toggles). MAC/serial must NOT reach the log; non-identity fields
+        # (modelName) still do, so the message stays useful for the maintainer.
+        data = [{
+            "macAddress": "AA:BB:CC:DD:EE:FF",
+            "serialNumber": "SN-SECRET-123",
+            "applianceTypeName": "REF",
+            "modelName": "HDPW5620CNPK",
+        }]
+        h = _Harness(self, data, fail_macs={"AA:BB:CC:DD:EE:FF"})
+        h.install()
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="ERROR") as cm:
+            _run(nh.setup())
+        blob = "\n".join(cm.output)
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", blob)
+        self.assertNotIn("SN-SECRET-123", blob)
+        self.assertIn("***", blob)
+        self.assertIn("HDPW5620CNPK", blob)  # non-identity survives
+        self.assertEqual([a.mac_address for a in nh.appliances], ["AA:BB:CC:DD:EE:FF"])
+
     def test_mqtt_disabled(self) -> None:
         data = [{"macAddress": "A", "applianceTypeName": "REF"}]
         h = _Harness(self, data)

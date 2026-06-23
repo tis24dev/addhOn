@@ -37,6 +37,7 @@ from .logging_utils import (
     reset_integration_log_level,
     silence_mqtt_noise,
 )
+from .debug_utils import redact_mac
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -313,10 +314,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             data = await hon_client.async_get_appliances_data()
             summary = [
                 {
-                    "id": appliance_id,
+                    "id": redact_mac(appliance_id),
                     "name": appliance_data.get("name"),
                     "type": appliance_data.get("type"),
-                    "mac": appliance_data.get("mac"),
+                    "mac": redact_mac(appliance_data.get("mac")),
                     "attributes": len(appliance_data.get("attributes", {}))
                     if isinstance(appliance_data.get("attributes"), dict)
                     else 0,

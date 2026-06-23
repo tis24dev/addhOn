@@ -169,6 +169,7 @@ def _install_stubs() -> None:
 _install_stubs()
 
 from custom_components.addhon import diagnostics  # noqa: E402
+from custom_components.addhon import debug_utils  # noqa: E402
 from custom_components.addhon.const import DOMAIN  # noqa: E402
 
 
@@ -615,6 +616,20 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
         cov = self._coverage_ac()
         self.assertEqual(cov["command_params_total"], 1)
         self.assertEqual(len(cov["command_params_unmapped"]), cov["command_params_total"])
+
+
+class IdentityKeysDriftGuardTest(unittest.TestCase):
+    """The shared log redactor (debug_utils._IDENTITY_KEYS) must redact at least
+    everything the Download-Diagnostics path (diagnostics._TO_REDACT) does, so a
+    new secret key added to one is not left in cleartext in the other."""
+
+    def test_to_redact_is_subset_of_identity_keys(self) -> None:
+        missing = set(diagnostics._TO_REDACT) - set(debug_utils._IDENTITY_KEYS)
+        self.assertEqual(
+            missing,
+            set(),
+            f"keys redacted by diagnostics but NOT by the log redactor: {missing}",
+        )
 
 
 if __name__ == "__main__":

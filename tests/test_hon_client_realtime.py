@@ -9,6 +9,7 @@ test_coordinator_config_entry.py).
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import types
 import unittest
@@ -232,6 +233,40 @@ class HonClientRealtimeTest(unittest.TestCase):
         c.subscribe_updates(lambda _arg: calls.append(True))
         c._hon_instance.notify()
         self.assertEqual(calls, [True])
+
+
+class DiscoveryLogRedactionTest(unittest.TestCase):
+    """The poll/discovery DEBUG logs (incl. the 'Updated' line) must redact the
+    MAC and the appliance_id (= MAC/serial), never log them raw."""
+
+    def test_discovery_and_updated_logs_redact_identity(self) -> None:
+        mac = "AA:BB:CC:DD:EE:FF"
+        app = types.SimpleNamespace(
+            mac_address=mac,
+            unique_id=mac,
+            appliance_type="REF",
+            nick_name="Fridge",
+            attributes={},
+            settings={},
+            statistics={},
+        )
+        c = HonClient(email="e@x", password="p")
+
+        async def fake_get_appliances():
+            return [app]
+
+        c.async_get_appliances = fake_get_appliances  # type: ignore[assignment]
+        c._update_appliance_sync = lambda a: None  # type: ignore[assignment]
+
+        logger = "custom_components.addhon.hon_client"
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            data = asyncio.run(c.async_get_appliances_data())
+        blob = "\n".join(cm.output)
+        self.assertNotIn(mac, blob)  # neither mac= nor id= leak the MAC
+        self.assertIn("***", blob)
+        self.assertTrue(any("Updated" in line for line in cm.output))
+        # the coordinator DATA still carries the real MAC (data, not a log)
+        self.assertIn(mac, data)
 
 
 class RealtimeWiringSourceGuard(unittest.TestCase):

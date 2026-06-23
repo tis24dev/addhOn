@@ -7,7 +7,7 @@ import logging
 import threading
 from typing import Any
 
-from .debug_utils import debug_key_sample, redact_email
+from .debug_utils import debug_key_sample, redact_email, redact_mac
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ def _debug_appliance_consumption(stage: str, appliance, attributes: dict | None 
         stage,
         _get_name(appliance),
         _get_type(appliance),
-        getattr(appliance, "unique_id", None) or _get_serial(appliance) or "<no-id>",
+        redact_mac(getattr(appliance, "unique_id", None) or _get_serial(appliance)) or "<no-id>",
         type(getattr(appliance, "statistics", None)).__name__,
         len(stats),
         debug_key_sample(stats),
@@ -663,7 +663,7 @@ class HonClient:
                     _LOGGER.debug(
                         "Discovery: appliance inventory from the cloud - %s",
                         "; ".join(
-                            f"type={_get_type(a)} mac={_get_mac(a) or '<no-mac>'} "
+                            f"type={_get_type(a)} mac={redact_mac(_get_mac(a)) or '<no-mac>'} "
                             f"name={_get_name(a)}"
                             for a in appliances
                         ),
@@ -686,7 +686,7 @@ class HonClient:
                         idx,
                         len(appliances),
                         _get_type(appliance),
-                        _get_mac(appliance) or "<no-mac>",
+                        redact_mac(_get_mac(appliance)) or "<no-mac>",
                         _get_name(appliance),
                     )
                     last_err = None
@@ -722,8 +722,8 @@ class HonClient:
                     _debug_appliance_consumption("coordinator snapshot", appliance, attributes)
                     _LOGGER.debug(
                         "Updated '%s' (type=%s, mac=%s, id=%s) - %d attributes",
-                        name, app_type, _get_mac(appliance) or "<no-mac>",
-                        appliance_id, len(attributes),
+                        name, app_type, redact_mac(_get_mac(appliance)) or "<no-mac>",
+                        redact_mac(appliance_id), len(attributes),
                     )
 
                 except Exception as err:
