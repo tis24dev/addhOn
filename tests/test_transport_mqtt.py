@@ -681,10 +681,18 @@ class WatchdogThresholdTest(unittest.TestCase):
         async def fake_sleep(_interval):
             if not seq:
                 raise asyncio.CancelledError
-            m._connection = seq.pop(0)
+            # A scripted state is "healthy" (connected + subscribed) or fully "down":
+            # the watchdog now requires BOTH flags to consider a tick healthy, so set
+            # them together to keep this test about the failed-tick/rebuild threshold.
+            state = seq.pop(0)
+            m._connection = state
+            m._subscribed = state
+
+        async def noop_sub():
+            return None
 
         m._start = fake_start  # type: ignore[assignment]
-        m._subscribe_appliances = lambda: None  # type: ignore[assignment]
+        m._subscribe_appliances = noop_sub  # type: ignore[assignment]
         real_sleep = mod.asyncio.sleep
         mod.asyncio.sleep = fake_sleep
         try:
@@ -853,7 +861,12 @@ class WatchdogResilienceTest(unittest.TestCase):
             intervals.append(interval)
             if not seq:
                 raise asyncio.CancelledError
-            m._connection = seq.pop(0)
+            # Healthy = connected AND subscribed (the watchdog now requires both); a
+            # scripted state drives the pair together so this test stays focused on the
+            # rebuild backoff, not the re-subscribe recovery path.
+            state = seq.pop(0)
+            m._connection = state
+            m._subscribed = state
 
         async def noop_sub():
             return None
@@ -1024,6 +1037,462 @@ class SubscribeNonBlockingTest(unittest.TestCase):
             self.assertIsInstance(ctx.exception.__cause__, asyncio.TimeoutError)
         finally:
             mod._SUBSCRIBE_TIMEOUT = orig
+
+
+class WatchdogSubscribedRecoveryTest(unittest.TestCase):
+    """Greptile P1: a single `self._connection` flag conflated 'transport connected'
+    with 'appliance topics subscribed'. The connection-success callback sets
+    _connection=True WITHOUT subscribing, so a rebuild whose _subscribe_appliances()
+    times out (or awscrt's own auto-reconnect on a clean session) left the client
+    connected-but-unsubscribed; the watchdog's `if self._connection:` check then treated
+    it as healthy and never recovered -> realtime pushes silently dead. The fix adds a
+    separate self._subscribed flag and a re-subscribe recovery branch. These tests fail
+    against the pre-fix one-flag watchdog and pass with the fix."""
+
+    def _drive(self, scripts, sub_fn=None):
+        """Drive the REAL _watchdog over a scripted sequence. Each script entry is a
+        (connection, subscribed) pair applied to the instance at the START of a tick
+        (i.e. it is the state the awscrt callbacks would have produced before this
+        tick's health check). asyncio.sleep is stubbed to advance the script and end
+        the loop (CancelledError) when it runs out. Returns (resub_calls, rebuilds,
+        m), where `rebuilds` holds the 1-based tick index of each full _start()
+        rebuild (so a test can pin WHEN the rebuild fired, not just that it did)."""
+        import custom_components.addhon.client.transport.mqtt as mod
+
+        m = NativeMqttClient(FakeHon([]), "MID")
+        seq = list(scripts)
+        rebuilds = []
+        resub_calls = []
+        tick = {"n": 0}
+
+        async def fake_start():
+            rebuilds.append(tick["n"])
+            # The real _start() clears _subscribed (fresh client). Mirror that so a
+            # rebuild that does not re-subscribe is correctly seen as unsubscribed.
+            m._subscribed = False
+
+        async def counted_sub():
+            resub_calls.append(True)
+            if sub_fn is not None:
+                await sub_fn()
+
+        async def fake_sleep(_interval):
+            if not seq:
+                raise asyncio.CancelledError
+            tick["n"] += 1
+            conn, sub = seq.pop(0)
+            m._connection = conn
+            m._subscribed = sub
+
+        m._start = fake_start  # type: ignore[assignment]
+        m._subscribe_appliances = counted_sub  # type: ignore[assignment]
+        real_sleep = mod.asyncio.sleep
+        mod.asyncio.sleep = fake_sleep
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(m._watchdog())
+            except asyncio.CancelledError:
+                pass
+            finally:
+                loop.close()
+        finally:
+            mod.asyncio.sleep = real_sleep
+        return resub_calls, rebuilds, m
+
+    def test_connected_but_unsubscribed_triggers_resubscribe_not_healthy(self) -> None:
+        # Connected but NOT subscribed for two ticks (the subscribe-timeout aftermath):
+        # the watchdog must re-subscribe each tick (recovery), NOT treat it as healthy.
+        # Pre-fix: `if self._connection:` -> healthy -> 0 re-subscribes (the bug).
+        resub, rebuilds, m = self._drive([(True, False), (True, False)])
+        self.assertEqual(len(resub), 2)        # re-subscribed on each tick
+        self.assertEqual(len(rebuilds), 0)     # no full rebuild: transport is up
+        self.assertTrue(m._subscribed)         # recovered to healthy
+
+    def test_resubscribe_failure_retries_next_tick_no_stuck_healthy(self) -> None:
+        # If the in-place re-subscribe RAISES (e.g. MQTT_SUBSCRIBE_TIMEOUT), the
+        # watchdog must NOT mark _subscribed True (no stuck "healthy") and must retry on
+        # the next tick. Pre-fix this scenario could never arise (it was always healthy).
+        from custom_components.addhon.error_codes import (
+            HonCodedError,
+            MQTT_SUBSCRIBE_TIMEOUT,
+        )
+
+        attempts = []
+
+        async def flaky_sub():
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise HonCodedError(MQTT_SUBSCRIBE_TIMEOUT, "stall")
+
+        # Tick 1: connected/unsubscribed -> re-subscribe raises -> backoff, stays
+        # unsubscribed. Tick 2: still connected/unsubscribed -> re-subscribe succeeds.
+        resub, rebuilds, m = self._drive(
+            [(True, False), (True, False)], sub_fn=flaky_sub
+        )
+        self.assertEqual(len(resub), 2)     # retried after the first failure
+        self.assertEqual(len(rebuilds), 0)  # never escalated to a full rebuild
+        self.assertTrue(m._subscribed)      # recovered on the 2nd attempt
+
+    def test_healthy_when_connected_and_subscribed(self) -> None:
+        # Both flags set -> healthy -> neither re-subscribe nor rebuild.
+        resub, rebuilds, _ = self._drive([(True, True), (True, True)])
+        self.assertEqual(len(resub), 0)
+        self.assertEqual(len(rebuilds), 0)
+
+    def test_not_connected_rebuilds_not_resubscribes(self) -> None:
+        # Sustained not-connected -> the rebuild path (NOT the in-place re-subscribe),
+        # preserving the _RECONNECT_AFTER_FAILED_TICKS threshold semantics.
+        from custom_components.addhon.client.transport.mqtt import (
+            _RECONNECT_AFTER_FAILED_TICKS,
+        )
+
+        resub, rebuilds, _ = self._drive(
+            [(False, False)] * _RECONNECT_AFTER_FAILED_TICKS
+        )
+        self.assertEqual(len(rebuilds), 1)   # one full rebuild after the threshold
+        # The rebuild path re-subscribes once as part of the rebuild.
+        self.assertEqual(len(resub), 1)
+
+    def test_perpetual_resubscribe_failure_escalates_to_rebuild(self) -> None:
+        # Issue 1: connected but _subscribe_appliances() ALWAYS raises (half-open socket
+        # / stale custom-authorizer session that awscrt still reports connected and that
+        # never fires a disconnection callback). The in-place re-subscribe branch must
+        # NOT loop forever: after _MAX_RESUBSCRIBE_FAILURES it must escalate to a full
+        # _start() rebuild (which is what refreshes the AWS token + tears down the dead
+        # client).
+        #
+        # This test PINS THE TICK the rebuild fires on -- that is what actually exercises
+        # the escalation branch. Two weaker designs would be vacuous: without the cap
+        # gate the in-place re-subscribe loops forever and never rebuilds; with the gate
+        # but without the prompt escalation-skip, the rebuild is merely DELAYED to the
+        # slower failed_ticks fallback (tick _MAX_RESUBSCRIBE_FAILURES +
+        # _RECONNECT_AFTER_FAILED_TICKS). Asserting `len(rebuilds) > 0` alone passes
+        # against BOTH (the fallback still rebuilds inside a generous budget), so we
+        # assert the FIRST rebuild lands on the very next tick after the cap is hit
+        # (tick _MAX_RESUBSCRIBE_FAILURES + 1) -- only the escalation produces that.
+        from custom_components.addhon.client.transport.mqtt import (
+            _MAX_RESUBSCRIBE_FAILURES,
+        )
+        from custom_components.addhon.error_codes import (
+            HonCodedError,
+            MQTT_SUBSCRIBE_TIMEOUT,
+        )
+
+        async def always_fail():
+            raise HonCodedError(MQTT_SUBSCRIBE_TIMEOUT, "stall")
+
+        # Stay connected-but-unsubscribed for more than enough ticks to exceed the
+        # threshold AND to give a (mutated) failed_ticks fallback room to fire later.
+        ticks = _MAX_RESUBSCRIBE_FAILURES + 3
+        resub, rebuilds, _ = self._drive(
+            [(True, False)] * ticks, sub_fn=always_fail
+        )
+        # It only escalated AFTER exhausting the in-place re-subscribe attempts.
+        self.assertGreaterEqual(len(resub), _MAX_RESUBSCRIBE_FAILURES)
+        # Escalation fired (with escalation disabled, or the cap gate removed, this is 0).
+        self.assertGreaterEqual(len(rebuilds), 1)
+        # ...and PROMPTLY, on the first tick past the cap -- not via the slower
+        # failed_ticks fallback. (1-based tick index recorded by _drive.)
+        self.assertEqual(rebuilds[0], _MAX_RESUBSCRIBE_FAILURES + 1)
+
+    def test_resubscribe_failure_counter_resets_on_success(self) -> None:
+        # Issue 1 corollary: the escalation counter must reset on EVERY successful
+        # subscribe, so an INTERMITTENT (not perpetual) re-subscribe failure never
+        # accumulates to a needless rebuild. Drive an alternating fail/succeed pattern
+        # whose TOTAL failures exceed _MAX_RESUBSCRIBE_FAILURES but where each failure is
+        # followed by a success (which must reset the counter to 0). With the reset: 0
+        # rebuilds. WITHOUT the reset: the failures accumulate past the threshold and the
+        # watchdog wrongly escalates to a full rebuild.
+        from custom_components.addhon.client.transport.mqtt import (
+            _MAX_RESUBSCRIBE_FAILURES,
+        )
+        from custom_components.addhon.error_codes import (
+            HonCodedError,
+            MQTT_SUBSCRIBE_TIMEOUT,
+        )
+
+        attempts = {"n": 0}
+
+        async def alternating():
+            attempts["n"] += 1
+            # Odd attempts fail, even attempts succeed: a fail is always followed by a
+            # success that re-subscribes (and must reset the failure counter).
+            if attempts["n"] % 2 == 1:
+                raise HonCodedError(MQTT_SUBSCRIBE_TIMEOUT, "stall")
+
+        # Enough fail/succeed pairs that the cumulative odd-attempt failures comfortably
+        # exceed _MAX_RESUBSCRIBE_FAILURES (without the reset, escalation would fire).
+        pairs = _MAX_RESUBSCRIBE_FAILURES + 2
+        script = [(True, False)] * (pairs * 2)
+        resub, rebuilds, _ = self._drive(script, sub_fn=alternating)
+        self.assertEqual(len(rebuilds), 0)  # reset prevents intermittent escalation
+
+    def test_failed_ticks_symmetry_resubscribe_recovery_resets_outage(self) -> None:
+        # Issue 2: a successful in-place re-subscribe must reset failed_ticks, exactly
+        # like the healthy branch. A flapping connection
+        #   [down, up-but-unsubscribed->resubscribe-OK, down, down]
+        # must NOT force a full rebuild, because the recovered tick resets the outage
+        # counter (only _RECONNECT_AFTER_FAILED_TICKS *consecutive* down ticks rebuild).
+        resub, rebuilds, _ = self._drive(
+            [(False, False), (True, False), (False, False), (False, False)]
+        )
+        self.assertEqual(len(rebuilds), 0)  # recovered tick reset the outage counter
+        self.assertEqual(len(resub), 1)     # the up-but-unsubscribed tick re-subscribed
+
+    def test_failed_ticks_symmetry_contrast_full_outage_rebuilds(self) -> None:
+        # Contrast to the symmetry test: an UNINTERRUPTED not-connected run of the same
+        # length (no recovery tick to reset failed_ticks) DOES rebuild at the threshold.
+        from custom_components.addhon.client.transport.mqtt import (
+            _RECONNECT_AFTER_FAILED_TICKS,
+        )
+
+        resub, rebuilds, _ = self._drive(
+            [(False, False)] * (_RECONNECT_AFTER_FAILED_TICKS + 1)
+        )
+        self.assertGreaterEqual(len(rebuilds), 1)  # no reset -> threshold reached
+
+    def test_lost_update_disconnect_mid_resubscribe_not_marked_healthy(self) -> None:
+        # Issue 3 at the re-subscribe site: a disconnection callback lands DURING the
+        # in-place re-subscribe await (flips _connection=False on the awscrt thread).
+        # The post-await assignment must re-check connection (and generation) instead of
+        # an unconditional True, so _subscribed ends up False (not clobbered) and the
+        # next tick is NOT treated as healthy.
+        def make_dropper(m):
+            async def dropping_sub():
+                # Simulate the awscrt disconnection callback landing mid-subscribe.
+                m._connection = False
+            return dropping_sub
+
+        import custom_components.addhon.client.transport.mqtt as mod
+
+        m = NativeMqttClient(FakeHon([]), "MID")
+        # One tick: connected/unsubscribed -> re-subscribe runs, but the connection drops
+        # during the await. Then a second scripted tick is NOT applied (loop ends), so we
+        # observe the state the re-subscribe left.
+        seq = [(True, False)]
+        rebuilds = []
+        resub_calls = []
+
+        async def fake_start():
+            rebuilds.append(True)
+            m._subscribed = False
+
+        dropping = make_dropper(m)
+
+        async def counted_sub():
+            resub_calls.append(True)
+            await dropping()
+
+        async def fake_sleep(_interval):
+            if not seq:
+                raise asyncio.CancelledError
+            conn, sub = seq.pop(0)
+            m._connection = conn
+            m._subscribed = sub
+
+        m._start = fake_start  # type: ignore[assignment]
+        m._subscribe_appliances = counted_sub  # type: ignore[assignment]
+        real_sleep = mod.asyncio.sleep
+        mod.asyncio.sleep = fake_sleep
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(m._watchdog())
+            except asyncio.CancelledError:
+                pass
+            finally:
+                loop.close()
+        finally:
+            mod.asyncio.sleep = real_sleep
+
+        self.assertEqual(len(resub_calls), 1)   # re-subscribe attempted
+        self.assertFalse(m._subscribed)         # NOT clobbered back to True
+        self.assertFalse(m._connection)         # the disconnect stuck
+        self.assertEqual(len(rebuilds), 0)      # one tick only: no rebuild yet
+
+    def test_lost_update_disconnect_mid_rebuild_subscribe_not_marked_healthy(self) -> None:
+        # Issue 3 at the REBUILD site: after a full _start() (which models the awscrt
+        # connection-success flipping _connection=True), the rebuild's subscribe is
+        # interrupted by a disconnection callback (flips _connection=False mid-await).
+        # The post-await assignment must re-check connection (and generation), so the
+        # rebuild does NOT leave a stuck "healthy on a dropped session".
+        import custom_components.addhon.client.transport.mqtt as mod
+        from custom_components.addhon.client.transport.mqtt import (
+            _RECONNECT_AFTER_FAILED_TICKS,
+        )
+
+        m = NativeMqttClient(FakeHon([]), "MID")
+        # Sustained not-connected long enough to trip the rebuild threshold; the rebuild's
+        # _start() then brings the transport up, but the subscribe drops it again.
+        seq = [(False, False)] * _RECONNECT_AFTER_FAILED_TICKS
+        rebuilds = []
+        resub_calls = []
+
+        async def fake_start():
+            rebuilds.append(True)
+            m._subscribed = False
+            # _start() built a fresh client; model the awscrt success callback bringing
+            # the transport up before the subscribe runs.
+            m._connection = True
+
+        async def counted_sub():
+            resub_calls.append(True)
+            # The disconnection callback lands on the awscrt thread mid-subscribe.
+            m._connection = False
+
+        async def fake_sleep(_interval):
+            if not seq:
+                raise asyncio.CancelledError
+            conn, sub = seq.pop(0)
+            m._connection = conn
+            m._subscribed = sub
+
+        m._start = fake_start  # type: ignore[assignment]
+        m._subscribe_appliances = counted_sub  # type: ignore[assignment]
+        real_sleep = mod.asyncio.sleep
+        mod.asyncio.sleep = fake_sleep
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(m._watchdog())
+            except asyncio.CancelledError:
+                pass
+            finally:
+                loop.close()
+        finally:
+            mod.asyncio.sleep = real_sleep
+
+        self.assertEqual(len(rebuilds), 1)   # the rebuild ran
+        self.assertEqual(len(resub_calls), 1)
+        self.assertFalse(m._subscribed)      # NOT clobbered back to True
+        self.assertFalse(m._connection)      # the mid-subscribe disconnect stuck
+
+
+class SubscribedFlagLifecycleTest(unittest.TestCase):
+    """The companion of WatchdogSubscribedRecoveryTest at the flag level: _subscribed
+    must be reset by the disconnection/failure callbacks (respecting the generation
+    guard) and by _start(), and set only after _subscribe_appliances() succeeds."""
+
+    def test_disconnection_resets_subscribed(self) -> None:
+        m = NativeMqttClient(FakeHon([]), "MID")
+        m._generation = 1
+        m._connection = True
+        m._subscribed = True
+        m._on_lifecycle_disconnection(None, generation=1)
+        self.assertFalse(m._connection)
+        self.assertFalse(m._subscribed)
+
+    def test_connection_failure_resets_subscribed(self) -> None:
+        m = NativeMqttClient(FakeHon([]), "MID")
+        m._generation = 1
+        m._connection = True
+        m._subscribed = True
+        m._on_lifecycle_connection_failure(None, generation=1)
+        self.assertFalse(m._connection)
+        self.assertFalse(m._subscribed)
+
+    def test_connection_success_does_not_set_subscribed(self) -> None:
+        # The success callback only flips _connection: it does NOT subscribe, so
+        # _subscribed must stay False (this is exactly the connected-but-unsubscribed
+        # window the watchdog must recover, incl. awscrt's clean-session auto-reconnect).
+        m = NativeMqttClient(FakeHon([]), "MID")
+        m._generation = 1
+        m._on_lifecycle_connection_success(None, generation=1)
+        self.assertTrue(m._connection)
+        self.assertFalse(m._subscribed)
+
+    def test_stale_disconnection_does_not_reset_subscribed(self) -> None:
+        # A late event from an OLD generation must not clear _subscribed on the current
+        # healthy client (same guard that protects _connection).
+        m = NativeMqttClient(FakeHon([]), "MID")
+        m._generation = 2
+        m._connection = True
+        m._subscribed = True
+        m._on_lifecycle_disconnection(None, generation=1)  # stale
+        self.assertTrue(m._connection)
+        self.assertTrue(m._subscribed)
+
+    def test_start_resets_subscribed(self) -> None:
+        import awscrt
+        import awsiot
+
+        class FakeClient:
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+        awsiot.mqtt5_client_builder.websockets_with_custom_authorizer = (
+            lambda **kw: FakeClient()
+        )
+
+        class FakeAuth:
+            id_token = "IDT"
+
+        class FakeApi:
+            auth = FakeAuth()
+
+            async def load_aws_token(self):
+                return "SIGNED"
+
+        hon = FakeHon([])
+        hon.api = FakeApi()
+        m = NativeMqttClient(hon, "MID")
+        m._subscribed = True  # pretend a previous client was subscribed
+
+        _run(m._start())
+        self.assertFalse(m._subscribed)  # fresh client -> no subscriptions
+
+    def test_create_sets_subscribed_true_on_success(self) -> None:
+        m = NativeMqttClient(FakeHon([]), "MID")
+
+        async def fake_start():
+            m._client = object()
+            # The real _start() builds the client; the awscrt connection-success
+            # callback then flips _connection=True before subscribe completes. create()'s
+            # lost-update guard (Issue 3) only marks _subscribed when _connection is up,
+            # so model the connected transport here.
+            m._connection = True
+
+        async def ok_sub():
+            return None
+
+        async def ok_watchdog():
+            return None
+
+        m._start = fake_start  # type: ignore[assignment]
+        m._subscribe_appliances = ok_sub  # type: ignore[assignment]
+        m._start_watchdog = ok_watchdog  # type: ignore[assignment]
+        _run(m.create())
+        self.assertTrue(m._subscribed)
+
+    def test_create_does_not_clobber_subscribed_when_disconnect_lands_mid_subscribe(
+        self,
+    ) -> None:
+        # Issue 3 at the create() site: if a disconnection callback lands DURING the
+        # initial subscribe (flips _connection=False), create() must NOT clobber
+        # _subscribed back to True with an unconditional assignment.
+        m = NativeMqttClient(FakeHon([]), "MID")
+
+        async def fake_start():
+            m._client = object()
+            m._connection = True
+
+        async def dropping_sub():
+            # The awscrt thread fires a disconnection mid-subscribe.
+            m._connection = False
+            m._subscribed = False
+
+        async def ok_watchdog():
+            return None
+
+        m._start = fake_start  # type: ignore[assignment]
+        m._subscribe_appliances = dropping_sub  # type: ignore[assignment]
+        m._start_watchdog = ok_watchdog  # type: ignore[assignment]
+        _run(m.create())
+        self.assertFalse(m._subscribed)  # not clobbered back to healthy
 
 
 if __name__ == "__main__":
