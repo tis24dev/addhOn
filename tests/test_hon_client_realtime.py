@@ -237,15 +237,16 @@ class HonClientRealtimeTest(unittest.TestCase):
 
 class DiscoveryLogRedactionTest(unittest.TestCase):
     """The poll/discovery DEBUG logs (incl. the 'Updated' line) must redact the
-    MAC and the appliance_id (= MAC/serial), never log them raw."""
+    MAC, the appliance_id (= MAC/serial) and the nick_name, never log them raw."""
 
     def test_discovery_and_updated_logs_redact_identity(self) -> None:
         mac = "AA:BB:CC:DD:EE:FF"
+        nick = "NickSecret42"
         app = types.SimpleNamespace(
             mac_address=mac,
             unique_id=mac,
             appliance_type="REF",
-            nick_name="Fridge",
+            nick_name=nick,
             attributes={},
             settings={},
             statistics={},
@@ -263,10 +264,80 @@ class DiscoveryLogRedactionTest(unittest.TestCase):
             data = asyncio.run(c.async_get_appliances_data())
         blob = "\n".join(cm.output)
         self.assertNotIn(mac, blob)  # neither mac= nor id= leak the MAC
+        self.assertNotIn(nick, blob)  # nick_name (= identity) must not leak either
         self.assertIn("***", blob)
         self.assertTrue(any("Updated" in line for line in cm.output))
-        # the coordinator DATA still carries the real MAC (data, not a log)
+        # the coordinator DATA still carries the real MAC + nick (data, not a log)
         self.assertIn(mac, data)
+        self.assertEqual(data[mac]["name"], nick)
+
+    def test_update_error_warning_redacts_nick_name(self) -> None:
+        # The per-appliance error path logs a WARNING with the nick_name and re-raises
+        # a RuntimeError carrying it (first poll). Neither must leak the nick.
+        nick = "NickSecret42"
+        app = types.SimpleNamespace(
+            mac_address="AA:BB:CC:DD:EE:FF",
+            unique_id="AA:BB:CC:DD:EE:FF",
+            appliance_type="REF",
+            nick_name=nick,
+            attributes={},
+            settings={},
+            statistics={},
+        )
+        c = HonClient(email="e@x", password="p")
+
+        async def fake_get_appliances():
+            return [app]
+
+        def boom(_a):
+            raise ValueError("update boom")
+
+        c.async_get_appliances = fake_get_appliances  # type: ignore[assignment]
+        c._update_appliance_sync = boom  # type: ignore[assignment]
+
+        logger = "custom_components.addhon.hon_client"
+        with self.assertLogs(logger, level="WARNING") as cm:
+            with self.assertRaises(RuntimeError) as ctx:
+                asyncio.run(c.async_get_appliances_data())
+        blob = "\n".join(cm.output)
+        self.assertTrue(any("Error updating" in line for line in cm.output))
+        self.assertNotIn(nick, blob)  # WARNING must not leak the nick
+        self.assertNotIn(nick, str(ctx.exception))  # nor the re-raised RuntimeError
+
+    def test_steady_state_partial_failure_warning_redacts_nick(self) -> None:
+        # Steady state (resilient): one appliance fails, the other succeeds. The
+        # 'Partial update' WARNING joins the failed appliances' names -> must redact.
+        nick_ok, nick_bad = "OkNick", "BadSecretNick99"
+        app_ok = types.SimpleNamespace(
+            mac_address="AA:BB:CC:DD:EE:01", unique_id="AA:BB:CC:DD:EE:01",
+            appliance_type="REF", nick_name=nick_ok,
+            attributes={}, settings={}, statistics={},
+        )
+        app_bad = types.SimpleNamespace(
+            mac_address="AA:BB:CC:DD:EE:02", unique_id="AA:BB:CC:DD:EE:02",
+            appliance_type="REF", nick_name=nick_bad,
+            attributes={}, settings={}, statistics={},
+        )
+        c = HonClient(email="e@x", password="p")
+        c._first_poll_done = True  # steady state -> skip a failed appliance, keep the rest
+
+        async def fake_get_appliances():
+            return [app_ok, app_bad]
+
+        def update(a):
+            if a is app_bad:
+                raise ValueError("update boom")
+
+        c.async_get_appliances = fake_get_appliances  # type: ignore[assignment]
+        c._update_appliance_sync = update  # type: ignore[assignment]
+
+        logger = "custom_components.addhon.hon_client"
+        with self.assertLogs(logger, level="WARNING") as cm:
+            data = asyncio.run(c.async_get_appliances_data())
+        blob = "\n".join(cm.output)
+        self.assertTrue(any("Partial update" in line for line in cm.output))
+        self.assertNotIn(nick_bad, blob)  # neither the per-appliance nor the joined list
+        self.assertIn(app_ok.unique_id, data)  # the healthy appliance survives
 
 
 class RealtimeWiringSourceGuard(unittest.TestCase):

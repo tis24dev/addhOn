@@ -16,6 +16,7 @@ from .const import (
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_STORE,
 )
+from .debug_utils import redact_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,12 +56,12 @@ async def async_setup_entry(
         _LOGGER.debug(
             "Select debug: evaluating appliance '%s' id=%s type=%s commands=%s",
             data.get("name"),
-            appliance_id,
+            redact_id(appliance_id),
             app_type,
             _command_names(appliance),
         )
         if app_type not in APPLIANCE_WASH_GROUP:
-            _LOGGER.debug("Select debug: appliance id=%s ignored, type=%s", appliance_id, app_type)
+            _LOGGER.debug("Select debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
             continue
         if HonProgramSelect.supports_appliance(appliance):
             entities.append(HonProgramSelect(coordinator, appliance_id, client))
@@ -70,7 +71,7 @@ async def async_setup_entry(
                 "Select debug: no program select for '%s' id=%s; "
                 "no source command with parameters %s",
                 data.get("name"),
-                appliance_id,
+                redact_id(appliance_id),
                 PROGRAM_PARAM_NAMES,
             )
     async_add_entities(entities)
@@ -95,8 +96,8 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         self._attr_options = list(self._program_reverse.keys())
         _LOGGER.debug(
             "Select debug: initialized '%s' id=%s programs=%d map=%s",
-            self._attr_unique_id,
-            appliance_id,
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
             len(self._program_map),
             self._program_map,
         )
@@ -223,14 +224,14 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
             if label is not None:
                 _LOGGER.debug(
                     "Select debug: current_option uses pending id=%s code=%s label=%s",
-                    self._appliance_id,
+                    redact_id(self._appliance_id),
                     pending,
                     label,
                 )
                 return label
             _LOGGER.debug(
                 "Select debug: current_option pending id=%s code=%s not present in map=%s",
-                self._appliance_id,
+                redact_id(self._appliance_id),
                 pending,
                 self._program_map,
             )
@@ -281,7 +282,7 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
                 token,
                 self._program_map,
             )
-        _LOGGER.debug("Select debug: current_option not available for id=%s", self._appliance_id)
+        _LOGGER.debug("Select debug: current_option not available for id=%s", redact_id(self._appliance_id))
         return None
 
     async def async_select_option(self, option: str) -> None:

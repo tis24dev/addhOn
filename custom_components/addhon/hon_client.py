@@ -7,7 +7,7 @@ import logging
 import threading
 from typing import Any
 
-from .debug_utils import debug_key_sample, redact_email, redact_mac
+from .debug_utils import debug_key_sample, redact_email, redact_id, redact_mac
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def _debug_appliance_consumption(stage: str, appliance, attributes: dict | None 
         "merged_keys=%d %s merged_values=%s; "
         "load_statistics=%s update=%s commands=%s",
         stage,
-        _get_name(appliance),
+        redact_id(_get_name(appliance)),
         _get_type(appliance),
         redact_mac(getattr(appliance, "unique_id", None) or _get_serial(appliance)) or "<no-id>",
         type(getattr(appliance, "statistics", None)).__name__,
@@ -517,7 +517,7 @@ class HonClient:
                                 _LOGGER.debug(
                                     "load_statistics after update() failed for '%s' "
                                     "(type=%s): %s",
-                                    _get_name(appliance),
+                                    redact_id(_get_name(appliance)),
                                     _get_type(appliance),
                                     err,
                                 )
@@ -526,7 +526,7 @@ class HonClient:
                             "(type=%s); statistics reloaded if available; "
                             "load_attributes/load_commands fallback not run in this cycle.",
                             len(attrs_after_update),
-                            _get_name(appliance),
+                            redact_id(_get_name(appliance)),
                             _get_type(appliance),
                         )
                         return
@@ -664,7 +664,7 @@ class HonClient:
                         "Discovery: appliance inventory from the cloud - %s",
                         "; ".join(
                             f"type={_get_type(a)} mac={redact_mac(_get_mac(a)) or '<no-mac>'} "
-                            f"name={_get_name(a)}"
+                            f"name={redact_id(_get_name(a))}"
                             for a in appliances
                         ),
                     )
@@ -687,7 +687,7 @@ class HonClient:
                         len(appliances),
                         _get_type(appliance),
                         redact_mac(_get_mac(appliance)) or "<no-mac>",
-                        _get_name(appliance),
+                        redact_id(_get_name(appliance)),
                     )
                     last_err = None
                     for attempt in range(3):
@@ -722,27 +722,27 @@ class HonClient:
                     _debug_appliance_consumption("coordinator snapshot", appliance, attributes)
                     _LOGGER.debug(
                         "Updated '%s' (type=%s, mac=%s, id=%s) - %d attributes",
-                        name, app_type, redact_mac(_get_mac(appliance)) or "<no-mac>",
+                        redact_id(name), app_type, redact_mac(_get_mac(appliance)) or "<no-mac>",
                         redact_mac(appliance_id), len(attributes),
                     )
 
                 except Exception as err:
                     _LOGGER.warning(
                         "Error updating '%s' (type=%s): %s",
-                        _get_name(appliance), _get_type(appliance), err,
+                        redact_id(_get_name(appliance)), _get_type(appliance), err,
                         exc_info=True,
                     )
                     if _requires_reauth(err):
                         if reauth_attempted:
                             raise RuntimeError(
                                 f"Haier auth error while updating "
-                                f"'{_get_name(appliance)}': {err}"
+                                f"'{redact_id(_get_name(appliance))}': {err}"
                             ) from err
                         _LOGGER.warning("Haier auth error, starting re-authentication")
                         if not await self._async_reauth():
                             raise RuntimeError(
                                 f"Haier auth error while updating "
-                                f"'{_get_name(appliance)}': {err}"
+                                f"'{redact_id(_get_name(appliance))}': {err}"
                             ) from err
                         reauth_attempted = True
                         retry_after_reauth = True
@@ -754,7 +754,7 @@ class HonClient:
                     # the full inventory loads. (Also surfaces genuine setup-time bugs.)
                     if not self._first_poll_done:
                         raise RuntimeError(
-                            f"Error updating '{_get_name(appliance)}': {err}"
+                            f"Error updating '{redact_id(_get_name(appliance))}': {err}"
                         ) from err
                     # Steady state: per-appliance resilience. A non-auth failure on ONE
                     # appliance (a transient cloud 5xx that outlived the retries, a
@@ -764,7 +764,7 @@ class HonClient:
                     # others stay live. A TOTAL failure (all errored -> empty data) is
                     # re-raised below so the coordinator marks the cycle failed instead of
                     # publishing an empty snapshot that silently blanks everything.
-                    failed_appliances.append(_get_name(appliance))
+                    failed_appliances.append(redact_id(_get_name(appliance)))
                     continue
 
             if retry_after_reauth:

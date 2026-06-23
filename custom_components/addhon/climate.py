@@ -33,7 +33,7 @@ from .const import (
     AC_SWING_MODE_ON,
     AC_SWING_MODE_OFF,
 )
-from .debug_utils import command_names
+from .debug_utils import command_names, redact_id
 from .ac_command import (
     async_send_settings,
     fixed_vertical_value,
@@ -69,14 +69,14 @@ async def async_setup_entry(
         _LOGGER.debug(
             "Climate debug: evaluating appliance '%s' id=%s type=%s commands=%s attributes=%d",
             data.get("name"),
-            aid,
+            redact_id(aid),
             data.get("type"),
             command_names(appliance),
             len(data.get("attributes", {})) if isinstance(data.get("attributes"), dict) else 0,
         )
         if data.get("type") == APPLIANCE_AC:
             entities.append(HaierClimateEntity(coordinator, aid, client))
-            _LOGGER.debug("Climate debug: created climate entity for id=%s", aid)
+            _LOGGER.debug("Climate debug: created climate entity for id=%s", redact_id(aid))
     async_add_entities(entities)
 
 
@@ -120,8 +120,8 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         self._attr_fan_modes = self._derive_fan_modes()
         _LOGGER.debug(
             "Climate debug: initialized '%s' id=%s hvac_modes=%s fan_modes=%s temp_range=%s-%s",
-            self._attr_unique_id,
-            appliance_id,
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
             self._attr_hvac_modes,
             self._attr_fan_modes,
             self.min_temp,
@@ -189,8 +189,8 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         if str(on_off) == "0":
             _LOGGER.debug(
                 "Climate debug: hvac_mode '%s' id=%s onOffStatus=%s -> OFF",
-                self._attr_unique_id,
-                self._appliance_id,
+                redact_id(self._attr_unique_id, self._appliance_id),
+                redact_id(self._appliance_id),
                 on_off,
             )
             return HVACMode.OFF
@@ -206,8 +206,8 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             mode = HVACMode(str(mode_str).lower())
             _LOGGER.debug(
                 "Climate debug: hvac_mode '%s' id=%s onOffStatus=%s machMode=%s -> %s",
-                self._attr_unique_id,
-                self._appliance_id,
+                redact_id(self._attr_unique_id, self._appliance_id),
+                redact_id(self._appliance_id),
                 on_off,
                 mode_val,
                 mode,

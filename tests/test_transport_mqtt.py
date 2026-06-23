@@ -518,6 +518,94 @@ class PublishReceivedTest(unittest.TestCase):
         self.assertEqual(hon.notified, 0)
 
 
+class PublishReceivedRedactionTest(unittest.TestCase):
+    """#32/#35: the MQTT handler must not log raw device identity (payload echoing
+    macAddress/serial, nick_name) even when the MQTT logger is raised to INFO/DEBUG
+    for troubleshooting."""
+
+    _LOGGER_NAME = "custom_components.addhon.client.transport.mqtt"
+
+    def _client(self, appliance):
+        return NativeMqttClient(FakeHon([appliance]), "MID")
+
+    def test_appliancestatus_payload_redacted_at_info(self) -> None:
+        # #32: the generic INFO line logs the whole payload; a macAddress echoed in it
+        # must be masked.
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        app = FakeAppliance(topic)
+        m = self._client(app)
+        mac = "AA:BB:CC:DD:EE:FF"
+        with self.assertLogs(self._LOGGER_NAME, level="INFO") as cm:
+            m._on_publish_received(
+                _packet(
+                    topic,
+                    {
+                        "macAddress": mac,
+                        "parameters": [{"parName": "temp", "parValue": "5"}],
+                    },
+                )
+            )
+        blob = "\n".join(cm.output)
+        self.assertNotIn(mac, blob)
+        self.assertIn("***", blob)
+
+    def test_disconnected_nick_name_redacted_at_info(self) -> None:
+        # #35: lifecycle logs nick_name at INFO -> must be masked.
+        topic = "haier/things/MAC/event/disconnected"
+        app = FakeAppliance(topic)
+        app.nick_name = "MySecretNick"
+        m = self._client(app)
+        with self.assertLogs(self._LOGGER_NAME, level="INFO") as cm:
+            m._on_publish_received(_packet(topic, {"disconnectReason": "x"}))
+        blob = "\n".join(cm.output)
+        self.assertNotIn("MySecretNick", blob)
+        self.assertIn("Disconnected ***", blob)
+
+    def test_connected_nick_name_redacted_at_info(self) -> None:
+        topic = "haier/things/MAC/event/connected"
+        app = FakeAppliance(topic)
+        app.nick_name = "MySecretNick"
+        m = self._client(app)
+        with self.assertLogs(self._LOGGER_NAME, level="INFO") as cm:
+            m._on_publish_received(_packet(topic, {}))
+        blob = "\n".join(cm.output)
+        self.assertNotIn("MySecretNick", blob)
+        self.assertIn("Connected ***", blob)
+
+    def test_topic_mac_redacted_at_info(self) -> None:
+        # #32 (refuter gap): the Haier topic embeds the device MAC
+        # (haier/things/<MAC>/...) and is logged at INFO right next to the payload.
+        mac = "3c-71-bf-bd-32-2c"
+        topic = f"haier/things/{mac}/event/appliancestatus/update"
+        app = FakeAppliance(topic)
+        m = self._client(app)
+        with self.assertLogs(self._LOGGER_NAME, level="INFO") as cm:
+            m._on_publish_received(
+                _packet(topic, {"parameters": [{"parName": "temp", "parValue": "5"}]})
+            )
+        blob = "\n".join(cm.output)
+        self.assertNotIn(mac, blob)
+        self.assertIn("haier/things/***/event/appliancestatus/update", blob)
+
+    def test_non_object_payload_logs_type_only(self) -> None:
+        # #35 (refuter gap): a bare scalar JSON payload (e.g. a string that is a MAC)
+        # must NOT be echoed; only its type is logged, and the topic MAC is masked.
+        mac = "AA:BB:CC:DD:EE:FF"
+        topic = f"haier/things/{mac}/event/appliancestatus"
+        app = FakeAppliance(topic)
+        m = self._client(app)
+        pkt = types.SimpleNamespace(
+            publish_packet=types.SimpleNamespace(
+                topic=topic, payload=json.dumps(mac).encode()  # bare JSON string
+            )
+        )
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as cm:
+            m._on_publish_received(pkt)
+        blob = "\n".join(cm.output)
+        self.assertNotIn(mac, blob)
+        self.assertIn("type=str", blob)
+
+
 class StartReconnectTest(unittest.TestCase):
     """Covers the watchdog leak fix: a second _start() (reconnect) must stop the
     previous awscrt client before building a new one, instead of leaking it."""

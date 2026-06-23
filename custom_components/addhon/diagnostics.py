@@ -32,6 +32,7 @@ from .const import (
     DOMAIN,
     PROGRAM_PARAM_NAMES,
 )
+from .debug_utils import redact_id
 from .hon_commands import SETTINGS_COMMANDS, param_range, param_values
 
 _LOGGER = logging.getLogger(__name__)
@@ -379,7 +380,7 @@ def _appliance_block(appliance_id: str, data: Mapping) -> dict:
     _LOGGER.debug(
         "Diagnostics debug: appliance id=%s name=%s type=%s attrs=%d commands=%d "
         "unmapped_attrs=%d unmapped_params=%d",
-        appliance_id,
+        redact_id(appliance_id),
         data.get("name"),
         app_type,
         len(attributes),

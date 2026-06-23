@@ -45,6 +45,7 @@ from .const import (
     WM_ATTR_DRY_CLEAN_NEEDED,
     WM_ATTR_FILTER_CLEAN,
 )
+from .debug_utils import redact_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -329,7 +330,7 @@ async def async_setup_entry(
             if description.attr_key not in attributes:
                 _LOGGER.debug(
                     "Binary debug: skip '%s' on '%s' id=%s (key '%s' absent)",
-                    description.key, data.get("name"), appliance_id, description.attr_key,
+                    description.key, data.get("name"), redact_id(appliance_id), description.attr_key,
                 )
                 continue
             entities.append(HonBinarySensor(coordinator, appliance_id, description))
@@ -346,7 +347,7 @@ async def async_setup_entry(
         created.append(_CONNECTIVITY.key)
         _LOGGER.debug(
             "Binary debug: '%s' (type=%s, id=%s) -> %d binary sensors %s",
-            data.get("name"), app_type, appliance_id, len(created), created,
+            data.get("name"), app_type, redact_id(appliance_id), len(created), created,
         )
     # Account-level diagnostic binary sensor (one per config entry).
     sw_version = entry_data.get("integration_version")

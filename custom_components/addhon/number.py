@@ -47,6 +47,7 @@ from .const import (
     APPLIANCE_WC,
     DOMAIN,
 )
+from .debug_utils import redact_id
 from .hon_commands import (
     async_send_command,
     find_settings_param,
@@ -238,7 +239,7 @@ async def async_setup_entry(
             "Number debug: '%s' (type=%s, id=%s) -> %d/%d numbers %s",
             data.get("name", "Haier"),
             app_type,
-            appliance_id,
+            redact_id(appliance_id),
             len(created),
             len(NUMBERS.get(app_type, ())),
             created,
@@ -284,7 +285,7 @@ class HonNumber(HonBaseEntity, NumberEntity):
             )
         _LOGGER.debug(
             "Number debug: init '%s' id=%s param=%s cmd=%s range=%s",
-            self._attr_unique_id, appliance_id, description.param, command_name, self._live_range,
+            redact_id(self._attr_unique_id, appliance_id), redact_id(appliance_id), description.param, command_name, self._live_range,
         )
 
     @property
@@ -350,7 +351,7 @@ class HonNumber(HonBaseEntity, NumberEntity):
         try:
             _LOGGER.debug(
                 "Number debug: set %s=%s (cmd=%s) id=%s",
-                param, send_value, self._command_name, self._appliance_id,
+                param, send_value, self._command_name, redact_id(self._appliance_id),
             )
             await async_send_command(
                 self.hass, client, appliance, self._command_name, {param: send_value}

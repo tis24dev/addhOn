@@ -91,6 +91,7 @@ from .const import (
     WM_ATTR_TOTAL_WATER,
     WM_STATE_MAP,
 )
+from .debug_utils import redact_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -859,7 +860,7 @@ async def async_setup_entry(
             "Sensor debug: '%s' (type=%s, id=%s) -> %d/%d sensors %s",
             data.get("name", "Haier"),
             app_type,
-            appliance_id,
+            redact_id(appliance_id),
             len(created),
             len(descriptions),
             created,

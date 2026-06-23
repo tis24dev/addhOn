@@ -9,7 +9,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .debug_utils import debug_key_sample
+from .debug_utils import debug_key_sample, redact_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ class HonBaseEntity(CoordinatorEntity):
             _LOGGER.debug(
                 "BaseEntity debug: created coordinator store '%s' for appliance=%s",
                 name,
-                self._appliance_id,
+                redact_id(self._appliance_id),
             )
         return store
 
@@ -218,8 +218,9 @@ class HonBaseEntity(CoordinatorEntity):
                 "BaseEntity debug: lookup '%s' for '%s' (id=%s) resolved from %s: "
                 "raw=%r (%s), value=%r; attribute_keys=%d %s; settings_keys=%d %s",
                 key,
-                getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
-                self._appliance_id,
+                redact_id(getattr(self, "_attr_unique_id", None), self._appliance_id)
+                or self.__class__.__name__,
+                redact_id(self._appliance_id),
                 source,
                 raw_value,
                 type(raw_value).__name__,
@@ -318,8 +319,9 @@ class HonBaseEntity(CoordinatorEntity):
                 "BaseEntity debug: lookup '%s' for '%s' (id=%s) not found, "
                 "returning default=%r; attribute_keys=%d %s; settings_keys=%d %s",
                 key,
-                getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
-                self._appliance_id,
+                redact_id(getattr(self, "_attr_unique_id", None), self._appliance_id)
+                or self.__class__.__name__,
+                redact_id(self._appliance_id),
                 default,
                 len(attributes) if isinstance(attributes, dict) else 0,
                 debug_key_sample(attributes) if isinstance(attributes, dict) else [],
@@ -335,15 +337,17 @@ class HonBaseEntity(CoordinatorEntity):
             refresh = self.coordinator.async_request_refresh
         _LOGGER.debug(
             "BaseEntity debug: refresh requested after command for appliance=%s entity=%s",
-            self._appliance_id,
-            getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
+            redact_id(self._appliance_id),
+            redact_id(getattr(self, "_attr_unique_id", None), self._appliance_id)
+            or self.__class__.__name__,
         )
         await refresh()
         if getattr(self.coordinator, "last_update_success", True) is not False:
             _LOGGER.debug(
                 "BaseEntity debug: refresh after command succeeded for appliance=%s entity=%s",
-                self._appliance_id,
-                getattr(self, "_attr_unique_id", None) or self.__class__.__name__,
+                redact_id(self._appliance_id),
+                redact_id(getattr(self, "_attr_unique_id", None), self._appliance_id)
+                or self.__class__.__name__,
             )
             return
 

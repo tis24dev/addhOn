@@ -19,7 +19,7 @@ from .const import (
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_STORE,
 )
-from .debug_utils import command_names, param_snapshot
+from .debug_utils import command_names, param_snapshot, redact_id
 from .logging_utils import reset_integration_log_level, silence_mqtt_noise
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,18 +40,18 @@ async def async_setup_entry(
         _LOGGER.debug(
             "Button debug: evaluating appliance '%s' id=%s type=%s commands=%s",
             data.get("name"),
-            appliance_id,
+            redact_id(appliance_id),
             app_type,
             command_names(data.get("appliance")),
         )
         if app_type not in APPLIANCE_WASH_GROUP:
-            _LOGGER.debug("Button debug: appliance id=%s ignored, type=%s", appliance_id, app_type)
+            _LOGGER.debug("Button debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
             continue
         appliance = data.get("appliance")
         commands = getattr(appliance, "commands", None)
         commands = commands if isinstance(commands, dict) else {}
         if "startProgram" in commands:
-            _LOGGER.debug("Button debug: creating startProgram button for id=%s", appliance_id)
+            _LOGGER.debug("Button debug: creating startProgram button for id=%s", redact_id(appliance_id))
             entities.append(
                 HonProgramCommandButton(
                     coordinator,
@@ -64,7 +64,7 @@ async def async_setup_entry(
                 )
             )
         if "stopProgram" in commands:
-            _LOGGER.debug("Button debug: creating stopProgram button for id=%s", appliance_id)
+            _LOGGER.debug("Button debug: creating stopProgram button for id=%s", redact_id(appliance_id))
             entities.append(
                 HonProgramCommandButton(
                     coordinator,
@@ -107,8 +107,8 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
         self._attr_icon = icon
         _LOGGER.debug(
             "Button debug: initialized '%s' id=%s command=%s fixed_params=%s",
-            self._attr_unique_id,
-            appliance_id,
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
             command_name,
             self._command_parameters,
         )
@@ -134,7 +134,7 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
         _LOGGER.debug(
             "Button debug: press '%s' id=%s pending_program=%s store=%s commands=%s",
             self._command_name,
-            self._appliance_id,
+            redact_id(self._appliance_id),
             pending_program,
             dict(store),
             command_names(appliance),

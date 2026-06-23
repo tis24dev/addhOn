@@ -21,6 +21,7 @@ from .const import (
     DOMAIN,
     WM_ATTR_STATUS,
 )
+from .debug_utils import redact_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ async def async_setup_entry(
         _LOGGER.debug(
             "Switch debug: evaluating appliance '%s' id=%s type=%s commands=%s",
             data.get("name"),
-            appliance_id,
+            redact_id(appliance_id),
             app_type,
             _command_names(appliance),
         )
@@ -99,13 +100,13 @@ async def async_setup_entry(
                 cmds = getattr(appliance, "commands", None)
                 cmds = cmds if isinstance(cmds, dict) else {}
                 if "pauseProgram" in cmds and "resumeProgram" in cmds:
-                    _LOGGER.debug("Switch debug: creating pause switch for id=%s", appliance_id)
+                    _LOGGER.debug("Switch debug: creating pause switch for id=%s", redact_id(appliance_id))
                     entities.append(HonWashingMachinePauseSwitch(coordinator, appliance_id, client))
                     _LOGGER.info("Added switch: %s", data.get("name"))
                 else:
                     _LOGGER.debug(
                         "Switch debug: pause switch not created for id=%s; pause/resume missing",
-                        appliance_id,
+                        redact_id(appliance_id),
                     )
         elif app_type == APPLIANCE_AC:
             created: list[str] = []
@@ -117,10 +118,10 @@ async def async_setup_entry(
                 created.append(desc.key)
             _LOGGER.debug(
                 "Switch debug: AC '%s' id=%s -> %d switches %s",
-                data.get("name"), appliance_id, len(created), created,
+                data.get("name"), redact_id(appliance_id), len(created), created,
             )
         else:
-            _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", appliance_id, app_type)
+            _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
     # Account-level debug switches (one set per config entry, independent of the
     # appliances): they mirror the two persisted toggles of the Options flow.
     sw_version = entry_data.get("integration_version")
@@ -153,7 +154,7 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
         super().__init__(coordinator, appliance_id, client)
         self._attr_unique_id = f"{appliance_id}_pause"
         self._attr_translation_key = "pause"
-        _LOGGER.debug("Switch debug: initialized '%s' id=%s", self._attr_unique_id, appliance_id)
+        _LOGGER.debug("Switch debug: initialized '%s' id=%s", redact_id(self._attr_unique_id, appliance_id), redact_id(appliance_id))
 
     @property
     def is_on(self) -> bool:
@@ -162,8 +163,8 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
         is_paused = str(val) == "3"
         _LOGGER.debug(
             "Switch debug: is_on '%s' id=%s machMode=%s -> %s",
-            self._attr_unique_id,
-            self._appliance_id,
+            redact_id(self._attr_unique_id, self._appliance_id),
+            redact_id(self._appliance_id),
             val,
             is_paused,
         )
@@ -181,7 +182,7 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
             "Switch debug: sending pause command '%s' value=%s id=%s commands=%s",
             command_name,
             pause_value,
-            self._appliance_id,
+            redact_id(self._appliance_id),
             _command_names(appliance),
         )
         try:
@@ -245,7 +246,7 @@ class HonAcSwitch(HonBaseEntity, SwitchEntity):
             self._attr_icon = description.icon
         _LOGGER.debug(
             "Switch debug: initialized AC switch '%s' id=%s param=%s",
-            self._attr_unique_id, appliance_id, description.param,
+            redact_id(self._attr_unique_id, appliance_id), redact_id(appliance_id), description.param,
         )
 
     @property
@@ -271,7 +272,7 @@ class HonAcSwitch(HonBaseEntity, SwitchEntity):
             )
         param = self._desc.param
         try:
-            _LOGGER.debug("Switch debug: AC set %s=%s id=%s", param, value, self._appliance_id)
+            _LOGGER.debug("Switch debug: AC set %s=%s id=%s", param, value, redact_id(self._appliance_id))
             await async_send_settings(self.hass, client, appliance, {param: value})
             await self._async_request_command_refresh()
         except HomeAssistantError:

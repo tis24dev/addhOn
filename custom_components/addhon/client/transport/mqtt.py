@@ -33,6 +33,7 @@ from awscrt import mqtt5
 from awsiot import mqtt5_client_builder  # type: ignore[import-untyped]
 
 from .device import MOBILE_ID
+from ...debug_utils import redact_id, redact_identity, redact_topic
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -186,10 +187,17 @@ class NativeMqttClient:
         try:
             payload = json.loads(data.publish_packet.payload.decode())
         except (ValueError, UnicodeDecodeError) as err:
-            _LOGGER.debug("MQTT: undecodable payload on %s: %s", topic, err)
+            _LOGGER.debug("MQTT: undecodable payload on %s: %s", redact_topic(topic), err)
             return
         if not isinstance(payload, dict):
-            _LOGGER.debug("MQTT: non-object payload on %s: %r", topic, payload)
+            # Log only the TYPE, not the value: redact_identity masks dict keys but a
+            # bare scalar (e.g. a JSON string that happens to be a MAC) would pass
+            # through, so never echo a non-object payload's content.
+            _LOGGER.debug(
+                "MQTT: non-object payload on %s: type=%s",
+                redact_topic(topic),
+                type(payload).__name__,
+            )
             return
         # The rest also runs on the awscrt callback thread: a VALID dict payload can
         # still make the engine raise (params[name].update, sync_params_to_command, or
@@ -205,7 +213,9 @@ class NativeMqttClient:
                 None,
             )
             if appliance is None:
-                _LOGGER.debug("MQTT: topic with no matching appliance: %s", topic)
+                _LOGGER.debug(
+                    "MQTT: topic with no matching appliance: %s", redact_topic(topic)
+                )
                 return
             if topic and "appliancestatus" in topic:
                 params = appliance.attributes.get("parameters", {})
@@ -237,21 +247,21 @@ class NativeMqttClient:
             elif topic and "disconnected" in topic:
                 _LOGGER.info(
                     "Disconnected %s: %s",
-                    appliance.nick_name,
+                    redact_id(appliance.nick_name),
                     payload.get("disconnectReason"),
                 )
                 appliance.connection = False
             elif topic and "connected" in topic:
                 appliance.connection = True
-                _LOGGER.info("Connected %s", appliance.nick_name)
+                _LOGGER.info("Connected %s", redact_id(appliance.nick_name))
             elif topic and "discovery" in topic:
-                _LOGGER.info("Discovered %s", appliance.nick_name)
+                _LOGGER.info("Discovered %s", redact_id(appliance.nick_name))
             self._hon.notify()
-            _LOGGER.info("%s - %s", topic, payload)
+            _LOGGER.info("%s - %s", redact_topic(topic), redact_identity(payload))
         except Exception:
             # Broad on purpose: the body spans transport -> engine -> HA coordinator and
             # may raise arbitrary types; we must never let one reach the awscrt thread.
-            _LOGGER.warning("MQTT: handler failed on %s", topic, exc_info=True)
+            _LOGGER.warning("MQTT: handler failed on %s", redact_topic(topic), exc_info=True)
             return
 
     # -- connection / subscribe / watchdog -------------------------------------
@@ -307,7 +317,7 @@ class NativeMqttClient:
                 mqtt5.SubscribePacket([mqtt5.Subscription(topic)])
             )
             await asyncio.wait_for(asyncio.wrap_future(future), _SUBSCRIBE_TIMEOUT)
-            _LOGGER.info("Subscribed to topic %s", topic)
+            _LOGGER.info("Subscribed to topic %s", redact_topic(topic))
 
     async def _start_watchdog(self) -> None:
         if not self._watchdog_task or self._watchdog_task.done():

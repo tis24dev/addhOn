@@ -61,6 +61,8 @@ class RedactEmailTest(unittest.TestCase):
 
 redact_identity = debug_utils.redact_identity
 redact_mac = debug_utils.redact_mac
+redact_id = debug_utils.redact_id
+redact_topic = debug_utils.redact_topic
 
 
 class RedactIdentityTest(unittest.TestCase):
@@ -115,6 +117,76 @@ class RedactMacTest(unittest.TestCase):
 
     def test_exported_in_all(self) -> None:
         self.assertIn("redact_mac", debug_utils.__all__)
+
+
+class RedactIdTest(unittest.TestCase):
+    def test_bare_id_is_fully_masked(self) -> None:
+        self.assertEqual(redact_id("AA:BB:CC:DD:EE:FF"), "***")
+        self.assertEqual(redact_id("SERIAL123"), "***")
+
+    def test_falsy_passthrough(self) -> None:
+        # Falsy returned unchanged so an `or <fallback>` at the call site still works.
+        self.assertIsNone(redact_id(None))
+        self.assertEqual(redact_id(""), "")
+
+    def test_raw_id_never_leaks(self) -> None:
+        out = redact_id("AA:BB:CC:DD:EE:FF")
+        self.assertNotIn("AA", out)
+        self.assertNotIn(":", out)
+
+    def test_unique_id_keeps_suffix_masks_prefix(self) -> None:
+        # f"{appliance_id}_{suffix}" -> the MAC prefix is masked, the suffix kept.
+        self.assertEqual(redact_id("AA:BB:CC_program", "AA:BB:CC"), "***_program")
+        self.assertEqual(
+            redact_id("SERIAL123_target_temp_zone3", "SERIAL123"),
+            "***_target_temp_zone3",
+        )
+
+    def test_prefix_absent_falls_back_to_full_mask(self) -> None:
+        # parent_id not a prefix (defensive) -> mask the whole thing, never leak.
+        self.assertEqual(redact_id("HonNumberXYZ", "AA:BB:CC"), "***")
+
+    def test_no_parent_id_full_mask(self) -> None:
+        self.assertEqual(redact_id("AA:BB:CC_program"), "***")
+
+    def test_non_string_value_coerced(self) -> None:
+        self.assertEqual(redact_id(12345), "***")
+
+    def test_exported_in_all(self) -> None:
+        self.assertIn("redact_id", debug_utils.__all__)
+
+
+class RedactTopicTest(unittest.TestCase):
+    def test_masks_dash_mac_in_topic(self) -> None:
+        self.assertEqual(
+            redact_topic("haier/things/3c-71-bf-bd-32-2c/event/appliancestatus/update"),
+            "haier/things/***/event/appliancestatus/update",
+        )
+
+    def test_masks_colon_mac_in_topic(self) -> None:
+        self.assertEqual(
+            redact_topic("haier/things/AA:BB:CC:DD:EE:FF/event/connected"),
+            "haier/things/***/event/connected",
+        )
+
+    def test_keeps_event_path(self) -> None:
+        out = redact_topic("x/3c-71-bf-bd-32-2c/event/disconnected")
+        self.assertIn("event/disconnected", out)
+        self.assertNotIn("3c-71-bf-bd-32-2c", out)
+
+    def test_no_mac_unchanged(self) -> None:
+        self.assertEqual(redact_topic("haier/things/foo/event"), "haier/things/foo/event")
+
+    def test_raw_mac_never_leaks(self) -> None:
+        mac = "3c-71-bf-bd-32-2c"
+        self.assertNotIn(mac, redact_topic(f"haier/things/{mac}/event/x"))
+
+    def test_falsy_passthrough(self) -> None:
+        self.assertIsNone(redact_topic(None))
+        self.assertEqual(redact_topic(""), "")
+
+    def test_exported_in_all(self) -> None:
+        self.assertIn("redact_topic", debug_utils.__all__)
 
 
 class IdentityKeysPinTest(unittest.TestCase):

@@ -1,7 +1,13 @@
 """Shared debug logging helpers for Haier hOn."""
 from __future__ import annotations
 
+import re
+
 DEBUG_KEY_SAMPLE_LIMIT = 80
+
+# A MAC address in either ':' or '-' form (the hOn MQTT topic embeds the appliance
+# MAC, e.g. 'haier/things/3c-71-bf-bd-32-2c/event/appliancestatus/update').
+_MAC_RE = re.compile(r"[0-9a-fA-F]{2}(?:[:-][0-9a-fA-F]{2}){5}")
 
 
 def debug_key_sample(values: dict) -> list[str]:
@@ -110,12 +116,46 @@ def redact_mac(mac: str | None) -> str | None:
     return _REDACTED
 
 
+def redact_id(value, parent_id=None):
+    """Redact a device identifier (MAC / serial / code / nickname) or an entity
+    unique_id for logs.
+
+    A bare identifier is masked entirely -> '***'. When `parent_id` is given and is a
+    prefix of `value` (an entity unique_id is `f"{appliance_id}_{suffix}"`), ONLY the
+    identifier prefix is masked and the human-useful suffix is kept, e.g.
+    'AA:BB:..._program' -> '***_program', so the logs still say WHICH entity without
+    exposing the MAC. A falsy value is returned unchanged (so an `or <fallback>` at the
+    call site still works)."""
+    if not value:
+        return value
+    text = value if isinstance(value, str) else str(value)
+    if parent_id:
+        prefix = parent_id if isinstance(parent_id, str) else str(parent_id)
+        if prefix and text.startswith(prefix):
+            return _REDACTED + text[len(prefix):]
+    return _REDACTED
+
+
+def redact_topic(topic):
+    """Mask any MAC embedded in an MQTT topic, keeping the rest of the path.
+
+    'haier/things/3c-71-bf-bd-32-2c/event/appliancestatus/update' ->
+    'haier/things/***/event/appliancestatus/update'. The MAC is hard device identity;
+    the event path is the useful diagnostic part and is preserved. A falsy topic is
+    returned unchanged."""
+    if not topic:
+        return topic
+    return _MAC_RE.sub(_REDACTED, topic if isinstance(topic, str) else str(topic))
+
+
 __all__ = [
     "DEBUG_KEY_SAMPLE_LIMIT",
     "command_names",
     "debug_key_sample",
     "param_snapshot",
     "redact_email",
+    "redact_id",
     "redact_identity",
     "redact_mac",
+    "redact_topic",
 ]
