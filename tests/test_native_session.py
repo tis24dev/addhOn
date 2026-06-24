@@ -290,11 +290,14 @@ class NativeSessionSetupTest(unittest.TestCase):
         self.assertEqual([a.mac_address for a in nh.appliances], ["AA:BB:CC:DD:EE:FF"])
 
     def test_malformed_log_does_not_leak_nested_identity(self) -> None:
-        # CR#2 / Refuter-2: redact_identity masks by TOP-LEVEL key name only, so a
-        # serial/MAC hidden in a nested attributes[].parValue (the real hOn shape) or
-        # under a benign key would survive it. The malformed-appliance log therefore
-        # logs STRUCTURE only (field names + error type), never values -- so nested
-        # identity cannot leak even though redact_identity would have passed it.
+        # CR#2 / Refuter-2: redact_identity is recursive and masks two ways -- a VALUE
+        # whose KEY name is identity-shaped (at any depth), AND any MAC embedded in a
+        # string leaf (regex, even under a benign key). The residual gap is a NON-MAC
+        # identity (e.g. a serial) carried as a VALUE under a non-identity key: a nested
+        # attributes[].parValue (the real hOn shape) or a benign top-level key like
+        # modelName -- no identity key name, no MAC pattern -> it survives redaction.
+        # The malformed-appliance log therefore logs STRUCTURE only (field names + error
+        # type), never values, so even that residual cannot leak.
         # zone is valid (numeric) so the LOAD path runs (fail_macs -> KeyError),
         # carrying the raw appliance_data (with nested + benign-key identity) into
         # _log_malformed -- the exact pre-existing path Refuter-2 flagged.
