@@ -358,6 +358,190 @@ class ConnectionTest(unittest.TestCase):
             asyncio.run(run())
 
 
+class RetryRefreshSingleFlightTest(unittest.TestCase):
+    """CR#3: the 401/403 RETRY refresh (loop=0 in _intercept) must be single-flighted
+    under the same _refresh_lock as the pre-request path, must copy the rotated
+    refresh_token back, and must release the lock BEFORE the recursive _intercept
+    (asyncio.Lock is not reentrant -> would deadlock)."""
+
+    def test_concurrent_401s_single_retry_refresh(self) -> None:
+        # A burst of concurrent requests (the asyncio.gather in load_commands) that all
+        # 401 must collapse to ONE refresh on the shared rotating token -- not N. The
+        # refresh yields so the siblings interleave and block on the lock.
+        class SlowFakeAuth(FakeAuth):
+            async def refresh(self, rt: str = "") -> bool:
+                self.refresh_calls += 1
+                await asyncio.sleep(0)  # yield: siblings reach the lock before gen bumps
+                self.cognito_token, self.id_token, self.refresh_token = "C2", "I2", "RT2"
+                self.token_expires_soon = False
+                return True
+
+        auth = SlowFakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"  # authenticated, NOT expiring
+        conn = _conn(auth, FakeSession([401, 401, 401, 200, 200, 200]))
+        conn._refresh_token = "RT"
+
+        async def one():
+            async with conn.get("https://x/api") as resp:
+                return resp.status
+
+        async def run():
+            return await asyncio.gather(one(), one(), one())
+
+        results = asyncio.run(run())
+        self.assertEqual(results, [200, 200, 200])
+        self.assertEqual(auth.refresh_calls, 1)        # single-flight (was N)
+        self.assertEqual(auth.authenticate_calls, 0)
+        self.assertEqual(conn._refresh_token, "RT2")   # rotated token copied back
+
+    def test_gen_snapshot_taken_before_send_skips_inflight_sibling_refresh(self) -> None:
+        # Pins the snapshot PLACEMENT: refresh_gen is captured BEFORE the request is
+        # sent, so a request whose token was minted at gen G and is rejected while a
+        # sibling refreshed WHILE IT WAS IN FLIGHT (gen -> G+1) correctly SKIPS its own
+        # refresh. If the snapshot were taken AFTER the send, the in-flight request would
+        # read the advanced gen and refresh redundantly (the herd survives). Coordinated
+        # with events for determinism (no reliance on sleep ordering).
+        b_sent = asyncio.Event()       # set when request B has sent (snapshotted gen=0)
+        a_refreshed = asyncio.Event()  # set when request A has finished refreshing
+
+        class GateAuth(FakeAuth):
+            async def refresh(self, rt: str = "") -> bool:
+                self.refresh_calls += 1
+                await b_sent.wait()  # hold the refresh until B has sent (and snapshotted)
+                self.cognito_token, self.id_token, self.refresh_token = "C2", "I2", "RT2"
+                self.token_expires_soon = False
+                a_refreshed.set()
+                return True
+
+        class GatedResp:
+            def __init__(self, status, on_enter=None, wait_for=None):
+                self.status = status
+                self._on_enter = on_enter
+                self._wait_for = wait_for
+
+            async def json(self, content_type=None):
+                return {"ok": True}
+
+            async def __aenter__(self):
+                if self._on_enter is not None:
+                    self._on_enter.set()
+                if self._wait_for is not None:
+                    await self._wait_for.wait()  # stay IN FLIGHT until the sibling refreshed
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        class GatedSession:
+            def __init__(self):
+                self.calls: list = []
+                self._n = 0
+
+            def _resp(self, url, **kw):
+                self.calls.append(kw.get("headers", {}))
+                self._n += 1
+                if self._n == 1:
+                    return GatedResp(401)                                  # A: 401 now
+                if self._n == 2:
+                    return GatedResp(401, on_enter=b_sent, wait_for=a_refreshed)  # B: 401, in-flight
+                return GatedResp(200)                                      # retries: 200
+
+            def get(self, url, **kw):
+                return self._resp(url, **kw)
+
+            def post(self, url, **kw):
+                return self._resp(url, **kw)
+
+        auth = GateAuth()
+        auth.cognito_token, auth.id_token = "C", "I"  # authenticated, not expiring
+        conn = _conn(auth, GatedSession())
+        conn._refresh_token = "RT"
+
+        async def one():
+            async with conn.get("https://x/api") as resp:
+                return resp.status
+
+        async def run():
+            return await asyncio.gather(one(), one())
+
+        results = asyncio.run(asyncio.wait_for(run(), timeout=2.0))
+        self.assertEqual(results, [200, 200])
+        # B's token was minted at gen 0; A bumped to gen 1 while B was in flight, so B
+        # must SKIP -> exactly one refresh. (Snapshot-after-send would make this 2.)
+        self.assertEqual(auth.refresh_calls, 1)
+
+    def test_rotation_after_401_retry_propagates_to_connection(self) -> None:
+        # Sub-claim (b): the retry refresh rotates the refresh_token; it MUST be copied
+        # back to the connection (the loop=0 path used to skip this, leaving it stale).
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"  # authenticated, not expiring
+        conn = _conn(auth, FakeSession([401, 200]))
+        conn._refresh_token = "RT"
+
+        async def run():
+            async with conn.post("https://x/api") as resp:
+                return resp.status
+
+        status = asyncio.run(run())
+        self.assertEqual(status, 200)
+        self.assertEqual(auth.refresh_calls, 1)
+        self.assertEqual(conn._refresh_token, "RT2")  # FakeAuth.refresh rotates to RT2
+
+    def test_single_401_retry_completes_no_deadlock(self) -> None:
+        # The retry lock must be released BEFORE the recursive _intercept (loop=1),
+        # which re-acquires it via _check_headers. With token_expires_soon left STICKY
+        # by refresh, the loop=1 _check_headers genuinely re-takes the lock -> if the
+        # retry held it across the recursion this would deadlock (caught by wait_for).
+        class StickyExpiryAuth(FakeAuth):
+            async def refresh(self, rt: str = "") -> bool:
+                self.refresh_calls += 1
+                self.cognito_token, self.id_token, self.refresh_token = "C2", "I2", "RT2"
+                self.token_expires_soon = True  # sticky -> loop=1 _check_headers re-locks
+                return True
+
+        auth = StickyExpiryAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        auth.token_expires_soon = False
+        conn = _conn(auth, FakeSession([401, 200, 200]))
+        conn._refresh_token = "RT"
+
+        async def run():
+            async with conn.get("https://x/api") as resp:
+                return resp.status
+
+        # wait_for turns a deadlock into a TimeoutError instead of hanging the suite.
+        status = asyncio.run(asyncio.wait_for(run(), timeout=2.0))
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(auth.refresh_calls, 2)  # loop0 retry + loop1 pre-request
+
+    def test_double_check_skips_when_gen_advanced(self) -> None:
+        # Directly: if a sibling already refreshed since this request was sent (the
+        # generation advanced), _refresh_after_rejection must NOT refresh again.
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        conn = _conn(auth, FakeSession([]))
+        conn._refresh_token = "RT"
+        conn._refresh_gen = 5
+
+        asyncio.run(conn._refresh_after_rejection(3))  # snapshot (3) != current (5)
+        self.assertEqual(auth.refresh_calls, 0)
+        self.assertEqual(conn._refresh_token, "RT")    # untouched
+
+    def test_double_check_refreshes_when_gen_matches(self) -> None:
+        # If nobody refreshed since this request was sent, the retry refreshes once,
+        # copies the rotated token back, and bumps the generation.
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        conn = _conn(auth, FakeSession([]))
+        conn._refresh_token = "RT"
+        conn._refresh_gen = 5
+
+        asyncio.run(conn._refresh_after_rejection(5))  # snapshot matches current
+        self.assertEqual(auth.refresh_calls, 1)
+        self.assertEqual(conn._refresh_token, "RT2")   # rotated + copied back
+        self.assertEqual(conn._refresh_gen, 6)         # generation bumped
+
+
 class ConnectionCreateCleanupTest(unittest.TestCase):
     """#31: a failed create() must not leak the aiohttp.ClientSession it created,
     and must never close a caller-supplied session (which the caller owns)."""
