@@ -26,7 +26,6 @@ from . import factory
 from .transport.api import HonApi
 from .transport.auth import NativeAuthError
 from .transport.connection import HonConnection
-from ..debug_utils import redact_identity
 from ..error_codes import APPLIANCE_DATA_MALFORMED
 
 _LOGGER = logging.getLogger(__name__)
@@ -119,9 +118,67 @@ class NativeHon:
             raise
         return self
 
+    # Exception families raised while building/loading ONE appliance from cloud
+    # data: the original (KeyError, ValueError, IndexError) plus TypeError and
+    # AttributeError -- a non-dict element's .get(), a malformed info["attributes"]
+    # comprehension in the constructor ({v["parName"]: v["parValue"] ...}), or
+    # load_attributes() popping a non-dict "shadow"/"parameters". Deliberately NOT
+    # Exception/BaseException: a genuine transport/auth error must still bubble to the
+    # setup classifier, and asyncio.CancelledError (a BaseException) must propagate so
+    # a cancelled setup is never mistaken for malformed data and swallowed.
+    _APPLIANCE_BUILD_ERRORS = (KeyError, ValueError, IndexError, TypeError, AttributeError)
+
+    def _log_malformed(self, error: BaseException, appliance_data: Any) -> None:
+        # A malformed appliance must not break the others (CR#2): it is logged and
+        # skipped (no usable object) or kept-partial (load failure). This ERROR is
+        # NEVER gated by the debug toggles -> it lands in home-assistant.log (the file
+        # users attach to issues), so it must be LEAK-PROOF BY CONSTRUCTION. Malformed
+        # cloud data hides identity where key-name redaction cannot reach it -- a
+        # serial as an attributes[].parValue (the real hOn shape), a MAC as a nested
+        # key, or an identity as the value of a benign key (e.g. zone) -- and the
+        # exception message itself echoes the offending raw value (int("AA:BB:..")
+        # -> "invalid literal for int(): 'AA:BB:..'"). So we log ONLY non-identity
+        # STRUCTURE: the exception TYPE name and the top-level field NAMES present
+        # (cloud schema names, not values) -- never a value, the raw dict, or the
+        # exception message/traceback. The full redacted dict (for the maintainer) is
+        # available via Download Diagnostics, which redacts at a different layer.
+        if isinstance(appliance_data, dict):
+            _LOGGER.error(
+                "[%s] Malformed appliance skipped (%s): fields=%s",
+                APPLIANCE_DATA_MALFORMED.label,
+                type(error).__name__,
+                # str() the keys BEFORE sorting: this logger runs inside the except
+                # handlers, so it must NEVER raise (a raise would escape and abort the
+                # whole setup loop -- the exact failure CR#2 fixes). sorted() on
+                # mixed-type keys raises TypeError; cloud JSON keys are always str so
+                # this is belt-and-suspenders, but the boundary must hold by construction.
+                sorted(map(str, appliance_data.keys())),
+            )
+        else:
+            _LOGGER.error(
+                "[%s] Malformed appliance skipped (%s): non-dict element type=%s",
+                APPLIANCE_DATA_MALFORMED.label,
+                type(error).__name__,
+                type(appliance_data).__name__,
+            )
+
     async def _create_appliance(self, appliance_data: dict, zone: int = 0) -> None:
-        appliance = factory.create_appliance(self._api, appliance_data, zone=zone)
-        if appliance.mac_address == "":
+        # Per-appliance fault boundary (CR#2 -- distinct from the steady-state
+        # coordinator/polling resilience): a single malformed device must be
+        # logged-and-skipped so the OTHER appliances still load and setup completes.
+        #
+        # CONSTRUCTION failures leave no usable object -> SKIP (do not append).
+        # factory.create_appliance runs HonAppliance.__init__, which flattens
+        # info["attributes"] and raises TypeError/KeyError on a bad shape; this ran
+        # BEFORE the per-device try in the old code, so it aborted setup of ALL
+        # appliances. mac_address is read here too (a property over the parsed info).
+        try:
+            appliance = factory.create_appliance(self._api, appliance_data, zone=zone)
+            mac_empty = appliance.mac_address == ""
+        except self._APPLIANCE_BUILD_ERRORS as error:
+            self._log_malformed(error, appliance_data)
+            return
+        if mac_empty:
             return
         if self._minimal:
             # Validation only: the appliance is built (so .appliances is populated and
@@ -133,20 +190,13 @@ class NativeHon:
             await appliance.load_commands()
             await appliance.load_attributes()
             await appliance.load_statistics()
-        except (KeyError, ValueError, IndexError) as error:
-            # An appliance with malformed data must not break the others; it is
-            # kept anyway (partial state) and logged. appliance_data is the RAW
-            # device dict (macAddress/serialNumber in cleartext) and this ERROR is
-            # never gated by the debug toggles -> it lands in home-assistant.log,
-            # the file users attach to issues. Redact identity before logging (the
-            # traceback carries no credentials, so _LOGGER.exception stays). The
-            # full (redacted) dict is available via Download Diagnostics.
-            _LOGGER.exception(error)
-            _LOGGER.error(
-                "[%s] Device data - %s",
-                APPLIANCE_DATA_MALFORMED.label,
-                redact_identity(appliance_data),
-            )
+        except self._APPLIANCE_BUILD_ERRORS as error:
+            # LOAD failure: the appliance object EXISTS but its data is partial. Keep
+            # it appended (partial state -- the shipped behavior) and log. Broadened
+            # from (KeyError, ValueError, IndexError) to also catch AttributeError
+            # (load_attributes pops a non-dict "shadow" then .get on it) and TypeError,
+            # which previously escaped this catch and aborted the whole loop.
+            self._log_malformed(error, appliance_data)
         self._appliances.append(appliance)
 
     async def setup(self) -> None:
@@ -154,7 +204,27 @@ class NativeHon:
         appliances = await self.api.load_appliances()
         self._setup_phase = "load_appliance"
         for appliance in appliances:
-            if (zones := int(appliance.get("zone", "0"))) > 1:
+            # Guard a non-dict element BEFORE appliance.get(...)/appliance.copy() can
+            # raise AttributeError: parse_appliance_list returns the cloud list
+            # verbatim with no per-element dict guarantee, so a schema-drift entry must
+            # be logged-and-skipped, not abort the whole loop (CR#2).
+            if not isinstance(appliance, dict):
+                self._log_malformed(
+                    TypeError(
+                        f"appliance entry is {type(appliance).__name__}, expected dict"
+                    ),
+                    appliance,
+                )
+                continue
+            # Zone parse is INSIDE the per-appliance boundary: a non-numeric "zone"
+            # raises ValueError (or TypeError on a non-str/int), which must skip only
+            # this device, not the rest.
+            try:
+                zones = int(appliance.get("zone", "0"))
+            except (TypeError, ValueError) as error:
+                self._log_malformed(error, appliance)
+                continue
+            if zones > 1:
                 for zone in range(zones):
                     await self._create_appliance(appliance.copy(), zone=zone + 1)
             await self._create_appliance(appliance)

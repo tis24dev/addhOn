@@ -48,6 +48,11 @@ _FILES = {
     "binary_sensor.py": (_ENTITY_NAMES, _ENTITY_ATTRS),
     "climate.py": (_ENTITY_NAMES, _ENTITY_ATTRS),
     "diagnostics.py": (frozenset({"appliance_id"}), frozenset()),
+    # Setup orchestration: the raw cloud appliance dict (CR#2 malformed-appliance
+    # log). It must never be passed bare to _LOGGER -- key-name redaction cannot mask
+    # nested identity (attributes[].parValue), so the malformed path logs structure
+    # only (field names + error type). This guards against a future bare-dict log.
+    "client/session.py": (frozenset({"appliance", "appliance_data"}), frozenset()),
     # MQTT handler: the whole parsed payload dict, the topic (embeds the MAC) and
     # the appliance nick_name.
     "client/transport/mqtt.py": (
