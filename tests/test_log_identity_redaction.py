@@ -56,7 +56,7 @@ _FILES = {
     # MQTT handler: the whole parsed payload dict, the topic (embeds the MAC) and
     # the appliance nick_name.
     "client/transport/mqtt.py": (
-        frozenset({"payload", "topic"}),
+        frozenset({"payload", "topic", "parameter"}),
         frozenset({"nick_name"}),
     ),
 }

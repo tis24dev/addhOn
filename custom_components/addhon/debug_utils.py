@@ -90,9 +90,13 @@ def redact_identity(obj):
     """Deep-copy a mapping/list masking identity/credential VALUES to '***'.
 
     Redaction is keyed on the dict KEY name (exact, case-insensitive) against
-    _IDENTITY_KEYS; everything else passes through. Non-container leaves are
-    returned unchanged. Pure (no HA import) and non-mutating (returns a copy), so
-    transport modules can redact a raw appliance/command dict before logging it.
+    _IDENTITY_KEYS. As a second layer, any MAC embedded in a STRING LEAF is masked
+    too (same _MAC_RE as redact_topic) -- so identity that arrives where key-name
+    redaction can't reach it (a bare list element, or a value under a benign key, e.g.
+    a malformed MQTT `parameters` scalar -- CR#4) does not slip through. Non-MAC
+    scalars pass through (a serial has no safe pattern -> documented residual; the
+    callers that can receive a bare scalar log only its type). Pure (no HA import) and
+    non-mutating (returns a copy), so transport modules can redact a raw dict for logs.
     """
     if isinstance(obj, dict):
         return {
@@ -105,6 +109,8 @@ def redact_identity(obj):
         }
     if isinstance(obj, (list, tuple)):
         return [redact_identity(item) for item in obj]
+    if isinstance(obj, str):
+        return _MAC_RE.sub(_REDACTED, obj)
     return obj
 
 

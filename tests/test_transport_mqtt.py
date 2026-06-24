@@ -447,6 +447,28 @@ class PublishReceivedTest(unittest.TestCase):
         with self.assertNoLogs(self._LOGGER_NAME, level="WARNING"):
             m._on_publish_received(_packet(topic, {"parameters": [None, "x"]}))
 
+    def test_non_dict_parameter_does_not_leak_mac_value(self) -> None:
+        # CR#4: a bare MAC-shaped element must NOT reach the log. The skip line logs
+        # only the element TYPE, and the INFO summary masks the MAC leaf inside the
+        # parameters list via redact_identity (key-based redaction can't reach a bare
+        # list scalar, so redact_identity now masks MAC-shaped string leaves too).
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        app = FakeAppliance(topic)
+        m, hon = self._client(app)
+        mac = "AA:BB:CC:DD:EE:FF"
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as cm:
+            m._on_publish_received(_packet(topic, {"parameters": [
+                mac,
+                {"parName": "temp", "parValue": "5"},
+            ]}))
+        blob = "\n".join(cm.output)
+        self.assertNotIn(mac, blob)      # raw MAC never logged (skip line + INFO summary)
+        self.assertIn("type=str", blob)  # skip line logs the element TYPE, not the value
+        # behaviour unchanged: the valid param in the same batch is still applied
+        self.assertEqual(app.attributes["parameters"]["temp"].updated,
+                         {"parName": "temp", "parValue": "5"})
+        self.assertEqual(hon.notified, 1)
+
     def test_appliance_topics_null_does_not_block_others(self) -> None:
         # An appliance whose info["topics"] is null must not break the topic lookup
         # for the OTHER appliances.

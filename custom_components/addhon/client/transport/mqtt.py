@@ -290,7 +290,15 @@ class NativeMqttClient:
                     # valid parameters in the same batch are still applied (and notify
                     # still fires), instead of dropping the entire message.
                     if not isinstance(parameter, dict):
-                        _LOGGER.debug("MQTT: skipping non-dict parameter element: %r", parameter)
+                        # Log only the TYPE, never the value (CR#4): a malformed element
+                        # is a raw cloud-controlled scalar; a bare MAC/serial would
+                        # bypass redaction (redact_identity is key-based, a pass-through
+                        # for a scalar). Mirrors the non-object-payload / not-a-list
+                        # branches above. The value is not diagnostically useful anyway.
+                        _LOGGER.debug(
+                            "MQTT: skipping non-dict parameter element: type=%s",
+                            type(parameter).__name__,
+                        )
                         continue
                     name = parameter.get("parName")
                     # Only already-known parameters (seeded by load_attributes). A new

@@ -86,6 +86,45 @@ class RedactIdentityTest(unittest.TestCase):
             {"outer": {"transactionId": "***"}, "items": [{"mobileId": "***"}]},
         )
 
+    def test_masks_mac_shaped_string_leaf(self) -> None:
+        # CR#4: identity that arrives where key-name redaction can't reach -- a bare
+        # list element or a value under a benign key -- is masked via the MAC pattern.
+        self.assertEqual(redact_identity("AA:BB:CC:DD:EE:FF"), "***")
+        self.assertEqual(
+            redact_identity({"parameters": ["AA:BB:CC:DD:EE:FF", "ok"]}),
+            {"parameters": ["***", "ok"]},
+        )
+        self.assertEqual(
+            redact_identity({"benign": "AA:BB:CC:DD:EE:FF"}), {"benign": "***"}
+        )
+
+    def test_mac_with_dash_separators_masked(self) -> None:
+        self.assertEqual(redact_identity("aa-bb-cc-dd-ee-ff"), "***")
+
+    def test_non_mac_string_leaf_passes_through(self) -> None:
+        # no over-redaction of legitimate non-MAC values
+        self.assertEqual(redact_identity("iot_auto"), "iot_auto")
+        self.assertEqual(
+            redact_identity({"benign": "HDPW5620CNPK"}), {"benign": "HDPW5620CNPK"}
+        )
+
+    def test_embedded_mac_in_string_leaf_masked(self) -> None:
+        # a MAC embedded mid-string (not an exact match) is still masked
+        self.assertEqual(
+            redact_identity("device AA:BB:CC:DD:EE:FF online"), "device *** online"
+        )
+
+    def test_serial_leaf_passes_through_documented_residual(self) -> None:
+        # DOCUMENTED RESIDUAL: a serial/mobile-id has no safe pattern, so a BARE serial
+        # scalar (e.g. a malformed parameters element, or a value under a benign key) is
+        # NOT masked by redact_identity -- only the MAC class is. A serial under a real
+        # `serialNumber` KEY is still masked (key-based). This pins the deliberate CR#2
+        # residual: if a future change starts masking bare serials, update this test.
+        self.assertEqual(redact_identity("SN0123456789ABC"), "SN0123456789ABC")
+        self.assertEqual(redact_identity(["SN0123456789ABC"]), ["SN0123456789ABC"])
+        self.assertEqual(redact_identity({"serialNumber": "SN0123456789ABC"}),
+                         {"serialNumber": "***"})  # key-based still masks it
+
     def test_does_not_mutate_input(self) -> None:
         src = {"mac": "secret", "nested": {"token": "t"}}
         redact_identity(src)
