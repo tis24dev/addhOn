@@ -50,6 +50,7 @@ def _install_stubs() -> None:
 _install_stubs()
 
 from custom_components.addhon.hon_client import HonClient  # noqa: E402
+from custom_components.addhon.error_codes import HonCodedError  # noqa: E402
 
 
 class FakeSession:
@@ -272,8 +273,9 @@ class DiscoveryLogRedactionTest(unittest.TestCase):
         self.assertEqual(data[mac]["name"], nick)
 
     def test_update_error_warning_redacts_nick_name(self) -> None:
-        # The per-appliance error path logs a WARNING with the nick_name and re-raises
-        # a RuntimeError carrying it (first poll). Neither must leak the nick.
+        # The per-appliance error path logs a WARNING with the nick_name and (first
+        # poll) re-raises a coded error (CR#6: HonCodedError preserving the cause).
+        # Neither the WARNING nor the raised error must leak the nick.
         nick = "NickSecret42"
         app = types.SimpleNamespace(
             mac_address="AA:BB:CC:DD:EE:FF",
@@ -297,12 +299,12 @@ class DiscoveryLogRedactionTest(unittest.TestCase):
 
         logger = "custom_components.addhon.hon_client"
         with self.assertLogs(logger, level="WARNING") as cm:
-            with self.assertRaises(RuntimeError) as ctx:
+            with self.assertRaises(HonCodedError) as ctx:
                 asyncio.run(c.async_get_appliances_data())
         blob = "\n".join(cm.output)
         self.assertTrue(any("Error updating" in line for line in cm.output))
         self.assertNotIn(nick, blob)  # WARNING must not leak the nick
-        self.assertNotIn(nick, str(ctx.exception))  # nor the re-raised RuntimeError
+        self.assertNotIn(nick, str(ctx.exception))  # nor the raised coded error
 
     def test_steady_state_partial_failure_warning_redacts_nick(self) -> None:
         # Steady state (resilient): one appliance fails, the other succeeds. The
@@ -338,6 +340,41 @@ class DiscoveryLogRedactionTest(unittest.TestCase):
         self.assertTrue(any("Partial update" in line for line in cm.output))
         self.assertNotIn(nick_bad, blob)  # neither the per-appliance nor the joined list
         self.assertIn(app_ok.unique_id, data)  # the healthy appliance survives
+
+    def test_steady_state_total_failure_warning_redacts_nick(self) -> None:
+        # Steady state, EVERY appliance fails (CR#6): the all-failed summary WARNING
+        # joins the failed names (must redact) and the raised coded error carries no
+        # identity in its message.
+        nick1, nick2 = "SecretNickA1", "SecretNickB2"
+        app1 = types.SimpleNamespace(
+            mac_address="AA:BB:CC:DD:EE:11", unique_id="AA:BB:CC:DD:EE:11",
+            appliance_type="REF", nick_name=nick1,
+            attributes={}, settings={}, statistics={},
+        )
+        app2 = types.SimpleNamespace(
+            mac_address="AA:BB:CC:DD:EE:12", unique_id="AA:BB:CC:DD:EE:12",
+            appliance_type="REF", nick_name=nick2,
+            attributes={}, settings={}, statistics={},
+        )
+        c = HonClient(email="e@x", password="p")
+        c._first_poll_done = True  # steady state -> all fail -> all-failed branch
+
+        async def fake_get_appliances():
+            return [app1, app2]
+
+        c.async_get_appliances = fake_get_appliances  # type: ignore[assignment]
+        c._update_appliance_sync = lambda a: (_ for _ in ()).throw(ValueError("update boom"))
+
+        logger = "custom_components.addhon.hon_client"
+        with self.assertLogs(logger, level="WARNING") as cm:
+            with self.assertRaises(HonCodedError) as ctx:
+                asyncio.run(c.async_get_appliances_data())
+        blob = "\n".join(cm.output)
+        self.assertTrue(any("Update failed for all" in line for line in cm.output))
+        self.assertNotIn(nick1, blob)  # summary WARNING must redact the joined names
+        self.assertNotIn(nick2, blob)
+        self.assertNotIn(nick1, str(ctx.exception))  # nor the raised coded error
+        self.assertNotIn(nick2, str(ctx.exception))
 
 
 class RealtimeWiringSourceGuard(unittest.TestCase):

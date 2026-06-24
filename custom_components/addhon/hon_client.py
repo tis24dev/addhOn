@@ -8,7 +8,14 @@ import threading
 from typing import Any
 
 from .debug_utils import debug_key_sample, redact_email, redact_id, redact_mac
-from .error_codes import HonCodedError, classify, phase_timeout_code
+from .error_codes import (
+    APPLIANCE_LOAD_FAILED,
+    UNKNOWN,
+    HonCodedError,
+    HonErrorCode,
+    classify,
+    phase_timeout_code,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -241,6 +248,37 @@ def _requires_reauth(err: BaseException) -> bool:
     return (
         _is_auth_error(err) or _is_missing_session_error(err)
     ) and not _is_retryable_server_error(err)
+
+
+def _representative_failure(
+    failures: list[tuple[str, Exception]]
+) -> tuple[HonErrorCode, Exception | None]:
+    """Pick a representative (code, error) from per-appliance update failures (CR#6).
+
+    The all-failed (and first-poll) paths used to raise a bare RuntimeError, which
+    classify() maps to UNKNOWN (ADDHON-999) -- losing the real cause from the logs,
+    the UpdateFailed message and Download Diagnostics. This surfaces a MEANINGFUL,
+    NON-AUTH code instead: deterministically, the FIRST failure (in poll order) whose
+    classify() is neither UNKNOWN nor a reauth code; if none qualifies, fall back to
+    APPLIANCE_LOAD_FAILED (ADDHON-220) paired with the first error.
+
+    Rejecting reauth codes is what keeps routing correct. Every error here already
+    passed the non-auth gate (_requires_reauth was False at the call site), but
+    classify() is substring-based and could still name an auth code (e.g. a message
+    that merely contains "login")  -- surfacing it would flip the transient
+    UpdateFailed into a reauth (ConfigEntryAuthFailed). APPLIANCE_LOAD_FAILED is
+    requires_reauth=False, so the fallback stays non-auth too.
+    """
+    chosen: Exception | None = None  # the first failure, kept as the fallback cause
+    for _name, err in failures:
+        if chosen is None:
+            chosen = err
+        code = classify(err)
+        if code is not UNKNOWN and not code.requires_reauth:
+            return code, err
+    # No meaningful non-auth code found (or -- defensively -- an empty list, which the
+    # two gated call sites never pass): fall back to APPLIANCE_LOAD_FAILED, NEVER UNKNOWN.
+    return APPLIANCE_LOAD_FAILED, chosen
 
 
 class HonClient:
@@ -671,7 +709,7 @@ class HonClient:
 
         while True:
             data: dict[str, Any] = {}
-            failed_appliances: list[str] = []
+            failed_appliances: list[tuple[str, Exception]] = []
             retry_after_reauth = False
             try:
                 appliances = await self.async_get_appliances()
@@ -781,9 +819,17 @@ class HonClient:
                     # first refresh fails -> ConfigEntryNotReady -> HA retries setup until
                     # the full inventory loads. (Also surfaces genuine setup-time bugs.)
                     if not self._first_poll_done:
-                        raise RuntimeError(
-                            f"Error updating '{redact_id(_get_name(appliance))}': {err}"
-                        ) from err
+                        # Same code-preservation as the all-failed path (CR#6): a bare
+                        # RuntimeError would classify to UNKNOWN. Reuse the helper (with
+                        # a single failure) so the real non-auth cause is surfaced while
+                        # the STRICT first-poll semantics are unchanged (it still
+                        # re-raises -> UpdateFailed -> ConfigEntryNotReady -> HA retries).
+                        code, cause = _representative_failure(
+                            [(redact_id(_get_name(appliance)), err)]
+                        )
+                        raise HonCodedError(
+                            code, "Error updating an appliance on the first poll"
+                        ) from cause
                     # Steady state: per-appliance resilience. A non-auth failure on ONE
                     # appliance (a transient cloud 5xx that outlived the retries, a
                     # malformed payload, ...) must NOT blank EVERY device. Record it and
@@ -792,7 +838,7 @@ class HonClient:
                     # others stay live. A TOTAL failure (all errored -> empty data) is
                     # re-raised below so the coordinator marks the cycle failed instead of
                     # publishing an empty snapshot that silently blanks everything.
-                    failed_appliances.append(redact_id(_get_name(appliance)))
+                    failed_appliances.append((redact_id(_get_name(appliance)), err))
                     continue
 
             if retry_after_reauth:
@@ -801,11 +847,21 @@ class HonClient:
             if appliances and not data and failed_appliances:
                 # Every appliance failed this cycle: surface a failed update (the
                 # coordinator keeps its last good snapshot and retries) instead of
-                # returning an empty one that would blank all devices at once.
-                raise RuntimeError(
-                    "Update failed for all appliances: "
-                    + ", ".join(failed_appliances)
+                # returning an empty one that would blank all devices at once. Carry a
+                # representative NON-AUTH code so the ADDHON-NNN catalog reports the real
+                # cause instead of UNKNOWN (CR#6); the redacted names go to the WARNING,
+                # never into the HonCodedError message (its contract forbids identity).
+                code, cause = _representative_failure(failed_appliances)
+                _LOGGER.warning(
+                    "[%s] Update failed for all %d appliances: %s",
+                    code.label,
+                    len(failed_appliances),
+                    ", ".join(name for name, _err in failed_appliances),
                 )
+                raise HonCodedError(
+                    code,
+                    f"Update failed for all {len(failed_appliances)} appliance(s)",
+                ) from cause
 
             if failed_appliances:
                 _LOGGER.warning(
@@ -813,7 +869,7 @@ class HonClient:
                     "skipped (unavailable until next poll): %s",
                     len(data),
                     len(appliances),
-                    ", ".join(failed_appliances),
+                    ", ".join(name for name, _err in failed_appliances),
                 )
 
             _LOGGER.info("Loaded %d hOn devices with data", len(data))

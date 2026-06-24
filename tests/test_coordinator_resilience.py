@@ -51,7 +51,19 @@ def _install_stubs() -> None:
 
 _install_stubs()
 
-from custom_components.addhon.hon_client import HonClient  # noqa: E402
+from custom_components.addhon.hon_client import (  # noqa: E402
+    HonClient,
+    _representative_failure,
+    _requires_reauth,
+)
+from custom_components.addhon.error_codes import (  # noqa: E402
+    APPLIANCE_LOAD_FAILED,
+    AUTH_REFRESH,
+    DECODE_ERROR,
+    UNKNOWN,
+    HonCodedError,
+    classify,
+)
 
 
 class FakeApi:
@@ -88,8 +100,13 @@ class CoordinatorResilienceTest(unittest.TestCase):
                 raise RuntimeError("boom")  # non-auth, non-retryable
 
         c._update_appliance_sync = _update
-        with self.assertRaises(RuntimeError):
+        # CR#6: it now raises a coded error preserving the real cause (boom is opaque ->
+        # APPLIANCE_LOAD_FAILED) and stays NON-auth, so routing is UpdateFailed ->
+        # ConfigEntryNotReady (HA retries setup), not a reauth.
+        with self.assertRaises(HonCodedError) as ctx:
             asyncio.run(c.async_get_appliances_data())
+        self.assertIs(classify(ctx.exception), APPLIANCE_LOAD_FAILED)
+        self.assertFalse(ctx.exception.error_code.requires_reauth)
         self.assertFalse(c._first_poll_done)  # never completed -> still strict
 
     def test_first_poll_full_success_flips_flag(self) -> None:
@@ -120,9 +137,95 @@ class CoordinatorResilienceTest(unittest.TestCase):
         c = _client([bad1, bad2])
         c._first_poll_done = True
         c._update_appliance_sync = lambda appliance: (_ for _ in ()).throw(RuntimeError("boom"))
-        # Every appliance failed -> surface a failed update (do NOT publish empty data)
-        with self.assertRaises(RuntimeError):
+        # Every appliance failed -> surface a failed update (do NOT publish empty data).
+        # CR#6: a coded error carrying a meaningful NON-auth code (boom is opaque ->
+        # APPLIANCE_LOAD_FAILED), never the old UNKNOWN.
+        with self.assertRaises(HonCodedError) as ctx:
             asyncio.run(c.async_get_appliances_data())
+        self.assertIs(classify(ctx.exception), APPLIANCE_LOAD_FAILED)
+        self.assertIsNot(classify(ctx.exception), UNKNOWN)
+        self.assertFalse(ctx.exception.error_code.requires_reauth)
+
+    def test_total_failure_preserves_meaningful_code(self) -> None:
+        # CR#6: a real per-appliance cause must reach the catalog, not UNKNOWN.
+        bad1, bad2 = FakeAppliance("b1"), FakeAppliance("b2")
+        c = _client([bad1, bad2])
+        c._first_poll_done = True
+        c._update_appliance_sync = lambda appliance: (_ for _ in ()).throw(
+            RuntimeError("decode error")  # non-retryable -> classify DECODE_ERROR
+        )
+        with self.assertRaises(HonCodedError) as ctx:
+            asyncio.run(c.async_get_appliances_data())
+        self.assertIs(classify(ctx.exception), DECODE_ERROR)
+
+    def test_total_failure_carried_coded_error_surfaced(self) -> None:
+        bad1, bad2 = FakeAppliance("b1"), FakeAppliance("b2")
+        c = _client([bad1, bad2])
+        c._first_poll_done = True
+        c._update_appliance_sync = lambda appliance: (_ for _ in ()).throw(
+            HonCodedError(DECODE_ERROR)
+        )
+        with self.assertRaises(HonCodedError) as ctx:
+            asyncio.run(c.async_get_appliances_data())
+        self.assertIs(ctx.exception.error_code, DECODE_ERROR)
+
+    def test_total_failure_mixed_picks_first_meaningful(self) -> None:
+        # First failure opaque (UNKNOWN), second meaningful -> the meaningful one wins.
+        b1, b2 = FakeAppliance("b1"), FakeAppliance("b2")
+        c = _client([b1, b2])
+        c._first_poll_done = True
+
+        def _update(appliance):
+            if appliance is b1:
+                raise RuntimeError("boom")        # UNKNOWN -> skipped by the picker
+            raise RuntimeError("decode error")    # DECODE_ERROR -> chosen
+
+        c._update_appliance_sync = _update
+        with self.assertRaises(HonCodedError) as ctx:
+            asyncio.run(c.async_get_appliances_data())
+        self.assertIs(classify(ctx.exception), DECODE_ERROR)
+
+    def test_total_failure_all_unknown_falls_back_to_load_failed(self) -> None:
+        b1, b2 = FakeAppliance("b1"), FakeAppliance("b2")
+        c = _client([b1, b2])
+        c._first_poll_done = True
+        c._update_appliance_sync = lambda appliance: (_ for _ in ()).throw(RuntimeError("boom"))
+        with self.assertRaises(HonCodedError) as ctx:
+            asyncio.run(c.async_get_appliances_data())
+        self.assertIs(ctx.exception.error_code, APPLIANCE_LOAD_FAILED)
+
+    def test_total_failure_routing_stays_non_auth(self) -> None:
+        b1 = FakeAppliance("b1")
+        c = _client([b1])
+        c._first_poll_done = True
+        c._update_appliance_sync = lambda appliance: (_ for _ in ()).throw(RuntimeError("boom"))
+        with self.assertRaises(HonCodedError) as ctx:
+            asyncio.run(c.async_get_appliances_data())
+        # the consumer routes a non-reauth code as a transient UpdateFailed, not a reauth
+        self.assertFalse(_requires_reauth(ctx.exception))
+
+    def test_representative_failure_rejects_reauth_code(self) -> None:
+        # The picker must NOT surface a reauth code (it would flip the transient
+        # UpdateFailed into a ConfigEntryAuthFailed). classify() is substring-based and
+        # could name an auth code for an error the non-auth gate already let through, so
+        # a reauth-classified failure falls back to the non-auth APPLIANCE_LOAD_FAILED.
+        code, _cause = _representative_failure([("n", HonCodedError(AUTH_REFRESH))])
+        self.assertIs(code, APPLIANCE_LOAD_FAILED)
+        self.assertFalse(code.requires_reauth)
+
+    def test_first_poll_failure_preserves_meaningful_code(self) -> None:
+        good, bad = FakeAppliance("g1"), FakeAppliance("bad")
+        c = _client([good, bad])  # _first_poll_done False
+
+        def _update(appliance):
+            if appliance is bad:
+                raise RuntimeError("decode error")  # DECODE_ERROR, non-retryable
+
+        c._update_appliance_sync = _update
+        with self.assertRaises(HonCodedError) as ctx:
+            asyncio.run(c.async_get_appliances_data())
+        self.assertIs(classify(ctx.exception), DECODE_ERROR)
+        self.assertFalse(c._first_poll_done)
 
     def test_zero_appliances_returns_empty_without_raising(self) -> None:
         c = _client([])
