@@ -19,7 +19,7 @@ from .const import (
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_STORE,
 )
-from .debug_utils import command_names, param_snapshot, redact_id
+from .debug_utils import command_names, param_snapshot, redact_id, redact_store
 from .logging_utils import reset_integration_log_level, silence_mqtt_noise
 
 _LOGGER = logging.getLogger(__name__)
@@ -136,7 +136,7 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
             self._command_name,
             redact_id(self._appliance_id),
             pending_program,
-            dict(store),
+            redact_store(store),
             command_names(appliance),
         )
         try:
@@ -233,7 +233,7 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                 store.pop(self._appliance_id, None)
                 _LOGGER.debug(
                     "Button debug: pending program consumed and removed, store=%s",
-                    dict(store),
+                    redact_store(store),
                 )
             _LOGGER.info("Button: command '%s' sent", self._command_name)
             await self._async_request_command_refresh()

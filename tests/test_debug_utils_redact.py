@@ -209,5 +209,58 @@ class IdentityKeysPinTest(unittest.TestCase):
         self.assertEqual(set(debug_utils._IDENTITY_KEYS), set(self._EXPECTED))
 
 
+redact_store = debug_utils.redact_store
+
+
+class RedactStoreTest(unittest.TestCase):
+    """CR#1: a coordinator store dumped to a debug log must mask its KEYS (MAC-derived
+    appliance ids) while keeping the non-identity VALUES (program codes)."""
+
+    def test_masks_mac_keyed_keys(self) -> None:
+        out = redact_store({"AA:BB:CC:DD:EE:FF": "iot_auto"})
+        self.assertEqual(out, {"***": "iot_auto"})
+
+    def test_raw_mac_key_never_leaks(self) -> None:
+        out = redact_store({"AA:BB:CC:DD:EE:FF": "iot_auto"})
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", str(out))
+        self.assertNotIn("AA:BB", str(out))
+
+    def test_values_pass_through(self) -> None:
+        # program codes are the diagnostic signal and carry no identity
+        self.assertEqual(redact_store({"mac": "super_cool"}), {"***": "super_cool"})
+
+    def test_multiple_appliances_keep_all_values_no_collapse(self) -> None:
+        # distinct keys all mask to '***'; without disambiguation they would collapse
+        # to one entry and drop a value -> the ordinal preserves count + every value.
+        out = redact_store({"AA:BB:CC:DD:EE:01": "a", "AA:BB:CC:DD:EE:02": "b"})
+        self.assertEqual(set(out), {"***", "***#2"})
+        self.assertEqual(sorted(out.values()), ["a", "b"])
+
+    def test_three_way_collision_keeps_all(self) -> None:
+        # exercises the ordinal loop beyond the 2-way case
+        out = redact_store({"AA:11": "a", "BB:22": "b", "CC:33": "c"})
+        self.assertEqual(set(out), {"***", "***#2", "***#3"})
+        self.assertEqual(sorted(out.values()), ["a", "b", "c"])
+
+    def test_int_id_fallback_key_is_masked(self) -> None:
+        # _appliance_id can fall back to id(obj); even a non-string key must mask.
+        self.assertEqual(redact_store({140234567890: "iot_auto"}), {"***": "iot_auto"})
+
+    def test_empty_store(self) -> None:
+        self.assertEqual(redact_store({}), {})
+
+    def test_does_not_mutate_input(self) -> None:
+        src = {"AA:BB:CC:DD:EE:FF": "iot_auto"}
+        redact_store(src)
+        self.assertEqual(src, {"AA:BB:CC:DD:EE:FF": "iot_auto"})
+
+    def test_non_mapping_returned_unchanged(self) -> None:
+        self.assertEqual(redact_store("not-a-dict"), "not-a-dict")
+        self.assertIsNone(redact_store(None))
+
+    def test_exported_in_all(self) -> None:
+        self.assertIn("redact_store", debug_utils.__all__)
+
+
 if __name__ == "__main__":
     unittest.main()

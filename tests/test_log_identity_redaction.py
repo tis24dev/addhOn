@@ -85,6 +85,27 @@ def _bare_offender(arg: ast.AST, names: frozenset, attrs: frozenset) -> str | No
     return None
 
 
+def _dict_dump_offender(arg: ast.AST) -> str | None:
+    """Label the arg if it is `dict(<name>)` -- a raw mapping dumped to a log.
+
+    `_bare_offender` only inspects top-level Name/Attribute nodes, so a `dict(store)`
+    (an ast.Call) slips through while still dumping the mapping's raw KEYS (e.g. the
+    MAC-derived appliance ids keying PROGRAM_PENDING_STORE -- CR#1). Any
+    `dict(<single bare Name>)` with no kwargs passed to _LOGGER must instead go through
+    a redactor (debug_utils.redact_store), so flag it. A dict LITERAL `{...}` or a
+    `redact_store(store)` call is a different node and is not flagged."""
+    if (
+        isinstance(arg, ast.Call)
+        and isinstance(arg.func, ast.Name)
+        and arg.func.id == "dict"
+        and not arg.keywords
+        and len(arg.args) == 1
+        and isinstance(arg.args[0], ast.Name)
+    ):
+        return f"dict({arg.args[0].id})"
+    return None
+
+
 class LogIdentityRedactionTest(unittest.TestCase):
     def test_no_raw_identity_in_logger_calls(self) -> None:
         offenders: list[str] = []
@@ -96,7 +117,7 @@ class LogIdentityRedactionTest(unittest.TestCase):
                 if not _is_logger_call(node):
                     continue
                 for arg in node.args:
-                    label = _bare_offender(arg, names, attrs)
+                    label = _bare_offender(arg, names, attrs) or _dict_dump_offender(arg)
                     if label:
                         offenders.append(f"{rel}:{node.lineno}: raw {label}")
         self.assertEqual(
@@ -117,6 +138,16 @@ class LogIdentityRedactionTest(unittest.TestCase):
         self.assertIsNone(
             _bare_offender(safe.args[1], _ENTITY_NAMES, _ENTITY_ATTRS)
         )
+
+    def test_guard_detects_dict_dump_leak(self) -> None:
+        # Meta: the CR#1 class -- `dict(store)` dumped to a log -- is caught, while a
+        # redacted dump or a dict literal is not.
+        leak = ast.parse('_LOGGER.debug("x %s", dict(store))').body[0].value
+        self.assertEqual(_dict_dump_offender(leak.args[1]), "dict(store)")
+        safe = ast.parse('_LOGGER.debug("x %s", redact_store(store))').body[0].value
+        self.assertIsNone(_dict_dump_offender(safe.args[1]))
+        literal = ast.parse('_LOGGER.debug("x %s", {"k": v})').body[0].value
+        self.assertIsNone(_dict_dump_offender(literal.args[1]))
 
 
 if __name__ == "__main__":

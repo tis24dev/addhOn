@@ -16,7 +16,7 @@ from .const import (
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_STORE,
 )
-from .debug_utils import redact_id
+from .debug_utils import redact_id, redact_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -302,12 +302,12 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
             "Select debug: before selection option=%s code=%s store=%s",
             option,
             code,
-            dict(store),
+            redact_store(store),
         )
         store[self._appliance_id] = code
         _LOGGER.info(
             "Select: program '%s' (code=%s) set; start it with 'Avvia programma'",
             option, code,
         )
-        _LOGGER.debug("Select debug: after selection store=%s", dict(store))
+        _LOGGER.debug("Select debug: after selection store=%s", redact_store(store))
         self.async_write_ha_state()

@@ -148,6 +148,35 @@ def redact_topic(topic):
     return _MAC_RE.sub(_REDACTED, topic if isinstance(topic, str) else str(topic))
 
 
+def redact_store(store):
+    """Redact a coordinator store dump for logs: mask the KEYS, keep the VALUES.
+
+    A coordinator store (e.g. PROGRAM_PENDING_STORE) is keyed by the appliance id
+    (a MAC-derived unique_id) -- hard identity -- and its values are non-identity
+    program codes (e.g. 'iot_auto'). `dict(store)` in a debug log would dump the raw
+    MAC/serial keys, and the AST redaction guard cannot catch a `dict(...)`-wrapped
+    arg, so use this. Keys are masked via redact_id (a bare id -> '***'); values pass
+    through unchanged (they ARE the diagnostic signal and carry no identity).
+
+    Distinct keys all mask to '***', which in a returned dict would collapse multiple
+    appliances' entries into one and silently drop their values -- so a colliding
+    masked key gets a stable insertion-order ordinal ('***', '***#2', ...) to preserve
+    the count and every value. Non-mapping input is returned unchanged (defensive, so
+    the dict(store)->redact_store(store) swap never changes behaviour on a bad type)."""
+    if not isinstance(store, dict):
+        return store
+    out: dict = {}
+    for key, value in store.items():
+        masked = redact_id(key)
+        if masked in out:
+            n = 2
+            while f"{masked}#{n}" in out:
+                n += 1
+            masked = f"{masked}#{n}"
+        out[masked] = value
+    return out
+
+
 __all__ = [
     "DEBUG_KEY_SAMPLE_LIMIT",
     "command_names",
@@ -157,5 +186,6 @@ __all__ = [
     "redact_id",
     "redact_identity",
     "redact_mac",
+    "redact_store",
     "redact_topic",
 ]
