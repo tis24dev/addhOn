@@ -1467,6 +1467,44 @@ class SubscribedFlagLifecycleTest(unittest.TestCase):
         _run(m._start())
         self.assertFalse(m._subscribed)  # fresh client -> no subscriptions
 
+    def test_start_resets_connection(self) -> None:
+        # CR#1: _start() must also reset _connection (symmetric with _subscribed): the
+        # new client is not up until ITS connection-success callback fires. An escalation
+        # rebuild (connected-but-unsubscribed) reaches _start() with _connection=True
+        # carried over from the just-stopped client; leaving it True would make a rebuild
+        # whose subscribe then fails look connected-but-unsubscribed on a client not
+        # actually up yet, sending the next watchdog tick down the in-place re-subscribe
+        # path against a dead client instead of rebuilding.
+        import awsiot
+
+        class FakeClient:
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+        awsiot.mqtt5_client_builder.websockets_with_custom_authorizer = (
+            lambda **kw: FakeClient()
+        )
+
+        class FakeAuth:
+            id_token = "IDT"
+
+        class FakeApi:
+            auth = FakeAuth()
+
+            async def load_aws_token(self):
+                return "SIGNED"
+
+        hon = FakeHon([])
+        hon.api = FakeApi()
+        m = NativeMqttClient(hon, "MID")
+        m._connection = True  # pretend the just-stopped client was connected
+
+        _run(m._start())
+        self.assertFalse(m._connection)  # fresh client -> not up until its success cb
+
     def test_create_sets_subscribed_true_on_success(self) -> None:
         m = NativeMqttClient(FakeHon([]), "MID")
 

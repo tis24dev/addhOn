@@ -343,6 +343,18 @@ class NativeMqttClient:
         # -- create() or the watchdog rebuild path -- sets it True only after
         # _subscribe_appliances() succeeds).
         self._subscribed = False
+        # Reset _connection too so it tracks the CURRENT client: the new one is not up
+        # until ITS generation-tagged success callback fires below. A rebuild reached via
+        # the escalation branch (connected-but-unsubscribed) would otherwise carry over
+        # _connection=True from the just-stopped client. That is NOT a false-healthy
+        # (_subscribed above is already False, so the watchdog never treats it as
+        # healthy), but a rebuild whose _subscribe_appliances() then fails would leave a
+        # stale connected-but-unsubscribed state on a client that is not actually up yet,
+        # sending the next tick down the in-place re-subscribe path against a dead client
+        # instead of rebuilding. The only late callback the stopped client can still emit
+        # is a disconnection (-> False), never a spurious success, and the generation bump
+        # below rejects every other stale event; so this reset cannot be clobbered True.
+        self._connection = False
         # Tag this client's state-mutating callbacks with a fresh generation so a late
         # event from the client just stopped cannot flip self._connection (see
         # _is_stale_generation).
