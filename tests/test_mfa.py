@@ -18,10 +18,18 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-# Import real aiohttp (and thus real yarl, with Query) BEFORE test_transport_auth's
-# module-level stub installs a fake yarl: session.py does `import aiohttp`, and aiohttp
-# does `from yarl import URL, Query` which a URL-only yarl stub would break.
-import aiohttp  # noqa: E402,F401
+# session.py (used by MfaNativeChainTest) does `import aiohttp`; the pytest-only CI env
+# has no aiohttp. Use the real one when present, else a minimal stub (the tests drive a
+# FakeSession, so aiohttp's runtime behavior is never exercised). yarl is ensured by
+# conftest.
+try:  # noqa: E402
+    import aiohttp  # noqa: F401
+except ImportError:
+    _aiohttp_stub = types.ModuleType("aiohttp")
+    _aiohttp_stub.ClientSession = type("ClientSession", (), {})
+    _aiohttp_stub.ClientResponse = type("ClientResponse", (), {})
+    _aiohttp_stub.ContentTypeError = type("ContentTypeError", (Exception,), {})
+    sys.modules["aiohttp"] = _aiohttp_stub
 
 from test_transport_auth import (  # noqa: E402 - reuse the stubs + fakes
     AUTH,

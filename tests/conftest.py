@@ -51,4 +51,27 @@ def _install_homeassistant_error() -> None:
     exc.HomeAssistantError = HomeAssistantError
 
 
+def _ensure_yarl() -> None:
+    """The CI test env installs only pytest (no yarl). config_flow now imports the
+    transport auth (which does `from yarl import URL`), so importing config_flow -- and
+    thus every config-flow test -- needs yarl present. Use the REAL yarl when installed
+    (this also loads it BEFORE any test module's `_mod('yarl')` can shadow it with a
+    URL-only stub that would break a real aiohttp's `from yarl import URL, Query`); else
+    install a minimal URL stub. Runs at conftest import, before any collection."""
+    try:
+        import yarl  # noqa: F401
+    except ImportError:
+        yarl_stub = types.ModuleType("yarl")
+        yarl_stub.URL = type(
+            "URL",
+            (),
+            {
+                "__init__": lambda self, s, encoded=False: setattr(self, "_s", s),
+                "__str__": lambda self: self._s,
+            },
+        )
+        sys.modules["yarl"] = yarl_stub
+
+
 _install_homeassistant_error()
+_ensure_yarl()
