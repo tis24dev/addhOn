@@ -101,7 +101,9 @@ class CoordinatorConfigEntryTest(unittest.TestCase):
             "the coordinator debug summary 'id' (= MAC/serial) must be redacted",
         )
         self.assertNotIn('"id": appliance_id,', source)
-        self.assertIn("from .debug_utils import redact_mac", source)
+        # Robust to import ordering / extra co-imports (e.g. redact_id added for the
+        # INFO privacy-log fixes): only require redact_mac to be imported here.
+        self.assertRegex(source, r"from \.debug_utils import [^\n]*\bredact_mac\b")
 
     def test_coordinator_summary_redacts_mac_ast(self) -> None:
         # Robust (decoy/whitespace-proof) version of the guard above: AST-parse the

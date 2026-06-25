@@ -65,7 +65,7 @@ async def async_setup_entry(
             continue
         if HonProgramSelect.supports_appliance(appliance):
             entities.append(HonProgramSelect(coordinator, appliance_id, client))
-            _LOGGER.info("Added program select: %s", data.get("name"))
+            _LOGGER.info("Added program select: id=%s", redact_id(appliance_id))
         else:
             _LOGGER.debug(
                 "Select debug: no program select for '%s' id=%s; "

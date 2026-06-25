@@ -38,7 +38,7 @@ from .logging_utils import (
     reset_integration_log_level,
     silence_mqtt_noise,
 )
-from .debug_utils import redact_mac
+from .debug_utils import redact_id, redact_mac
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -286,12 +286,13 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
         if domain == "switch" and unique_id.endswith("_power"):
             registry.async_remove(reg_entry.entity_id)
             removed += 1
-            _LOGGER.info("Removed legacy power switch: %s", reg_entry.entity_id)
+            _LOGGER.info("Removed legacy power switch: id=%s", redact_id(reg_entry.unique_id))
         elif unique_id in td_orphans:
             registry.async_remove(reg_entry.entity_id)
             removed += 1
             _LOGGER.info(
-                "Removed invalid consumption entity for tumble dryer: %s", reg_entry.entity_id
+                "Removed invalid consumption entity for tumble dryer: id=%s",
+                redact_id(reg_entry.unique_id),
             )
     _LOGGER.debug(
         "Setup debug: legacy cleanup completed for entry=%s, checked=%d, removed=%d",

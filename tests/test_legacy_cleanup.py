@@ -128,6 +128,30 @@ class LegacyCleanupTest(unittest.TestCase):
         )
         self.assertEqual(removed, [])
 
+    def test_legacy_power_removal_log_redacts_identity(self) -> None:
+        # Privacy: the INFO removal log must carry the redacted id, never the
+        # entity_id (whose object_id is the nickname slug). INFO is not gated by
+        # the debug toggles, so it always reaches home-assistant.log.
+        with self.assertLogs("custom_components.addhon", level="INFO") as logs:
+            removed = _run([FakeRegEntry("switch.foo_power", "ID_power")])
+        self.assertEqual(removed, ["switch.foo_power"])
+        blob = "\n".join(logs.output)
+        self.assertIn("id=***", blob)
+        self.assertNotIn("foo_power", blob)
+        self.assertNotIn("ID_power", blob)
+
+    def test_td_orphan_removal_log_redacts_identity(self) -> None:
+        with self.assertLogs("custom_components.addhon", level="INFO") as logs:
+            removed = _run(
+                [FakeRegEntry("sensor.td_total_water", "tdid_total_water")],
+                coord_data={"tdid": {"type": "TD"}},
+            )
+        self.assertEqual(removed, ["sensor.td_total_water"])
+        blob = "\n".join(logs.output)
+        self.assertIn("id=***", blob)
+        self.assertNotIn("td_total_water", blob)
+        self.assertNotIn("tdid", blob)
+
 
 if __name__ == "__main__":
     unittest.main()

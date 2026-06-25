@@ -761,6 +761,36 @@ class DiagnosticsTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("person", diagnostics["entry"]["title"])
 
 
+class SelectLoggingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_added_select_log_redacts_identity(self) -> None:
+        # Privacy: the INFO "Added program select" log must carry the redacted id,
+        # never the appliance nickname (INFO is not gated by the debug toggles, so
+        # it always lands in home-assistant.log and gets attached to public issues).
+        from custom_components.addhon import select
+        from custom_components.addhon.const import DOMAIN
+
+        commands = {
+            "startProgram": RecordingCommand(
+                {"program": Param(values={"1": "Cotone", "2": "Sintetici"})}
+            )
+        }
+        coordinator = FakeCoordinator(_washer(commands))
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
+        )
+        added: list = []
+
+        with self.assertLogs(select._LOGGER.name, level="INFO") as logs:
+            await select.async_setup_entry(hass, FakeEntry(), added.extend)
+
+        added = [e for e in added if not getattr(e, "_addhon_account", False)]
+        self.assertEqual(1, len(added))
+        blob = "\n".join(logs.output)
+        self.assertIn("Added program select: id=***", blob)
+        self.assertNotIn("Washer", blob)
+        self.assertNotIn("washer-1", blob)
+
+
 class SwitchLoggingTest(unittest.IsolatedAsyncioTestCase):
     async def test_added_switch_log_only_emitted_when_entity_is_created(self) -> None:
         from custom_components.addhon import switch
@@ -795,7 +825,12 @@ class SwitchLoggingTest(unittest.IsolatedAsyncioTestCase):
 
         added = [e for e in added if not getattr(e, "_addhon_account", False)]
         self.assertEqual(1, len(added))
-        self.assertIn("Added switch: Washer", "\n".join(logs.output))
+        # Privacy: the INFO "added" log must carry the redacted id, never the
+        # nickname (it lands in home-assistant.log even with debug off).
+        blob = "\n".join(logs.output)
+        self.assertIn("Added pause switch: id=***", blob)
+        self.assertNotIn("Washer", blob)
+        self.assertNotIn("washer-1", blob)
 
 
 class DebugLoggingGuardTest(unittest.IsolatedAsyncioTestCase):
