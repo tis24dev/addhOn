@@ -183,7 +183,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         return self._live_temp_range[2]
 
     @property
-    def hvac_mode(self) -> HVACMode:
+    def hvac_mode(self) -> HVACMode | None:
         """Return the current HVAC state, translating the const.py string into the HA enum."""
         on_off = self._get_attr(AC_ATTR_ON_OFF, "0")
         if str(on_off) == "0":
@@ -198,28 +198,49 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         # Read machMode (e.g. "2") using the constant from const.py
         mode_val = str(self._get_attr(AC_ATTR_MODE, "1"))
 
-        # Retrieve the text from const.py (e.g. "cool")
-        mode_str = AC_MODE_MAP.get(mode_val, "cool")
+        # Retrieve the text from const.py (e.g. "cool"). No default: an unmapped raw
+        # value must not be coerced into a guessed mode -- HA rejects a current option
+        # outside hvac_modes ("is not a valid option") and logs a warning. Report
+        # unknown (None) instead, which HA represents honestly.
+        mode_str = AC_MODE_MAP.get(mode_val)
+        if mode_str is None:
+            _LOGGER.debug(
+                "Climate debug: machMode=%s not in AC_MODE_MAP, hvac_mode -> None",
+                mode_val,
+            )
+            return None
 
         # Convert the string into the correct Home Assistant enum
         try:
             mode = HVACMode(str(mode_str).lower())
-            _LOGGER.debug(
-                "Climate debug: hvac_mode '%s' id=%s onOffStatus=%s machMode=%s -> %s",
-                redact_id(self._attr_unique_id, self._appliance_id),
-                redact_id(self._appliance_id),
-                on_off,
-                mode_val,
-                mode,
-            )
-            return mode
         except ValueError:
             _LOGGER.debug(
-                "Climate debug: machMode=%s translated to mode_str=%s invalid, fallback COOL",
+                "Climate debug: machMode=%s translated to mode_str=%s invalid, hvac_mode -> None",
                 mode_val,
                 mode_str,
             )
-            return HVACMode.COOL
+            return None
+
+        # Never report a mode outside the advertised capability list (HA would ignore
+        # it and warn). With the full-list fallback this can only trigger when the
+        # device exposed a restricted machMode enum that excludes the current value.
+        if mode not in self._attr_hvac_modes:
+            _LOGGER.debug(
+                "Climate debug: hvac_mode %s not in advertised modes %s -> None",
+                mode,
+                self._attr_hvac_modes,
+            )
+            return None
+
+        _LOGGER.debug(
+            "Climate debug: hvac_mode '%s' id=%s onOffStatus=%s machMode=%s -> %s",
+            redact_id(self._attr_unique_id, self._appliance_id),
+            redact_id(self._appliance_id),
+            on_off,
+            mode_val,
+            mode,
+        )
+        return mode
 
     @property
     def target_temperature(self) -> float | None:
@@ -249,7 +270,12 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
     def fan_mode(self) -> str | None:
         """Return the fan speed based on the reversed map."""
         val = str(self._get_attr(AC_ATTR_FAN_SPEED, "0"))
-        fan = AC_FAN_MAP.get(val, "auto")
+        # No default: an unmapped raw value, or one outside the advertised fan_modes,
+        # must report unknown (None) rather than a guessed speed HA would reject.
+        fan = AC_FAN_MAP.get(val)
+        if fan is None or fan not in (self._attr_fan_modes or []):
+            _LOGGER.debug("Climate debug: fan_mode raw=%s not advertised -> None", val)
+            return None
         _LOGGER.debug("Climate debug: fan_mode raw=%s -> %s", val, fan)
         return fan
 

@@ -498,6 +498,72 @@ class AcClimateWritePathTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, settings.send_calls)
 
 
+class AcClimateReadPathTest(unittest.IsolatedAsyncioTestCase):
+    """hvac_mode / fan_mode read semantics: never report a value outside the
+    advertised capability list (HA logs 'is not a valid option' and ignores it).
+    A current value that is unmapped, or mapped but not advertised, -> None.
+    """
+
+    async def test_hvac_mode_valid_mapped_and_advertised(self) -> None:
+        entity, _, _ = _climate(
+            {"machMode": Param("1", values=["0", "1", "2", "4", "6"])},
+            attributes={"settings.onOffStatus": "1", "settings.machMode": "1"},
+        )
+        self.assertEqual(HVACMode.COOL, entity.hvac_mode)
+
+    async def test_hvac_mode_unmapped_raw_returns_none(self) -> None:
+        # Cloud reports a machMode code not in AC_MODE_MAP (e.g. "3"): report
+        # unknown instead of guessing COOL (which HA would then reject).
+        entity, _, _ = _climate(
+            {"machMode": Param("1", values=["0", "1", "2", "4", "6"])},
+            attributes={"settings.onOffStatus": "1", "settings.machMode": "3"},
+        )
+        self.assertIsNone(entity.hvac_mode)
+
+    async def test_hvac_mode_mapped_but_not_advertised_returns_none(self) -> None:
+        # Device exposes only AUTO+DRY; a current machMode of "1" (cool) is mapped
+        # but is NOT in the advertised list -> None (no HA "not a valid option").
+        entity, _, _ = _climate(
+            {"machMode": Param("0", values=["0", "2"])},
+            attributes={"settings.onOffStatus": "1", "settings.machMode": "1"},
+        )
+        self.assertNotIn(HVACMode.COOL, entity._attr_hvac_modes)
+        self.assertIsNone(entity.hvac_mode)
+
+    async def test_hvac_mode_off_wins_over_unmapped(self) -> None:
+        # onOffStatus=0 -> OFF regardless of an unmapped machMode.
+        entity, _, _ = _climate(
+            {"machMode": Param("1", values=["0", "1"])},
+            attributes={"settings.onOffStatus": "0", "settings.machMode": "3"},
+        )
+        self.assertEqual(HVACMode.OFF, entity.hvac_mode)
+
+    async def test_fan_mode_valid_returns_speed(self) -> None:
+        entity, _, _ = _climate(
+            {"windSpeed": Param("5", values=["5", "3", "2", "1"])},
+            attributes={"settings.windSpeed": "3"},
+        )
+        self.assertEqual("low", entity.fan_mode)
+
+    async def test_fan_mode_unmapped_raw_returns_none(self) -> None:
+        # windSpeed "0" is not in AC_FAN_MAP -> None instead of guessing "auto".
+        entity, _, _ = _climate(
+            {"windSpeed": Param("5", values=["5", "3", "2", "1"])},
+            attributes={"settings.windSpeed": "0"},
+        )
+        self.assertIsNone(entity.fan_mode)
+
+    async def test_fan_mode_mapped_but_not_advertised_returns_none(self) -> None:
+        # Device exposes only auto+high; a current "3" (low) is mapped but not
+        # advertised -> None.
+        entity, _, _ = _climate(
+            {"windSpeed": Param("5", values=["5", "1"])},
+            attributes={"settings.windSpeed": "3"},
+        )
+        self.assertNotIn("low", entity._attr_fan_modes)
+        self.assertIsNone(entity.fan_mode)
+
+
 class AcSwitchWritePathTest(unittest.IsolatedAsyncioTestCase):
     """switch.HonAcSwitch send semantics."""
 
