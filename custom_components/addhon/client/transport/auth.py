@@ -315,7 +315,11 @@ class HonAuth:
             await self._get_token(url)
             await self._api_auth()
         except _NoAuthNeeded:
-            pass
+            # The authorize page already carried the OAuth tokens (a still-valid SSO
+            # cookie), so the login steps are skipped -- but cognito_token is minted
+            # ONLY by _api_auth and connection.py needs it for every API call. Run it
+            # so this path completes with usable auth headers instead of empty ones.
+            await self._api_auth()
         # Login complete: clear the phase so a LATER non-auth failure (e.g. a poll) is
         # not mis-attributed to the last auth step.
         self._current_phase = ""

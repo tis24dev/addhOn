@@ -159,15 +159,17 @@ class NativeAuthFlowTest(unittest.TestCase):
         self.assertEqual(auth.cognito_token, "COG123")
 
     def test_no_auth_needed(self) -> None:
-        # The authorize page is already the redirect with the tokens: no login, no cognito.
+        # The authorize page is already the redirect with the tokens: the login steps
+        # are skipped, but _api_auth STILL runs so cognito_token is minted (connection.py
+        # needs it for every API call).
         auth = self._auth([
             FakeResp(text="...oauth/done#access_token=AAA&refresh_token=BBB&id_token=CCC&..."),
+            FakeResp(json={"cognitoUser": {"Token": "COG123"}}),  # _api_auth
         ])
         asyncio.run(auth.authenticate())
         self.assertEqual(auth.id_token, "CCC")
-        # The already-authenticated short-circuit returns before _api_auth, so the
-        # cognito token (minted only by _api_auth) is never set.
-        self.assertEqual(auth.cognito_token, "")
+        self.assertEqual(auth.access_token, "AAA")
+        self.assertEqual(auth.cognito_token, "COG123")
 
     def test_login_page_without_fwuid_raises(self) -> None:
         auth = self._auth([
