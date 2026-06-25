@@ -83,6 +83,17 @@ AUTH_REFRESH = _reg(150, "auth_refresh", "Session refresh failed", True, ui=Fals
 # server returns a single boolean for verifyEmailOTP, so wrong vs expired are one code).
 MFA_REQUIRED = _reg(160, "mfa_required", "Two-factor verification code required", True)
 MFA_CODE_INVALID = _reg(161, "mfa_code_invalid", "Verification code was rejected", True)
+# Distinguishable 2FA sub-failures (so the user sees "couldn't send" vs "wrong code" vs
+# "server hiccup"). 162/163 are NOT reauth: the credentials and OTP are fine, it's a
+# transient send/verify problem -> cannot_connect/retry. 164 IS reauth (re-drive login).
+# 165 (account-action-required/privacy) is intentionally RESERVED, not registered: the
+# privacy markers live in every ProgressiveLogin page's remoting registry, so it cannot be
+# detected reliably without a captured privacy-only page. 165-168 stay reserved.
+MFA_SEND_FAILED = _reg(162, "mfa_send_failed", "Could not send the verification code", False)
+MFA_SERVICE_ERROR = _reg(163, "mfa_service_error", "Two-factor verification service error", False)
+MFA_TOKEN_AFTER_VERIFY_FAILED = _reg(
+    164, "mfa_token_after_verify_failed", "Sign-in could not finish after verification", True
+)
 # 2xx - appliance inventory / per-appliance (runtime, logged only)
 APPLIANCE_LIST_FAILED = _reg(200, "appliance_list_failed", "Could not fetch the appliance list")
 APPLIANCE_LIST_EMPTY = _reg(210, "appliance_list_empty", "No appliances on this account", ui=False)

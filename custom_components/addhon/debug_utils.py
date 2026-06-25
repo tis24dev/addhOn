@@ -183,6 +183,27 @@ def redact_store(store):
     return out
 
 
+def redact_remoting_summary(entry) -> dict:
+    """Leak-proof structural summary of a Salesforce JS-Remoting response entry.
+
+    A 2FA remoting result can carry signed/sensitive material (a `message`/`data`/
+    `stackTrace`, or -- in other shapes -- tokens), so a debug log must NEVER dump the
+    entry. This keeps ONLY the finite-domain control fields needed to diagnose a 2FA
+    failure: the boolean `result`, the int `statusCode`, the `type` ('rpc'/'exception'),
+    and a bounded SAMPLE of the KEY NAMES (never the values). Passing this (a Call node)
+    instead of the bare entry also keeps the AST leak-guard satisfied by construction."""
+    if not isinstance(entry, dict):
+        return {"type": type(entry).__name__}
+    result = entry.get("result")
+    status = entry.get("statusCode")
+    return {
+        "result": result if isinstance(result, bool) else None,
+        "statusCode": status if isinstance(status, int) else None,
+        "type": entry.get("type") if isinstance(entry.get("type"), str) else None,
+        "keys": debug_key_sample(entry),
+    }
+
+
 __all__ = [
     "DEBUG_KEY_SAMPLE_LIMIT",
     "command_names",
@@ -192,6 +213,7 @@ __all__ = [
     "redact_id",
     "redact_identity",
     "redact_mac",
+    "redact_remoting_summary",
     "redact_store",
     "redact_topic",
 ]

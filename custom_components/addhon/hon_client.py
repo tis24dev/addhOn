@@ -315,6 +315,10 @@ class HonClient:
         self._validation = validation
         # Last classified error code (for the downloadable diagnostics / log parity).
         self.last_error_code: Any = None
+        # Login phase reached at the last failure ("authenticate"/"mfa_verify"/...), and a
+        # leak-proof 2FA summary, surfaced in the downloadable diagnostics for triage.
+        self.last_error_phase: str | None = None
+        self.last_mfa_summary: dict | None = None
         self._hon_instance = None
         self._api = None
         self._hon_loop: asyncio.AbstractEventLoop | None = None
@@ -514,6 +518,12 @@ class HonClient:
         from .client.transport.auth import MFAChallengeRequired
 
         with self._lifecycle_lock:
+            # Fresh attempt: clear any stale failure record so (a) a success leaves the
+            # diagnostics last_error empty, and (b) a new failure is never shown with a
+            # phase/mfa-summary left over from a prior attempt (the three move together).
+            self.last_error_code = None
+            self.last_error_phase = None
+            self.last_mfa_summary = None
             try:
                 if self._hon_loop is None or not self._hon_loop.is_running():
                     self._start_hon_loop()
@@ -535,19 +545,27 @@ class HonClient:
                 # without this the MQTT push is a permanent no-op after a re-auth (#20).
                 if self._notify_function is not None:
                     self._hon_instance.subscribe_updates(self._notify_function)
-            except MFAChallengeRequired:
+            except MFAChallengeRequired as err:
                 # 2FA email-OTP challenge: KEEP the dedicated loop + half-open session
                 # alive so submit_mfa_code_sync() can resume on the SAME session. Do NOT
                 # _close_sync(). The interactive config flow drives the resume; a
                 # background caller (async_setup_entry) closes the client itself and
                 # routes to the reauth flow. last_error_code set for diagnostics parity.
                 self.last_error_code = MFA_REQUIRED
+                self.last_error_phase = "mfa_challenge"
+                ctx = getattr(err, "context", None)
+                self.last_mfa_summary = {
+                    "challenge_kind": getattr(ctx, "challenge_kind", None),
+                    "can_resend": getattr(ctx, "can_resend", None),
+                }
                 _LOGGER.info("hOn login needs 2FA verification [%s]", MFA_REQUIRED.label)
                 raise
             except Exception as err:
+                self.last_error_phase = getattr(self._hon_instance, "auth_phase", "") or None
                 self.last_error_code = classify(err)
                 _LOGGER.error(
-                    "hOn setup failed [%s]: %s", self.last_error_code.label, err
+                    "hOn setup failed [%s] (phase=%s): %s",
+                    self.last_error_code.label, self.last_error_phase or "?", err,
                 )
                 self._close_sync()
                 raise
@@ -572,9 +590,21 @@ class HonClient:
         with self._lifecycle_lock:
             if self._hon_instance is None:
                 raise RuntimeError("no pending MFA challenge")
-            self._api = self._run_on_hon_loop(
-                self._hon_instance.submit_mfa_code(context, code)
-            )
+            try:
+                self._api = self._run_on_hon_loop(
+                    self._hon_instance.submit_mfa_code(context, code)
+                )
+            except Exception as err:
+                # Record the precise code/phase so the form + diagnostics reflect the real
+                # cause (wrong code vs service error vs token-after-verify), not a stale one.
+                self.last_error_phase = getattr(self._hon_instance, "auth_phase", "") or "mfa_verify"
+                self.last_error_code = classify(err)
+                raise
+            # 2FA resolved: clear the challenge record set by setup_sync's MFA branch so a
+            # later (unrelated) failure is never shown with the stale 2FA phase/summary.
+            self.last_error_code = None
+            self.last_error_phase = None
+            self.last_mfa_summary = None
             _LOGGER.info("hOn 2FA verification succeeded for %s", redact_email(self._email))
             # Re-apply the realtime notify callback to the now-completed session (#20).
             if self._notify_function is not None:
@@ -585,7 +615,12 @@ class HonClient:
         with self._lifecycle_lock:
             if self._hon_instance is None:
                 raise RuntimeError("no pending MFA challenge")
-            self._run_on_hon_loop(self._hon_instance.resend_mfa_code(context))
+            try:
+                self._run_on_hon_loop(self._hon_instance.resend_mfa_code(context))
+            except Exception as err:
+                self.last_error_phase = "mfa_send"
+                self.last_error_code = classify(err)
+                raise
 
     def run_command_sync(self, coro) -> Any:
         """Run a client coroutine (e.g. command.send()) on the dedicated loop.

@@ -258,6 +258,17 @@ class NativeHon:
         except Exception:  # noqa: BLE001 - no auth yet
             return ""
 
+    @property
+    def auth_phase(self) -> str:
+        """Last login phase the auth layer reached (for diagnostics attribution)."""
+        conn = self._connection
+        if conn is None:
+            return ""
+        try:
+            return getattr(conn.auth, "_current_phase", "") or ""
+        except Exception:  # noqa: BLE001 - no auth yet
+            return ""
+
     async def submit_mfa_code(self, context: Any, code: str) -> "NativeHon":
         """Resume a paused 2FA login: verify the OTP, then finish setup (load the
         appliances + start MQTT at runtime) on the same session."""

@@ -646,11 +646,39 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
 
         class _Client:
             last_error_code = ec.NETWORK_TIMEOUT
+            last_error_phase = "load_appliances"
+            last_mfa_summary = None
+            _refresh_token = ""
 
         hass = FakeHass(_build_coordinator())
         hass.data[DOMAIN]["e1"]["client"] = _Client()
         result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
-        self.assertEqual(result["last_error"], {"code": "ADDHON-400", "reason": ec.NETWORK_TIMEOUT.reason_en})
+        le = result["last_error"]
+        self.assertEqual("ADDHON-400", le["code"])
+        self.assertEqual(ec.NETWORK_TIMEOUT.reason_en, le["reason"])
+        self.assertFalse(le["requires_reauth"])
+        self.assertTrue(le["ui"])
+        self.assertEqual("load_appliances", le["phase"])
+        self.assertFalse(le["had_refresh_token"])
+        self.assertNotIn("mfa", le)  # not an MFA-band code
+
+    def test_last_error_includes_mfa_summary_for_mfa_code(self) -> None:
+        from custom_components.addhon import error_codes as ec
+
+        class _Client:
+            last_error_code = ec.MFA_REQUIRED
+            last_error_phase = "mfa_challenge"
+            last_mfa_summary = {"challenge_kind": "email", "can_resend": True}
+            _refresh_token = "rt"
+
+        hass = FakeHass(_build_coordinator())
+        hass.data[DOMAIN]["e1"]["client"] = _Client()
+        result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+        le = result["last_error"]
+        self.assertEqual("ADDHON-160", le["code"])
+        self.assertTrue(le["requires_reauth"])
+        self.assertTrue(le["had_refresh_token"])
+        self.assertEqual({"challenge_kind": "email", "can_resend": True}, le["mfa"])
 
 
 if __name__ == "__main__":

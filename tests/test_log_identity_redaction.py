@@ -59,6 +59,26 @@ _FILES = {
         frozenset({"payload", "topic", "parameter"}),
         frozenset({"nick_name"}),
     ),
+    # Auth/login: the new DEBUG breadcrumbs must log STRUCTURE only. Forbid passing any
+    # raw page text / URL / href / remoting entry / OTP code bare to _LOGGER (the
+    # remoting summary goes through redact_remoting_summary(...), a Call, so it is fine).
+    "client/transport/auth.py": (
+        frozenset(
+            {
+                "text", "prog_text", "prog_url", "href", "code", "entry", "body",
+                "url", "done_url", "login_url", "redirect", "token_url", "payload",
+                # token-bearing locals: a future bare log of these would be a leak
+                "tokens", "t", "data", "params", "new_refresh", "result",
+                "id_token", "access_token", "refresh_token", "loaded_str",
+                "device_payload", "headers", "descriptor", "context",
+                "r1", "r2", "match", "challenge", "device", "email", "password",
+            }
+        ),
+        frozenset(
+            {"access_token", "refresh_token", "id_token", "cognito_token",
+             "_email", "_password", "_fw_uid"}
+        ),
+    ),
 }
 
 

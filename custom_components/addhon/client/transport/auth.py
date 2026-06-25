@@ -18,7 +18,14 @@ from typing import Any
 
 from yarl import URL
 
-from ...error_codes import MFA_CODE_INVALID, MFA_REQUIRED
+from ...debug_utils import redact_remoting_summary
+from ...error_codes import (
+    MFA_CODE_INVALID,
+    MFA_REQUIRED,
+    MFA_SEND_FAILED,
+    MFA_SERVICE_ERROR,
+    MFA_TOKEN_AFTER_VERIFY_FAILED,
+)
 from .device import HonDevice
 from .headers import USER_AGENT
 from .oauth import (
@@ -80,6 +87,27 @@ class MFACodeInvalid(NativeAuthError):
     error_code = MFA_CODE_INVALID
 
 
+# Distinguishable 2FA sub-failures, carried so classify()/_requires_reauth route them
+# precisely (no fragile message matching). All subclass NativeAuthError so the existing
+# broad excepts keep working. 162/163 are NOT reauth (transient); 164 IS.
+class MFASendFailed(NativeAuthError):
+    """resendEmailCode did not confirm the send (transient: the user can retry/resend)."""
+
+    error_code = MFA_SEND_FAILED
+
+
+class MFAServiceError(NativeAuthError):
+    """verifyEmailOTP returned a service exception / 5xx (transient, not a wrong code)."""
+
+    error_code = MFA_SERVICE_ERROR
+
+
+class MFATokenAfterVerifyFailed(NativeAuthError):
+    """OTP accepted but the post-verify authorize did not yield tokens."""
+
+    error_code = MFA_TOKEN_AFTER_VERIFY_FAILED
+
+
 class _NoAuthNeeded(Exception):
     """The authorize page was already the redirect with the tokens (login not needed)."""
 
@@ -100,6 +128,17 @@ class HonAuth:
         self._fw_uid = ""
         self._loaded: Any = None
         self._page_url = ""
+        # Last login phase reached, for the DEBUG trace + diagnostics attribution ("failed
+        # during mfa_verify"). Updated by _phase(); read via NativeHon.auth_phase.
+        self._current_phase = ""
+
+    def _phase(self, name: str, **fields: Any) -> None:
+        """Mark + DEBUG-log a login phase. Content is STRUCTURE only (status/booleans/
+        phase name) -- never email/password/OTP/token/csrf/cookie/url (leak-proof)."""
+        self._current_phase = name
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            extra = " ".join(f"{k}={v}" for k, v in fields.items())
+            _LOGGER.debug("auth phase %s%s", name, f": {extra}" if extra else "")
 
     def _expired(self, hours: int) -> bool:
         return datetime.now(timezone.utc) >= self._expires + timedelta(hours=hours)
@@ -119,6 +158,7 @@ class HonAuth:
         return headers
 
     async def _introduce(self) -> str:
+        self._phase("introduce")
         url = build_authorize_url(generate_nonce())
         async with self._session.get(url, headers=self._ua()) as resp:
             text = await resp.text()
@@ -130,8 +170,11 @@ class HonAuth:
                     self.access_token = t.access_token
                     self.refresh_token = t.refresh_token
                     self.id_token = t.id_token
+                    self._phase("introduce", status=resp.status, no_auth_needed=True)
                     raise _NoAuthNeeded()
+                self._phase("introduce", status=resp.status, login_url=False)
                 raise NativeAuthError(f"introduce: no login url (status {resp.status})")
+        self._phase("introduce", status=resp.status, login_url=True)
         return login_url
 
     async def _manual_redirect(self, url: str) -> str:
@@ -141,23 +184,28 @@ class HonAuth:
             return resp.headers.get("Location", "") or url
 
     async def _handle_redirects(self, login_url: str) -> str:
+        self._phase("redirects")
         r1 = await self._manual_redirect(login_url)
         r2 = await self._manual_redirect(r1)
         return f"{r2}&System=IoT_Mobile_App&RegistrationSubChannel=hOn"
 
     async def _open_login_page(self, login_url: str) -> None:
+        self._phase("login_page")
         async with self._session.get(
             URL(login_url, encoded=True), headers=self._ua()
         ) as resp:
             text = await resp.text()
             match = _FWUID_RE.findall(text)
             if not match:
+                self._phase("login_page", status=resp.status, fwuid=False)
                 raise NativeAuthError(f"login page: no fwuid (status {resp.status})")
             self._fw_uid, loaded_str = match[0]
             self._loaded = json.loads(loaded_str)
             self._page_url = login_url.replace(AUTH_API, "")
+        self._phase("login_page", status=resp.status, fwuid=True)
 
     async def _login(self) -> str:
+        self._phase("login_submit")
         body, params = build_login_payload(
             self._email, self._password, self._fw_uid, self._loaded, self._page_url
         )
@@ -170,21 +218,28 @@ class HonAuth:
             if resp.status == 200:
                 try:
                     result = await resp.json(content_type=None)
-                    return str(result["events"][0]["attributes"]["values"]["url"])
+                    redirect = str(result["events"][0]["attributes"]["values"]["url"])
+                    self._phase("login_submit", status=resp.status, redirect=True)
+                    return redirect
                 except (json.JSONDecodeError, KeyError, TypeError):
                     pass
+            self._phase("login_submit", status=resp.status, redirect=False)
             raise NativeAuthError(f"login: failed (status {resp.status})")
 
     async def _get_token(self, url: str) -> None:
+        self._phase("get_token")
         async with self._session.get(url, headers=self._ua()) as resp:
             if resp.status != 200:
+                self._phase("get_token", status=resp.status)
                 raise NativeAuthError(f"get_token: status {resp.status}")
             href = _HREF_RE.findall(await resp.text())
         if not href:
+            self._phase("get_token", status=resp.status, href=False)
             raise NativeAuthError("get_token: no href")
         if "ProgressiveLogin" in href[0]:
             async with self._session.get(href[0], headers=self._ua()) as resp:
                 if resp.status != 200:
+                    self._phase("progressive_detect", status=resp.status)
                     raise NativeAuthError(f"progressive: status {resp.status}")
                 prog_text = await resp.text()
                 # resp.url is the final (post-redirect) URL; fall back to the requested
@@ -195,12 +250,17 @@ class HonAuth:
             # pause the login with the context to resume; otherwise behave exactly as
             # before (follow the redirect). Inert on non-2FA accounts.
             challenge = detect_progressive_otp(prog_text, prog_url)
+            self._phase(
+                "progressive_detect", otp=challenge is not None,
+                can_resend=getattr(challenge, "can_resend", None),
+            )
             if challenge is not None:
                 raise MFAChallengeRequired(challenge)
             href = _HREF_RE_PROGRESSIVE.findall(prog_text)
             if not href:  # like the guard after the first findall: no IndexError
                 raise NativeAuthError("progressive: no href")
         token_url = AUTH_API + href[0]
+        self._phase("get_token", status=200, href=True)
         async with self._session.get(token_url, headers=self._ua()) as resp:
             if resp.status != 200:
                 raise NativeAuthError(f"token page: status {resp.status}")
@@ -212,6 +272,7 @@ class HonAuth:
         self.id_token = tokens.id_token
 
     async def _api_auth(self) -> None:
+        self._phase("api_auth")
         # Our HonDevice exposes payload(); the get() branch is a defensive fallback
         # for a device that exposes the old interface. Same dictionary in
         # both cases.
@@ -228,7 +289,9 @@ class HonAuth:
             data = await resp.json(content_type=None)
         self.cognito_token = data.get("cognitoUser", {}).get("Token", "")
         if not self.cognito_token:
+            self._phase("api_auth", status=resp.status, cognito_token=False)
             raise NativeAuthError("api_auth: no cognito token")
+        self._phase("api_auth", status=resp.status, cognito_token=True)
 
     async def authenticate(self) -> None:
         self.clear()
@@ -240,7 +303,10 @@ class HonAuth:
             await self._get_token(url)
             await self._api_auth()
         except _NoAuthNeeded:
-            return
+            pass
+        # Login complete: clear the phase so a LATER non-auth failure (e.g. a poll) is
+        # not mis-attributed to the last auth step.
+        self._current_phase = ""
 
     # -- Two-factor (email OTP) resume -----------------------------------------
     # These run on the SAME aiohttp session that hit the challenge (its cookies bind
@@ -248,9 +314,10 @@ class HonAuth:
     # authenticate() raised MFAChallengeRequired. Validated live 2026-06-25.
 
     async def _mfa_remoting(
-        self, context: MfaContext, descriptor: dict, data: list, tid: int
+        self, context: MfaContext, descriptor: dict, data: list, tid: int, phase: str
     ) -> dict:
         """One Salesforce JS-Remoting call (POST /apexremote), returns the result entry."""
+        self._phase(phase)
         payload = build_remoting_payload(context.vid, descriptor, data, tid)
         headers = self._ua(
             {
@@ -265,6 +332,12 @@ class HonAuth:
             status = resp.status
             text = await resp.text()
         entry = parse_remoting_result(text)
+        # Leak-proof structural summary (result/statusCode/type/key-names only).
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "auth phase %s: remoting method=%s http=%d %s",
+                phase, descriptor.get("method"), status, redact_remoting_summary(entry),
+            )
         if not entry:
             raise NativeAuthError(f"mfa: unreadable remoting response (status {status})")
         return entry
@@ -273,28 +346,30 @@ class HonAuth:
         """(Re)send the email OTP via resendEmailCode. This is also the FIRST send:
         merely loading the page does not email a code, the page's JS does."""
         entry = await self._mfa_remoting(
-            context, context.resend, [{"expid": context.expid, "localeId": context.locale}], 11
+            context, context.resend,
+            [{"expid": context.expid, "localeId": context.locale}], 11, "mfa_send",
         )
         if entry.get("result") is not True:
-            raise NativeAuthError("mfa: could not send the verification code")
+            raise MFASendFailed("mfa: could not send the verification code")
 
     async def submit_mfa_code(self, context: MfaContext, code: str) -> None:
         """Verify the OTP (remoting) -> finish (VF postback) -> obtain the tokens.
 
         On a wrong/expired code raises MFACodeInvalid so the flow can re-prompt."""
-        entry = await self._mfa_remoting(context, context.verify, [code], 21)
+        entry = await self._mfa_remoting(context, context.verify, [code], 21, "mfa_verify")
         if entry.get("result") is not True:
             # A Salesforce remoting EXCEPTION / 5xx is a transient service error, not a
-            # wrong code: surface it as a generic auth error (cannot_connect) so the user
+            # wrong code: surface it as MFAServiceError (cannot_connect/retry) so the user
             # is not told to re-enter a perfectly good OTP. A plain result==false IS a
             # wrong/expired code.
             status = entry.get("statusCode")
             if entry.get("type") == "exception" or (
                 isinstance(status, int) and status >= 500
             ):
-                raise NativeAuthError("mfa: verification service error")
+                raise MFAServiceError("mfa: verification service error")
             raise MFACodeInvalid("mfa: invalid verification code")
         # finishFlowCall: VF form postback (ViewState + the commandLink marker).
+        self._phase("mfa_finish")
         async with self._session.post(
             context.vf_action,
             data=build_finish_body(context),
@@ -308,6 +383,7 @@ class HonAuth:
             await resp.text()  # consume the postback response (redirect to retURL)
         await self._resume_tokens_after_2fa()
         await self._api_auth()
+        self._current_phase = ""  # 2FA login complete
 
     async def _resume_tokens_after_2fa(self) -> None:
         """Re-run authorize on the now-verified session and extract the tokens.
@@ -316,6 +392,7 @@ class HonAuth:
         the `hon://...oauth/done#access_token=...` URL before `is_oauth_done` would, so
         we parse the tokens from whichever the page yields (with a trailing '&' so the
         last fragment field is captured)."""
+        self._phase("resume_token")
         url = build_authorize_url(generate_nonce())
         async with self._session.get(url, headers=self._ua()) as resp:
             text = await resp.text()
@@ -330,7 +407,8 @@ class HonAuth:
         else:
             tokens = parse_token_fragment(text)
         if not tokens.complete:
-            raise NativeAuthError("mfa: token retrieval failed after verification")
+            self._phase("resume_token", done_url=bool(done_url), tokens_complete=False)
+            raise MFATokenAfterVerifyFailed("mfa: token retrieval failed after verification")
         self.access_token = tokens.access_token
         self.refresh_token = tokens.refresh_token
         self.id_token = tokens.id_token
@@ -365,6 +443,9 @@ class HonAuth:
         if new_refresh := (data.get("refresh_token") if isinstance(data, dict) else None):
             self.refresh_token = new_refresh
         await self._api_auth()
+        # Refresh succeeded (no full login): clear the phase so a later non-auth failure
+        # is not mis-attributed to "api_auth" (symmetric with authenticate()).
+        self._current_phase = ""
         return True
 
     def clear(self) -> None:

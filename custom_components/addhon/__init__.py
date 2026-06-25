@@ -383,6 +383,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             from .error_codes import classify
 
             hon_client.last_error_code = classify(err)
+            # Attribute the phase to THIS update failure (a carried HonCodedError.phase, or
+            # the live auth phase if a re-auth was in flight) so diagnostics never shows a
+            # phase/mfa-summary left over from the last login event.
+            hon_client.last_error_phase = (
+                getattr(err, "phase", None)
+                or getattr(hon_client._hon_instance, "auth_phase", "")
+                or None
+            )
+            hon_client.last_mfa_summary = None
             _LOGGER.debug(
                 "Coordinator debug: hOn data update failed [%s]: %s",
                 hon_client.last_error_code.label,

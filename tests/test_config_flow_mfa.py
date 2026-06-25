@@ -114,7 +114,9 @@ class _FakeMfaClient:
 
     def resend_mfa_code_sync(self, context):
         if self.send_raises:
-            raise RuntimeError("send boom")
+            from custom_components.addhon.client.transport.auth import MFASendFailed
+
+            raise MFASendFailed("mfa: could not send the verification code")
         self.sent += 1
 
     def submit_mfa_code_sync(self, context, code):
@@ -352,7 +354,9 @@ class MfaFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("form", result["type"])
         self.assertEqual("2fa", result["step_id"])
-        self.assertTrue(result["errors"])  # send failure surfaced
+        # the precise transient code surfaces, NOT a generic auth/credentials error
+        self.assertEqual("mfa_send_failed", result["errors"]["base"])
+        self.assertEqual("ADDHON-162", result["description_placeholders"]["error_code"])
 
 
 if __name__ == "__main__":

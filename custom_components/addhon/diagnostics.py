@@ -418,7 +418,26 @@ def _last_error(hass: HomeAssistant, entry: ConfigEntry) -> dict | None:
     code = getattr(client, "last_error_code", None)
     if code is None:
         return None
-    return {"code": code.label, "reason": code.reason_en}
+    # All fields are closed-domain primitives (catalog strings / bools / a finite phase
+    # token / the 2FA challenge_kind enum) -- no device identity, no token/OTP/csrf, so
+    # this hand-built block is leak-proof by construction (not run through _redact).
+    out: dict = {
+        "code": code.label,
+        "reason": code.reason_en,
+        "requires_reauth": getattr(code, "requires_reauth", None),
+        "ui": getattr(code, "ui", None),
+        "phase": getattr(client, "last_error_phase", None),
+        "had_refresh_token": bool(getattr(client, "_refresh_token", "")),
+    }
+    # 2FA summary only when the failure is in the MFA band (160-169) -- challenge_kind is
+    # the enum "email"/None and can_resend is a bool; the MfaContext secrets are NEVER here.
+    mfa = getattr(client, "last_mfa_summary", None)
+    if isinstance(mfa, dict) and 160 <= getattr(code, "code", 0) <= 169:
+        out["mfa"] = {
+            "challenge_kind": mfa.get("challenge_kind"),
+            "can_resend": mfa.get("can_resend"),
+        }
+    return out
 
 
 async def async_get_config_entry_diagnostics(
