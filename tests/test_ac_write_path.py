@@ -538,6 +538,17 @@ class AcClimateReadPathTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(HVACMode.OFF, entity.hvac_mode)
 
+    async def test_hvac_mode_missing_machmode_returns_none(self) -> None:
+        # Powered on (onOffStatus=1) but settings.machMode is ABSENT entirely: report
+        # unknown (None), not a guessed COOL. This is the separate branch from the
+        # unmapped/non-advertised cases -- the old code defaulted a missing machMode to
+        # "1" (COOL).
+        entity, _, _ = _climate(
+            {"machMode": Param("1", values=["0", "1", "2", "4", "6"])},
+            attributes={"settings.onOffStatus": "1"},  # no settings.machMode
+        )
+        self.assertIsNone(entity.hvac_mode)
+
     async def test_fan_mode_valid_returns_speed(self) -> None:
         entity, _, _ = _climate(
             {"windSpeed": Param("5", values=["5", "3", "2", "1"])},

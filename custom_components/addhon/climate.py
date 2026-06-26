@@ -195,8 +195,18 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             )
             return HVACMode.OFF
 
-        # Read machMode (e.g. "2") using the constant from const.py
-        mode_val = str(self._get_attr(AC_ATTR_MODE, "1"))
+        # Read machMode (e.g. "2") using the constant from const.py. NO default: a
+        # powered-on unit whose current mode is absent (settings.machMode missing) must
+        # report unknown (None), not a guessed mode. Defaulting to "1" here coerced an
+        # absent mode into COOL, defeating the unknown-state contract below.
+        raw_mode = self._get_attr(AC_ATTR_MODE)
+        if raw_mode is None:
+            _LOGGER.debug(
+                "Climate debug: machMode missing id=%s -> hvac_mode None",
+                redact_id(self._appliance_id),
+            )
+            return None
+        mode_val = str(raw_mode)
 
         # Retrieve the text from const.py (e.g. "cool"). No default: an unmapped raw
         # value must not be coerced into a guessed mode -- HA rejects a current option

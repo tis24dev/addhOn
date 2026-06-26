@@ -549,10 +549,11 @@ class PublishReceivedTest(unittest.TestCase):
         topic = "$aws/events/presence/connected/myclient"
         app = FakeAppliance(topic)
         app.connection = False  # genuinely offline
-        m, _ = self._client(app)
+        m, hon = self._client(app)
         m._on_publish_received(_packet(topic, {"clientId": "myclient", "eventType": "connected"}))
         self.assertFalse(app.connection)        # not pinned online by our session
         self.assertEqual(app.realtime_seen, [])  # liveness not armed
+        self.assertEqual(hon.notified, 0)        # session presence: no HA state push
 
     def test_session_presence_disconnected_does_not_clobber_live_appliance(self) -> None:
         # `$aws/events/presence/disconnected/<clientId>` is OUR client's session blip; it
@@ -561,10 +562,11 @@ class PublishReceivedTest(unittest.TestCase):
         topic = "$aws/events/presence/disconnected/myclient"
         app = FakeAppliance(topic)
         app.connection = True  # appliance is live (streaming appliancestatus)
-        m, _ = self._client(app)
+        m, hon = self._client(app)
         m._on_publish_received(_packet(topic, {"clientId": "myclient", "eventType": "disconnected"}))
         self.assertTrue(app.connection)          # still live
         self.assertEqual(app.disconnected_calls, 0)  # marks NOT cleared
+        self.assertEqual(hon.notified, 0)        # session presence: no HA state push
 
     def test_connected_does_not_arm_realtime_liveness(self) -> None:
         # The presence "connected" event is OUR client's AWS-IoT session presence, not the

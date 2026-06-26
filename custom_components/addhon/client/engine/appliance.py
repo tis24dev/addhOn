@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timedelta
+from time import monotonic
 from typing import Any, Optional
 
 from ..helpers import parse_cloud_timestamp
@@ -63,11 +64,12 @@ class HonAppliance:
         # comparison against the cloud-stamped lastConnEvent is skew-free. See
         # mark_realtime_seen and load_attributes.
         self._last_realtime_ts: Optional[datetime] = None
-        # Local (wall-clock) receipt time of the last realtime message. Used ONLY for the
-        # freshness bound (_REALTIME_LIVENESS_TTL) -- a local-vs-local comparison, so it
-        # is skew-free; distinct from _last_realtime_ts, which is the CLOUD timestamp used
-        # for ordering against the cloud-stamped lastConnEvent.
-        self._last_realtime_local: Optional[datetime] = None
+        # MONOTONIC receipt time (seconds) of the last realtime message. Used ONLY for the
+        # freshness bound (_REALTIME_LIVENESS_TTL): a monotonic-vs-monotonic elapsed
+        # measure, immune to wall-clock jumps (NTP steps, DST transitions) that a naive
+        # datetime.now() would distort. Distinct from _last_realtime_ts, which is the CLOUD
+        # timestamp used for ordering against the cloud-stamped lastConnEvent.
+        self._last_realtime_local: Optional[float] = None
         # Per-type layer (resolved via the static registry).
         self._extra = _native_appliances.get_extra(self)
 
@@ -194,10 +196,10 @@ class HonAppliance:
         """
         self._connection = True
         self._attributes["available"] = True
-        # Wall-clock receipt time for the freshness bound (see load_attributes). Recorded
+        # Monotonic receipt time for the freshness bound (see load_attributes). Recorded
         # unconditionally -- even a timestamp-less message proves the appliance is live
         # NOW -- and only ever moves forward.
-        local_now = datetime.now()
+        local_now = monotonic()
         if self._last_realtime_local is None or local_now > self._last_realtime_local:
             self._last_realtime_local = local_now
         ts = parse_cloud_timestamp(timestamp)
@@ -278,8 +280,8 @@ class HonAppliance:
                     and realtime_ts > disconnect_ts
                 )
                 realtime_fresh = self._last_realtime_local is not None and (
-                    datetime.now() - self._last_realtime_local
-                    < timedelta(seconds=self._REALTIME_LIVENESS_TTL)
+                    monotonic() - self._last_realtime_local
+                    < self._REALTIME_LIVENESS_TTL
                 )
                 # Newer-than-disconnect AND still fresh -> trust realtime; else offline.
                 self._connection = realtime_newer and realtime_fresh

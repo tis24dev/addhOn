@@ -315,7 +315,7 @@ class RealtimeReconciliationTest(unittest.TestCase):
         # NOT stay online forever while the cloud's lastConnEvent is frozen at an old
         # disconnect. Once the last realtime message ages past _REALTIME_LIVENESS_TTL, the
         # stale disconnect is honored -> offline (recovers a dead device within the window).
-        from datetime import datetime, timedelta
+        from time import monotonic
 
         app = self._build(
             [self._lce("DISCONNECTED", ts_ms=self._DISCONNECT_MS)] * 2
@@ -323,11 +323,9 @@ class RealtimeReconciliationTest(unittest.TestCase):
         app.mark_realtime_seen(self._REALTIME_ISO)  # cloud ts 16:04 (newer than 13:35)
         _run(app.load_attributes())
         self.assertTrue(app.connection)  # still fresh -> online
-        # Age the LOCAL receipt time past the freshness window (cloud ts unchanged, still
-        # newer than the disconnect): realtime is no longer recent enough to be trusted.
-        app._last_realtime_local = datetime.now() - timedelta(
-            seconds=app._REALTIME_LIVENESS_TTL + 60
-        )
+        # Age the MONOTONIC receipt time past the freshness window (cloud ts unchanged,
+        # still newer than the disconnect): realtime is no longer recent enough to trust.
+        app._last_realtime_local = monotonic() - (app._REALTIME_LIVENESS_TTL + 60)
         _run(app.load_attributes())
         self.assertFalse(app.connection)  # stale realtime -> defer to REST -> offline
         self.assertFalse(app.attributes["available"])

@@ -297,6 +297,11 @@ class NativeMqttClient:
                     "MQTT: client session presence on %s, ignored for connectivity",
                     redact_topic(topic),
                 )
+                # Nothing about appliance state changed: return WITHOUT notifying the
+                # coordinator or logging the payload at INFO. Falling through would push a
+                # spurious HA state update and echo the session payload for every client
+                # (re)connect/disconnect.
+                return
             elif topic and "appliancestatus" in topic:
                 # Realtime traffic is authoritative connectivity evidence (the hOn app
                 # trusts it): mark the appliance connected and remember WHEN, using the
