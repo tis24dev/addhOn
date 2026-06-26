@@ -1690,6 +1690,26 @@ class _PerTopicFakeClient:
         return fut
 
 
+class _RaisingTopicFakeClient:
+    """A fake awscrt mqtt5 client whose subscribe() future RAISES a NON-timeout exception
+    for `raise_topics` (modelling an awscrt/transport error surfaced on the future), to
+    prove _subscribe_missing isolates more than just the HonCodedError timeout."""
+
+    def __init__(self, raise_topics) -> None:
+        self.raise_topics = set(raise_topics)
+        self.subscribed: list = []
+
+    def subscribe(self, packet):
+        topic = packet[1][0]
+        self.subscribed.append(topic)
+        fut: concurrent.futures.Future = concurrent.futures.Future()
+        if topic in self.raise_topics:
+            fut.set_exception(RuntimeError("awscrt subscribe failure"))
+        else:
+            fut.set_result(None)
+        return fut
+
+
 class SubscribeMissingIsolationTest(unittest.TestCase):
     """H1 direct guard: _subscribe_missing must subscribe every topic it CAN, isolating a
     single failing topic instead of aborting the whole pass (the old sequential
@@ -1766,6 +1786,51 @@ class SubscribeMissingIsolationTest(unittest.TestCase):
         blob = "\n".join(cm.output)
         self.assertIn("subscribe failed for one topic, continuing", blob)
         self.assertEqual(m._subscribed_topics_set, {"t/good"})
+
+    def test_non_timeout_exception_is_isolated(self) -> None:
+        # A subscribe failure that is NOT the HonCodedError timeout (e.g. an awscrt
+        # transport error surfaced on the future) must ALSO be isolated, not abort the
+        # pass: otherwise H1 starvation reopens for any non-timeout failure. With the
+        # old `except HonCodedError`-only handler this RuntimeError escaped and starved
+        # t/good2.
+        topics = ["t/good1", "t/raises", "t/good2"]
+        app = MultiTopicAppliance(topics)
+        m = NativeMqttClient(FakeHon([app]), "MID")
+        m._client = _RaisingTopicFakeClient(raise_topics={"t/raises"})
+        name = "custom_components.addhon.client.transport.mqtt"
+        with self.assertLogs(name, level="WARNING") as cm:
+            _run(m._subscribe_missing())  # must NOT raise out of the loop
+        self.assertIn(
+            "subscribe failed for one topic, continuing", "\n".join(cm.output)
+        )
+        # The other topics still got subscribed; all three were attempted.
+        self.assertEqual(m._subscribed_topics_set, {"t/good1", "t/good2"})
+        self.assertEqual(set(m._client.subscribed), set(topics))
+
+    def test_cancelled_error_propagates(self) -> None:
+        # A CancelledError (stop() cancels the watchdog) must NOT be swallowed as a
+        # per-topic failure: it has to propagate so shutdown is not deadlocked.
+        app = MultiTopicAppliance(["t/x"])
+        m = NativeMqttClient(FakeHon([app]), "MID")
+
+        async def _cancel(_topic):
+            raise asyncio.CancelledError
+
+        m._subscribe_topic = _cancel  # type: ignore[assignment]
+        with self.assertRaises(asyncio.CancelledError):
+            _run(m._subscribe_missing())
+
+        # Forward-protection: today CancelledError propagates because it is
+        # BaseException-derived and `except Exception` cannot catch it, so the behavioral
+        # check above passes with OR without the explicit re-raise. The REAL risk is a
+        # future refactor to `except BaseException`, which WOULD swallow the cancellation
+        # and deadlock stop(). Pin the isolation handler against that: it must catch
+        # `Exception` (not `BaseException`) and keep the explicit CancelledError re-raise.
+        import inspect
+
+        src = inspect.getsource(NativeMqttClient._subscribe_missing)
+        self.assertIn("except asyncio.CancelledError", src)
+        self.assertNotIn("except BaseException", src)
 
 
 class WatchdogPartialMissEscalationTest(unittest.TestCase):

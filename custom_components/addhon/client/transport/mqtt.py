@@ -467,7 +467,17 @@ class NativeMqttClient:
                 continue
             try:
                 await self._subscribe_topic(topic)
-            except HonCodedError as err:
+            except asyncio.CancelledError:
+                # stop() cancels+awaits the watchdog: a cancellation must propagate,
+                # never be swallowed as a per-topic failure (it is not one).
+                raise
+            except Exception as err:
+                # Isolate EVERY non-cancellation failure, not just the HonCodedError
+                # timeout: client.subscribe()/the awscrt future can also raise transport
+                # or awscrt errors, and letting those escape would abort the loop and
+                # re-open the exact H1 starvation (every later topic skipped this pass).
+                # A failed topic stays missing and is retried next tick; if NOTHING
+                # subscribes the watchdog's blackout escalation still fires.
                 _LOGGER.warning(
                     "MQTT: subscribe failed for one topic, continuing: %s", err
                 )
