@@ -76,8 +76,20 @@ def _install_stubs() -> None:
     class CoordinatorEntity:
         def __init__(self, coordinator) -> None:
             self.coordinator = coordinator
+            self.hass = getattr(coordinator, "hass", None)
 
-    uc.CoordinatorEntity = getattr(uc, "CoordinatorEntity", CoordinatorEntity)
+        def async_write_ha_state(self) -> None:
+            self.state_writes = getattr(self, "state_writes", 0) + 1
+
+        @property
+        def available(self) -> bool:
+            return self.coordinator.last_update_success
+
+    # FORCE-ASSIGN (not getattr): this module imports the addhon entities below, binding
+    # HonBaseEntity to whatever CoordinatorEntity is installed now. If collected first it
+    # must bind a COMPLETE base (hass + async_write_ha_state + available, mirroring
+    # test_ac_write_path) so it never poisons the entity tests that DO instantiate.
+    uc.CoordinatorEntity = CoordinatorEntity
     uc.DataUpdateCoordinator = getattr(uc, "DataUpdateCoordinator", type("DataUpdateCoordinator", (), {}))
     uc.UpdateFailed = getattr(uc, "UpdateFailed", type("UpdateFailed", (Exception,), {}))
 

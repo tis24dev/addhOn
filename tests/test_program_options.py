@@ -655,6 +655,75 @@ class TypeGateDryLevelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(["iron_dry", "ready_to_wear", "cupboard"], entity._attr_options)
 
 
+class DuplicateLabelDisambiguationTest(unittest.IsolatedAsyncioTestCase):
+    """PR#38 FIX#4 (Greptile P2): a TD dryLevel can expose two raw codes that share a
+    label (DRY_LEVEL_LABELS_TD: 1&12->iron_dry, 3&14->cupboard, 4&15->extra_dry). When
+    BOTH members are exposed the select must keep them as two DISTINCT options and
+    round-trip each raw, not collapse them onto one key (which would drop a code from
+    _attr_options and make _key_to_raw buffer the wrong raw)."""
+
+    def _attach(self, entity) -> None:
+        entity.hass = FakeHass()
+
+    def _td_dry_level(self, param):
+        from custom_components.addhon import select
+
+        # The real type-gated TD dry_level description (label_map=DRY_LEVEL_LABELS_TD).
+        desc = next(
+            d for d in select._PROGRAM_OPTION_SELECTS
+            if d.key == "dry_level" and "TD" in d.types
+        )
+        coordinator = FakeCoordinator(
+            _washer({"startProgram": RecordingCommand({"dryLevel": param})}, app_type="TD")
+        )
+        entity = select.HonProgramOptionSelect(coordinator, "washer-1", desc, FakeClient())
+        self._attach(entity)
+        return entity, coordinator
+
+    async def test_colliding_codes_stay_distinct_and_round_trip(self) -> None:
+        # 4 and 15 both map to "extra_dry" on TD; both must survive as DISTINCT options.
+        # Mutation-proof: without FIX#4 _attr_options collapses to ["extra_dry"] (len 1)
+        # and _key_to_raw is {"extra_dry": "15"} -> the first two assertions fail and the
+        # raw "4" is unreachable / buffers as "15".
+        entity, coordinator = self._td_dry_level(SetParam(["4", "15"]))
+
+        self.assertEqual(2, len(entity._attr_options))
+        self.assertEqual(len(entity._attr_options), len(set(entity._attr_options)))
+        # Every raw code is reachable through the option keys (injective round-trip map).
+        self.assertEqual({"4", "15"}, set(entity._key_to_raw.values()))
+
+        for option in entity._attr_options:
+            await entity.async_select_option(option)
+            # Each option buffers its OWN distinct raw, not a collapsed sibling.
+            self.assertEqual(
+                entity._key_to_raw[option],
+                coordinator.pending_options["washer-1"]["dryLevel"],
+            )
+            # current_option read-back round-trips to the very option just selected.
+            self.assertEqual(option, entity.current_option)
+
+    async def test_iron_dry_pair_round_trips_each_raw(self) -> None:
+        # 1 and 12 both map to "iron_dry": a live device reading of each raw must read
+        # back as a distinct option (no aliasing of 1 onto 12 or vice versa).
+        entity, coordinator = self._td_dry_level(SetParam(["1", "12"]))
+
+        self.assertEqual(2, len(set(entity._attr_options)))
+        opt_1 = entity._raw_to_key["1"]
+        opt_12 = entity._raw_to_key["12"]
+        self.assertNotEqual(opt_1, opt_12)
+        # Live read (no pending): each raw resolves to its own distinct option.
+        coordinator.data["washer-1"]["attributes"] = {"dryLevel": "1"}
+        self.assertEqual(opt_1, entity.current_option)
+        coordinator.data["washer-1"]["attributes"] = {"dryLevel": "12"}
+        self.assertEqual(opt_12, entity.current_option)
+
+    async def test_no_collision_keeps_translatable_keys_unchanged(self) -> None:
+        # Regression guard: erpayo's TD range [12,13,14] has NO label collision, so the
+        # options stay the plain translatable keys (state.<key>), unsuffixed.
+        entity, _ = self._td_dry_level(RangeParam(12, 14, 1))
+        self.assertEqual(["iron_dry", "ready_to_wear", "cupboard"], entity._attr_options)
+
+
 class ProgramDependencyTest(unittest.IsolatedAsyncioTestCase):
     """PR#38 reviewer findings: stale options across programs (#1) and a cached
     range that outlives the program after a swap (#3)."""

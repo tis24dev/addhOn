@@ -450,11 +450,24 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
             if self._option_param is not None
             else []
         )
-        # raw schema value -> displayed option key (label map, raw value as fallback).
-        self._raw_to_key: dict[str, str] = {raw: label_map.get(raw, raw) for raw in choices}
+        # raw schema value -> base label (label map, raw value as fallback).
+        base_keys = {raw: label_map.get(raw, raw) for raw in choices}
+        # Collision-aware disambiguation (PR #38 / Greptile P2): when two EXPOSED raw codes
+        # share a label (DRY_LEVEL_LABELS_TD maps e.g. 1 & 12 both to "iron_dry"), suffixing
+        # ONLY the colliding ones with their raw code keeps every code selectable and keeps
+        # the reverse map injective (otherwise one raw would be unreachable). Non-colliding
+        # labels are untouched, so the common case keeps its translatable `state.<key>`; a
+        # suffixed colliding key has no translation and renders literally (rare-model-only).
+        label_counts: dict[str, int] = {}
+        for label in base_keys.values():
+            label_counts[label] = label_counts.get(label, 0) + 1
+        self._raw_to_key: dict[str, str] = {
+            raw: (f"{label} ({raw})" if label_counts[label] > 1 else label)
+            for raw, label in base_keys.items()
+        }
         self._key_to_raw: dict[str, str] = {key: raw for raw, key in self._raw_to_key.items()}
-        # Preserve order, dedupe (two raw codes can share a label on some models).
-        self._attr_options = list(dict.fromkeys(self._raw_to_key.values()))
+        # One distinct option per exposed raw code (keys are now unique; order preserved).
+        self._attr_options = list(self._raw_to_key.values())
         _LOGGER.debug(
             "Select debug: init option select '%s' id=%s param=%s options=%s",
             redact_id(self._attr_unique_id, appliance_id),
