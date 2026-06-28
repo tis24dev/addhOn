@@ -181,7 +181,7 @@ def _tk(description) -> str:
 
 
 def _collect_code_keys() -> dict[str, set[str]]:
-    from custom_components.addhon import binary_sensor, number, sensor, switch
+    from custom_components.addhon import binary_sensor, number, select, sensor, switch
 
     used: dict[str, set[str]] = {}
 
@@ -206,13 +206,18 @@ def _collect_code_keys() -> dict[str, set[str]]:
     used["binary_sensor"].add("update_ok")
     used["number"] = {
         _tk(d) for descs in number.NUMBERS.values() for d in descs
+    } | {d.translation_key for d in number._PROGRAM_OPTION_NUMBERS}
+    # HonAcSwitch names from description.key; the pause + debug switches use fixed keys;
+    # the program-option switches (#35) come from their description key.
+    used["switch"] = (
+        {d.key for d in switch._AC_SWITCHES}
+        | {d.key for d in switch._PROGRAM_OPTION_SWITCHES}
+        | {"pause", "debug_logging", "mqtt_realtime_debug"}
+    )
+    # Program select (fixed key) + the program-option selects (#35).
+    used["select"] = {"program"} | {
+        d.translation_key for d in select._PROGRAM_OPTION_SELECTS
     }
-    # HonAcSwitch names from description.key; the pause + debug switches use fixed keys.
-    used["switch"] = {d.key for d in switch._AC_SWITCHES} | {
-        "pause", "debug_logging", "mqtt_realtime_debug"
-    }
-    # Fixed-key entities (no description table).
-    used["select"] = {"program"}
     used["button"] = {"start_program", "stop_program", "force_refresh", "reset_debug"}
     return used
 
@@ -426,6 +431,43 @@ class SensorStateTranslationTest(unittest.TestCase):
                     )
                 else:
                     seen[tk] = opts
+
+
+def _collect_select_state_keys() -> dict[str, set[str]]:
+    """Per select translation_key, the union of label-map values across the program-option
+    select descriptions (the machine keys that need a `state` translation). dryLevel is
+    type-gated (WM/WD + TD) and shares the `dry_level` key, so the union covers both maps."""
+    from custom_components.addhon import select
+
+    by_tk: dict[str, set[str]] = {}
+    for d in select._PROGRAM_OPTION_SELECTS:
+        label_map = getattr(d, "label_map", None)
+        if not label_map:
+            continue
+        by_tk.setdefault(d.translation_key, set()).update(label_map.values())
+    return by_tk
+
+
+class SelectStateTranslationTest(unittest.TestCase):
+    """Every label-mapped program-option select's machine keys must have a matching
+    `entity.select.<tk>.state.<key>` label in BOTH languages, with no extras. Without it
+    a mapped state would render as a raw machine key in the UI (#35). The numeric-label
+    selects (spin/temp) have no label map and are intentionally skipped here."""
+
+    def test_label_mapped_select_state_matches_translations(self) -> None:
+        by_tk = _collect_select_state_keys()
+        self.assertTrue(by_tk, "no label-mapped select options were collected")
+        for lang in ("en", "it"):
+            data = json.loads((COMPONENT / "translations" / f"{lang}.json").read_text(encoding="utf-8"))
+            select_block = data.get("entity", {}).get("select", {})
+            for tk, keys in by_tk.items():
+                state = set(select_block.get(tk, {}).get("state", {}))
+                self.assertEqual(
+                    keys,
+                    state,
+                    f"[{lang}] entity.select.{tk}.state keys {sorted(state)} != "
+                    f"label-map keys used in code {sorted(keys)}",
+                )
 
 
 if __name__ == "__main__":

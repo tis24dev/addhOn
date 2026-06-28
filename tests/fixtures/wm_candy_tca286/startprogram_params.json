@@ -1,0 +1,281 @@
+{
+  "_comment": "Real startProgram command parameter SCHEMA of erpayo device (model TCA286TM5-S), from the redacted config-entry diagnostics dump (discussion #35, 2026-06-25). Reconstructed into raw engine attribute form (typology + enumValues/min/max/step) so the gate can be run against real HonParameter objects. Candy washing machine, settable on this unit: spinSpeed/temp (enum) + delayTime + extraRinse1/2/3 + acquaplus (range). prewash/hygiene/anticrease/goodNight/dirtyLevel fixed. No identity, schema only.",
+  "model": "TCA286TM5-S",
+  "type": "WM",
+  "source": "config_entry diagnostics (.data.appliances[].commands.startProgram), redacted",
+  "captured": "2026-06-25",
+  "startprogram_params": {
+    "checkUpStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "program": {
+      "typology": "enum",
+      "enumValues": [
+        "autoclean",
+        "cottons",
+        "delicati_59",
+        "drain_spin",
+        "eco_40_60_new_energy_label",
+        "handwash_wool",
+        "hygiene_60",
+        "hygiene_plus_59",
+        "intensive_40",
+        "iot_checkup",
+        "iot_wash_100_custom_wash",
+        "iot_wash_anti_mites",
+        "iot_wash_ariel_clean_cycle",
+        "iot_wash_ariel_cold_cycle",
+        "iot_wash_ariel_fresh_cycle",
+        "iot_wash_baby_sanitizer",
+        "iot_wash_backpacks",
+        "iot_wash_bathrobe",
+        "iot_wash_bed_linen",
+        "iot_wash_bleaching",
+        "iot_wash_blood_stains",
+        "iot_wash_cashmere",
+        "iot_wash_chocolate_stains",
+        "iot_wash_cold_wash",
+        "iot_wash_colored",
+        "iot_wash_colored_anti_stain",
+        "iot_wash_colored_delicate",
+        "iot_wash_coloured",
+        "iot_wash_coloured_bed_linen",
+        "iot_wash_coloured_curtains",
+        "iot_wash_coloured_shirts",
+        "iot_wash_cotton",
+        "iot_wash_cuddly_toys",
+        "iot_wash_curtains",
+        "iot_wash_dark",
+        "iot_wash_darks_and_coloured_44",
+        "iot_wash_darks_and_coloured_59",
+        "iot_wash_darks_and_coloured_xl",
+        "iot_wash_dash_clean_cycle",
+        "iot_wash_dash_cold_cycle",
+        "iot_wash_dash_fresh_cycle",
+        "iot_wash_delicate",
+        "iot_wash_delicate_antiallergy",
+        "iot_wash_delicate_colors",
+        "iot_wash_delicate_dark",
+        "iot_wash_delicate_tablecloths",
+        "iot_wash_delicate_whites",
+        "iot_wash_denim_jeans",
+        "iot_wash_diving_suits",
+        "iot_wash_down_jackets",
+        "iot_wash_fruit_stains",
+        "iot_wash_gym_fit",
+        "iot_wash_handwash",
+        "iot_wash_handwash_colored",
+        "iot_wash_handwash_dark",
+        "iot_wash_lingerie",
+        "iot_wash_masks_refresh",
+        "iot_wash_masks_sanification",
+        "iot_wash_mats",
+        "iot_wash_men_s_trousers",
+        "iot_wash_mix_and_coloured_44",
+        "iot_wash_mix_and_coloured_59",
+        "iot_wash_mix_and_coloured_xl",
+        "iot_wash_mixed",
+        "iot_wash_new_clothes",
+        "iot_wash_perfect_white",
+        "iot_wash_pets",
+        "iot_wash_pets_hair_removal",
+        "iot_wash_pets_odours_stains_removal",
+        "iot_wash_playsuits",
+        "iot_wash_quick_drum_cleaner",
+        "iot_wash_rapid_14",
+        "iot_wash_rapid_30",
+        "iot_wash_rapid_44",
+        "iot_wash_rapid_59",
+        "iot_wash_refresh_14_min",
+        "iot_wash_resistant_colored",
+        "iot_wash_resistant_dark",
+        "iot_wash_resistant_whites",
+        "iot_wash_rinse",
+        "iot_wash_shirts",
+        "iot_wash_silk",
+        "iot_wash_ski_suit",
+        "iot_wash_spin",
+        "iot_wash_sport",
+        "iot_wash_sport_anti_odor",
+        "iot_wash_stains_remover",
+        "iot_wash_super_saving",
+        "iot_wash_swimsuits_and_bikinis",
+        "iot_wash_synthetic",
+        "iot_wash_tablecloths",
+        "iot_wash_technical_fabrics",
+        "iot_wash_technical_jackets",
+        "iot_wash_trainers",
+        "iot_wash_whites",
+        "iot_wash_whites_44",
+        "iot_wash_whites_59",
+        "iot_wash_whites_xl",
+        "iot_wash_wine_stains",
+        "iot_wash_wool",
+        "jeans_60",
+        "mix_and_colour_59",
+        "perfect_cotton_59",
+        "rapid_14_min",
+        "rapid_30_min",
+        "rapid_44_min",
+        "rinse",
+        "silent_night",
+        "single_item",
+        "special_49",
+        "sport_plus_39",
+        "synthetic_and_coloured",
+        "tumbling"
+      ],
+      "defaultValue": "special_49"
+    },
+    "delayTime": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1410.0,
+      "incrementValue": 30.0,
+      "defaultValue": 240
+    },
+    "dirtyLevel": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "lang": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 25.0,
+      "incrementValue": 1.0,
+      "defaultValue": 1
+    },
+    "onOffStatus": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "operationName": {
+      "typology": "fixed",
+      "fixedValue": "grCHGWash"
+    },
+    "prewash": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "hygiene": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "anticrease": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "goodNight": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "extraRinse1": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "extraRinse2": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "extraRinse3": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "acquaplus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "prCode": {
+      "typology": "fixed",
+      "fixedValue": "12"
+    },
+    "prPosition": {
+      "typology": "fixed",
+      "fixedValue": "5"
+    },
+    "prStr": {
+      "typology": "fixed",
+      "fixedValue": "PROGRAMS.WM_WD.MIX_AND_COLOUR_59"
+    },
+    "spinSpeed": {
+      "typology": "enum",
+      "enumValues": [
+        "0",
+        "400",
+        "800",
+        "1000",
+        "1200"
+      ],
+      "defaultValue": "1200"
+    },
+    "temp": {
+      "typology": "enum",
+      "enumValues": [
+        "0",
+        "20",
+        "30",
+        "40"
+      ],
+      "defaultValue": "40"
+    },
+    "energyLabel": {
+      "typology": "range",
+      "minimumValue": 3.0,
+      "maximumValue": 5.0,
+      "incrementValue": 1.0,
+      "defaultValue": 4
+    },
+    "liquidDetergentDose": {
+      "typology": "fixed",
+      "fixedValue": "2"
+    },
+    "powderDetergentDose": {
+      "typology": "fixed",
+      "fixedValue": "2"
+    },
+    "programCluster": {
+      "typology": "fixed",
+      "fixedValue": "quick"
+    },
+    "programFamily": {
+      "typology": "enum",
+      "enumValues": [
+        "dashboard"
+      ],
+      "defaultValue": "dashboard"
+    },
+    "programType": {
+      "typology": "fixed",
+      "fixedValue": "W+D"
+    },
+    "remoteActionable": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remoteVisible": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "suggestedLoadW": {
+      "typology": "fixed",
+      "fixedValue": "4"
+    },
+    "tempContribution": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    }
+  }
+}

@@ -33,7 +33,7 @@ from homeassistant.components.number import (
     NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -44,7 +44,11 @@ from .const import (
     APPLIANCE_FRE,
     APPLIANCE_OV,
     APPLIANCE_REF,
+    APPLIANCE_TD,
+    APPLIANCE_WASH_GROUP,
     APPLIANCE_WC,
+    APPLIANCE_WD,
+    APPLIANCE_WM,
     DOMAIN,
 )
 from .debug_utils import redact_id
@@ -53,6 +57,10 @@ from .hon_commands import (
     find_settings_param,
     param_range,
     param_values,
+)
+from .program_options import (
+    HonProgramOptionEntity,
+    option_range,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -130,6 +138,38 @@ NUMBERS: dict[str, tuple[HonNumberEntityDescription, ...]] = {
     APPLIANCE_WC: _WINE_NUMBERS,
     APPLIANCE_OV: _OVEN_NUMBERS,
 }
+
+
+@dataclass(frozen=True, kw_only=True)
+class HonProgramOptionNumberDescription:
+    """A numeric program option (e.g. delayed start) buffered onto startProgram (#35).
+
+    `param` is the startProgram range parameter; min/max/step are read live from it.
+    `types` gates the appliance families.
+    """
+
+    key: str
+    param: str
+    translation_key: str
+    types: tuple[str, ...]
+    icon: str | None = None
+    unit: str | None = None
+
+
+_WASH_GROUP_TYPES = (APPLIANCE_WM, APPLIANCE_WD, APPLIANCE_TD)
+
+# Candidate program-option numbers, capability-gated by the device schema. delayTime is a
+# true range (0..1410 step 30 on the real models); the bounds are read live.
+_PROGRAM_OPTION_NUMBERS: tuple[HonProgramOptionNumberDescription, ...] = (
+    HonProgramOptionNumberDescription(
+        key="delay_time",
+        param="delayTime",
+        translation_key="delay_time",
+        types=_WASH_GROUP_TYPES,
+        icon="mdi:timer-outline",
+        unit=UnitOfTime.MINUTES,
+    ),
+)
 
 
 def _is_enum_param(param) -> bool:
@@ -259,14 +299,28 @@ async def async_setup_entry(
                 )
             )
             created.append(description.key)
+        # Writable program-option numbers (#35): delayed start etc., capability-gated on
+        # the wash group's live startProgram schema.
+        opt_created: list[str] = []
+        if app_type in APPLIANCE_WASH_GROUP:
+            for option in _PROGRAM_OPTION_NUMBERS:
+                if app_type not in option.types:
+                    continue
+                if not HonProgramOptionNumber.supports(appliance, option.param):
+                    continue
+                entities.append(
+                    HonProgramOptionNumber(coordinator, appliance_id, option, client)
+                )
+                opt_created.append(option.key)
         _LOGGER.debug(
-            "Number debug: '%s' (type=%s, id=%s) -> %d/%d numbers %s",
+            "Number debug: '%s' (type=%s, id=%s) -> %d/%d numbers %s; option numbers %s",
             data.get("name", "Haier"),
             app_type,
             redact_id(appliance_id),
             len(created),
             len(NUMBERS.get(app_type, ())),
             created,
+            opt_created,
         )
     async_add_entities(entities)
 
@@ -395,3 +449,92 @@ class HonNumber(HonBaseEntity, NumberEntity):
                 translation_key="command_error",
                 translation_placeholders={"error": str(err)},
             ) from err
+
+
+def _clean_number(value: float) -> str:
+    """'30' not '30.0'; keep the decimals for a non-integer."""
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+class HonProgramOptionNumber(HonProgramOptionEntity, NumberEntity):
+    """Numeric program option (delayed start) buffered onto the startProgram command;
+    applied + sent on the "Start program" button (no immediate send)."""
+
+    entity_description: HonProgramOptionNumberDescription
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        description: HonProgramOptionNumberDescription,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, description.param, client)
+        self._desc = description
+        self._attr_translation_key = description.translation_key
+        self._attr_unique_id = f"{appliance_id}_opt_{description.key}"
+        if description.icon:
+            self._attr_icon = description.icon
+        if description.unit:
+            self._attr_native_unit_of_measurement = description.unit
+        # Fallback for a device that errored on its first load. The live bounds are read
+        # off the cached param (resolved once by the mixin -- see _live_range); engine
+        # rules can still move min/max/step, so they are read fresh. delayTime is 0..1410
+        # step 30 on the real models.
+        self._fallback_range = option_range(self._option_param) or (0.0, 1410.0, 30.0)
+        _LOGGER.debug(
+            "Number debug: init option number '%s' id=%s param=%s range=%s",
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
+            description.param,
+            self._live_range,
+        )
+
+    @property
+    def _live_range(self) -> tuple[float, float, float]:
+        # Read live min/max/step off the cached param (cheap: no per-read available_settings
+        # re-resolution across program categories). Falls back if the param is unavailable.
+        rng = option_range(self._option_param) if self._option_param is not None else None
+        return rng or self._fallback_range
+
+    @property
+    def native_min_value(self) -> float:
+        return self._live_range[0]
+
+    @property
+    def native_max_value(self) -> float:
+        return self._live_range[1]
+
+    @property
+    def native_step(self) -> float:
+        return self._live_range[2]
+
+    @property
+    def native_value(self) -> float | None:
+        raw = self._current_raw()
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            return None
+
+    async def async_set_native_value(self, value: float) -> None:
+        lo, hi, step = self._live_range
+        # Reject out-of-range / off-grid up front (clean message); the engine range setter
+        # would otherwise raise an opaque error only at "Start program".
+        on_grid = step > 0 and abs((value - lo) / step - round((value - lo) / step)) < 1e-6
+        if not (lo <= value <= hi) or not on_grid:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_setpoint",
+                translation_placeholders={
+                    "value": _clean_number(value),
+                    "allowed": (
+                        f"min {_clean_number(lo)} max {_clean_number(hi)} "
+                        f"step {_clean_number(step)}"
+                    ),
+                },
+            )
+        self._buffer(_clean_number(value))

@@ -50,6 +50,45 @@ PROGRAM_PARAM_NAMES = ("program", "prCode")
 # to startProgram. The single shared source of truth between select.py and button.py.
 PROGRAM_PENDING_STORE = "pending_programs"
 
+# Key of the volatile store (kept on the coordinator) that holds the writable
+# program OPTIONS (spin/temp/dry level/extra rinses/delayed start/...) chosen on the
+# option entities but not yet started. Shape: {appliance_id: {param: value_str}}.
+# Parallel to PROGRAM_PENDING_STORE: the option entities (switch/select/number) buffer
+# here, and the "Start program" button applies them to the startProgram command and
+# clears them on a successful send (see program_options.py / button.py). Discussion #35.
+PROGRAM_PENDING_OPTIONS = "pending_options"
+
+# --- Program-option label maps (discussion #35) -------------------------------
+# Labels ONLY (machine keys for the select state translations); the legal VALUE set is
+# ALWAYS read from the device's startProgram schema, never hardcoded (a model exposes
+# only a slice -- e.g. the user's dryer shows dryLevel[12,13,14], tempLevel[2,3,4]).
+# Values are the decompiled-app codes. dryLevel semantics are NOT stable across classes
+# (value 1 = EXTRA_DRY on WM/WD but IRON_DRY on TD), so it is TYPE-GATED with two maps.
+DRY_LEVEL_LABELS_WM = {
+    "1": "extra_dry",
+    "2": "cupboard",
+    "3": "iron_dry",
+    "4": "hang_dry",
+    "5": "smart_dry",
+    "6": "wool_dry",
+}  # decomp case 300 (WM/WD)
+DRY_LEVEL_LABELS_TD = {
+    "1": "iron_dry",
+    "2": "hang_dry",
+    "3": "cupboard",
+    "4": "extra_dry",
+    "12": "iron_dry",
+    "13": "ready_to_wear",
+    "14": "cupboard",
+    "15": "extra_dry",
+}  # decomp case 53 (TD)
+TEMP_LEVEL_LABELS = {"1": "minimum", "2": "low", "3": "medium", "4": "high"}
+DIRTY_LEVEL_LABELS = {"1": "little", "2": "normal", "3": "very"}
+STEAM_LEVEL_LABELS = {"0": "no_steam", "1": "cotton", "2": "delicate", "3": "synthetic"}
+# Unselectable dryLevel sentinels (hasDryLevelValue returns false for ''/'0'/'11'):
+# dropped from the select options so they never appear as a choice.
+DRY_LEVEL_SENTINELS = ("0", "11")
+
 # Service to change at runtime the log level of the realtime MQTT channel. By
 # default the reconnection-attempt noise is silenced (see logging_utils); this
 # service re-enables it on demand for debugging. The logger names and the level

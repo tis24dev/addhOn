@@ -58,6 +58,7 @@ _FILES = {
     "switch.py": (_ENTITY_NAMES, _ENTITY_ATTRS),
     "button.py": (_ENTITY_NAMES, _ENTITY_ATTRS),
     "number.py": (_ENTITY_NAMES, _ENTITY_ATTRS),
+    "program_options.py": (_ENTITY_NAMES, _ENTITY_ATTRS),
     "sensor.py": (_ENTITY_NAMES, _ENTITY_ATTRS),
     "binary_sensor.py": (_ENTITY_NAMES, _ENTITY_ATTRS),
     "climate.py": (_ENTITY_NAMES, _ENTITY_ATTRS),

@@ -621,6 +621,42 @@
       "energy_saving": {
         "name": "Risparmio Energetico"
       },
+      "extra_rinse_1": {
+        "name": "Extra risciacquo 1"
+      },
+      "extra_rinse_2": {
+        "name": "Extra risciacquo 2"
+      },
+      "extra_rinse_3": {
+        "name": "Extra risciacquo 3"
+      },
+      "acquaplus": {
+        "name": "Acqua Plus"
+      },
+      "prewash": {
+        "name": "Prelavaggio"
+      },
+      "hygiene": {
+        "name": "Igiene extra"
+      },
+      "anticrease": {
+        "name": "Antipiega"
+      },
+      "good_night": {
+        "name": "Buonanotte"
+      },
+      "sterilization": {
+        "name": "Sterilizzazione"
+      },
+      "tumbling": {
+        "name": "Rotazione antipiega"
+      },
+      "permanent_press": {
+        "name": "Mantieni fresco"
+      },
+      "anti_crease_time": {
+        "name": "Antipiega"
+      },
       "pause": {
         "name": "Pausa"
       },
@@ -655,11 +691,58 @@
       },
       "target_temp_oven": {
         "name": "Temperatura Forno"
+      },
+      "delay_time": {
+        "name": "Partenza ritardata"
       }
     },
     "select": {
       "program": {
         "name": "Programma"
+      },
+      "spin_speed": {
+        "name": "Centrifuga"
+      },
+      "wash_temp": {
+        "name": "Temperatura"
+      },
+      "dry_level": {
+        "name": "Livello di asciugatura",
+        "state": {
+          "extra_dry": "Extra asciutto",
+          "cupboard": "Pronto armadio",
+          "iron_dry": "Pronto stiro",
+          "hang_dry": "Pronto stendi",
+          "smart_dry": "Asciugatura smart",
+          "wool_dry": "Asciugatura lana",
+          "ready_to_wear": "Pronto indossa"
+        }
+      },
+      "temp_level": {
+        "name": "Livello temperatura",
+        "state": {
+          "minimum": "Minima",
+          "low": "Bassa",
+          "medium": "Media",
+          "high": "Alta"
+        }
+      },
+      "dirty_level": {
+        "name": "Livello di sporco",
+        "state": {
+          "little": "Leggero",
+          "normal": "Normale",
+          "very": "Intenso"
+        }
+      },
+      "steam_level": {
+        "name": "Livello vapore",
+        "state": {
+          "no_steam": "Senza vapore",
+          "cotton": "Cotone",
+          "delicate": "Delicati",
+          "synthetic": "Sintetici"
+        }
       }
     },
     "button": {

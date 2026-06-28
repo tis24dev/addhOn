@@ -15,13 +15,21 @@ from .ac_command import async_send_settings, settings_param
 from .base_entity import HonAccountEntity, HonBaseEntity
 from .const import (
     APPLIANCE_AC,
+    APPLIANCE_TD,
     APPLIANCE_WASH_GROUP,
+    APPLIANCE_WD,
+    APPLIANCE_WM,
     CONF_ENABLE_DEBUG,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
     WM_ATTR_STATUS,
 )
 from .debug_utils import redact_id
+from .program_options import (
+    HonProgramOptionEntity,
+    normalize_code,
+    option_choices,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +66,43 @@ _AC_SWITCHES: tuple[HonAcSwitchDescription, ...] = (
     HonAcSwitchDescription(key="fresh_air", param="freshAirStatus", icon="mdi:air-filter"),
     HonAcSwitchDescription(key="half_degree", param="halfDegreeSettingStatus", icon="mdi:thermometer-lines"),
     HonAcSwitchDescription(key="energy_saving", param="energySavingStatus", icon="mdi:meter-electric"),
+)
+
+
+@dataclass(frozen=True, kw_only=True)
+class HonProgramOptionSwitchDescription:
+    """Boolean program-option switch buffered onto the startProgram command (#35).
+
+    `param` is the startProgram parameter name (read + write). `types` gates which
+    appliance families the option applies to. on/off tokens are derived from the device
+    schema at runtime (handles 0/1 AND value-pair ranges like antiCreaseTime[0,360]).
+    """
+
+    key: str            # translation_key + base of the unique_id suffix
+    param: str
+    types: tuple[str, ...]
+    icon: str | None = None
+
+
+# Candidate program-option switches (decomp/andre0512 superset), capability-gated by the
+# device's startProgram schema (a param that is fixed / single-value on the model creates
+# NO entity, so no "No disponible" clutter). WM/WD vs TD families are kept distinct
+# (anticrease is the WM/WD opt-toggle; antiCreaseTime is the TD timed variant).
+_WASH_TYPES = (APPLIANCE_WM, APPLIANCE_WD)
+_DRY_TYPES = (APPLIANCE_TD,)
+_PROGRAM_OPTION_SWITCHES: tuple[HonProgramOptionSwitchDescription, ...] = (
+    HonProgramOptionSwitchDescription(key="extra_rinse_1", param="extraRinse1", types=_WASH_TYPES, icon="mdi:water-plus"),
+    HonProgramOptionSwitchDescription(key="extra_rinse_2", param="extraRinse2", types=_WASH_TYPES, icon="mdi:water-plus"),
+    HonProgramOptionSwitchDescription(key="extra_rinse_3", param="extraRinse3", types=_WASH_TYPES, icon="mdi:water-plus"),
+    HonProgramOptionSwitchDescription(key="acquaplus", param="acquaplus", types=_WASH_TYPES, icon="mdi:water"),
+    HonProgramOptionSwitchDescription(key="prewash", param="prewash", types=_WASH_TYPES, icon="mdi:water-sync"),
+    HonProgramOptionSwitchDescription(key="hygiene", param="hygiene", types=_WASH_TYPES, icon="mdi:bacteria"),
+    HonProgramOptionSwitchDescription(key="anticrease", param="anticrease", types=_WASH_TYPES, icon="mdi:tshirt-crew"),
+    HonProgramOptionSwitchDescription(key="good_night", param="goodNight", types=_WASH_TYPES, icon="mdi:weather-night"),
+    HonProgramOptionSwitchDescription(key="sterilization", param="sterilizationStatus", types=_DRY_TYPES, icon="mdi:bacteria-outline"),
+    HonProgramOptionSwitchDescription(key="tumbling", param="tumblingStatus", types=_DRY_TYPES, icon="mdi:tumble-dryer"),
+    HonProgramOptionSwitchDescription(key="permanent_press", param="permanentPressStatus", types=_DRY_TYPES, icon="mdi:tshirt-crew-outline"),
+    HonProgramOptionSwitchDescription(key="anti_crease_time", param="antiCreaseTime", types=_DRY_TYPES, icon="mdi:tshirt-crew"),
 )
 
 
@@ -108,6 +153,28 @@ async def async_setup_entry(
                         "Switch debug: pause switch not created for id=%s; pause/resume missing",
                         redact_id(appliance_id),
                     )
+            # Writable program-option switches (#35): created only for the params this
+            # model genuinely exposes as settable in its startProgram schema.
+            created_opts: list[str] = []
+            for desc in _PROGRAM_OPTION_SWITCHES:
+                if app_type not in desc.types:
+                    continue
+                if not HonProgramOptionSwitch.supports(appliance, desc.param):
+                    continue
+                entities.append(HonProgramOptionSwitch(coordinator, appliance_id, desc, client))
+                created_opts.append(desc.key)
+            if created_opts:
+                _LOGGER.info(
+                    "Added %d program-option switches: id=%s",
+                    len(created_opts),
+                    redact_id(appliance_id),
+                )
+            _LOGGER.debug(
+                "Switch debug: option switches for id=%s type=%s -> %s",
+                redact_id(appliance_id),
+                app_type,
+                created_opts,
+            )
         elif app_type == APPLIANCE_AC:
             created: list[str] = []
             for desc in _AC_SWITCHES:
@@ -284,6 +351,52 @@ class HonAcSwitch(HonBaseEntity, SwitchEntity):
                 translation_key="command_error",
                 translation_placeholders={"error": str(err)},
             ) from err
+
+
+class HonProgramOptionSwitch(HonProgramOptionEntity, SwitchEntity):
+    """Boolean program option (extra rinse, prewash, sterilization, ...) buffered onto
+    the startProgram command; the real send happens on the "Start program" button."""
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        description: HonProgramOptionSwitchDescription,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, description.param, client)
+        self._desc = description
+        self._attr_translation_key = description.key
+        self._attr_unique_id = f"{appliance_id}_opt_{description.key}"
+        if description.icon:
+            self._attr_icon = description.icon
+        # Resolve on/off tokens from the device schema (the param is resolved + cached once
+        # by the mixin): off = "0" (or the lowest value), on = the first value that is not
+        # off. Handles plain 0/1 AND value-pair ranges such as antiCreaseTime[0,360].
+        choices = option_choices(self._option_param) if self._option_param is not None else []
+        self._off = "0" if "0" in choices else (choices[0] if choices else "0")
+        self._on = next((c for c in choices if c != self._off), "1")
+        _LOGGER.debug(
+            "Switch debug: init option switch '%s' id=%s param=%s off=%s on=%s",
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
+            description.param,
+            self._off,
+            self._on,
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        raw = self._current_raw()
+        if raw is None:
+            return None
+        return normalize_code(raw) != self._off
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self._buffer(self._on)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self._buffer(self._off)
 
 
 class HonDebugSwitch(HonAccountEntity, SwitchEntity):

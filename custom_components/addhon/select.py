@@ -1,6 +1,7 @@
-"""Haier hOn select - washer program selection."""
+"""Haier hOn select - washer program selection + writable program options."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 
 from homeassistant.components.select import SelectEntity
@@ -11,14 +12,88 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity
 from .const import (
+    APPLIANCE_TD,
     APPLIANCE_WASH_GROUP,
+    APPLIANCE_WD,
+    APPLIANCE_WM,
+    DIRTY_LEVEL_LABELS,
     DOMAIN,
+    DRY_LEVEL_LABELS_TD,
+    DRY_LEVEL_LABELS_WM,
+    DRY_LEVEL_SENTINELS,
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_STORE,
+    STEAM_LEVEL_LABELS,
+    TEMP_LEVEL_LABELS,
 )
 from .debug_utils import redact_id, redact_store
+from .program_options import (
+    HonProgramOptionEntity,
+    normalize_code,
+    option_choices,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, kw_only=True)
+class HonProgramOptionSelectDescription:
+    """A categorical program option rendered as a select (#35).
+
+    `label_map` maps raw schema values -> machine keys for the select state translations
+    (None = render the raw values, used for the numeric spin/temp enums). `drop` removes
+    unselectable sentinels. `types` gates the appliance families; dryLevel is TYPE-GATED
+    (WM/WD vs TD) because value 1 means EXTRA_DRY on WM/WD but IRON_DRY on TD, so the two
+    descriptions share the `dry_level` translation_key but carry disjoint label maps.
+    """
+
+    key: str                 # base of the unique_id suffix (opt_<key>)
+    param: str
+    translation_key: str
+    types: tuple[str, ...]
+    label_map: dict[str, str] | None = None
+    drop: tuple[str, ...] = ()
+    icon: str | None = None
+
+
+_WASH_TYPES = (APPLIANCE_WM, APPLIANCE_WD)
+_DRY_TYPES = (APPLIANCE_TD,)
+
+# Candidate program-option selects, capability-gated by the device schema. spin/temp are
+# numeric enums on the real washers -> selects with raw numeric labels (no state block).
+# dryLevel/tempLevel/dirtyLevel/steamLevel are label-mapped (state translations).
+_PROGRAM_OPTION_SELECTS: tuple[HonProgramOptionSelectDescription, ...] = (
+    HonProgramOptionSelectDescription(
+        key="spin_speed", param="spinSpeed", translation_key="spin_speed",
+        types=_WASH_TYPES, icon="mdi:speedometer",
+    ),
+    HonProgramOptionSelectDescription(
+        key="wash_temp", param="temp", translation_key="wash_temp",
+        types=_WASH_TYPES, icon="mdi:thermometer",
+    ),
+    HonProgramOptionSelectDescription(
+        key="dry_level", param="dryLevel", translation_key="dry_level",
+        types=_WASH_TYPES, label_map=DRY_LEVEL_LABELS_WM, drop=DRY_LEVEL_SENTINELS,
+        icon="mdi:tumble-dryer",
+    ),
+    HonProgramOptionSelectDescription(
+        key="dry_level", param="dryLevel", translation_key="dry_level",
+        types=_DRY_TYPES, label_map=DRY_LEVEL_LABELS_TD, drop=DRY_LEVEL_SENTINELS,
+        icon="mdi:tumble-dryer",
+    ),
+    HonProgramOptionSelectDescription(
+        key="temp_level", param="tempLevel", translation_key="temp_level",
+        types=_DRY_TYPES, label_map=TEMP_LEVEL_LABELS, icon="mdi:thermometer",
+    ),
+    HonProgramOptionSelectDescription(
+        key="dirty_level", param="dirtyLevel", translation_key="dirty_level",
+        types=_WASH_TYPES, label_map=DIRTY_LEVEL_LABELS, icon="mdi:liquid-spot",
+    ),
+    HonProgramOptionSelectDescription(
+        key="steam_level", param="steamLevel", translation_key="steam_level",
+        types=_WASH_TYPES, label_map=STEAM_LEVEL_LABELS, icon="mdi:weather-fog",
+    ),
+)
 
 # "Safe" commands (they do not start a cycle) to read/write the program from.
 PROGRAM_SELECT_COMMANDS = ("settings", "setProgram", "setProgramme", "programSettings")
@@ -74,6 +149,27 @@ async def async_setup_entry(
                 redact_id(appliance_id),
                 PROGRAM_PARAM_NAMES,
             )
+        # Writable program-option selects (#35): capability-gated on the live schema.
+        created_opts: list[str] = []
+        for desc in _PROGRAM_OPTION_SELECTS:
+            if app_type not in desc.types:
+                continue
+            if not HonProgramOptionSelect.supports(appliance, desc.param, desc.drop):
+                continue
+            entities.append(HonProgramOptionSelect(coordinator, appliance_id, desc, client))
+            created_opts.append(desc.key)
+        if created_opts:
+            _LOGGER.info(
+                "Added %d program-option selects: id=%s",
+                len(created_opts),
+                redact_id(appliance_id),
+            )
+        _LOGGER.debug(
+            "Select debug: option selects for id=%s type=%s -> %s",
+            redact_id(appliance_id),
+            app_type,
+            created_opts,
+        )
     async_add_entities(entities)
 
 
@@ -311,3 +407,61 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         )
         _LOGGER.debug("Select debug: after selection store=%s", redact_store(store))
         self.async_write_ha_state()
+
+
+class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
+    """Categorical program option (dry level, spin speed, soil level, ...) buffered onto
+    the startProgram command; applied + sent on the "Start program" button."""
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        description: HonProgramOptionSelectDescription,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, description.param, client)
+        self._desc = description
+        self._attr_translation_key = description.translation_key
+        self._attr_unique_id = f"{appliance_id}_opt_{description.key}"
+        if description.icon:
+            self._attr_icon = description.icon
+        label_map = description.label_map or {}
+        # The param is resolved + cached once by the mixin; materialize its codes here.
+        choices = (
+            option_choices(self._option_param, description.drop)
+            if self._option_param is not None
+            else []
+        )
+        # raw schema value -> displayed option key (label map, raw value as fallback).
+        self._raw_to_key: dict[str, str] = {raw: label_map.get(raw, raw) for raw in choices}
+        self._key_to_raw: dict[str, str] = {key: raw for raw, key in self._raw_to_key.items()}
+        # Preserve order, dedupe (two raw codes can share a label on some models).
+        self._attr_options = list(dict.fromkeys(self._raw_to_key.values()))
+        _LOGGER.debug(
+            "Select debug: init option select '%s' id=%s param=%s options=%s",
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
+            description.param,
+            self._attr_options,
+        )
+
+    @property
+    def current_option(self) -> str | None:
+        raw = self._current_raw()
+        if raw is None:
+            return None
+        return self._raw_to_key.get(normalize_code(raw))
+
+    async def async_select_option(self, option: str) -> None:
+        raw = self._key_to_raw.get(option)
+        if raw is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_setpoint",
+                translation_placeholders={
+                    "value": option,
+                    "allowed": ", ".join(self._attr_options),
+                },
+            )
+        self._buffer(raw)

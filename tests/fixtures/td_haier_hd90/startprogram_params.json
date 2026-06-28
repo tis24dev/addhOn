@@ -1,0 +1,236 @@
+{
+  "_comment": "Real startProgram command parameter SCHEMA of erpayo device (model HD90-A3959 INT), from the redacted config-entry diagnostics dump (discussion #35, 2026-06-25). Reconstructed into raw engine attribute form (typology + enumValues/min/max/step) so the gate can be run against real HonParameter objects. Haier tumble dryer, settable on this unit: dryLevel[12,13,14] + tempLevel[2,3,4] + delayTime + antiCreaseTime[0,360] + sterilizationStatus + tumblingStatus (range). dryTimeMM fixed. No identity, schema only.",
+  "model": "HD90-A3959 INT",
+  "type": "TD",
+  "source": "config_entry diagnostics (.data.appliances[].commands.startProgram), redacted",
+  "captured": "2026-06-25",
+  "startprogram_params": {
+    "airWashMode": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "program": {
+      "typology": "enum",
+      "enumValues": [
+        "Algodón",
+        "Ropa mixta",
+        "Sintéticos",
+        "Sábanas",
+        "hqd_baby_care",
+        "hqd_bath_towel",
+        "hqd_bed_sheets",
+        "hqd_bulky",
+        "hqd_casual",
+        "hqd_cold_wind_timing",
+        "hqd_cotton",
+        "hqd_curtain",
+        "hqd_delicate",
+        "hqd_duvet",
+        "hqd_feather",
+        "hqd_hot_wind_timing",
+        "hqd_hygienic",
+        "hqd_i_refresh",
+        "hqd_jacket",
+        "hqd_jeans",
+        "hqd_mix",
+        "hqd_night_dry",
+        "hqd_outdoor",
+        "hqd_precious_cure",
+        "hqd_quick_30",
+        "hqd_quick_dry",
+        "hqd_quilt",
+        "hqd_refresh",
+        "hqd_shirt",
+        "hqd_shoes",
+        "hqd_silk",
+        "hqd_sports",
+        "hqd_synthetics",
+        "hqd_timer",
+        "hqd_towel",
+        "hqd_underwear",
+        "hqd_wool",
+        "hqd_working_suit",
+        "iot_dry_baby",
+        "iot_dry_backpacks",
+        "iot_dry_bathrobe",
+        "iot_dry_bed_linen",
+        "iot_dry_cotton",
+        "iot_dry_cuddly_toys",
+        "iot_dry_curtains",
+        "iot_dry_delicates",
+        "iot_dry_denim_jeans",
+        "iot_dry_down_jacket",
+        "iot_dry_duvet",
+        "iot_dry_gym_fit",
+        "iot_dry_lingerie",
+        "iot_dry_mixed",
+        "iot_dry_pet_accessories",
+        "iot_dry_pet_hair_removal",
+        "iot_dry_rapid_30",
+        "iot_dry_rapid_59",
+        "iot_dry_shirts",
+        "iot_dry_swimsuits_and_bikinis",
+        "iot_dry_synthetics",
+        "iot_dry_tablecloths",
+        "iot_dry_technical_fabrics",
+        "iot_dry_tennis_tie_break",
+        "iot_dry_wool"
+      ],
+      "defaultValue": "iot_dry_baby"
+    },
+    "airwashSprayTime": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "anionStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "antiCreaseTime": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 360.0,
+      "incrementValue": 360.0,
+      "defaultValue": 0
+    },
+    "buzzerDisabled": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "cloudProgId": {
+      "typology": "fixed",
+      "fixedValue": "255"
+    },
+    "cloudProgSrc": {
+      "typology": "fixed",
+      "fixedValue": "2"
+    },
+    "delayTime": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1410.0,
+      "incrementValue": 30.0,
+      "defaultValue": 0
+    },
+    "delicateStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "dryLevel": {
+      "typology": "range",
+      "minimumValue": 12.0,
+      "maximumValue": 14.0,
+      "incrementValue": 1.0,
+      "defaultValue": 14
+    },
+    "dryMode": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "dryTimeMM": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "fastDryStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "ironRemindStatus": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "lockStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "mitesRemovalStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "onOffStatus": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "operationName": {
+      "typology": "fixed",
+      "fixedValue": "grDryCloudProg"
+    },
+    "pause": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "prCode": {
+      "typology": "fixed",
+      "fixedValue": "63"
+    },
+    "programClass": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "sterilizationStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "tempLevel": {
+      "typology": "range",
+      "minimumValue": 2.0,
+      "maximumValue": 4.0,
+      "incrementValue": 1.0,
+      "defaultValue": 3
+    },
+    "texture": {
+      "typology": "fixed",
+      "fixedValue": "64"
+    },
+    "energyLabel": {
+      "typology": "range",
+      "minimumValue": 1.0,
+      "maximumValue": 5.0,
+      "incrementValue": 1.0,
+      "defaultValue": 2
+    },
+    "programCluster": {
+      "typology": "fixed",
+      "fixedValue": "specialCare"
+    },
+    "programFamily": {
+      "typology": "enum",
+      "enumValues": [
+        "guided",
+        "auto",
+        "guided_auto"
+      ],
+      "defaultValue": "guided_auto"
+    },
+    "programType": {
+      "typology": "fixed",
+      "fixedValue": "D"
+    },
+    "prPosition": {
+      "typology": "fixed",
+      "fixedValue": "8"
+    },
+    "remoteActionable": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remoteVisible": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "suggestedLoadD": {
+      "typology": "fixed",
+      "fixedValue": 4.5
+    },
+    "tumblingStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    }
+  }
+}

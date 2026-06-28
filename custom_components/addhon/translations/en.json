@@ -621,6 +621,42 @@
       "energy_saving": {
         "name": "Energy saving"
       },
+      "extra_rinse_1": {
+        "name": "Extra rinse 1"
+      },
+      "extra_rinse_2": {
+        "name": "Extra rinse 2"
+      },
+      "extra_rinse_3": {
+        "name": "Extra rinse 3"
+      },
+      "acquaplus": {
+        "name": "Acqua Plus"
+      },
+      "prewash": {
+        "name": "Prewash"
+      },
+      "hygiene": {
+        "name": "Extra hygiene"
+      },
+      "anticrease": {
+        "name": "Anti-crease"
+      },
+      "good_night": {
+        "name": "Good night"
+      },
+      "sterilization": {
+        "name": "Sterilization"
+      },
+      "tumbling": {
+        "name": "Tumbling"
+      },
+      "permanent_press": {
+        "name": "Keep fresh"
+      },
+      "anti_crease_time": {
+        "name": "Anti-crease"
+      },
       "pause": {
         "name": "Pause"
       },
@@ -655,11 +691,58 @@
       },
       "target_temp_oven": {
         "name": "Oven temperature"
+      },
+      "delay_time": {
+        "name": "Delayed start"
       }
     },
     "select": {
       "program": {
         "name": "Program"
+      },
+      "spin_speed": {
+        "name": "Spin speed"
+      },
+      "wash_temp": {
+        "name": "Temperature"
+      },
+      "dry_level": {
+        "name": "Dry level",
+        "state": {
+          "extra_dry": "Extra dry",
+          "cupboard": "Cupboard dry",
+          "iron_dry": "Iron dry",
+          "hang_dry": "Hang dry",
+          "smart_dry": "Smart dry",
+          "wool_dry": "Wool dry",
+          "ready_to_wear": "Ready to wear"
+        }
+      },
+      "temp_level": {
+        "name": "Temperature level",
+        "state": {
+          "minimum": "Minimum",
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High"
+        }
+      },
+      "dirty_level": {
+        "name": "Soil level",
+        "state": {
+          "little": "Light",
+          "normal": "Normal",
+          "very": "Heavy"
+        }
+      },
+      "steam_level": {
+        "name": "Steam level",
+        "state": {
+          "no_steam": "No steam",
+          "cotton": "Cotton",
+          "delicate": "Delicate",
+          "synthetic": "Synthetic"
+        }
       }
     },
     "button": {
