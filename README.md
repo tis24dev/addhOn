@@ -85,7 +85,9 @@ controls where they have been mapped.
 
 - **AC Unit:** Haier AS35PBPHRA-PRE
 - **Washing Machine:** Haier HW80-B14959TU1IT
+- **Washing Machine:** Candy TCA286TM5-S
 - **Tumble Dryer:** Haier HD100-C367GU1-IT
+- **Tumble Dryer:** Haier HD90-A3959 INT
 - **Refrigerator:** Haier HDPW5620CNPK
 
 Other hOn-compatible Haier appliances should work; feel free to test and report.
