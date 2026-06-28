@@ -131,10 +131,14 @@ def option_choices(param, drop: tuple[str, ...] = ()) -> list[str]:
     rng = option_range(param)
     if rng is not None:
         lo, hi, step = rng
+        if step <= 0:
+            return []
         out: list[str] = []
         current = lo
         count = 0
-        while current <= hi + step / 2 and count < _MAX_RANGE_CHOICES:
+        # Tight upper bound (+1e-9 only for float-accumulation drift, NOT step/2): a step
+        # that overshoots the max (e.g. 0..10 step 20) must NOT emit a value beyond hi.
+        while current <= hi + 1e-9 and count < _MAX_RANGE_CHOICES:
             token = _num_str(current)
             if token not in drop and token not in out:
                 out.append(token)
@@ -156,8 +160,14 @@ def is_settable_option(param, drop: tuple[str, ...] = ()) -> bool:
         return False
     rng = option_range(param)
     if rng is not None:
+        lo, hi, step = rng
+        if step <= 0:
+            return False
         if not drop:
-            return rng[1] > rng[0]
+            # >= 2 reachable values: lo AND lo+step must both fall within [lo, hi]. A range
+            # whose step overshoots the max (e.g. 0..10 step 20) has ONE real value -> not a
+            # control (max > min alone would wrongly accept it).
+            return lo + step <= hi + 1e-9
         return len(option_choices(param, drop)) >= 2
     return len(option_value_set(param, drop)) >= 2
 

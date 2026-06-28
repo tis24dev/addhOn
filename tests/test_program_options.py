@@ -305,6 +305,38 @@ class GateTest(unittest.TestCase):
         self.assertEqual("iot_smart", normalize_code("iot_smart"))
         self.assertIsNone(normalize_code(None))
 
+    def test_uneven_range_does_not_overshoot_max(self) -> None:
+        # FIX #6: a step that overshoots the max must NOT emit a value beyond it
+        # (0..10 step 20 -> ["0"], never ["0","20"]), and such a single-reachable-value
+        # range is NOT a settable control (max>min alone would wrongly accept it).
+        from custom_components.addhon.program_options import (
+            is_settable_option,
+            option_choices,
+        )
+
+        self.assertEqual(["0"], option_choices(RangeParam(0, 10, 20)))
+        self.assertFalse(is_settable_option(RangeParam(0, 10, 20)))
+        # A clean two-value uneven range is fine.
+        self.assertEqual(["0", "20"], option_choices(RangeParam(0, 20, 20)))
+        self.assertTrue(is_settable_option(RangeParam(0, 20, 20)))
+
+    def test_empty_string_drylevel_sentinel_dropped(self) -> None:
+        # FIX #5: '' is an unselectable dryLevel sentinel (hasDryLevelValue == false),
+        # so it must be dropped from the options and not count toward the gate.
+        from custom_components.addhon.const import DRY_LEVEL_SENTINELS
+        from custom_components.addhon.program_options import (
+            is_settable_option,
+            option_choices,
+        )
+
+        self.assertIn("", DRY_LEVEL_SENTINELS)
+        self.assertEqual(
+            ["12", "13"],
+            option_choices(SetParam(["", "12", "13"]), DRY_LEVEL_SENTINELS),
+        )
+        # '' + one real value -> only one selectable -> not a control.
+        self.assertFalse(is_settable_option(SetParam(["", "12"]), DRY_LEVEL_SENTINELS))
+
 
 class BufferWriteTest(unittest.IsolatedAsyncioTestCase):
     def _attach(self, entity) -> None:

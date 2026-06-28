@@ -109,6 +109,18 @@ class TranslationsContentTest(unittest.TestCase):
     def test_en_it_have_identical_structure(self) -> None:
         self.assertEqual(_dotted_keys(self.data["en"]), _dotted_keys(self.data["it"]))
 
+    def test_anti_crease_time_distinct_from_anticrease(self) -> None:
+        # PR #38 (#7): a WD merges the WM+TD option catalogs, so both the anticrease
+        # toggle and the antiCreaseTime control can appear; their labels must differ or
+        # the UI shows two indistinguishable "Anti-crease" switches.
+        for lang in LANGS:
+            switches = self.data[lang]["entity"]["switch"]
+            self.assertNotEqual(
+                switches["anticrease"]["name"],
+                switches["anti_crease_time"]["name"],
+                f"{lang}: anti_crease_time must have a label distinct from anticrease",
+            )
+
     def test_no_dead_pyhon_references(self) -> None:
         """#17 regression guard: the strangler fully removed pyhOn (native client in
         hon_client.py), so no user-facing translation string may mention it again.

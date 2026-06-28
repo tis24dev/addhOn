@@ -87,7 +87,7 @@ DIRTY_LEVEL_LABELS = {"1": "little", "2": "normal", "3": "very"}
 STEAM_LEVEL_LABELS = {"0": "no_steam", "1": "cotton", "2": "delicate", "3": "synthetic"}
 # Unselectable dryLevel sentinels (hasDryLevelValue returns false for ''/'0'/'11'):
 # dropped from the select options so they never appear as a choice.
-DRY_LEVEL_SENTINELS = ("0", "11")
+DRY_LEVEL_SENTINELS = ("", "0", "11")
 
 # Service to change at runtime the log level of the realtime MQTT channel. By
 # default the reconnection-attempt noise is silenced (see logging_utils); this
