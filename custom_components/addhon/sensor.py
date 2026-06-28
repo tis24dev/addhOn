@@ -962,7 +962,14 @@ class HonMeanWaterConsumption(HonBaseEntity, SensorEntity):
 
     _attr_translation_key = "mean_water_consumption"
     _attr_icon = "mdi:water-sync"
-    _attr_device_class = SensorDeviceClass.WATER
+    # No device_class on purpose: this is an average litres-per-cycle figure that
+    # rises and falls, so it needs state_class MEASUREMENT to record min/mean/max
+    # long-term statistics. WATER and VOLUME allow only total/total_increasing (see
+    # HA sensor const.py DEVICE_CLASS_STATE_CLASSES); the only volume-family classes
+    # that allow MEASUREMENT are VOLUME_STORAGE ("amount currently stored in a
+    # container") and VOLUME_FLOW_RATE (needs flow-rate units, not litres) -- neither
+    # fits a per-cycle average. Dropping the device_class keeps the litre unit and
+    # the statistics while staying semantically honest; the icon is already set above.
     _attr_native_unit_of_measurement = UnitOfVolume.LITERS
     _attr_state_class = SensorStateClass.MEASUREMENT
 
