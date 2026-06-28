@@ -51,6 +51,83 @@ def _install_homeassistant_error() -> None:
     exc.HomeAssistantError = HomeAssistantError
 
 
+def _ensure_module(name: str) -> types.ModuleType:
+    module = sys.modules.get(name)
+    if module is None:
+        module = types.ModuleType(name)
+        sys.modules[name] = module
+    return module
+
+
+def _install_shared_entity_stubs() -> None:
+    """Install the COMPLETE Home Assistant stubs the entity stack binds at import time.
+
+    `custom_components/addhon/base_entity.py` does `class HonBaseEntity(CoordinatorEntity)`
+    at import, so whatever `CoordinatorEntity` is in sys.modules the FIRST time base_entity
+    is imported becomes the permanent base for the run. Several test modules install an
+    INCOMPLETE `CoordinatorEntity` (no `async_write_ha_state` / `available` / `hass`) with a
+    first-wins `getattr(...)` idiom; in a partial collection order one of those can win and
+    poison every entity instantiated afterwards. Likewise some `const` stubs omit symbols
+    the platforms import at module load (e.g. `UnitOfTime`). pytest imports this conftest
+    before ANY test module, so installing a COMPLETE `CoordinatorEntity` + the full `const`
+    symbol set here makes those per-file first-wins `getattr`/`hasattr` calls reuse the
+    complete shared stubs -- the suite stops depending on collection order. Everything is
+    getattr/hasattr-guarded so an already-present (or real) symbol is never clobbered."""
+    helpers = _ensure_module("homeassistant.helpers")
+    sys.modules["homeassistant"].helpers = helpers
+
+    uc = _ensure_module("homeassistant.helpers.update_coordinator")
+    helpers.update_coordinator = uc
+
+    class CoordinatorEntity:
+        """Complete mirror of HA's CoordinatorEntity (the base HonBaseEntity subclasses)."""
+
+        def __init__(self, coordinator) -> None:
+            self.coordinator = coordinator
+            self.hass = getattr(coordinator, "hass", None)
+
+        @property
+        def available(self) -> bool:
+            return getattr(self.coordinator, "last_update_success", True)
+
+        def async_write_ha_state(self) -> None:
+            self.state_writes = getattr(self, "state_writes", 0) + 1
+
+    uc.CoordinatorEntity = getattr(uc, "CoordinatorEntity", CoordinatorEntity)
+    uc.DataUpdateCoordinator = getattr(
+        uc, "DataUpdateCoordinator", type("DataUpdateCoordinator", (), {})
+    )
+    uc.UpdateFailed = getattr(uc, "UpdateFailed", type("UpdateFailed", (Exception,), {}))
+
+    const = _ensure_module("homeassistant.const")
+    sys.modules["homeassistant"].const = const
+    if not hasattr(const, "UnitOfTemperature"):
+        const.UnitOfTemperature = type("UnitOfTemperature", (), {"CELSIUS": "°C"})
+    if not hasattr(const, "UnitOfTime"):
+        const.UnitOfTime = type("UnitOfTime", (), {"MINUTES": "min", "SECONDS": "s"})
+    if not hasattr(const, "UnitOfEnergy"):
+        const.UnitOfEnergy = type("UnitOfEnergy", (), {"KILO_WATT_HOUR": "kWh"})
+    if not hasattr(const, "UnitOfVolume"):
+        const.UnitOfVolume = type("UnitOfVolume", (), {"LITERS": "L"})
+    if not hasattr(const, "UnitOfMass"):
+        const.UnitOfMass = type("UnitOfMass", (), {"GRAMS": "g", "KILOGRAMS": "kg"})
+    if not hasattr(const, "EntityCategory"):
+        const.EntityCategory = type(
+            "EntityCategory", (), {"CONFIG": "config", "DIAGNOSTIC": "diagnostic"}
+        )
+
+    # base_entity's other import-time HA deps (never order-sensitive today, seeded here so
+    # the same class of bug can't resurface for a future entity-only subset).
+    entity = _ensure_module("homeassistant.helpers.entity")
+    helpers.entity = entity
+    entity.DeviceInfo = getattr(entity, "DeviceInfo", dict)
+    dr = _ensure_module("homeassistant.helpers.device_registry")
+    helpers.device_registry = dr
+    dr.DeviceEntryType = getattr(
+        dr, "DeviceEntryType", type("DeviceEntryType", (), {"SERVICE": "service"})
+    )
+
+
 def _ensure_yarl() -> None:
     """The CI test env installs only pytest (no yarl). config_flow now imports the
     transport auth (which does `from yarl import URL`), so importing config_flow -- and
@@ -74,4 +151,5 @@ def _ensure_yarl() -> None:
 
 
 _install_homeassistant_error()
+_install_shared_entity_stubs()
 _ensure_yarl()
