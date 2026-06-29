@@ -29,10 +29,12 @@ from __future__ import annotations
 
 import logging
 
+from homeassistant.exceptions import HomeAssistantError
+
 from .base_entity import HonBaseEntity
-from .const import PROGRAM_PENDING_OPTIONS
+from .const import DOMAIN, PROGRAM_PARAM_NAMES, PROGRAM_PENDING_OPTIONS
 from .debug_utils import redact_id
-from .hon_commands import get_command, param_range, param_values
+from .hon_commands import get_command, get_commands, param_range, param_values
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +50,67 @@ _MAX_RANGE_CHOICES = 1000
 def startprogram_command(appliance):
     """The device's ``startProgram`` command, or None if absent."""
     return get_command(appliance, STARTPROGRAM_COMMAND)
+
+
+async def async_send_program(hass, client, appliance, program_code: str) -> None:
+    """Apply ``program_code`` to the ``startProgram`` command and send it, SWAP-AWARE.
+
+    Setting the ``program``/``prCode`` parameter SWAPS the active startProgram command in
+    ``appliance.commands`` (a ``HonParameterProgram`` setter does ``command.category =
+    value`` -> ``appliance.commands["startProgram"] = categories[code]``, replacing the
+    object), so we re-read the now-active command and send THAT, not the stale pre-swap
+    object. Mirrors the proven washer flow (button.py:200-251); used by the fridge program
+    select for an IMMEDIATE send (no buffer/Start-button cycle). The per-program fixed
+    ancillaries (programFamily/zone/holidayMode/quickMode*/remoteActionable/remoteVisible)
+    ride along in the swapped category's own schema and are serialized by ``command.send()``
+    -- we never set them by hand.
+    """
+    if not appliance or not client:
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="appliance_or_client_unavailable",
+        )
+
+    def _do():
+        async def _inner():
+            commands = get_commands(appliance)
+            command = commands.get(STARTPROGRAM_COMMAND)
+            if command is None:
+                raise RuntimeError(
+                    f"Command '{STARTPROGRAM_COMMAND}' not found on the device"
+                )
+            params = getattr(command, "parameters", None)
+            params = params if isinstance(params, dict) else {}
+            applied = False
+            for pname in PROGRAM_PARAM_NAMES:
+                if pname in params:
+                    params[pname].value = program_code
+                    applied = True
+                    break
+            if not applied:
+                raise RuntimeError(
+                    f"startProgram has no program parameter {PROGRAM_PARAM_NAMES} "
+                    f"among {sorted(params)}"
+                )
+            # Re-read after the category swap so send() targets the SELECTED program's
+            # command (carrying its fixed ancillaries), not the stale pre-swap object.
+            refreshed = commands.get(STARTPROGRAM_COMMAND)
+            if refreshed is not None and refreshed is not command:
+                _LOGGER.debug(
+                    "ProgramSend debug: startProgram swapped after program apply (%s)",
+                    program_code,
+                )
+                command = refreshed
+            await command.send()
+            _LOGGER.debug(
+                "ProgramSend debug: startProgram '%s' send completed id=%s",
+                program_code,
+                redact_id(getattr(appliance, "id", None)),
+            )
+
+        client.run_command_sync(_inner())
+
+    await hass.async_add_executor_job(_do)
 
 
 def startprogram_option_param(appliance, name: str):

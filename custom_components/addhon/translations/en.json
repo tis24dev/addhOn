@@ -700,6 +700,26 @@
       "program": {
         "name": "Program"
       },
+      "ref_program": {
+        "name": "Program",
+        "state": {
+          "off": "Off",
+          "holiday": "Holiday",
+          "super_cool": "Super cool",
+          "super_freeze": "Super freeze",
+          "auto_set": "Auto set",
+          "quick_cool": "Quick cool",
+          "zero_fresh": "Zero degrees",
+          "fruit_and_veg": "Fruit and veg",
+          "soft_freeze": "Soft freeze",
+          "iot_daily_use": "Daily use",
+          "iot_extra_cold": "Extra cold",
+          "iot_extra_cold_water": "Extra cold (water)",
+          "iot_extra_ice": "Extra ice",
+          "iot_high_efficiency": "High efficiency",
+          "iot_special_food_core": "Special food"
+        }
+      },
       "spin_speed": {
         "name": "Spin speed"
       },

@@ -12,6 +12,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity
 from .const import (
+    APPLIANCE_FR,
+    APPLIANCE_FRE,
+    APPLIANCE_REF,
     APPLIANCE_TD,
     APPLIANCE_WASH_GROUP,
     APPLIANCE_WD,
@@ -28,11 +31,30 @@ from .const import (
     TEMP_LEVEL_LABELS,
 )
 from .debug_utils import redact_id, redact_store
+from .hon_commands import async_send_command
 from .program_options import (
     HonProgramOptionEntity,
+    async_send_program,
     normalize_code,
     option_choices,
 )
+
+# Fridge family (REF/FR/FRE): the writable program/mode select (discussion #40).
+_COOLING_TYPES = (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE)
+# Synthetic "no program" option -> stopProgram (the global mode reset).
+REF_PROGRAM_OFF = "off"
+# Read-back ONLY: a live device mode flag (0/1) -> the startProgram program code it
+# corresponds to. Used to derive current_option from the device truth (never from
+# startProgram.program, which only carries the recovered default category). The app's own
+# identity map (refrigeration.md section 1): superCool=quickModeZ1, superFreeze=quickModeZ2,
+# holiday=holidayMode, autoSet=intelligenceMode. Double-gated at read time: the code must
+# also be in the device's live program enum.
+_REF_MODE_FLAG_TO_PROGRAM: dict[str, str] = {
+    "quickModeZ1": "super_cool",
+    "quickModeZ2": "super_freeze",
+    "holidayMode": "holiday",
+    "intelligenceMode": "auto_set",
+}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -136,6 +158,19 @@ async def async_setup_entry(
             app_type,
             _command_names(appliance),
         )
+        if app_type in _COOLING_TYPES:
+            # Fridge family (#40): one writable program/mode select, sends immediately.
+            if HonRefProgramSelect.supports_appliance(appliance):
+                entities.append(HonRefProgramSelect(coordinator, appliance_id, client))
+                _LOGGER.info("Added REF program select: id=%s", redact_id(appliance_id))
+            else:
+                _LOGGER.debug(
+                    "Select debug: no REF program select for '%s' id=%s; "
+                    "needs startProgram(program enum) + stopProgram",
+                    data.get("name"),
+                    redact_id(appliance_id),
+                )
+            continue
         if app_type not in APPLIANCE_WASH_GROUP:
             _LOGGER.debug("Select debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
             continue
@@ -495,3 +530,135 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
                 },
             )
         self._buffer(raw)
+
+
+class HonRefProgramSelect(HonBaseEntity, SelectEntity):
+    """Writable program/mode select for fridges (REF/FR/FRE), discussion #40.
+
+    Fridge "modes" (super cool, super freeze, holiday, plus the iot_* presets) are NOT
+    writable settings booleans: they are ``startProgram`` PROGRAMS, cleared by
+    ``stopProgram`` (a GLOBAL reset that zeroes every mode flag). The app/cloud model is
+    mutually exclusive (one program at a time), so the faithful HA shape is a single
+    select. Options are ``off`` plus the device's LIVE ``startProgram.program`` enum
+    (capability-gated, never hard-coded). Unlike the washer select, selecting here sends
+    IMMEDIATELY (no buffer/Start-button cycle): a program -> ``startProgram(program=X)``,
+    ``off`` -> ``stopProgram``. ``current_option`` is derived from the live device mode
+    FLAGS, NOT from ``startProgram.program`` (which only carries the recovered default
+    category and would otherwise pin a phantom mode forever)."""
+
+    _attr_icon = "mdi:snowflake"
+
+    def __init__(self, coordinator, appliance_id: str, client=None) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._attr_unique_id = f"{appliance_id}_ref_program"
+        self._attr_translation_key = "ref_program"
+        # Build the option list from the live program enum read SPECIFICALLY off the
+        # startProgram command -- the same command async_send_program targets -- so the
+        # option SOURCE can never diverge from the SEND target (a fridge could in theory
+        # also expose another program-bearing command; we deliberately ignore it here).
+        self._program_codes: list[str] = []
+        resolved = self._start_program_param(self._appliance)
+        if resolved is not None:
+            command, param_name = resolved
+            self._program_codes = list(
+                HonProgramSelect._program_values(command, param_name).keys()
+            )
+        self._attr_options = [REF_PROGRAM_OFF, *self._program_codes]
+        _LOGGER.debug(
+            "Select debug: initialized REF program '%s' id=%s options=%s",
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
+            self._attr_options,
+        )
+
+    @staticmethod
+    def _start_program_param(appliance):
+        """(startProgram command, program-param name), or None.
+
+        Resolved ONLY on ``startProgram`` (not the broader PROGRAM_SOURCE_COMMANDS walk the
+        washer uses) so the fridge select's option source is always the very command it
+        sends to."""
+        commands = getattr(appliance, "commands", None)
+        commands = commands if isinstance(commands, dict) else {}
+        command = commands.get("startProgram")
+        params = getattr(command, "parameters", None) if command is not None else None
+        if not isinstance(params, dict):
+            return None
+        for param_name in PROGRAM_PARAM_NAMES:
+            if param_name in params:
+                return command, param_name
+        return None
+
+    @classmethod
+    def supports_appliance(cls, appliance) -> bool:
+        """True if the device exposes startProgram with a populated program enum AND a
+        stopProgram command (so the ``off`` reset is real)."""
+        commands = getattr(appliance, "commands", None)
+        commands = commands if isinstance(commands, dict) else {}
+        if "stopProgram" not in commands:
+            _LOGGER.debug(
+                "Select debug: REF select skipped, no stopProgram. commands=%s",
+                _command_names(appliance),
+            )
+            return False
+        resolved = cls._start_program_param(appliance)
+        if resolved is None:
+            _LOGGER.debug(
+                "Select debug: REF select skipped, startProgram has no program param. "
+                "commands=%s",
+                _command_names(appliance),
+            )
+            return False
+        command, param_name = resolved
+        return bool(HonProgramSelect._program_values(command, param_name))
+
+    @property
+    def current_option(self) -> str | None:
+        # Device truth from the mode FLAGS (double-gated: the code must also be a live
+        # program option). No mode set -> off. Deliberately ignores startProgram.program.
+        for flag, code in _REF_MODE_FLAG_TO_PROGRAM.items():
+            if code in self._program_codes and str(self._get_attr(flag)) == "1":
+                _LOGGER.debug(
+                    "Select debug: REF current_option id=%s flag=%s -> %s",
+                    redact_id(self._appliance_id), flag, code,
+                )
+                return code
+        return REF_PROGRAM_OFF
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in self._attr_options:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="program_not_found",
+                translation_placeholders={"program": option},
+            )
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        try:
+            if option == REF_PROGRAM_OFF:
+                _LOGGER.info(
+                    "Select: REF program off -> stopProgram id=%s",
+                    redact_id(self._appliance_id),
+                )
+                await async_send_command(self.hass, client, appliance, "stopProgram", {})
+            else:
+                _LOGGER.info(
+                    "Select: REF program '%s' -> startProgram id=%s",
+                    option, redact_id(self._appliance_id),
+                )
+                await async_send_program(self.hass, client, appliance, option)
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error("Select: REF program '%s' error: %s", option, err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        await self._async_request_command_refresh()

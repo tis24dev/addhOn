@@ -700,6 +700,26 @@
       "program": {
         "name": "Programma"
       },
+      "ref_program": {
+        "name": "Programma",
+        "state": {
+          "off": "Spento",
+          "holiday": "Vacanza",
+          "super_cool": "Super raffreddamento",
+          "super_freeze": "Super congelamento",
+          "auto_set": "Auto set",
+          "quick_cool": "Raffreddamento rapido",
+          "zero_fresh": "Zero gradi",
+          "fruit_and_veg": "Frutta e verdura",
+          "soft_freeze": "Congelamento leggero",
+          "iot_daily_use": "Uso quotidiano",
+          "iot_extra_cold": "Extra freddo",
+          "iot_extra_cold_water": "Extra freddo (acqua)",
+          "iot_extra_ice": "Extra ghiaccio",
+          "iot_high_efficiency": "Alta efficienza",
+          "iot_special_food_core": "Alimenti speciali"
+        }
+      },
       "spin_speed": {
         "name": "Centrifuga"
       },
