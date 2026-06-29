@@ -543,10 +543,12 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
     (capability-gated, never hard-coded). Unlike the washer select, selecting here sends
     IMMEDIATELY (no buffer/Start-button cycle): a program -> ``startProgram(program=X)``,
     ``off`` -> ``stopProgram``. ``current_option`` is derived from REAL device feedback:
-    first the live mode FLAGS (boost modes), then the cloud-persisted active-program field
-    ``programName``/``prStr``/``prCode`` (covers the iot_* presets, which set no flag) -
-    never optimistic state and never ``startProgram.program`` (the recovered default
-    category, which would otherwise pin a phantom mode forever)."""
+    first the live mode FLAGS (boost modes), then the cloud-persisted active-program
+    field ``programName``/``prStr``/``prCode`` - never optimistic state and never
+    ``startProgram.program`` (the recovered default category, which would otherwise pin
+    a phantom mode forever). An active iot_* preset (which sets no flag) is NOT observable
+    on the current engine -- the REF shadow carries no program-identity field for it --
+    so it correctly falls back to ``off`` (see ``_active_program_code``)."""
 
     _attr_icon = "mdi:snowflake"
 
@@ -615,8 +617,24 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
         return bool(HonProgramSelect._program_values(command, param_name))
 
     # Shadow attributes carrying the ACTIVE program identity (cloud-persisted: what the
-    # official app reads to show the running program, e.g. after an app reinstall). NOT
-    # startProgram.program, which is only the recovered default category.
+    # official app reads to show the running program, e.g. after an app reinstall),
+    # matched double-gated against the offered codes. NOT startProgram.program (only the
+    # recovered default category).
+    #
+    # Deliberately EXCLUDES the per-zone modeZ1/modeZ2: those are ENGINE-SYNTHETIC
+    # (client/engine/appliances/ref.py rewrites them from the boost flags by VALUE), so
+    # they only ever read holiday/auto_set/super_cool/super_freeze/"no_mode". Every offered
+    # value they could carry is already resolved by the FLAG path above, "no_mode" is not
+    # an offered code, and the engine clobbers any raw modeZ before the select sees it --
+    # so reading them here is strictly dead and cannot surface a program.
+    #
+    # GAP (blocked on a real iot_*-active dump): an active iot_* download preset sets no
+    # flag and, on the REF model we have evidence for (roberglezz, HCW58F18EWMP), leaves
+    # NO program-identity field in the raw shadow (no prCode/prStr/programName; activity
+    # ={}). Its only footprint is the tempSel setpoint triple, which is user-settable and
+    # therefore not identity-safe. We never guess from setpoints, so an active iot_*
+    # correctly reads off. programName/prStr/prCode stay as the forward-correct handler
+    # for any REF model that DOES expose a raw program-identity key.
     _REF_ACTIVE_PROGRAM_ATTRS = ("programName", "prStr", "prCode")
 
     @property
@@ -630,9 +648,10 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
                     redact_id(self._appliance_id), flag, code,
                 )
                 return code
-        # 2) Any other active program (e.g. the iot_* download presets, which set no
-        #    flag) from the cloud-persisted programName/prStr/prCode. Real device
-        #    feedback, NOT optimistic "remember what was clicked" state.
+        # 2) Any other active program surfaced via the cloud-persisted programName/prStr/
+        #    prCode. Real device feedback, NOT optimistic "remember what was clicked"
+        #    state. (An active iot_* preset is not observable here on the current engine --
+        #    see _REF_ACTIVE_PROGRAM_ATTRS -- so it falls through to off below.)
         matched = self._active_program_code()
         if matched is not None:
             return matched
@@ -645,9 +664,10 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
         programName/prStr ship as i18n keys (e.g. ``PROGRAMS.REF.IOT_EXTRA_COLD``), so we
         compare both the whole token and its last dotted segment, case-insensitively, and
         accept ONLY an exact match against an offered code (no fuzzy/substring match, to
-        never report the wrong program). This is what reflects the iot_* presets, which
-        set no mode flag. ``startProgram.program`` is deliberately NOT consulted (it is the
-        recovered default category, not the running program)."""
+        never report the wrong program). The idle sentinels ("No Program", "") are not
+        offered codes, so the double-gate rejects them. ``startProgram.program`` is
+        deliberately NOT consulted (it is the recovered default category, not the running
+        program)."""
         by_lower = {code.lower(): code for code in self._program_codes}
         for attr in self._REF_ACTIVE_PROGRAM_ATTRS:
             raw = self._get_attr(attr)

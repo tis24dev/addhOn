@@ -460,6 +460,67 @@ class RefProgramSelectBehaviourTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual("super_cool", entity.current_option)
 
+    async def test_modez_synthetic_field_not_surfaced(self) -> None:
+        # modeZ1/modeZ2 are ENGINE-SYNTHETIC (client/engine/appliances/ref.py rewrites
+        # them from the boost flags), so they can never carry an iot_* code on the real
+        # engine and the select deliberately does NOT read them. Even if a modeZ field
+        # somehow held a real offered code, it must not be surfaced. Guards against
+        # re-adding modeZ1/modeZ2 to the active-program matcher.
+        for attr in ("modeZ1", "modeZ2"):
+            entity, _ = self._entity(_ref_commands(), {attr: "iot_extra_cold"})
+            self.assertEqual("off", entity.current_option, attr)
+
+    async def test_current_option_modez_no_mode_is_off(self) -> None:
+        entity, _ = self._entity(
+            _ref_commands(), {"modeZ1": "no_mode", "modeZ2": "no_mode"}
+        )
+        self.assertEqual("off", entity.current_option)
+        self.assertNotIn("no_mode", entity._attr_options)
+
+    async def test_current_option_modez_empty_is_off(self) -> None:
+        entity, _ = self._entity(_ref_commands(), {"modeZ1": "", "modeZ2": ""})
+        self.assertEqual("off", entity.current_option)
+
+    async def test_current_option_modez_gated_by_live_enum(self) -> None:
+        entity, _ = self._entity(_ref_commands(), {"modeZ1": "auto_set"})
+        self.assertEqual("off", entity.current_option)
+
+    async def test_flag_wins_over_modez(self) -> None:
+        entity, _ = self._entity(
+            _ref_commands(), {"quickModeZ1": "1", "modeZ1": "iot_daily_use"}
+        )
+        self.assertEqual("super_cool", entity.current_option)
+
+    async def test_current_option_real_super_cool_dump(self) -> None:
+        entity, _ = self._entity(
+            _ref_commands(),
+            {
+                "quickModeZ1": "1",
+                "modeZ1": "super_cool",
+                "modeZ2": "no_mode",
+                "programName": "No Program",
+            },
+        )
+        self.assertEqual("super_cool", entity.current_option)
+
+    async def test_iot_preset_not_surfaced_by_current_engine(self) -> None:
+        # CAVEAT (load-bearing): current engine derives modeZ from flags only, so an active
+        # iot_* preset (no flag) yields modeZ1=modeZ2="no_mode"; reading modeZ does NOT by
+        # itself close the iot_* gap. This pins that reality.
+        entity, _ = self._entity(
+            _ref_commands(),
+            {
+                "quickModeZ1": "0",
+                "quickModeZ2": "0",
+                "holidayMode": "0",
+                "intelligenceMode": "0",
+                "modeZ1": "no_mode",
+                "modeZ2": "no_mode",
+                "programName": "No Program",
+            },
+        )
+        self.assertEqual("off", entity.current_option)
+
 
 class RefProgramStateTranslationTest(unittest.TestCase):
     """The ref_program state map must label every code the select can show: the read-back
