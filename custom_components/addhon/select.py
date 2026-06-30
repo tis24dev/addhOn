@@ -862,11 +862,20 @@ class HonAcDirectionSelect(HonBaseEntity, SelectEntity):
         param = settings_param(self._appliance, description.param)
         # Offer the LIVE per-model enum values, mapped to stable option keys (raw number
         # as a forward-safe fallback for an unmapped value); order follows the device
-        # enum. param_allowed_values([]/None) yields {} (gated-out params never reach
-        # here). Mirrors HonProgramOptionSelect.
-        self._raw_to_key: dict[str, str] = {
-            raw: label_map.get(raw, raw) for raw in param_allowed_values(param)
-        }
+        # enum. Each raw value is NORMALIZED to its canonical code (normalize_code:
+        # "5.0"/"5,0" -> "5") BEFORE it becomes a map key, so the stored key, the label
+        # lookup and the value we send share the SAME canonical form current_option()
+        # looks up with -- otherwise an enum advertised non-canonically (e.g. "13.0")
+        # would build a key the normalized read-back never matches and would surface as
+        # unknown. For the real per-model enums (clean small integers) this is a no-op.
+        # param_allowed_values([]/None) yields [] (gated-out params never reach here).
+        # Mirrors HonProgramOptionSelect / option_value_set, which already normalize.
+        self._raw_to_key: dict[str, str] = {}
+        for raw in param_allowed_values(param):
+            code = normalize_code(raw)
+            if code is None:
+                continue
+            self._raw_to_key[code] = label_map.get(code, code)
         self._key_to_raw: dict[str, str] = {
             key: raw for raw, key in self._raw_to_key.items()
         }

@@ -226,6 +226,21 @@ class AcFanDirectionSelectTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(self._by_key(added, "fan_direction_vertical").current_option)
 
+    async def test_non_canonical_enum_value_normalized(self) -> None:
+        # A device advertising a non-canonical enum value ("5.0") must still build the
+        # clean option key, read back through current_option, and carry the canonical
+        # code as the send value -- the option map is normalized in __init__ so it stays
+        # symmetric with current_option()'s normalize_code lookup (CodeRabbit, PR #42).
+        added, _, _ = await self._setup(
+            {"windDirectionVertical": DirParam("5.0", values=["2", "4", "5.0", "6", "8"])},
+            attributes={"settings.windDirectionVertical": "5.0"},
+        )
+        v = self._by_key(added, "fan_direction_vertical")
+        self.assertIn("position_5", v._attr_options)
+        self.assertNotIn("5.0", v._attr_options)
+        self.assertEqual("position_5", v.current_option)
+        self.assertEqual("5", v._key_to_raw["position_5"])
+
     async def test_select_sends_setparameters(self) -> None:
         added, settings, coord = await self._setup(
             {
