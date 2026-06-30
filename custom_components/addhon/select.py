@@ -546,9 +546,10 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
     first the live mode FLAGS (boost modes), then the cloud-persisted active-program
     field ``programName``/``prStr``/``prCode`` - never optimistic state and never
     ``startProgram.program`` (the recovered default category, which would otherwise pin
-    a phantom mode forever). An active iot_* preset (which sets no flag) is NOT observable
-    on the current engine -- the REF shadow carries no program-identity field for it --
-    so it correctly falls back to ``off`` (see ``_active_program_code``)."""
+    a phantom mode forever). An active iot_* preset (which sets no flag) is NOT recoverable
+    from the cloud shadow -- it leaves no program-identity field, and the official app only
+    tracks it client-side -- so it correctly falls back to ``off`` (see
+    ``_active_program_code``)."""
 
     _attr_icon = "mdi:snowflake"
 
@@ -628,13 +629,20 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
     # an offered code, and the engine clobbers any raw modeZ before the select sees it --
     # so reading them here is strictly dead and cannot surface a program.
     #
-    # GAP (blocked on a real iot_*-active dump): an active iot_* download preset sets no
-    # flag and, on the REF model we have evidence for (roberglezz, HCW58F18EWMP), leaves
-    # NO program-identity field in the raw shadow (no prCode/prStr/programName; activity
-    # ={}). Its only footprint is the tempSel setpoint triple, which is user-settable and
-    # therefore not identity-safe. We never guess from setpoints, so an active iot_*
-    # correctly reads off. programName/prStr/prCode stay as the forward-correct handler
-    # for any REF model that DOES expose a raw program-identity key.
+    # iot_* DOWNLOAD PRESETS ARE NOT SHADOW-OBSERVABLE (proven, not merely dump-blocked):
+    # an active iot_* download preset sets no flag and leaves NO program-identity field in
+    # the raw cloud shadow (no prCode/prStr/prPhase/machMode/programName; activity={}),
+    # confirmed on BOTH observed REF models (HDPW5620CNPK, HCW58F18EWMP). The official hOn
+    # app does not recover it from the shadow either: it reads no shadow identity field and
+    # runs no setpoint reverse-match, and instead shows the running preset only as a
+    # CLIENT-LOCAL "Last used" label kept in React Native AsyncStorage (@quickSet, its own
+    # last send) -- a device-local memory we cannot and should not reconstruct from the
+    # cloud. Its only shadow footprint is the tempSel setpoint triple, which is
+    # user-settable (not identity-safe) and ambiguous (preset setpoints collide); we never
+    # guess from setpoints. So "off" is the PERMANENTLY-correct current_option for download
+    # presets; programName/prStr/prCode stay only as the forward-correct handler for any
+    # future REF model that DOES expose a real program-identity key. Evidence trail:
+    # apk/analysis/deep/ref-active-program-detection.md (+ refrigeration.md section 6).
     _REF_ACTIVE_PROGRAM_ATTRS = ("programName", "prStr", "prCode")
 
     @property
