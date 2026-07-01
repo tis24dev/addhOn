@@ -90,6 +90,8 @@ controls where they have been mapped.
 - **Tumble Dryer:** Haier HD100-C367GU1-IT
 - **Tumble Dryer:** Haier HD90-A3959 INT
 - **Refrigerator:** Haier HDPW5620CNPK
+- **Refrigerator:** HCW58F18EWMP
+- **Oven:** HWO60SM5T5BH
 
 Other hOn-compatible Haier appliances should work; feel free to test and report.
 

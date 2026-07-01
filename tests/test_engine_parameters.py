@@ -19,7 +19,10 @@ from _golden import REPO, frozen, install_stubs  # noqa: E402
 install_stubs()
 _DUMP = REPO / "tests" / "fixtures" / "ref_10136" / "commands.json"
 
-from custom_components.addhon.client.engine.parameter.range import HonParameterRange as NaRange  # noqa: E402
+from custom_components.addhon.client.engine.parameter.range import (  # noqa: E402
+    HonParameterRange as NaRange,
+    _MAX_RANGE_VALUES,
+)
 from custom_components.addhon.client.engine.parameter.enum import HonParameterEnum as NaEnum  # noqa: E402
 from custom_components.addhon.client.engine.parameter.fixed import HonParameterFixed as NaFixed  # noqa: E402
 
@@ -156,6 +159,125 @@ class NativeEnumEdgeBehaviorTest(unittest.TestCase):
         na = NaEnum("k", dict(data), "grp")
         with self.assertRaises(ValueError):
             na.value = "A|B|C"
+
+
+class RangeGridSetterTest(unittest.TestCase):
+    """Regression for the x100 modulo grid-check bug: an on-grid setpoint with a
+    non-zero min and a decimal step (e.g. 20.1 on 20..25 step 0.1) was wrongly
+    rejected with a ValueError, which the write path (climate.py / number.py) reads as
+    a failed set and SILENTLY rolls the user's value back. The replacement snap-to-index
+    grid-check accepts every real on-grid value while still rejecting off-grid /
+    out-of-range ones."""
+
+    def _range(self, lo, hi, step):
+        return NaRange("temp", {"category": "command", "typology": "range",
+                                "mandatory": 0, "minimumValue": lo, "maximumValue": hi,
+                                "incrementValue": step, "defaultValue": lo}, "grp")
+
+    # --- values that USED to be wrongly rejected (the actual bug) ---
+    def test_decimal_min_nonzero_accept_string(self) -> None:
+        p = self._range("20", "25", "0.1")
+        p.value = "20.1"  # on-grid, non-zero min, decimal step -> was ValueError
+        self.assertEqual(p.value, 20.1)
+        self.assertEqual(p.intern_value, "20.1")
+
+    def test_decimal_min_nonzero_accept_direct_float(self) -> None:
+        p = self._range("20", "25", "0.1")
+        p.value = 20.1  # fractional float assigned directly, must not truncate to 20
+        self.assertEqual(p.value, 20.1)
+        self.assertEqual(p.intern_value, "20.1")
+
+    def test_16_30_step_01_accept(self) -> None:
+        p = self._range("16", "30", "0.1")
+        p.value = "16.3"  # was ValueError
+        self.assertEqual(p.value, 16.3)
+        self.assertEqual(p.intern_value, "16.3")
+
+    def test_three_decimals_accept(self) -> None:
+        p = self._range("0", "1", "0.001")
+        p.value = "0.003"  # >2 decimals was ValueError under the x100 trick
+        self.assertEqual(p.value, 0.003)
+        self.assertEqual(p.intern_value, "0.003")
+
+    # --- genuinely off-grid values must STILL raise ValueError (rollback contract) ---
+    def test_off_grid_half_step_string_rejected(self) -> None:
+        p = self._range("16", "30", "0.1")
+        with self.assertRaises(ValueError):
+            p.value = "16.35"
+
+    def test_off_grid_three_decimals_rejected(self) -> None:
+        p = self._range("0", "1", "0.001")
+        with self.assertRaises(ValueError):
+            p.value = "0.0035"
+
+    def test_off_grid_direct_float_rejected_not_truncated(self) -> None:
+        # 22.3 is off the 0.5 grid: must raise, not be silently truncated to 22.
+        p = self._range("20", "25", "0.5")
+        with self.assertRaises(ValueError):
+            p.value = 22.3
+
+    # --- out-of-range still rejected, on-grid boundary still accepted ---
+    def test_out_of_range_rejected(self) -> None:
+        p = self._range("20", "25", "0.5")
+        with self.assertRaises(ValueError):
+            p.value = 25.5
+
+    def test_boundary_max_on_grid_accepted(self) -> None:
+        p = self._range("20", "25", "0.5")
+        p.value = "25.0"
+        self.assertEqual(p.value, 25.0)
+
+    # --- intern_value invariant: integer-valued inputs stay clean ("24", not "24.0") ---
+    def test_integer_inputs_clean_intern(self) -> None:
+        for v in ("24", 24, 24.0):
+            p = self._range("20", "25", "0.5")
+            p.value = v
+            self.assertEqual(p.value, 24)
+            self.assertEqual(p.intern_value, "24")
+
+    def test_decimal_comma_preserved(self) -> None:
+        p = self._range("20", "25", "0.5")
+        p.value = "22,5"  # cloud decimal comma
+        self.assertEqual(p.value, 22.5)
+        self.assertEqual(p.intern_value, "22.5")
+
+    # --- negative-min integer grid ---
+    def test_negative_min_integer_grid(self) -> None:
+        p = self._range("-24", "-16", "1")
+        p.value = -20
+        self.assertEqual(p.value, -20)
+        self.assertEqual(p.intern_value, "-20")
+        p2 = self._range("-24", "-16", "1")
+        with self.assertRaises(ValueError):
+            p2.value = "-20.5"
+
+    # --- malformed negative step: no ZeroDivisionError, no spurious reject ---
+    def test_malformed_negative_step_no_crash(self) -> None:
+        p = self._range("0", "10", "-1")
+        self.assertEqual(p.step, -1)  # step property keeps a genuine negative
+        p.value = "5"  # in-range: accepted via the step<=0 branch, no crash
+        self.assertEqual(p.value, 5)
+
+    # --- values(): index-based, no dropped final point, no unbounded loop ---
+    def test_values_decimal_endpoints_and_length(self) -> None:
+        p = self._range("16", "30", "0.1")
+        v = p.values
+        self.assertEqual(len(v), 141)
+        self.assertEqual(v[0], "16.0")
+        self.assertEqual(v[-1], "30.0")  # final point no longer dropped / drifted
+
+    def test_values_half_step_range(self) -> None:
+        p = self._range("20", "25", "0.5")
+        self.assertEqual(
+            p.values,
+            ["20.0", "20.5", "21.0", "21.5", "22.0", "22.5",
+             "23.0", "23.5", "24.0", "24.5", "25.0"],
+        )
+
+    def test_values_bounded_on_malformed_range(self) -> None:
+        # tiny step over a huge span must not loop unbounded.
+        p = self._range("0", "1000", "0.001")
+        self.assertLessEqual(len(p.values), _MAX_RANGE_VALUES)
 
 
 class RangeSetterHardeningTest(unittest.TestCase):

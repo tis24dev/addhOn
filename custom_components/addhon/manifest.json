@@ -13,5 +13,5 @@
     "yarl>=1.8",
     "typing-extensions>=4.8"
   ],
-  "version": "5.7.0"
+  "version": "5.7.1"
 }
