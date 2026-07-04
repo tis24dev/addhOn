@@ -438,7 +438,12 @@ class HonAuth:
             "grant_type": "refresh_token",
         }
         async with self._session.post(
-            f"{AUTH_API}/services/oauth2/token", params=params, headers=self._ua()
+            # Send the refresh_token in the FORM BODY (data=), not the query string
+            # (params=). With params= it lands in the request URL, where it leaks into
+            # proxy/access logs and aiohttp exception reprs (request_info.real_url). The
+            # OAuth2 token endpoint expects application/x-www-form-urlencoded; Salesforce
+            # accepts both, and a dict passed as data= is form-encoded into the body.
+            f"{AUTH_API}/services/oauth2/token", data=params, headers=self._ua()
         ) as resp:
             if resp.status >= 400:
                 return False
