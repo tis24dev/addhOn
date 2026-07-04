@@ -211,6 +211,25 @@ class NativeSessionSetupTest(unittest.TestCase):
         self.assertEqual(h.events.count("mqtt"), 1)
         self.assertEqual(len(h.mqtt_calls), 1)
 
+    def test_setup_twice_does_not_duplicate_appliances(self) -> None:
+        # Finding 9: a mid-setup MFA challenge makes submit_mfa_code() resume by calling
+        # setup() again. setup() must clear the (possibly partial) inventory first, or the
+        # appliances loaded before the challenge get appended a second time -> duplicates.
+        data = [
+            {"macAddress": "A", "applianceTypeName": "REF"},
+            {"macAddress": "B", "applianceTypeName": "WM"},
+        ]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        first = nh.appliances  # the list object; must be cleared in place, not rebound
+        _run(nh.setup())
+        _run(nh.setup())
+        # No duplicates across the two setups.
+        self.assertEqual([a.mac_address for a in nh.appliances], ["A", "B"])
+        # Cleared IN PLACE (same object) -- the MQTT client holds this list by reference.
+        self.assertIs(nh.appliances, first)
+
     def test_mixed_zoned_and_normal_ordering(self) -> None:
         # a multi-zone appliance followed by a normal one: zone1,zone2,base(0) then normal(0),
         # all loaded BEFORE mqtt (which is last).
