@@ -121,9 +121,14 @@ class HonConnection:
         if _need_refresh() or _need_auth():
             async with self._refresh_lock:
                 if _need_refresh():
-                    await self.auth.refresh(self._refresh_token)
-                    self._refresh_token = self.auth.refresh_token
-                    self._refresh_gen += 1
+                    # Advance the generation ONLY on a real refresh (CR#3/finding 5).
+                    # refresh() returns False without touching the tokens on a failed
+                    # refresh (token endpoint outage, consumed token). Bumping the gen
+                    # anyway would make a concurrent 401-retry sibling believe a fresh
+                    # token exists and SKIP its own refresh, reusing stale tokens.
+                    if await self.auth.refresh(self._refresh_token):
+                        self._refresh_token = self.auth.refresh_token
+                        self._refresh_gen += 1
                 if _need_auth():
                     await self.auth.authenticate()
                     self._refresh_token = self.auth.refresh_token
@@ -148,9 +153,13 @@ class HonConnection:
         async with self._refresh_lock:
             if self._refresh_gen != gen_at_send:
                 return  # a sibling already refreshed; reuse its fresh tokens
-            await self.auth.refresh(self._refresh_token)
-            self._refresh_token = self.auth.refresh_token
-            self._refresh_gen += 1
+            # Advance the generation ONLY on success (finding 5): a failed refresh()
+            # returns False leaving the stale tokens in place. Bumping regardless would
+            # let a concurrent sibling skip its own refresh and reuse tokens that were
+            # never actually rotated -- guaranteeing its next request 401s too.
+            if await self.auth.refresh(self._refresh_token):
+                self._refresh_token = self.auth.refresh_token
+                self._refresh_gen += 1
 
     @asynccontextmanager
     async def _intercept(

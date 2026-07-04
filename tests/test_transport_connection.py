@@ -516,6 +516,45 @@ class RetryRefreshSingleFlightTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertGreaterEqual(auth.refresh_calls, 2)  # loop0 retry + loop1 pre-request
 
+    def test_failed_retry_refresh_does_not_advance_generation(self) -> None:
+        # Finding 5: a retry refresh() that returns False (endpoint outage, tokens left
+        # untouched) must NOT advance _refresh_gen. Otherwise a concurrent sibling reads
+        # the bumped generation and SKIPS its own refresh, reusing never-refreshed tokens.
+        class FailingRefreshAuth(FakeAuth):
+            async def refresh(self, rt: str = "") -> bool:
+                self.refresh_calls += 1
+                return False  # tokens deliberately left as-is
+
+        auth = FailingRefreshAuth()
+        auth.cognito_token, auth.id_token, auth.refresh_token = "C", "I", "RT"
+        conn = _conn(auth, FakeSession([]))
+        conn._refresh_token = "RT"
+        conn._refresh_gen = 5
+
+        asyncio.run(conn._refresh_after_rejection(5))  # gen matches -> attempt
+        self.assertEqual(auth.refresh_calls, 1)
+        self.assertEqual(conn._refresh_gen, 5)       # NOT advanced on failure
+        self.assertEqual(conn._refresh_token, "RT")  # untouched
+
+    def test_failed_pre_request_refresh_does_not_advance_generation(self) -> None:
+        # Same invariant on the pre-request path (_check_headers): a failed refresh must
+        # not bump the generation, so a concurrent 401-retry sibling still refreshes.
+        class FailingRefreshAuth(FakeAuth):
+            async def refresh(self, rt: str = "") -> bool:
+                self.refresh_calls += 1
+                return False
+
+        auth = FailingRefreshAuth()
+        auth.cognito_token, auth.id_token = "C", "I"  # present but near expiry
+        auth.token_expires_soon = True
+        conn = _conn(auth, FakeSession([]))
+        conn._refresh_token = "RT"
+        conn._refresh_gen = 0
+
+        asyncio.run(conn._check_headers({}))
+        self.assertEqual(auth.refresh_calls, 1)
+        self.assertEqual(conn._refresh_gen, 0)  # failed refresh -> no bump
+
     def test_double_check_skips_when_gen_advanced(self) -> None:
         # Directly: if a sibling already refreshed since this request was sent (the
         # generation advanced), _refresh_after_rejection must NOT refresh again.
