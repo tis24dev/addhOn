@@ -709,6 +709,20 @@ class HonClient:
                         _LOGGER.debug("Fallback OK: %s", method_name)
                         _debug_appliance_consumption(f"after {method_name}", appliance)
                     except Exception as err:
+                        # Match the primary update() path (see the load_statistics guard
+                        # above): a failed load_statistics is non-fatal -- it only carries
+                        # the consumption counters -- UNLESS it is an auth/retryable error
+                        # the caller must act on. Without this, a single stats hiccup made
+                        # the WHOLE appliance unavailable in the fallback path while the
+                        # primary path tolerated it (inconsistent). load_attributes and
+                        # load_commands stay fatal: that IS the appliance's data.
+                        if method_name == "load_statistics" and not (
+                            _requires_reauth(err) or _is_retryable_server_error(err)
+                        ):
+                            _LOGGER.debug(
+                                "Fallback load_statistics tolerated (non-auth): %s", err
+                            )
+                            continue
                         _LOGGER.debug("Fallback %s failed: %s", method_name, err)
                         raise RuntimeError(f"Fallback {method_name} failed: {err}") from err
 
