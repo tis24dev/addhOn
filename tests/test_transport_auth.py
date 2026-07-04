@@ -300,6 +300,36 @@ class RefreshTest(unittest.TestCase):
         auth = self._auth([FakeResp(status=400)])
         self.assertFalse(asyncio.run(auth.refresh()))
 
+    def test_refresh_sends_token_in_body_not_query_string(self) -> None:
+        # Finding 8: the refresh_token must be sent in the FORM BODY (data=), not the
+        # query string (params=), where it would leak into proxy/access logs and
+        # aiohttp exception reprs (request_info.real_url).
+        class CapturingSession(FakeSession):
+            def __init__(self, responses) -> None:
+                super().__init__(responses)
+                self.post_kwargs: list = []
+
+            def post(self, url, **kw):
+                self.post_kwargs.append((str(url), kw))
+                return self._next("POST", url)
+
+        sess = CapturingSession([
+            FakeResp(json={"id_token": "I", "access_token": "A", "refresh_token": "NEWRT"}),
+            FakeResp(json={"cognitoUser": {"Token": "COG"}}),  # _api_auth
+        ])
+        auth = HonAuth(sess, "user@x.it", "pw", HonDevice())
+        auth.refresh_token = "SECRET-RT"
+
+        self.assertTrue(asyncio.run(auth.refresh()))
+
+        token_posts = [kw for url, kw in sess.post_kwargs if "oauth2/token" in url]
+        self.assertEqual(len(token_posts), 1)
+        kw = token_posts[0]
+        self.assertNotIn("params", kw)              # NOT in the URL
+        self.assertIn("data", kw)                   # in the form body
+        self.assertEqual(kw["data"]["refresh_token"], "SECRET-RT")
+        self.assertEqual(kw["data"]["grant_type"], "refresh_token")
+
 
 if __name__ == "__main__":
     unittest.main()

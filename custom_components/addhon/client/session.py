@@ -87,13 +87,11 @@ class NativeHon:
 
     @property
     def appliances(self) -> list[Any]:
+        # Read-only on purpose: no setter. The MQTT client binds this list by
+        # reference at __init__, so the inventory is mutated IN PLACE (setup()
+        # clears + appends) and never rebound -- a `session.appliances = [...]`
+        # would swap the object out from under the live subscriptions.
         return self._appliances
-
-    @appliances.setter
-    def appliances(self, appliances: list[Any]) -> None:
-        # NB: the MQTT client binds the list by reference at __init__. Do not rebind
-        # after MQTT is started, or the subscriptions would not see the new list.
-        self._appliances = appliances
 
     async def create(self) -> "NativeHon":
         try:
@@ -207,6 +205,13 @@ class NativeHon:
         self._appliances.append(appliance)
 
     async def setup(self) -> None:
+        # Drop any partial inventory from an earlier setup() that a mid-setup MFA
+        # challenge interrupted: submit_mfa_code() resumes by calling setup() again, and
+        # without this the appliances built before the challenge would be appended a
+        # second time -- duplicate appliance objects, each updated every poll (the
+        # coordinator dedupes by id, so no double entities, just wasted work). Clear
+        # IN PLACE, never rebind: the MQTT client binds this list by reference.
+        self._appliances.clear()
         self._setup_phase = "load_appliances"
         appliances = await self.api.load_appliances()
         self._setup_phase = "load_appliance"

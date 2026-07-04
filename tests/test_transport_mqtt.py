@@ -1985,5 +1985,39 @@ class WatchdogDisconnectMidSubscribeClearsSetTest(unittest.TestCase):
         self.assertEqual(len(rebuilds), 0)          # one tick: no rebuild yet
 
 
+class SubscribeMissingRebindRaceTest(unittest.TestCase):
+    """Finding 6: a disconnect + awscrt auto-reconnect (SAME generation) that rebinds
+    _subscribed_topics_set WHILE a SUBACK is in flight must NOT let the topic be
+    committed to the fresh set. Committing it marks a topic 'subscribed' on a session
+    that never subscribed it -> the watchdog sees healthy and never re-subscribes ->
+    dead push for that topic. The reconnect restores _connection=True, so the
+    watchdog's outer post-await guard cannot catch it; only the in-place identity
+    check inside _subscribe_missing can."""
+
+    def test_rebind_during_suback_is_not_committed(self) -> None:
+        app = MultiTopicAppliance(["t/x"])
+        m = NativeMqttClient(FakeHon([app]), "MID")
+        m._generation = 1
+        m._connection = True
+
+        async def subscribe_then_reconnect(_topic):
+            # SUBACK in flight: a disconnect rebinds the set to a fresh empty one, then
+            # an auto-reconnect on the SAME generation flips _connection back to True.
+            m._on_lifecycle_disconnection(None, generation=1)       # rebinds set -> S2
+            m._on_lifecycle_connection_success(None, generation=1)  # _connection=True
+            # await returns: the OLD session's SUBACK finally lands.
+
+        m._subscribe_topic = subscribe_then_reconnect  # type: ignore[assignment]
+
+        _run(m._subscribe_missing())
+
+        # The topic was NOT committed to the rebound set (OLD code did add it):
+        self.assertEqual(m._subscribed_topics_set, set())
+        self.assertNotIn("t/x", m._subscribed_topics_set)
+        # Reconnected -> the watchdog's outer guard would (wrongly) trust the set; the
+        # fix is what keeps the topic pending so the next tick re-subscribes it.
+        self.assertTrue(m._connection)
+
+
 if __name__ == "__main__":
     unittest.main()

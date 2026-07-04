@@ -17,6 +17,7 @@ from typing import Any
 
 import aiohttp
 
+from ...error_codes import DECODE_ERROR
 from .auth import HonAuth, NativeAuthError
 from .device import HonDevice
 from .headers import build_auth_headers
@@ -120,9 +121,14 @@ class HonConnection:
         if _need_refresh() or _need_auth():
             async with self._refresh_lock:
                 if _need_refresh():
-                    await self.auth.refresh(self._refresh_token)
-                    self._refresh_token = self.auth.refresh_token
-                    self._refresh_gen += 1
+                    # Advance the generation ONLY on a real refresh (CR#3/finding 5).
+                    # refresh() returns False without touching the tokens on a failed
+                    # refresh (token endpoint outage, consumed token). Bumping the gen
+                    # anyway would make a concurrent 401-retry sibling believe a fresh
+                    # token exists and SKIP its own refresh, reusing stale tokens.
+                    if await self.auth.refresh(self._refresh_token):
+                        self._refresh_token = self.auth.refresh_token
+                        self._refresh_gen += 1
                 if _need_auth():
                     await self.auth.authenticate()
                     self._refresh_token = self.auth.refresh_token
@@ -147,9 +153,13 @@ class HonConnection:
         async with self._refresh_lock:
             if self._refresh_gen != gen_at_send:
                 return  # a sibling already refreshed; reuse its fresh tokens
-            await self.auth.refresh(self._refresh_token)
-            self._refresh_token = self.auth.refresh_token
-            self._refresh_gen += 1
+            # Advance the generation ONLY on success (finding 5): a failed refresh()
+            # returns False leaving the stale tokens in place. Bumping regardless would
+            # let a concurrent sibling skip its own refresh and reuse tokens that were
+            # never actually rotated -- guaranteeing its next request 401s too.
+            if await self.auth.refresh(self._refresh_token):
+                self._refresh_token = self.auth.refresh_token
+                self._refresh_gen += 1
 
     @asynccontextmanager
     async def _intercept(
@@ -163,12 +173,19 @@ class HonConnection:
         # that may get rejected, not one a sibling rotated to meanwhile.
         refresh_gen = self._refresh_gen
         async with method(url, *args, **kwargs) as response:
-            if (self.auth.token_expires_soon or response.status in (401, 403)) and loop == 0:
-                _LOGGER.info("addhOn: token expiring/%s, refresh", response.status)
+            # Replay ONLY on a real rejection (401/403). The old condition also
+            # replayed on token_expires_soon/token_is_expired -- but then a *successful*
+            # 200 got discarded and re-sent whenever the pre-refresh in _check_headers
+            # had failed silently (refresh() -> False leaves _expires stale, so the
+            # flag stays True for the whole period). For a POST /commands/v1/send that
+            # means the command is delivered TWICE. Token expiry is already handled
+            # BEFORE the request in _check_headers; here we only recover a rejection.
+            if response.status in (401, 403) and loop == 0:
+                _LOGGER.info("addhOn: rejected (%s), refresh+retry", response.status)
                 await self._refresh_after_rejection(refresh_gen)
                 async with self._intercept(method, url, *args, loop=1, **kwargs) as result:
                     yield result
-            elif (self.auth.token_is_expired or response.status in (401, 403)) and loop == 1:
+            elif response.status in (401, 403) and loop == 1:
                 _LOGGER.warning("addhOn: re-auth after %s", response.status)
                 await self.create()
                 async with self._intercept(method, url, *args, loop=2, **kwargs) as result:
@@ -182,6 +199,21 @@ class HonConnection:
                 # discarding a successful recovery).
                 raise NativeAuthError(f"Login failure (status {response.status})")
             else:
+                # A 5xx / 429 with a JSON body would otherwise decode cleanly here and
+                # be delivered as "success" (api.py then extracts {} -> empty attributes,
+                # an empty AWS token, no error). Raise a transient, NON-auth error that
+                # carries the status, so _is_retryable_server_error and classify() route
+                # it to the 3-attempt backoff in async_get_appliances_data (which was
+                # effectively dead code for real server errors before). Deliberately a
+                # RuntimeError, NOT a NativeAuthError: no "auth" in the class name keeps
+                # the routing transient.
+                if response.status == 429:
+                    # 429 is a rate-limit, not a server fault: keep the "429" token so
+                    # classify() maps it to RATE_LIMITED and _is_retryable_server_error
+                    # still routes it to the backoff, but don't mislabel it "server error".
+                    raise RuntimeError("hOn rate limited (status 429)")
+                if response.status >= 500:
+                    raise RuntimeError(f"hOn server error (status {response.status})")
                 # Force a decode-check before yielding.
                 # content_type=None: DELIBERATE (consistent with auth.py); it tolerates
                 # a non-JSON content-type but a valid JSON body (Salesforce sometimes does this);
@@ -190,7 +222,16 @@ class HonConnection:
                     await response.json(content_type=None)
                     yield response
                 except (json.JSONDecodeError, aiohttp.ContentTypeError) as exc:
-                    raise NativeAuthError("Decode Error") from exc
+                    # A non-JSON body (HTML maintenance/CDN page, Cloudflare challenge,
+                    # captive portal) is a TRANSIENT cloud hiccup, not bad credentials.
+                    # Attach the existing DECODE_ERROR code (requires_reauth=False) so the
+                    # duck-typed _requires_reauth routes it as UpdateFailed (the coordinator
+                    # retries) instead of opening a spurious reauth -- and, with 2FA on,
+                    # prompting the user for a new OTP. Aligns the routing with classify(),
+                    # which already maps "decode error" -> DECODE_ERROR (ADDHON-470).
+                    err = NativeAuthError(f"Decode Error (status {response.status})")
+                    err.error_code = DECODE_ERROR
+                    raise err from exc
 
     @asynccontextmanager
     async def get(self, *args: Any, **kwargs: Any) -> AsyncIterator[aiohttp.ClientResponse]:

@@ -89,6 +89,73 @@ def _client(appliances=None):
     return c
 
 
+class _FallbackAppliance:
+    """No update() attribute -> _do_update takes the load_* fallback path directly.
+    Records which loads ran; load_statistics can be made to raise a chosen error."""
+
+    def __init__(self, stats_error=None) -> None:
+        self.unique_id = "APP-1"
+        self.attributes = {"parameters": {}}
+        self.settings: dict = {}
+        self.statistics: dict = {}
+        self._stats_error = stats_error
+        self.calls: list[str] = []
+
+    async def load_attributes(self) -> None:
+        self.calls.append("load_attributes")
+
+    async def load_commands(self) -> None:
+        self.calls.append("load_commands")
+
+    async def load_statistics(self) -> None:
+        self.calls.append("load_statistics")
+        if self._stats_error is not None:
+            raise self._stats_error
+
+
+class FallbackLoadStatisticsToleranceTest(unittest.TestCase):
+    """Finding 7: in the load_* FALLBACK path a failed load_statistics (consumption
+    counters only) must be tolerated for non-auth/non-retryable errors -- exactly like
+    the primary update() path -- instead of failing the whole appliance. Auth and
+    retryable errors still propagate so reauth/backoff can act on them."""
+
+    def _client_running(self) -> HonClient:
+        c = HonClient(email="e@x", password="p")
+        # Run _do_update inline instead of on the dedicated loop.
+        c._run_on_hon_loop = lambda coro: asyncio.run(coro)  # type: ignore[assignment]
+        return c
+
+    def test_non_auth_load_statistics_failure_is_tolerated(self) -> None:
+        app = _FallbackAppliance(stats_error=ValueError("stats parse boom"))
+        c = self._client_running()
+        c._update_appliance_sync(app)  # must NOT raise: attrs+commands loaded
+        self.assertEqual(app.calls, ["load_attributes", "load_commands", "load_statistics"])
+
+    def test_retryable_load_statistics_failure_still_raises(self) -> None:
+        app = _FallbackAppliance(stats_error=TimeoutError())
+        c = self._client_running()
+        with self.assertRaises(RuntimeError):
+            c._update_appliance_sync(app)
+
+    def test_auth_load_statistics_failure_still_raises(self) -> None:
+        app = _FallbackAppliance(stats_error=RuntimeError("401 unauthorized"))
+        c = self._client_running()
+        with self.assertRaises(RuntimeError):
+            c._update_appliance_sync(app)
+
+    def test_load_attributes_failure_is_still_fatal(self) -> None:
+        # Regression guard: the tolerance is load_statistics-only. A broken
+        # load_attributes (the real data) must still fail the appliance.
+        class _BadAttrs(_FallbackAppliance):
+            async def load_attributes(self) -> None:
+                self.calls.append("load_attributes")
+                raise ValueError("attrs boom")
+
+        c = self._client_running()
+        with self.assertRaises(RuntimeError):
+            c._update_appliance_sync(_BadAttrs())
+
+
 class HonClientRealtimeTest(unittest.TestCase):
     def test_subscribe_updates_forwarded(self) -> None:
         c = _client()

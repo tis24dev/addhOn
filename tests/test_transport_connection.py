@@ -8,6 +8,7 @@ live-validated.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import types
 import unittest
@@ -61,6 +62,7 @@ _install_stubs()
 
 from custom_components.addhon.client.transport.connection import HonConnection  # noqa: E402
 from custom_components.addhon.client.transport.auth import NativeAuthError  # noqa: E402
+from custom_components.addhon.error_codes import DECODE_ERROR  # noqa: E402
 
 
 class FakeAuth:
@@ -514,6 +516,45 @@ class RetryRefreshSingleFlightTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertGreaterEqual(auth.refresh_calls, 2)  # loop0 retry + loop1 pre-request
 
+    def test_failed_retry_refresh_does_not_advance_generation(self) -> None:
+        # Finding 5: a retry refresh() that returns False (endpoint outage, tokens left
+        # untouched) must NOT advance _refresh_gen. Otherwise a concurrent sibling reads
+        # the bumped generation and SKIPS its own refresh, reusing never-refreshed tokens.
+        class FailingRefreshAuth(FakeAuth):
+            async def refresh(self, rt: str = "") -> bool:
+                self.refresh_calls += 1
+                return False  # tokens deliberately left as-is
+
+        auth = FailingRefreshAuth()
+        auth.cognito_token, auth.id_token, auth.refresh_token = "C", "I", "RT"
+        conn = _conn(auth, FakeSession([]))
+        conn._refresh_token = "RT"
+        conn._refresh_gen = 5
+
+        asyncio.run(conn._refresh_after_rejection(5))  # gen matches -> attempt
+        self.assertEqual(auth.refresh_calls, 1)
+        self.assertEqual(conn._refresh_gen, 5)       # NOT advanced on failure
+        self.assertEqual(conn._refresh_token, "RT")  # untouched
+
+    def test_failed_pre_request_refresh_does_not_advance_generation(self) -> None:
+        # Same invariant on the pre-request path (_check_headers): a failed refresh must
+        # not bump the generation, so a concurrent 401-retry sibling still refreshes.
+        class FailingRefreshAuth(FakeAuth):
+            async def refresh(self, rt: str = "") -> bool:
+                self.refresh_calls += 1
+                return False
+
+        auth = FailingRefreshAuth()
+        auth.cognito_token, auth.id_token = "C", "I"  # present but near expiry
+        auth.token_expires_soon = True
+        conn = _conn(auth, FakeSession([]))
+        conn._refresh_token = "RT"
+        conn._refresh_gen = 0
+
+        asyncio.run(conn._check_headers({}))
+        self.assertEqual(auth.refresh_calls, 1)
+        self.assertEqual(conn._refresh_gen, 0)  # failed refresh -> no bump
+
     def test_double_check_skips_when_gen_advanced(self) -> None:
         # Directly: if a sibling already refreshed since this request was sent (the
         # generation advanced), _refresh_after_rejection must NOT refresh again.
@@ -540,6 +581,101 @@ class RetryRefreshSingleFlightTest(unittest.TestCase):
         self.assertEqual(auth.refresh_calls, 1)
         self.assertEqual(conn._refresh_token, "RT2")   # rotated + copied back
         self.assertEqual(conn._refresh_gen, 6)         # generation bumped
+
+
+class InterceptCloudErrorRoutingTest(unittest.TestCase):
+    """Findings 1-3: a transient cloud fault must not be delivered as success nor
+    mis-routed to reauth. (a) a non-JSON body carries DECODE_ERROR (transient, NOT
+    reauth); (b) a 5xx/429 raises a retryable server error instead of decoding an
+    error page as data; (c) a *successful* 200 is never replayed just because the
+    token looks like it is expiring (a re-sent POST would fire the command twice)."""
+
+    def test_non_json_body_carries_decode_error_code(self) -> None:
+        # A 200 carrying an HTML maintenance/CDN page: json() raises -> the decode
+        # branch must attach DECODE_ERROR so routing stays transient, not reauth.
+        class HtmlResp(FakeResp):
+            async def json(self, content_type=None):
+                raise json.JSONDecodeError("Expecting value", "<html>oops</html>", 0)
+
+        class HtmlSession(FakeSession):
+            def _resp(self, url, **kw):
+                self.calls.append(kw.get("headers", {}))
+                return HtmlResp(200)
+
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        conn = _conn(auth, HtmlSession([]))
+        conn._refresh_token = "RT"
+
+        async def run():
+            async with conn.get("https://x/api"):
+                pass
+
+        with self.assertRaises(NativeAuthError) as ctx:
+            asyncio.run(run())
+        # The carried code is what _requires_reauth (duck-typed) reads: requires_reauth
+        # is False -> UpdateFailed (coordinator retries), NO reauth/2FA prompt.
+        self.assertIs(ctx.exception.error_code, DECODE_ERROR)
+        self.assertFalse(DECODE_ERROR.requires_reauth)
+        self.assertEqual(auth.authenticate_calls, 0)  # no spurious full re-login
+
+    def test_5xx_json_body_raises_retryable_not_success(self) -> None:
+        # A 502 whose body decodes as JSON must NOT be yielded as a good response
+        # (that produced silent empty attrs / empty AWS token before).
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        conn = _conn(auth, FakeSession([502]))
+        conn._refresh_token = "RT"
+
+        async def run():
+            async with conn.get("https://x/api"):
+                pass
+
+        with self.assertRaises(RuntimeError) as ctx:
+            asyncio.run(run())
+        self.assertIn("502", str(ctx.exception))
+        # NOT a NativeAuthError: no "auth" in the class name -> routed as retryable.
+        self.assertNotIsInstance(ctx.exception, NativeAuthError)
+
+    def test_429_raises_retryable(self) -> None:
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        conn = _conn(auth, FakeSession([429]))
+        conn._refresh_token = "RT"
+
+        async def run():
+            async with conn.get("https://x/api"):
+                pass
+
+        with self.assertRaises(RuntimeError) as ctx:
+            asyncio.run(run())
+        self.assertIn("429", str(ctx.exception))
+
+    def test_successful_200_not_replayed_on_sticky_expiry(self) -> None:
+        # Finding 2: refresh() "succeeds" but leaves the expiry flag set (models the
+        # real bug -- a silent refresh failure leaves _expires stale). A 200 must be
+        # returned as-is, NOT discarded and re-sent. The OLD condition replayed it
+        # (2 requests); re-sending a POST /commands/v1/send fires the command twice.
+        class StickyAuth(FakeAuth):
+            async def refresh(self, rt: str = "") -> bool:
+                self.refresh_calls += 1
+                self.cognito_token, self.id_token, self.refresh_token = "C2", "I2", "RT2"
+                self.token_expires_soon = True  # stays True (stale _expires)
+                return True
+
+        auth = StickyAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        auth.token_expires_soon = True
+        conn = _conn(auth, FakeSession([200, 200]))
+        conn._refresh_token = "RT"
+
+        async def run():
+            async with conn.post("https://x/api") as resp:
+                return resp.status
+
+        status = asyncio.run(run())
+        self.assertEqual(status, 200)
+        self.assertEqual(len(conn._session.calls), 1)  # sent once, not replayed
 
 
 class ConnectionCreateCleanupTest(unittest.TestCase):
