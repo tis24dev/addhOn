@@ -207,7 +207,12 @@ class HonConnection:
                 # effectively dead code for real server errors before). Deliberately a
                 # RuntimeError, NOT a NativeAuthError: no "auth" in the class name keeps
                 # the routing transient.
-                if response.status >= 500 or response.status == 429:
+                if response.status == 429:
+                    # 429 is a rate-limit, not a server fault: keep the "429" token so
+                    # classify() maps it to RATE_LIMITED and _is_retryable_server_error
+                    # still routes it to the backoff, but don't mislabel it "server error".
+                    raise RuntimeError("hOn rate limited (status 429)")
+                if response.status >= 500:
                     raise RuntimeError(f"hOn server error (status {response.status})")
                 # Force a decode-check before yielding.
                 # content_type=None: DELIBERATE (consistent with auth.py); it tolerates
