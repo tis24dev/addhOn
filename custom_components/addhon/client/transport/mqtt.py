@@ -470,6 +470,13 @@ class NativeMqttClient:
         for topic in self._all_topics():
             if topic in self._subscribed_topics_set:
                 continue
+            # Snapshot the set identity BEFORE the await. If a disconnect + awscrt
+            # auto-reconnect (SAME generation, so no _start()) fires while this SUBACK
+            # is in flight, the lifecycle handlers rebind _subscribed_topics_set to a
+            # fresh empty set (the reconnected session carries no subscriptions). The
+            # reconnect flips _connection back to True, so the watchdog's post-await
+            # guard sees "healthy" and cannot catch it -- only this identity check can.
+            ref = self._subscribed_topics_set
             try:
                 await self._subscribe_topic(topic)
             except asyncio.CancelledError:
@@ -487,7 +494,12 @@ class NativeMqttClient:
                     "MQTT: subscribe failed for one topic, continuing: %s", err
                 )
                 continue
-            self._subscribed_topics_set.add(topic)
+            # Commit only if the session that ACKed is still the current one: an identity
+            # mismatch means a reconnect rebound the set mid-await and this SUBACK belongs
+            # to a session that has since dropped its subscriptions. Skip; the next
+            # watchdog tick re-subscribes the topic on the fresh (empty) set.
+            if self._subscribed_topics_set is ref:
+                ref.add(topic)
 
     # Thin compatibility wrappers over the per-topic primitives above. _subscribe_missing
     # is the path used by create()/the watchdog; these keep the per-appliance call shape
