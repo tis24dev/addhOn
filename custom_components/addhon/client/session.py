@@ -87,13 +87,11 @@ class NativeHon:
 
     @property
     def appliances(self) -> list[Any]:
+        # Read-only on purpose: no setter. The MQTT client binds this list by
+        # reference at __init__, so the inventory is mutated IN PLACE (setup()
+        # clears + appends) and never rebound -- a `session.appliances = [...]`
+        # would swap the object out from under the live subscriptions.
         return self._appliances
-
-    @appliances.setter
-    def appliances(self, appliances: list[Any]) -> None:
-        # NB: the MQTT client binds the list by reference at __init__. Do not rebind
-        # after MQTT is started, or the subscriptions would not see the new list.
-        self._appliances = appliances
 
     async def create(self) -> "NativeHon":
         try:
