@@ -273,6 +273,42 @@ class ConnectionTest(unittest.TestCase):
         self.assertEqual(auth.refresh_calls, 1)
         self.assertEqual(auth.authenticate_calls, 0)
 
+    def test_concurrent_reauth_single_flight(self) -> None:
+        # The loop-1 re-auth is now single-flighted under the same lock+generation as
+        # the refresh: a burst that all reach loop 1 collapses to ONE create() +
+        # authenticate(). Before, each request's create() reset self._auth to a
+        # token-less HonAuth, so the loop-2 _check_headers of every sibling fired its
+        # OWN full login on the shared session (colliding cookie jars / multiple OTPs).
+        created = {"n": 0}
+
+        class SlowFakeAuth(FakeAuth):
+            async def authenticate(self) -> None:
+                self.authenticate_calls += 1
+                await asyncio.sleep(0)  # yield so siblings pile up on the lock
+                self.cognito_token, self.id_token, self.refresh_token = "COG", "IDT", "RT"
+
+        auth = SlowFakeAuth()
+        conn = _conn(auth, FakeSession([]))
+
+        async def _fake_create():
+            created["n"] += 1
+            return conn  # a real re-login repopulates the same connection's auth
+
+        conn.create = _fake_create
+
+        async def run():
+            gen = conn._refresh_gen  # all three "sent" at the same generation
+            await asyncio.gather(
+                conn._reauth_after_rejection(gen),
+                conn._reauth_after_rejection(gen),
+                conn._reauth_after_rejection(gen),
+            )
+
+        asyncio.run(run())
+        self.assertEqual(auth.authenticate_calls, 1)  # one re-login, not three
+        self.assertEqual(created["n"], 1)             # one create(), not three
+        self.assertEqual(conn._refresh_gen, 1)        # advanced exactly once
+
     def test_retry_on_403_refreshes(self) -> None:
         # Same branch as the 401 (the code treats them identically) but made explicit
         # to avoid regressions on the 403 (CodeRabbit nitpick).
