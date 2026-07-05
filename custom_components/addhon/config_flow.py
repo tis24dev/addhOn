@@ -226,6 +226,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         reauth_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
+        if reauth_entry is None:
+            # The entry was removed while the reauth flow was open: abort cleanly
+            # instead of raising AttributeError on reauth_entry.data below.
+            return self.async_abort(reason="reauth_account_mismatch")
         email = reauth_entry.data["email"]
 
         if user_input is not None:

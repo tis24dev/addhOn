@@ -281,6 +281,49 @@ class ApplyDebugOptionsTest(unittest.TestCase):
             logging.getLogger("custom_components.addhon").level, logging.NOTSET
         )
 
+    def test_options_listener_skips_when_toggles_unchanged(self) -> None:
+        # HA fires update listeners on ANY entry write (e.g. a refresh-token rotation),
+        # not only options changes. With the toggles unchanged the listener must NOT
+        # re-apply/reset the levels, so a debug level raised at runtime survives.
+        import asyncio
+
+        from custom_components.addhon import (
+            _DEBUG_OPTS_KEY,
+            _async_options_updated,
+            _debug_opts,
+        )
+        from custom_components.addhon.const import DOMAIN
+
+        entry = _FakeEntry({CONF_ENABLE_DEBUG: False})
+
+        class _Hass:
+            data = {DOMAIN: {entry.entry_id: {_DEBUG_OPTS_KEY: _debug_opts(entry)}}}
+
+        logging.getLogger("custom_components.addhon").setLevel(logging.DEBUG)
+        asyncio.run(_async_options_updated(_Hass(), entry))
+        # unchanged toggles -> level preserved, NOT reset to NOTSET
+        self.assertEqual(
+            logging.getLogger("custom_components.addhon").level, logging.DEBUG
+        )
+
+    def test_options_listener_applies_when_toggles_changed(self) -> None:
+        # A genuine options change (baseline debug ON, now OFF) still re-applies live.
+        import asyncio
+
+        from custom_components.addhon import _DEBUG_OPTS_KEY, _async_options_updated
+        from custom_components.addhon.const import DOMAIN
+
+        entry = _FakeEntry({CONF_ENABLE_DEBUG: False})
+
+        class _Hass:
+            data = {DOMAIN: {entry.entry_id: {_DEBUG_OPTS_KEY: (True, False)}}}
+
+        logging.getLogger("custom_components.addhon").setLevel(logging.DEBUG)
+        asyncio.run(_async_options_updated(_Hass(), entry))
+        self.assertEqual(
+            logging.getLogger("custom_components.addhon").level, logging.NOTSET
+        )
+
 
 class ResetHelperTest(unittest.TestCase):
     def setUp(self) -> None:
