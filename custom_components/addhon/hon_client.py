@@ -251,6 +251,19 @@ def _requires_reauth(err: BaseException) -> bool:
     ) and not _is_retryable_server_error(err)
 
 
+def _must_propagate(err: BaseException) -> bool:
+    """True when an error must reach the caller instead of being tolerated.
+
+    A load_statistics failure is normally non-fatal -- it only carries the
+    consumption counters -- so both the primary update() path and the load_*
+    fallback loop swallow it. But an error that needs reauth, or a retryable
+    server error that needs the backoff, MUST still surface. Keeping that single
+    predicate here enforces the "both paths tolerate the same set" invariant by
+    code rather than by a comment that can drift.
+    """
+    return _requires_reauth(err) or _is_retryable_server_error(err)
+
+
 def _representative_failure(
     failures: list[tuple[str, Exception]]
 ) -> tuple[HonErrorCode, Exception | None]:
@@ -673,7 +686,7 @@ class HonClient:
                                     attrs_after_update,
                                 )
                             except Exception as err:
-                                if _requires_reauth(err) or _is_retryable_server_error(err):
+                                if _must_propagate(err):
                                     raise
                                 _LOGGER.debug(
                                     "load_statistics after update() failed for '%s' "
@@ -694,7 +707,7 @@ class HonClient:
                     update_returned_empty = True
                     _LOGGER.debug("update() completed with no data, trying load_*")
                 except Exception as err:
-                    if _requires_reauth(err) or _is_retryable_server_error(err):
+                    if _must_propagate(err):
                         raise
                     _LOGGER.debug("update() failed: %s, trying load_*", err or "<no msg>")
 
@@ -709,16 +722,14 @@ class HonClient:
                         _LOGGER.debug("Fallback OK: %s", method_name)
                         _debug_appliance_consumption(f"after {method_name}", appliance)
                     except Exception as err:
-                        # Match the primary update() path (see the load_statistics guard
-                        # above): a failed load_statistics is non-fatal -- it only carries
-                        # the consumption counters -- UNLESS it is an auth/retryable error
-                        # the caller must act on. Without this, a single stats hiccup made
-                        # the WHOLE appliance unavailable in the fallback path while the
+                        # Match the primary update() path via the shared _must_propagate
+                        # predicate: a failed load_statistics is non-fatal -- it only
+                        # carries the consumption counters -- UNLESS it is an auth/retryable
+                        # error the caller must act on. Without this, a single stats hiccup
+                        # made the WHOLE appliance unavailable in the fallback path while the
                         # primary path tolerated it (inconsistent). load_attributes and
                         # load_commands stay fatal: that IS the appliance's data.
-                        if method_name == "load_statistics" and not (
-                            _requires_reauth(err) or _is_retryable_server_error(err)
-                        ):
+                        if method_name == "load_statistics" and not _must_propagate(err):
                             _LOGGER.debug(
                                 "Fallback load_statistics tolerated (non-auth): %s", err
                             )
