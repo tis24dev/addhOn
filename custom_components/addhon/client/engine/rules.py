@@ -23,12 +23,15 @@ rules are a cohesive cluster.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from .parameter.base import HonParameter
 from .parameter.enum import HonParameterEnum
 from .parameter.range import HonParameterRange
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -188,10 +191,26 @@ class HonRuleSet:
                 return
             if not (param := self._command.parameters.get(rule.param_key)):
                 return
-            if fixed_value := rule.param_data.get("fixedValue", ""):
-                self._apply_fixed(param, fixed_value)
-            elif rule.param_data.get("typology") == "enum":
-                self._apply_enum(param, rule)
+            try:
+                if fixed_value := rule.param_data.get("fixedValue", ""):
+                    self._apply_fixed(param, fixed_value)
+                elif rule.param_data.get("typology") == "enum":
+                    self._apply_enum(param, rule)
+            except (ValueError, TypeError) as err:
+                # A malformed rule (non-numeric or off-grid `fixedValue`, bad enum
+                # value) must NOT abort the whole appliance's command-load. The
+                # immediate-fire in `HonParameter.add_trigger` runs at construction
+                # time, so an escaping ValueError from `_apply_fixed` (e.g. float("x")
+                # or an off-step value rejected by the range setter) would fail setup
+                # for every entity of the device. Log and skip the bad rule instead;
+                # the runtime path already tolerates this via the entity write-path.
+                _LOGGER.debug(
+                    "addhOn: skipping unapplicable rule for '%s' (trigger %s=%s): %s",
+                    rule.param_key,
+                    rule.trigger_key,
+                    rule.trigger_value,
+                    err,
+                )
 
         parameter.add_trigger(data.trigger_value, apply, data)
 

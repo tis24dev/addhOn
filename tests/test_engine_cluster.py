@@ -360,6 +360,26 @@ class ClusterBehaviorTest(unittest.TestCase):
     def test_favourite_added(self) -> None:
         self.assertIn("MyFav", _native_snapshot()["rich_favourites_categories"])
 
+    def test_favourite_does_not_corrupt_base_program(self) -> None:
+        # Regression: `_add_favourites` shallow-copied the base command, sharing its
+        # `_parameters` dict AND parameter objects. Applying MyFav (tempSel=7 on
+        # SUPER_COOL) then mutated the REAL super_cool program -> it got tempSel=7 and
+        # a favourite="1" flag, and `HonParameterProgram.ids` (which drops favourites)
+        # hid it entirely. HonCommand.__copy__ now isolates the parameters.
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=_RICH_FAVOURITES))
+        start = app.commands["startProgram"]
+        base = start.categories["super_cool"]  # the real program, not the MyFav copy
+        # base keeps its own default, untouched by the favourite's tempSel=7
+        self.assertEqual(float(base.parameters["tempSel"].value), 5.0)
+        # base is NOT flagged as a favourite...
+        self.assertNotIn("favourite", base.parameters)
+        # ...so it still appears in the selectable program ids (prCode 1 -> super_cool)
+        self.assertEqual(start.parameters["program"].ids.get(1), "super_cool")
+        # the favourite itself is a distinct command carrying tempSel=7 + favourite=1
+        fav = start.categories["MyFav"]
+        self.assertEqual(float(fav.parameters["tempSel"].value), 7.0)
+        self.assertEqual(str(fav.parameters["favourite"].value), "1")
+
     def test_favourites_malformed_do_not_crash(self) -> None:
         # Stale/malformed favourites payloads must not stop the loader.
         bad_favs = [

@@ -76,7 +76,11 @@ class HonParameter:
         return self._group
 
     def add_trigger(self, value: str, func: Callable[[Any], None], data: Any) -> None:
-        if self._value == value:
+        # Normalize both sides like `check_trigger` does: `_value` may be numeric
+        # (range/int) while the trigger value is always a string, so a raw `==`
+        # would miss `1 == "1"` and skip the immediate-fire for a param whose
+        # default already equals the trigger value.
+        if str(self._value).lower() == str(value).lower():
             func(data)
         self._triggers.setdefault(value, []).append((func, data))
 

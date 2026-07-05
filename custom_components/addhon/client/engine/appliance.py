@@ -126,7 +126,14 @@ class HonAppliance:
 
     @property
     def model_id(self) -> int:
-        return int(self._info.get("applianceModelId", 0))
+        # The `0` default only covers a MISSING key; a present-but-empty or
+        # non-numeric `applianceModelId` (seen on some payloads) would make
+        # int("") raise ValueError. model_id feeds the entity identity, so parse
+        # defensively and fall back to 0.
+        try:
+            return int(self._info.get("applianceModelId") or 0)
+        except (TypeError, ValueError):
+            return 0
 
     # --- state / data ---
     @property

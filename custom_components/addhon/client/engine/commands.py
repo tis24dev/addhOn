@@ -14,6 +14,7 @@ false "sent".
 """
 from __future__ import annotations
 
+from copy import copy
 from typing import Any, Optional, Union
 
 from .exceptions import ApiError, NoAuthenticationException
@@ -52,6 +53,20 @@ class HonCommand:
 
     def __repr__(self) -> str:
         return f"{self._name} command"
+
+    def __copy__(self) -> "HonCommand":
+        # `_add_favourites` (command_loader) does `copy(base)` and then MUTATES the
+        # copy's parameters (sets values, injects a `favourite` fixed, sets the program
+        # value). A default shallow copy shares the SAME `_parameters` dict AND the same
+        # parameter objects with the base program command (also reachable via
+        # `parent.categories`), so those mutations corrupt the base program: its values
+        # get overwritten, it gains `favourite="1"`, and it then disappears from
+        # `HonParameterProgram.ids` (which filters favourites out). Give each copy its own
+        # parameter dict with copied parameter objects so the base stays pristine.
+        new = self.__class__.__new__(self.__class__)
+        new.__dict__.update(self.__dict__)
+        new._parameters = {name: copy(param) for name, param in self._parameters.items()}
+        return new
 
     @property
     def name(self) -> str:
