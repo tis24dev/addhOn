@@ -321,7 +321,8 @@ async def async_setup_entry(
     entry_data = hass.data[DOMAIN][entry.entry_id]
     coordinator = entry_data["coordinator"]
     entities: list[BinarySensorEntity] = []
-    for appliance_id, data in coordinator.data.items():
+    data_map = coordinator.data if isinstance(coordinator.data, dict) else {}
+    for appliance_id, data in data_map.items():
         app_type = data.get("type", "")
         attributes = data.get("attributes", {})
         attributes = attributes if isinstance(attributes, dict) else {}

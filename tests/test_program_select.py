@@ -290,6 +290,28 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("program", added[0]._attr_translation_key)
         self.assertEqual(["Cotone", "Sintetici"], added[0]._attr_options)
 
+    async def test_duplicate_program_labels_stay_distinct(self) -> None:
+        # Two program CODES sharing a display label must both stay selectable and map
+        # back to their OWN code, instead of collapsing (one code unreachable, the other
+        # mis-selected). Colliding labels get a "(code)" suffix; unique ones untouched.
+        from custom_components.addhon.select import HonProgramSelect
+
+        start = RecordingCommand(
+            {"program": Param(values={"1": "Eco", "2": "Eco", "3": "Cotone"})}
+        )
+        coordinator = FakeCoordinator(_washer({"startProgram": start}))
+        entity = HonProgramSelect(coordinator, "washer-1", FakeClient())
+        self._attach(entity)
+
+        self.assertEqual(["Eco (1)", "Eco (2)", "Cotone"], entity._attr_options)
+        await entity.async_select_option("Eco (1)")
+        self.assertEqual({"washer-1": "1"}, coordinator.pending_programs)
+        await entity.async_select_option("Eco (2)")
+        self.assertEqual({"washer-1": "2"}, coordinator.pending_programs)
+        # current_option reflects the pending disambiguated option (must be in options)
+        self.assertEqual("Eco (2)", entity.current_option)
+        self.assertIn(entity.current_option, entity._attr_options)
+
     async def test_select_option_records_pending_without_starting(self) -> None:
         from custom_components.addhon.select import HonProgramSelect
 
