@@ -447,6 +447,16 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             target = AC_SWING_V_ON
         else:
             target = fixed_vertical_value(allowed)
+            if target == AC_SWING_V_ON:
+                # No genuine fixed (non-swing) position exists for this model, so
+                # fixed_vertical_value fell back to the swing-ON code (8). Sending it
+                # for an OFF request would START oscillation -- the opposite of what
+                # was asked. Refuse instead of transmitting the wrong command.
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="swing_position_not_allowed",
+                    translation_placeholders={"position": str(target), "allowed": str(allowed)},
+                )
         if allowed and target not in allowed:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

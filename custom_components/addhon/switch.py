@@ -252,6 +252,10 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
             redact_id(self._appliance_id),
             _command_names(appliance),
         )
+        # Rollback state: the pause param is mutated in memory before send; on a send
+        # failure restore it so the switch does not report a local pause/resume the
+        # cloud never accepted until the next poll. Populated inside _inner.
+        restore_pause: dict = {}
         try:
             def _do():
                 async def _inner():
@@ -267,8 +271,12 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
                         _param_snapshot(params),
                     )
                     if isinstance(params, dict) and "pause" in params:
-                        previous = getattr(params["pause"], "value", None)
-                        params["pause"].value = pause_value
+                        pause_param = params["pause"]
+                        if hasattr(pause_param, "__dict__"):
+                            restore_pause["param"] = pause_param
+                            restore_pause["snap"] = dict(pause_param.__dict__)
+                        previous = getattr(pause_param, "value", None)
+                        pause_param.value = pause_value
                         _LOGGER.debug(
                             "Switch debug: pause parameter set to %s (previous=%s)",
                             pause_value,
@@ -280,6 +288,7 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
                             command_name,
                         )
                     await command.send()
+                    restore_pause.clear()  # sent: nothing to roll back
                     _LOGGER.debug("Switch debug: command '%s' send completed", command_name)
                 client.run_command_sync(_inner())
 
@@ -287,6 +296,11 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
             _LOGGER.info("Pause: %s sent", command_name)
             await self._async_request_command_refresh()
         except Exception as err:
+            param = restore_pause.get("param")
+            snap = restore_pause.get("snap")
+            if param is not None and isinstance(snap, dict):
+                param.__dict__.clear()
+                param.__dict__.update(snap)
             _LOGGER.error("Pause %s: Error: %s", command_name, err, exc_info=True)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

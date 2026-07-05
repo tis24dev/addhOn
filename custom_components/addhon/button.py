@@ -151,6 +151,31 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
             redact_store(store),
             command_names(appliance),
         )
+        # Rollback state for a failed send: applying the pending program both mutates
+        # the program parameter AND swaps appliance.commands[name] to the selected
+        # category. Populated inside _inner BEFORE the mutation and consumed by the
+        # except below, so a send failure does not leave the appliance pointing at a
+        # program/command the cloud never accepted (which would otherwise skew the
+        # per-program option ranges until the next poll self-heals it). Mirrors the
+        # snapshot/restore in hon_commands.async_send_command.
+        rollback: dict = {}
+
+        def _snapshot_params(ps):
+            if not isinstance(ps, dict):
+                return {}
+            return {k: dict(p.__dict__) for k, p in ps.items() if hasattr(p, "__dict__")}
+
+        def _restore_params(ps, snap):
+            if not isinstance(ps, dict):
+                return
+            for key, saved in snap.items():
+                param = ps.get(key)
+                if param is not None and hasattr(param, "__dict__"):
+                    # Restore via __dict__ (not the setter) so rules are not re-fired
+                    # and values/min/max are restored too.
+                    param.__dict__.clear()
+                    param.__dict__.update(saved)
+
         try:
             def _do():
                 async def _inner():
@@ -163,6 +188,11 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                             f"Available: {list(commands.keys())}"
                         )
                     params = getattr(command, "parameters", {})
+                    # Record the pre-swap state so a failed send can be fully rolled back.
+                    rollback["commands"] = commands
+                    rollback["name"] = self._command_name
+                    rollback["original_command"] = command
+                    rollback["snapshots"] = [(params, _snapshot_params(params))]
                     if _LOGGER.isEnabledFor(logging.DEBUG):
                         _LOGGER.debug(
                             "Button debug: before command '%s' params=%s",
@@ -211,6 +241,9 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                         )
                         command = refreshed
                         params = getattr(command, "parameters", {})
+                        # Snapshot the post-swap command's params too, so options/fixed
+                        # applied below are rolled back with the swap on a send failure.
+                        rollback["snapshots"].append((params, _snapshot_params(params)))
                     # (b) Apply the buffered program options to the POST-SWAP command
                     # (#35): selecting the program swaps the active startProgram command,
                     # so the options must land on the new one. apply_pending_options skips
@@ -249,6 +282,7 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                             param_snapshot(params),
                         )
                     await command.send()
+                    rollback.clear()  # sent: nothing to roll back
                     _LOGGER.debug("Button debug: command '%s' send completed", self._command_name)
 
                 client.run_command_sync(_inner())
@@ -285,6 +319,16 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
             _LOGGER.info("Button: command '%s' sent", self._command_name)
             await self._async_request_command_refresh()
         except Exception as err:
+            # Roll back the command swap + parameter mutations left by a failed send,
+            # so the appliance does not keep pointing at a program the cloud rejected.
+            if rollback:
+                cmds = rollback.get("commands")
+                name = rollback.get("name")
+                original = rollback.get("original_command")
+                if isinstance(cmds, dict) and original is not None and cmds.get(name) is not original:
+                    cmds[name] = original
+                for ps, snap in reversed(rollback.get("snapshots", [])):
+                    _restore_params(ps, snap)
             _LOGGER.error(
                 "Button %s: command error: %s",
                 self._command_name, err, exc_info=True,

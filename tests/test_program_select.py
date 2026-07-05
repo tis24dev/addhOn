@@ -480,6 +480,61 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         # The fixed parameters were applied to the NEW (swapped) command, not the stale one.
         self.assertEqual("Y", new_cmd.parameters["prStr"].value)
 
+    async def test_start_button_rolls_back_swap_on_send_failure(self) -> None:
+        # If send() fails AFTER the program apply swapped the active command, the button
+        # must roll back: restore appliance.commands[name] to the original command and
+        # undo the parameter mutations, so the appliance does not keep pointing at a
+        # program the cloud never accepted. Pending program is kept for retry.
+        from homeassistant.exceptions import HomeAssistantError
+        from custom_components.addhon.button import HonProgramCommandButton
+
+        appliance = types.SimpleNamespace(commands={})
+
+        class FailingCommand(RecordingCommand):
+            async def send(self) -> None:
+                self.send_calls += 1
+                raise RuntimeError("cloud rejected")
+
+        new_cmd = FailingCommand({"prStr": Param("X")})
+
+        class ProgramSwapParam:
+            def __init__(self) -> None:
+                self._value = None
+
+            @property
+            def value(self):
+                return self._value
+
+            @value.setter
+            def value(self, v) -> None:
+                self._value = v
+                appliance.commands["startProgram"] = new_cmd  # category swap
+
+        old_cmd = RecordingCommand({"program": ProgramSwapParam()})
+        appliance.commands["startProgram"] = old_cmd
+        coordinator = FakeCoordinator(
+            {"washer-1": {"type": "WM", "name": "W", "appliance": appliance,
+                          "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_programs = {"washer-1": "2"}
+        button = HonProgramCommandButton(
+            coordinator, "washer-1", FakeClient(),
+            command_name="startProgram", unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+            command_parameters={"prStr": "Y"},
+        )
+        self._attach(button)
+
+        with self.assertRaises(HomeAssistantError):
+            await button.async_press()
+
+        # rolled back to the ORIGINAL command and its pre-apply parameter state
+        self.assertIs(old_cmd, appliance.commands["startProgram"])
+        self.assertIsNone(old_cmd.parameters["program"].value)
+        self.assertEqual("X", new_cmd.parameters["prStr"].value)  # fixed mutation undone
+        # pending program NOT consumed: the user can retry
+        self.assertEqual({"washer-1": "2"}, coordinator.pending_programs)
+
     async def test_stop_button_ignores_pending_program(self) -> None:
         from custom_components.addhon.button import HonProgramCommandButton
 
