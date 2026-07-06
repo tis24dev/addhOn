@@ -13,6 +13,7 @@ import asyncio
 import json
 import sys
 import unittest
+from copy import copy
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -359,6 +360,100 @@ class ClusterBehaviorTest(unittest.TestCase):
 
     def test_favourite_added(self) -> None:
         self.assertIn("MyFav", _native_snapshot()["rich_favourites_categories"])
+
+    def test_favourite_does_not_corrupt_base_program(self) -> None:
+        # Regression: `_add_favourites` shallow-copied the base command, sharing its
+        # `_parameters` dict AND parameter objects. Applying MyFav (tempSel=7 on
+        # SUPER_COOL) then mutated the REAL super_cool program -> it got tempSel=7 and
+        # a favourite="1" flag, and `HonParameterProgram.ids` (which drops favourites)
+        # hid it entirely. HonCommand.__copy__ now isolates the parameters.
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=_RICH_FAVOURITES))
+        start = app.commands["startProgram"]
+        base = start.categories["super_cool"]  # the real program, not the MyFav copy
+        # base keeps its own default, untouched by the favourite's tempSel=7
+        self.assertEqual(float(base.parameters["tempSel"].value), 5.0)
+        # base is NOT flagged as a favourite...
+        self.assertNotIn("favourite", base.parameters)
+        # ...so it still appears in the selectable program ids (prCode 1 -> super_cool)
+        self.assertEqual(start.parameters["program"].ids.get(1), "super_cool")
+        # the favourite itself is a distinct command carrying tempSel=7 + favourite=1
+        fav = start.categories["MyFav"]
+        self.assertEqual(float(fav.parameters["tempSel"].value), 7.0)
+        self.assertEqual(str(fav.parameters["favourite"].value), "1")
+
+    def test_favourite_copy_rules_do_not_corrupt_base(self) -> None:
+        # Regression: isolating `_parameters` in __copy__ was not enough. A shallow-copied
+        # parameter SHARED its trigger table with the base, and every rule callback closed
+        # over the BASE command. Applying a favourite sets values on the copy (see
+        # command_loader._update_base_command_with_data), which fires check_trigger -> the
+        # rule ran against the BASE program and mutated it. __copy__ now gives the copy its
+        # own trigger tables + rule sets bound to itself.
+        attrs = {
+            "parameters": {
+                "mode": _enum("cold", ["cold", "hot"]),
+                "temp": _range(default="20", lo="16", hi="30", inc="1"),
+            },
+            "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "28"}}}})},
+        }
+        base = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())
+        fav = copy(base)
+        # Applying the favourite fires the rule ON THE COPY: mode=hot -> temp=28.
+        fav.parameters["mode"].value = "hot"
+        self.assertEqual(fav.parameters["temp"].value, 28)  # the copy IS constrained
+        # ...and the base program keeps its own default, uncorrupted.
+        self.assertEqual(base.parameters["temp"].value, 20)  # bug: became 28
+        self.assertEqual(base.parameters["mode"].value, "cold")
+        # White-box: the copy's rule set is a distinct object bound to the copy, and the
+        # copied parameter's trigger table is not shared with the base.
+        self.assertIsNot(fav._rules[0], base._rules[0])
+        self.assertIsNot(fav.parameters["mode"]._triggers, base.parameters["mode"]._triggers)
+
+    def test_malformed_fixed_value_rule_skipped_at_runtime(self) -> None:
+        # A rule whose fixedValue is non-numeric for a RANGE target must NOT raise out
+        # of the runtime trigger (the range setter rejects "x" with ValueError). The
+        # rule is skipped and the parameter keeps its value; setup is not aborted.
+        attrs = {
+            "parameters": {
+                "mode": _enum("cold", ["cold", "hot"]),
+                "temp": _range(default="20", lo="16", hi="30", inc="1"),
+            },
+            "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "not-a-number"}}}})},
+        }
+        cmd = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())
+        cmd.parameters["mode"].value = "hot"  # fires the bad rule -> must be swallowed
+        self.assertEqual(cmd.parameters["temp"].value, 20)  # unchanged
+
+    def test_malformed_fixed_value_rule_skipped_at_construction(self) -> None:
+        # Same malformed rule, but the trigger value equals the param DEFAULT, so the
+        # immediate-fire runs during construction (patch()). Building the command must
+        # not raise -- the ValueError from _apply_fixed used to abort the whole load.
+        attrs = {
+            "parameters": {
+                "mode": _enum("hot", ["cold", "hot"]),  # default already == trigger
+                "temp": _range(default="20", lo="16", hi="30", inc="1"),
+            },
+            "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "not-a-number"}}}})},
+        }
+        cmd = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())  # must not raise
+        self.assertEqual(cmd.parameters["temp"].value, 20)  # unchanged
+
+    def test_copy_rebinds_program_param_backrefs(self) -> None:
+        # A HonParameterProgram carries `_command` (the base command); its value-setter
+        # does `self._command.category = value` (swapping appliance.commands). A shallow
+        # copy shares that back-reference, so a write on the copy's program parameter
+        # could reach the base. __copy__ now rebinds `_command`/`_programs` to the copy.
+        from custom_components.addhon.client.engine.parameter.program import (
+            HonParameterProgram,
+        )
+
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=_RICH_FAVOURITES))
+        base = app.commands["startProgram"].categories["super_cool"]
+        self.assertIsInstance(base.parameters["program"], HonParameterProgram)
+        fav = copy(base)
+        fav_prog = fav.parameters["program"]
+        self.assertIs(fav_prog._command, fav)       # rebound to the copy...
+        self.assertIsNot(fav_prog._command, base)   # ...not the base command
+        self.assertIs(fav_prog._programs, fav.categories)
 
     def test_favourites_malformed_do_not_crash(self) -> None:
         # Stale/malformed favourites payloads must not stop the loader.

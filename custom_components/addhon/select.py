@@ -218,7 +218,8 @@ async def async_setup_entry(
     coordinator = entry_data["coordinator"]
     client = entry_data["client"]
     entities = []
-    for appliance_id, data in coordinator.data.items():
+    data_map = coordinator.data if isinstance(coordinator.data, dict) else {}
+    for appliance_id, data in data_map.items():
         appliance = data.get("appliance")
         app_type = data.get("type")
         _LOGGER.debug(
@@ -321,8 +322,23 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         if appliance is not None:
             self._program_map = self._load_programs(appliance)
 
-        self._program_reverse: dict[str, str] = {v: k for k, v in self._program_map.items()}
-        self._attr_options = list(self._program_reverse.keys())
+        # Disambiguate collided labels: two program CODES sharing a display label would
+        # otherwise collapse in the reverse map, leaving one program unreachable from the
+        # UI and mapping current_option of the lost code onto the survivor's code. Suffix
+        # ONLY the colliding labels with their raw code so every code stays selectable and
+        # the reverse map is injective (mirrors HonProgramOptionSelect). Unique labels are
+        # untouched, keeping their translatable string.
+        label_counts: dict[str, int] = {}
+        for label in self._program_map.values():
+            label_counts[label] = label_counts.get(label, 0) + 1
+        self._program_display: dict[str, str] = {
+            code: (f"{label} ({code})" if label_counts[label] > 1 else label)
+            for code, label in self._program_map.items()
+        }
+        self._program_reverse: dict[str, str] = {
+            display: code for code, display in self._program_display.items()
+        }
+        self._attr_options = list(self._program_display.values())
         _LOGGER.debug(
             "Select debug: initialized '%s' id=%s programs=%d map=%s",
             redact_id(self._attr_unique_id, appliance_id),
@@ -449,7 +465,7 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         #    until the user starts the cycle with the "Avvia programma" button.
         pending = self._coordinator_store(PROGRAM_PENDING_STORE).get(self._appliance_id)
         if pending is not None:
-            label = self._program_map.get(str(pending))
+            label = self._program_display.get(str(pending))
             if label is not None:
                 _LOGGER.debug(
                     "Select debug: current_option uses pending id=%s code=%s label=%s",
@@ -495,9 +511,9 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
                     "Select debug: current_option key '%s' token code=%s label=%s",
                     key,
                     token,
-                    self._program_map[token],
+                    self._program_display[token],
                 )
-                return self._program_map[token]
+                return self._program_display[token]
             if token in self._program_reverse:
                 _LOGGER.debug(
                     "Select debug: current_option key '%s' token label=%s",

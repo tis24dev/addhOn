@@ -32,7 +32,7 @@ from .const import (
     DOMAIN,
     PROGRAM_PARAM_NAMES,
 )
-from .debug_utils import redact_id
+from .debug_utils import _MAC_RE, redact_id
 from .hon_commands import SETTINGS_COMMANDS, param_range, param_values
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,6 +67,7 @@ _TO_REDACT = frozenset(
         # (leaks the full MAC despite mac/macAddress being redacted), mobileId is the
         # phone-install id of whoever issued the last command (often a third party).
         "transactionid",
+        "transaction_id",
         "mobileid",
         "mobile_id",
     }
@@ -177,14 +178,16 @@ def _jsonable(value):
     encoder raises ``TypeError`` on them. Unwrap a ``.value`` if present (one level),
     else stringify, so the dump never carries an unserializable object.
     """
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, (bool, int, float)):
         return value
+    if isinstance(value, str):
+        return _MAC_RE.sub(_REDACTED, value)
     if hasattr(value, "value"):
         inner = value.value
-        if inner is None or isinstance(inner, (str, int, float, bool)):
+        if inner is None or isinstance(inner, (bool, int, float)):
             return inner
-        return str(inner)
-    return str(value)
+        return _MAC_RE.sub(_REDACTED, str(inner))
+    return _MAC_RE.sub(_REDACTED, str(value))
 
 
 def _redact(value):
@@ -220,12 +223,19 @@ def _param_schema(param) -> dict:
         "category": getattr(param, "category", None),
         "mandatory": getattr(param, "mandatory", None),
     }
-    enum = param_values(param)
-    if enum:
-        schema["enum"] = enum
+    # Check range FIRST and emit ONLY min/max/step for a range param. param_values()
+    # calls `.values`, which on a HonParameterRange ENUMERATES the whole grid (up to
+    # _MAX_RANGE_VALUES = 100000 strings) synchronously on the event loop -- a huge,
+    # redundant dump for what min/max/step already describe. program_options makes the
+    # same rule explicit ("never call .values on a HonParameterRange"). enum is only
+    # meaningful for enum/fixed params, where param_range() returns None.
     rng = param_range(param)
     if rng is not None:
         schema["min"], schema["max"], schema["step"] = rng
+    else:
+        enum = param_values(param)
+        if enum:
+            schema["enum"] = enum
     return schema
 
 

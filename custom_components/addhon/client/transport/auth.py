@@ -15,6 +15,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from yarl import URL
 
@@ -173,7 +174,22 @@ class HonAuth:
             login_url = extract_login_url(text)
             if login_url is None:
                 if is_oauth_done(text):
-                    t = parse_token_fragment(text)
+                    # Append a trailing '&' so parse_token_fragment captures the LAST
+                    # fragment field too: its regex is `name=(.*?)&`, so a token at the
+                    # end without a trailing '&' (typically id_token) is dropped -> ""
+                    # -> _api_auth later fails with an empty id-token even though the SSO
+                    # cookies were valid. Then require .complete before committing the
+                    # tokens, mirroring _resume_tokens_after_2fa, instead of proceeding
+                    # with a half-parsed fragment.
+                    t = parse_token_fragment(text + "&")
+                    if not t.complete:
+                        self._phase(
+                            "introduce", status=resp.status,
+                            no_auth_needed=True, tokens_complete=False,
+                        )
+                        raise NativeAuthError(
+                            f"introduce: incomplete token fragment (status {resp.status})"
+                        )
                     self.access_token = t.access_token
                     self.refresh_token = t.refresh_token
                     self.id_token = t.id_token
@@ -470,10 +486,16 @@ class HonAuth:
         return True
 
     def clear(self) -> None:
-        # Note: `AUTH_API.split("/")[-2]` is '' here (not the host, because there is
-        # no trailing slash), so clear_domain('') is effectively a no-op on any
-        # session. This is intentional.
-        self._session.cookie_jar.clear_domain(AUTH_API.split("/")[-2])
+        # Clear the auth host's cookies so a REUSED session cannot carry a stale SSO
+        # cookie into the next login and send _introduce down the already-authorized
+        # fast-path with tokens that may no longer be valid. The previous
+        # `AUTH_API.split("/")[-2]` was '' (AUTH_API has no trailing slash), so
+        # clear_domain('') was a no-op and never cleared anything; use the real host.
+        # urlsplit().netloc (stdlib) mirrors how oauth._AUTH_HOST is derived and, unlike
+        # yarl.URL(...).host, works under the CI's minimal URL stub (which has no .host).
+        auth_host = urlsplit(AUTH_API).netloc
+        if auth_host:
+            self._session.cookie_jar.clear_domain(auth_host)
         self.cognito_token = ""
         self.id_token = ""
         self.access_token = ""

@@ -342,6 +342,38 @@ class DiagnosticsValuesTest(unittest.TestCase):
         self.assertEqual(machmode["enum"], ["0", "1", "2"])
         self.assertEqual(machmode["value"], "1")
 
+    def test_range_param_schema_omits_enumerated_grid(self):
+        # A real HonParameterRange exposes BOTH min/max/step AND a .values property
+        # that ENUMERATES the whole grid (up to 100k strings). _param_schema must
+        # emit only min/max/step and never dump that grid into `enum`.
+        grid = [str(v) for v in range(0, 1401, 100)]
+        param = FakeParam(value="1000", typology="range", rng=(0, 1400, 100), values=grid)
+        schema = diagnostics._param_schema(param)
+        self.assertEqual((schema["min"], schema["max"], schema["step"]), (0, 1400, 100))
+        self.assertNotIn("enum", schema)
+
+    def test_mac_in_value_under_benign_key_is_masked(self):
+        # Identity that lands in a string VALUE under a non-redacted key (an event
+        # payload, a transactionId-shaped value under a benign name) must still be
+        # masked, matching the log path (debug_utils.redact_identity).
+        out = diagnostics._redact(
+            {"someInfo": "3c-71-bf-bd-32-2c_1699999999",
+             "nested": {"note": "mac 3C:71:BF:BD:32:2C here"}}
+        )
+        dumped = json.dumps(out)
+        self.assertNotIn("3c-71-bf-bd-32-2c", dumped)
+        self.assertNotIn("3C:71:BF:BD:32:2C", dumped)
+        self.assertEqual(out["someInfo"], "***_1699999999")
+
+    def test_mac_in_value_wrapped_object_is_masked(self):
+        # _jsonable also unwraps a HonAttribute/HonParameter-like object via `.value`;
+        # a MAC carried inside that `.value` must be masked too, so wrapping it does
+        # not smuggle the identity into the dump in cleartext.
+        out = diagnostics._redact({"deviceInfo": FakeWrapper("mac 3C:71:BF:BD:32:2C")})
+        dumped = json.dumps(out)
+        self.assertNotIn("3C:71:BF:BD:32:2C", dumped)
+        self.assertEqual(out["deviceInfo"], "mac ***")
+
 
 class DiagnosticsCoverageTest(unittest.TestCase):
     def test_unmapped_bare_attribute_surfaces(self):

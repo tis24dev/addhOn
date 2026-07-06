@@ -186,17 +186,46 @@ def _apply_debug_options(entry: ConfigEntry, *, reset_when_off: bool = True) -> 
         silence_mqtt_noise()
 
 
+_DEBUG_OPTS_KEY = "debug_options"
+
+
+def _debug_opts(entry: ConfigEntry) -> tuple[bool, bool]:
+    """Current (integration-debug, mqtt-debug) toggles for the entry."""
+    return (
+        entry.options.get(CONF_ENABLE_DEBUG, False),
+        entry.options.get(CONF_ENABLE_MQTT_DEBUG, False),
+    )
+
+
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Re-apply the log levels on the fly when the toggles change (no reload).
 
     A reload would tear down auth and the MQTT channel just to change a log level;
     here we re-apply the levels on the fly, as the existing services do.
+
+    HA fires update listeners on ANY entry change (data, options, title), not only
+    on an options change. A data-only write -- e.g. _persist_refresh_token rotating
+    the OAuth refresh token during a routine poll -- must NOT re-apply/reset the
+    debug levels: that would silently kill a debug level raised at runtime via the
+    set_log_level / set_mqtt_log_level service (reset_when_off=True), exactly when the
+    logs are needed. So re-apply only when the debug toggles actually changed.
     """
+    current = _debug_opts(entry)
+    hass_data = getattr(hass, "data", None)
+    entry_data = (
+        hass_data.get(DOMAIN, {}).get(entry.entry_id)
+        if isinstance(hass_data, dict)
+        else None
+    )
+    if entry_data is not None:
+        if entry_data.get(_DEBUG_OPTS_KEY) == current:
+            return  # entry changed but the debug toggles didn't
+        entry_data[_DEBUG_OPTS_KEY] = current
     _LOGGER.debug(
         "Options debug: options updated entry=%s enable_debug=%s enable_mqtt_debug=%s",
         entry.entry_id,
-        entry.options.get(CONF_ENABLE_DEBUG, False),
-        entry.options.get(CONF_ENABLE_MQTT_DEBUG, False),
+        current[0],
+        current[1],
     )
     _apply_debug_options(entry)
 
@@ -530,6 +559,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "coordinator": coordinator,
             "client": hon_client,
             "integration_version": integration_version,
+            # Baseline for _async_options_updated: the toggles already applied at the
+            # start of setup, so a later data-only entry write (token rotation) is a
+            # no-op and only a real options change re-applies the levels.
+            _DEBUG_OPTS_KEY: _debug_opts(entry),
         }
         stored = True
         _LOGGER.debug("Setup debug: coordinator and client stored in hass.data for entry=%s", entry.entry_id)

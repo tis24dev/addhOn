@@ -273,6 +273,80 @@ class ConnectionTest(unittest.TestCase):
         self.assertEqual(auth.refresh_calls, 1)
         self.assertEqual(auth.authenticate_calls, 0)
 
+    def test_concurrent_reauth_single_flight(self) -> None:
+        # The loop-1 re-auth is now single-flighted under the same lock+generation as
+        # the refresh: a burst that all reach loop 1 collapses to ONE create() +
+        # authenticate(). Before, each request's create() reset self._auth to a
+        # token-less HonAuth, so the loop-2 _check_headers of every sibling fired its
+        # OWN full login on the shared session (colliding cookie jars / multiple OTPs).
+        created = {"n": 0}
+
+        class SlowFakeAuth(FakeAuth):
+            async def authenticate(self) -> None:
+                self.authenticate_calls += 1
+                await asyncio.sleep(0)  # yield so siblings pile up on the lock
+                self.cognito_token, self.id_token, self.refresh_token = "COG", "IDT", "RT"
+
+        auth = SlowFakeAuth()
+        conn = _conn(auth, FakeSession([]))
+
+        async def _fake_create():
+            created["n"] += 1
+            return conn  # a real re-login repopulates the same connection's auth
+
+        conn.create = _fake_create
+
+        async def run():
+            gen = conn._refresh_gen  # all three "sent" at the same generation
+            await asyncio.gather(
+                conn._reauth_after_rejection(gen),
+                conn._reauth_after_rejection(gen),
+                conn._reauth_after_rejection(gen),
+            )
+
+        asyncio.run(run())
+        self.assertEqual(auth.authenticate_calls, 1)  # one re-login, not three
+        self.assertEqual(created["n"], 1)             # one create(), not three
+        self.assertEqual(conn._refresh_gen, 1)        # advanced exactly once
+
+    def test_concurrent_reauth_single_flight_on_failure(self) -> None:
+        # A FAILING loop-1 re-auth (e.g. MFAChallengeRequired) must also collapse to
+        # ONE attempt: without caching the error + advancing the generation, each
+        # queued sibling would run its own create()+authenticate() -- N sequential
+        # logins / OTP prompts on a 2FA account exactly when the login is failing.
+        created = {"n": 0}
+
+        class SlowFailAuth(FakeAuth):
+            async def authenticate(self) -> None:
+                self.authenticate_calls += 1
+                await asyncio.sleep(0)  # yield so siblings pile up on the lock
+                raise NativeAuthError("2FA challenge required")
+
+        auth = SlowFailAuth()
+        conn = _conn(auth, FakeSession([]))
+
+        async def _fake_create():
+            created["n"] += 1
+            return conn
+
+        conn.create = _fake_create
+
+        async def run():
+            gen = conn._refresh_gen  # all three "sent" at the same generation
+            return await asyncio.gather(
+                conn._reauth_after_rejection(gen),
+                conn._reauth_after_rejection(gen),
+                conn._reauth_after_rejection(gen),
+                return_exceptions=True,
+            )
+
+        results = asyncio.run(run())
+        self.assertEqual(auth.authenticate_calls, 1)  # one attempt, not three
+        self.assertEqual(created["n"], 1)             # one create(), not three
+        # every caller surfaces the SAME auth error (the siblings reuse the cached one)
+        self.assertTrue(all(isinstance(r, NativeAuthError) for r in results))
+        self.assertEqual(conn._refresh_gen, 1)        # advanced once, even on failure
+
     def test_retry_on_403_refreshes(self) -> None:
         # Same branch as the 401 (the code treats them identically) but made explicit
         # to avoid regressions on the 403 (CodeRabbit nitpick).
@@ -618,6 +692,59 @@ class InterceptCloudErrorRoutingTest(unittest.TestCase):
         self.assertIs(ctx.exception.error_code, DECODE_ERROR)
         self.assertFalse(DECODE_ERROR.requires_reauth)
         self.assertEqual(auth.authenticate_calls, 0)  # no spurious full re-login
+
+    def test_html_403_is_transient_not_reauth(self) -> None:
+        # A 403 whose body is HTML (Cloudflare/WAF challenge, captive portal) is a
+        # transient edge hiccup, NOT an hOn auth rejection. It must carry DECODE_ERROR
+        # (coordinator retries via UpdateFailed) and never enter the refresh -> reauth
+        # ladder, which on a 2FA account would open a spurious OTP prompt.
+        class HtmlResp(FakeResp):
+            content_type = "text/html"
+
+        class HtmlSession(FakeSession):
+            def _resp(self, url, **kw):
+                self.calls.append(kw.get("headers", {}))
+                return HtmlResp(403)
+
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        conn = _conn(auth, HtmlSession([]))
+        conn._refresh_token = "RT"
+
+        async def run():
+            async with conn.get("https://x/api"):
+                pass
+
+        with self.assertRaises(NativeAuthError) as ctx:
+            asyncio.run(run())
+        self.assertIs(ctx.exception.error_code, DECODE_ERROR)
+        self.assertFalse(DECODE_ERROR.requires_reauth)
+        self.assertEqual(auth.refresh_calls, 0)       # not routed to refresh
+        self.assertEqual(auth.authenticate_calls, 0)  # nor to a full reauth
+        self.assertEqual(len(conn._session.calls), 1)  # raised, not retried in-band
+
+    def test_json_403_still_climbs_the_reauth_ladder(self) -> None:
+        # A NON-HTML 403 that persists must still follow refresh (loop 0) -> full
+        # re-auth (loop 1) -> retry, so a genuine auth rejection is never masked by
+        # the HTML-challenge shortcut. FakeResp has no content_type -> not HTML.
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        conn = _conn(auth, FakeSession([403, 403, 200]))
+        conn._refresh_token = "RT"
+
+        async def _fake_create():
+            return conn  # a real re-login repopulates the same connection's auth
+
+        conn.create = _fake_create
+
+        async def run():
+            async with conn.get("https://x/api") as resp:
+                return resp.status
+
+        status = asyncio.run(run())
+        self.assertEqual(status, 200)
+        self.assertEqual(auth.refresh_calls, 1)       # loop 0 refresh
+        self.assertEqual(auth.authenticate_calls, 1)  # loop 1 full reauth
 
     def test_5xx_json_body_raises_retryable_not_success(self) -> None:
         # A 502 whose body decodes as JSON must NOT be yielded as a good response

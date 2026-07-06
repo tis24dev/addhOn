@@ -23,12 +23,15 @@ rules are a cohesive cluster.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from .parameter.base import HonParameter
 from .parameter.enum import HonParameterEnum
 from .parameter.range import HonParameterRange
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -188,10 +191,26 @@ class HonRuleSet:
                 return
             if not (param := self._command.parameters.get(rule.param_key)):
                 return
-            if fixed_value := rule.param_data.get("fixedValue", ""):
-                self._apply_fixed(param, fixed_value)
-            elif rule.param_data.get("typology") == "enum":
-                self._apply_enum(param, rule)
+            try:
+                if fixed_value := rule.param_data.get("fixedValue", ""):
+                    self._apply_fixed(param, fixed_value)
+                elif rule.param_data.get("typology") == "enum":
+                    self._apply_enum(param, rule)
+            except (ValueError, TypeError) as err:
+                # A malformed rule (non-numeric or off-grid `fixedValue`, bad enum
+                # value) must NOT abort the whole appliance's command-load. The
+                # immediate-fire in `HonParameter.add_trigger` runs at construction
+                # time, so an escaping ValueError from `_apply_fixed` (e.g. float("x")
+                # or an off-step value rejected by the range setter) would fail setup
+                # for every entity of the device. Log and skip the bad rule instead;
+                # the runtime path already tolerates this via the entity write-path.
+                _LOGGER.debug(
+                    "addhOn: skipping unapplicable rule for '%s' (trigger %s=%s): %s",
+                    rule.param_key,
+                    rule.trigger_key,
+                    rule.trigger_value,
+                    err,
+                )
 
         parameter.add_trigger(data.trigger_value, apply, data)
 
@@ -225,9 +244,30 @@ class HonRuleSet:
 
     def patch(self) -> None:
         self._duplicate_for_extra_conditions()
+        self._attach_triggers()
+        self._apply_config_rules()
+
+    def _attach_triggers(self) -> None:
+        """Register every (already-expanded) rule as a trigger on its command's params."""
         for name, parameter in self._command.parameters.items():
             if name not in self._rules:
                 continue
             for data in self._rules.get(name, []):
                 self._add_trigger(parameter, data)
-        self._apply_config_rules()
+
+    def rebound(self, command: Any) -> "HonRuleSet":
+        """A copy of this (already-expanded) rule set bound to `command`, with its
+        triggers attached to `command`'s parameters.
+
+        `HonCommand.__copy__` uses this: a shallow-copied command shares each parameter's
+        trigger table, and every rule callback closes over the ORIGINAL command -- so
+        setting a value on the copy (applying a favourite) would fire rules that mutate the
+        BASE command. `_duplicate_for_extra_conditions` is NOT re-run (self is already
+        expanded); HonRule entries are read-only in the apply path, so they are shared."""
+        new = HonRuleSet.__new__(HonRuleSet)
+        new._command = command
+        new._rules = {key: list(rules) for key, rules in self._rules.items()}
+        new._config_rules = list(self._config_rules)
+        new._attach_triggers()
+        new._apply_config_rules()
+        return new

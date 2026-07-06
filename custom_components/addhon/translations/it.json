@@ -53,6 +53,7 @@
       "already_configured": "Questo account hOn è già configurato.",
       "reauth_successful": "Ri-autenticazione completata.",
       "reauth_account_mismatch": "Le nuove credenziali devono appartenere allo stesso account hOn.",
+      "reauth_entry_not_found": "La voce di configurazione non esiste più. Aggiungi di nuovo l'integrazione.",
       "mfa_no_challenge": "La sessione di verifica in due passaggi è scaduta. Riprova da capo."
     }
   },
