@@ -816,6 +816,9 @@
     "program_not_found": {
       "message": "Programma \"{program}\" non trovato."
     },
+    "program_not_supported": {
+      "message": "Programma \"{program}\" non supportato da questo apparecchio."
+    },
     "refresh_after_command_failed": {
       "message": "Aggiornamento dopo il comando non riuscito."
     },

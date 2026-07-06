@@ -24,6 +24,7 @@ from .const import (
     AC_TEMP_PARAM,
     AC_MODE_PARAM,
     AC_FAN_PARAM,
+    AC_ON_OFF_PARAM,
     AC_ATTR_ON_OFF,
     AC_ATTR_CURRENT_TEMP,
     AC_ATTR_FAN_SPEED,
@@ -32,6 +33,9 @@ from .const import (
     AC_SWING_V_ON,
     AC_SWING_MODE_ON,
     AC_SWING_MODE_OFF,
+    AC_PROGRAM_MAP,
+    AC_PROGRAM_SIMPLE_START,
+    PROGRAM_PARAM_NAMES,
 )
 from .debug_utils import command_names, redact_id
 from .ac_command import (
@@ -40,7 +44,12 @@ from .ac_command import (
     param_allowed_values,
     settings_param,
 )
-from .hon_commands import param_range
+from .hon_commands import async_send_command, param_range, param_values
+from .program_options import async_send_program, startprogram_command
+
+# startProgram/stopProgram are the two program-based AC write commands (see
+# AC_PROGRAM_MAP in const.py). The names are stable across program category swaps.
+STOPPROGRAM_COMMAND = "stopProgram"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -301,8 +310,87 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         _LOGGER.debug("Climate debug: swing_mode windDirectionVertical=%s -> %s", val, mode)
         return mode
 
+    def _is_program_based(self) -> bool:
+        """True for AC models that drive power/mode via startProgram/stopProgram.
+
+        Two AC write models exist (see AC_PROGRAM_MAP in const.py):
+        - settings-based (e.g. AS35PBPHRA-PRE): the `settings` command carries
+          onOffStatus + machMode, so power/mode are written into `settings`.
+        - program-based (e.g. AD71S2SM3FA(H)): the `settings` command has NO
+          onOffStatus; ON goes through startProgram (program enum, onOffStatus fixed
+          "1") and OFF through stopProgram (onOffStatus fixed "0"). Writing
+          onOffStatus/machMode into `settings` on such a model raises
+          "Parameter(s) not found" before the request ever reaches the cloud, which
+          is exactly why every on/off/mode command looked "ignored".
+
+        The gate: NO onOffStatus among the settings params AND a startProgram command
+        exists. Temperature/fan stay on the settings path in BOTH models (tempSel /
+        windSpeed live on `settings` either way), so only power/mode is rerouted.
+        """
+        if settings_param(self._appliance, AC_ON_OFF_PARAM) is not None:
+            return False
+        return startprogram_command(self._appliance) is not None
+
+    def _startprogram_programs(self) -> list[str]:
+        """Program codes the device declares in its startProgram enum, or [].
+
+        Reads the `program`/`prCode` parameter's .values off the startProgram
+        command. Used to capability-gate a mapped program BEFORE sending it.
+        """
+        command = startprogram_command(self._appliance)
+        params = getattr(command, "parameters", None) if command is not None else None
+        if not isinstance(params, dict):
+            return []
+        for pname in PROGRAM_PARAM_NAMES:
+            param = params.get(pname)
+            if param is not None:
+                return param_values(param)
+        return []
+
+    def _program_for_mode(self, hvac_mode: HVACMode) -> str:
+        """Map a (non-OFF) HVAC mode to its startProgram code, capability-gated.
+
+        FAN_ONLY special-cases to iot_fan (NOT iot_fan_only). Raises
+        program_not_supported when the mode has no program mapping, or when the
+        mapped program is absent from the device's live startProgram enum -- never
+        silently no-op nor fall back to the settings path (which lacks onOffStatus).
+        Called BEFORE the send try-block so the specific key is not rewrapped.
+        """
+        program_code = AC_PROGRAM_MAP.get(hvac_mode.value)
+        if program_code is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="program_not_supported",
+                translation_placeholders={"program": str(hvac_mode.value)},
+            )
+        self._assert_program_available(program_code)
+        return program_code
+
+    def _assert_program_available(self, program_code: str) -> None:
+        """Guard: raise program_not_supported if the device's startProgram enum is
+        readable AND does not declare `program_code`. When the enum is unreadable
+        (empty) we let it through (the engine enum setter still rejects a bad value),
+        mirroring the hvac_modes/fan_modes full-list fallback."""
+        available = self._startprogram_programs()
+        if available and program_code not in available:
+            _LOGGER.debug(
+                "Climate debug: program %s not in startProgram enum %s",
+                program_code,
+                available,
+            )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="program_not_supported",
+                translation_placeholders={"program": str(program_code)},
+            )
+
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Send the mode change, converting the HVACMode into the exact hOn numeric code."""
+        """Send the mode change.
+
+        Settings-based model: onOffStatus (+ machMode) into the `settings` command,
+        exactly as before. Program-based model: OFF -> stopProgram; a concrete mode ->
+        startProgram with the mapped iot_<mode> program.
+        """
         appliance = self._appliance
         client = self._hon_client
         # Both checks BEFORE the try: a missing appliance/client must surface the
@@ -313,10 +401,34 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
                 translation_domain=DOMAIN,
                 translation_key="appliance_or_client_unavailable",
             )
+        program_based = self._is_program_based()
+        # Resolve + capability-gate the program BEFORE the try, so a
+        # program_not_supported surfaces with its own key (like the swing gate) rather
+        # than being rewrapped into command_error by the except below.
+        program_code = None
+        if program_based and hvac_mode != HVACMode.OFF:
+            program_code = self._program_for_mode(hvac_mode)
         try:
             if hvac_mode == HVACMode.OFF:
-                _LOGGER.debug("Climate debug: set_hvac_mode OFF -> onOffStatus=0")
-                await self._send_command_in_executor(client, appliance, {"onOffStatus": "0"})
+                if program_based:
+                    # Program-based OFF: stopProgram carries the mandatory fixed
+                    # onOffStatus="0"; the engine serializes it, no override needed.
+                    _LOGGER.debug("Climate debug: set_hvac_mode OFF -> stopProgram")
+                    await async_send_command(
+                        self.hass, client, appliance, STOPPROGRAM_COMMAND, {}
+                    )
+                else:
+                    _LOGGER.debug("Climate debug: set_hvac_mode OFF -> onOffStatus=0")
+                    await self._send_command_in_executor(
+                        client, appliance, {"onOffStatus": "0"}
+                    )
+            elif program_based:
+                _LOGGER.debug(
+                    "Climate debug: set_hvac_mode %s -> startProgram %s",
+                    hvac_mode,
+                    program_code,
+                )
+                await async_send_program(self.hass, client, appliance, program_code)
             else:
                 # HVACMode is a StrEnum: .value returns the string directly ("cool", "heat", etc.)
                 mode_str = hvac_mode.value
@@ -345,8 +457,10 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
         """Turn the AC back on, restoring its last mode.
 
         HA convention for TURN_ON is to resume the previous operating state, not
-        force a fixed mode. We send only onOffStatus=1: the device keeps its stored
-        machMode, so it resumes the last mode (the old code forced COOL).
+        force a fixed mode. Settings-based model: send only onOffStatus=1, so the
+        device keeps its stored machMode and resumes the last mode (the old code
+        forced COOL). Program-based model: send startProgram iot_simple_start, the
+        program the device uses to resume its last mode.
         """
         appliance = self._appliance
         client = self._hon_client
@@ -355,9 +469,23 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
                 translation_domain=DOMAIN,
                 translation_key="appliance_or_client_unavailable",
             )
+        program_based = self._is_program_based()
+        # Capability-gate simple-start BEFORE the try (same reasoning as set_hvac_mode).
+        if program_based:
+            self._assert_program_available(AC_PROGRAM_SIMPLE_START)
         try:
-            _LOGGER.debug("Climate debug: turn_on -> onOffStatus=1 (mode preserved)")
-            await self._send_command_in_executor(client, appliance, {"onOffStatus": "1"})
+            if program_based:
+                _LOGGER.debug(
+                    "Climate debug: turn_on -> startProgram %s", AC_PROGRAM_SIMPLE_START
+                )
+                await async_send_program(
+                    self.hass, client, appliance, AC_PROGRAM_SIMPLE_START
+                )
+            else:
+                _LOGGER.debug("Climate debug: turn_on -> onOffStatus=1 (mode preserved)")
+                await self._send_command_in_executor(
+                    client, appliance, {"onOffStatus": "1"}
+                )
             await self._async_request_command_refresh()
         except Exception as err:
             _LOGGER.error("Climate: turn_on error: %s", err, exc_info=True)

@@ -816,6 +816,9 @@
     "program_not_found": {
       "message": "Program \"{program}\" was not found."
     },
+    "program_not_supported": {
+      "message": "Program \"{program}\" is not supported by this device."
+    },
     "refresh_after_command_failed": {
       "message": "Refresh after the command failed."
     },

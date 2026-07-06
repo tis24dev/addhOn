@@ -174,6 +174,59 @@ def _climate_failing(params: dict):
     return entity, settings, coordinator
 
 
+# Golden startProgram `program` enum from the real program-based AC (AD71S2SM3FA(H)
+# diagnostics dump), NOT imported from const: a map mutation must be caught here.
+_PROGRAM_ENUM = [
+    "iot_10_heating",
+    "iot_auto",
+    "iot_cool",
+    "iot_dry",
+    "iot_fan",
+    "iot_heat",
+    "iot_simple_start",
+    "iot_uv",
+    "iot_uv_and_auto",
+    "iot_uv_and_cool",
+    "iot_uv_and_dry",
+    "iot_uv_and_fan",
+    "iot_uv_and_heat",
+]
+
+
+def _program_climate(program_enum: list | None = None, *, with_onoff: bool = False):
+    """Build a program-based AC: `settings` WITHOUT onOffStatus + startProgram/stopProgram.
+
+    This is the AD71S2SM3FA(H) write model: power/mode are driven by startProgram
+    (program enum, onOffStatus fixed "1") and stopProgram (onOffStatus fixed "0"),
+    NOT by onOffStatus/machMode in `settings`. temp/fan still live on `settings`.
+
+    ``with_onoff=True`` adds onOffStatus to `settings` to reproduce the AS35-style
+    settings-based model even though startProgram/stopProgram also exist: the gate
+    must then stay on the settings path (regression guard).
+
+    Returns (entity, settings_cmd, start_cmd, stop_cmd, coordinator).
+    """
+    enum = list(_PROGRAM_ENUM if program_enum is None else program_enum)
+    settings_params = {
+        "tempSel": Param("26"),
+        "machMode": Param("1", values=["0", "1", "2", "4", "6"]),
+        "windSpeed": Param("5", values=["5", "3", "2", "1"]),
+    }
+    if with_onoff:
+        settings_params["onOffStatus"] = Param("0")
+    settings = RecordingCommand(settings_params)
+    start = RecordingCommand(
+        {"onOffStatus": Param("1"), "program": Param(enum[0], values=enum)}
+    )
+    stop = RecordingCommand({"onOffStatus": Param("0")})
+    coordinator = FakeCoordinator(
+        _ac({"settings": settings, "startProgram": start, "stopProgram": stop})
+    )
+    entity = climate.HaierClimateEntity(coordinator, "ac-1", FakeClient())
+    entity.hass = FakeHass()
+    return entity, settings, start, stop, coordinator
+
+
 class AcClimateWritePathTest(unittest.IsolatedAsyncioTestCase):
     """climate.HaierClimateEntity send semantics."""
 
@@ -496,6 +549,159 @@ class AcClimateWritePathTest(unittest.IsolatedAsyncioTestCase):
             getattr(ctx.exception, "translation_key", None),
         )
         self.assertEqual(0, settings.send_calls)
+
+
+class AcClimateProgramWritePathTest(unittest.IsolatedAsyncioTestCase):
+    """Program-based AC (AD71S2SM3FA(H)): power/mode via startProgram/stopProgram.
+
+    Its `settings` command has NO onOffStatus, so the old settings path raised
+    "Parameter(s) not found" for on/off/mode -- every such command looked ignored.
+    Here on/off/mode must route to startProgram (ON) / stopProgram (OFF), while
+    temp/fan stay on `settings` (tempSel/windSpeed exist there). Assertions verify
+    the ACTUAL command sent (start vs stop vs settings) AND the program value.
+    """
+
+    async def test_turn_on_sends_startprogram_simple_start(self) -> None:
+        entity, settings, start, stop, coord = _program_climate()
+        await entity.async_turn_on()
+        # turn_on = resume last mode -> iot_simple_start on startProgram, NOT settings.
+        self.assertEqual(1, start.send_calls)
+        self.assertEqual(
+            {"onOffStatus": "1", "program": "iot_simple_start"}, start.sent
+        )
+        self.assertEqual(0, stop.send_calls)
+        self.assertEqual(0, settings.send_calls)
+        self.assertEqual(1, coord.refreshes)
+
+    async def test_set_hvac_mode_sends_mapped_program(self) -> None:
+        # Golden mode->program from the AD71 startProgram enum.
+        cases = [
+            (HVACMode.COOL, "iot_cool"),
+            (HVACMode.HEAT, "iot_heat"),
+            (HVACMode.AUTO, "iot_auto"),
+            (HVACMode.DRY, "iot_dry"),
+            (HVACMode.FAN_ONLY, "iot_fan"),
+        ]
+        for mode, program in cases:
+            with self.subTest(mode=mode):
+                entity, settings, start, stop, _ = _program_climate()
+                await entity.async_set_hvac_mode(mode)
+                self.assertEqual(1, start.send_calls)
+                self.assertEqual(
+                    {"onOffStatus": "1", "program": program}, start.sent
+                )
+                self.assertEqual(0, stop.send_calls)
+                self.assertEqual(0, settings.send_calls)
+
+    async def test_fan_only_maps_to_iot_fan_not_iot_fan_only(self) -> None:
+        # HVACMode.FAN_ONLY.value == "fan_only" but the program is iot_fan: a naive
+        # "iot_" + value would send iot_fan_only (absent from the enum). This locks
+        # the special case explicitly.
+        entity, _, start, _, _ = _program_climate()
+        await entity.async_set_hvac_mode(HVACMode.FAN_ONLY)
+        self.assertEqual("iot_fan", start.sent["program"])
+        self.assertNotEqual("iot_fan_only", start.sent["program"])
+
+    async def test_set_hvac_mode_off_sends_stopprogram(self) -> None:
+        entity, settings, start, stop, coord = _program_climate()
+        await entity.async_set_hvac_mode(HVACMode.OFF)
+        # OFF -> stopProgram (mandatory fixed onOffStatus="0" serialized by the engine).
+        self.assertEqual(1, stop.send_calls)
+        self.assertEqual({"onOffStatus": "0"}, stop.sent)
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual(0, settings.send_calls)
+        self.assertEqual(1, coord.refreshes)
+
+    async def test_turn_off_delegates_to_stopprogram(self) -> None:
+        entity, settings, start, stop, _ = _program_climate()
+        await entity.async_turn_off()
+        self.assertEqual(1, stop.send_calls)
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual(0, settings.send_calls)
+
+    async def test_set_temperature_uses_settings_not_program(self) -> None:
+        entity, settings, start, stop, coord = _program_climate()
+        await entity.async_set_temperature(temperature=24)
+        self.assertEqual(1, settings.send_calls)
+        self.assertEqual("24", settings.sent["tempSel"])
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual(0, stop.send_calls)
+        self.assertEqual(1, coord.refreshes)
+
+    async def test_set_fan_mode_uses_settings_not_program(self) -> None:
+        entity, settings, start, stop, _ = _program_climate()
+        await entity.async_set_fan_mode("high")  # golden windSpeed high=1
+        self.assertEqual(1, settings.send_calls)
+        self.assertEqual("1", settings.sent["windSpeed"])
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual(0, stop.send_calls)
+
+    async def test_mode_absent_from_enum_raises_without_send(self) -> None:
+        # startProgram enum lacks iot_dry: requesting DRY must raise
+        # program_not_supported and send NOTHING (no silent fallback to settings).
+        enum = ["iot_auto", "iot_cool", "iot_heat", "iot_fan", "iot_simple_start"]
+        entity, settings, start, stop, coord = _program_climate(enum)
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await entity.async_set_hvac_mode(HVACMode.DRY)
+        self.assertEqual(
+            "program_not_supported", getattr(ctx.exception, "translation_key", None)
+        )
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual(0, settings.send_calls)
+        self.assertEqual(0, coord.refreshes)
+
+    async def test_program_send_failure_raises_command_error(self) -> None:
+        # startProgram send fails -> command_error, no refresh (rollback path).
+        settings = RecordingCommand(
+            {"tempSel": Param("26"), "windSpeed": Param("5", values=["5", "1"])}
+        )
+        start = FailingCommand(
+            {"onOffStatus": Param("1"), "program": Param("iot_auto", values=_PROGRAM_ENUM)}
+        )
+        stop = RecordingCommand({"onOffStatus": Param("0")})
+        coordinator = FakeCoordinator(
+            _ac({"settings": settings, "startProgram": start, "stopProgram": stop})
+        )
+        entity = climate.HaierClimateEntity(coordinator, "ac-1", FakeClient())
+        entity.hass = FakeHass()
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await entity.async_set_hvac_mode(HVACMode.COOL)
+        self.assertEqual(
+            "command_error", getattr(ctx.exception, "translation_key", None)
+        )
+        self.assertEqual(1, start.send_calls)
+        self.assertEqual(0, coordinator.refreshes)
+
+
+class AcClimateSettingsRegressionTest(unittest.IsolatedAsyncioTestCase):
+    """Regression: an AS35-style settings-with-onOffStatus model keeps the settings
+    write path for on/off/mode EVEN IF startProgram/stopProgram also exist. The gate
+    keys on onOffStatus being present in `settings`, so it must never reroute here.
+    """
+
+    async def test_turn_on_uses_settings_onoffstatus(self) -> None:
+        entity, settings, start, stop, coord = _program_climate(with_onoff=True)
+        await entity.async_turn_on()
+        self.assertEqual(1, settings.send_calls)
+        self.assertEqual("1", settings.sent["onOffStatus"])
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual(0, stop.send_calls)
+        self.assertEqual(1, coord.refreshes)
+
+    async def test_set_mode_uses_settings_machmode(self) -> None:
+        entity, settings, start, stop, _ = _program_climate(with_onoff=True)
+        await entity.async_set_hvac_mode(HVACMode.HEAT)  # golden machMode heat=4
+        self.assertEqual("4", settings.sent["machMode"])
+        self.assertEqual("1", settings.sent["onOffStatus"])
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual(0, stop.send_calls)
+
+    async def test_off_uses_settings_onoffstatus(self) -> None:
+        entity, settings, start, stop, _ = _program_climate(with_onoff=True)
+        await entity.async_set_hvac_mode(HVACMode.OFF)
+        self.assertEqual("0", settings.sent["onOffStatus"])
+        self.assertEqual(0, stop.send_calls)
+        self.assertEqual(0, start.send_calls)
 
 
 class AcClimateReadPathTest(unittest.IsolatedAsyncioTestCase):

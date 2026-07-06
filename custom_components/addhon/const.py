@@ -125,6 +125,12 @@ AC_ATTR_TEMP         = "settings.tempSel"
 AC_TEMP_PARAM        = "tempSel"
 AC_MODE_PARAM        = "machMode"
 AC_FAN_PARAM         = "windSpeed"
+# Bare power-flag parameter NAME inside the "settings" command (distinct from the
+# dotted read-side AC_ATTR_ON_OFF below). It is present in `settings` ONLY on the
+# settings-based AC write model (e.g. AS35PBPHRA-PRE); its ABSENCE is the signal of
+# the program-based write model (e.g. AD71S2SM3FA(H)) whose power/mode go through
+# startProgram/stopProgram instead. Used as the write-path capability gate.
+AC_ON_OFF_PARAM      = "onOffStatus"
 # tempIndoor / tempOutdoor are DIRECT attributes (not in settings), confirmed from diagnostics
 AC_ATTR_CURRENT_TEMP     = "tempIndoor"
 AC_ATTR_OUTDOOR_TEMP     = "tempOutdoor"
@@ -175,6 +181,30 @@ AC_FAN_MAP = {
     "1": "high",
 }
 AC_FAN_MAP_REVERSE = {v: k for k, v in AC_FAN_MAP.items()}
+
+# --- Program-based AC write model (e.g. AD71S2SM3FA(H)) ------------------------
+# Two AC write models exist in the hOn fleet:
+#   1) settings-based (AS35PBPHRA-PRE): the `settings` command carries onOffStatus +
+#      machMode, so power/mode are written directly into `settings`.
+#   2) program-based (AD71S2SM3FA(H)): the `settings` command has NO onOffStatus (and
+#      no machMode power semantics); power/mode are driven by a startProgram command
+#      (program enum + onOffStatus fixed "1") for ON and a stopProgram (onOffStatus
+#      fixed "0") for OFF.
+# This map routes an HA HVAC mode to the startProgram program code for model (2). Keys
+# are the SAME HA mode strings AC_MODE_MAP already produces, so it composes with the
+# read side. FAN_ONLY (HVACMode.FAN_ONLY.value == "fan_only") special-cases to
+# "iot_fan", NOT "iot_fan_only" -- a naive "iot_" + mode.value would be wrong. OFF is
+# handled via stopProgram (not a program), so it is intentionally not a key here.
+AC_PROGRAM_MAP = {
+    "auto": "iot_auto",
+    "cool": "iot_cool",
+    "dry": "iot_dry",
+    "heat": "iot_heat",
+    "fan_only": "iot_fan",
+}
+# turn_on (resume last mode) uses this program on the program-based model. It is not
+# an HVAC-mode key: HA TURN_ON means "resume", which the device maps to simple-start.
+AC_PROGRAM_SIMPLE_START = "iot_simple_start"
 
 # --- AC fan-direction position selects (discussion #37) -----------------------
 # windDirectionVertical / windDirectionHorizontal are PER-MODEL position ENUMS. The two
