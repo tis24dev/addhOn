@@ -144,13 +144,13 @@ def _install_stubs() -> None:
         const, "EntityCategory", type("EntityCategory", (), {"CONFIG": "config", "DIAGNOSTIC": "diagnostic"})
     )
 
-    # dt_util.utcnow(): the timestamp source for HonLastRefreshSensor (lazy-imported
+    # dt_util.now(UTC): the timestamp source for HonLastRefreshSensor (lazy-imported
     # in production so most stubs need not provide it). Our lifecycle tests DO drive
     # a coordinator update, so supply a tz-aware UTC clock (TIMESTAMP must be aware).
     util = _mod("homeassistant.util")
     dt = _mod("homeassistant.util.dt")
-    if not hasattr(dt, "utcnow"):
-        dt.utcnow = lambda: datetime.datetime.now(datetime.timezone.utc)
+    if not hasattr(dt, "now"):
+        dt.now = lambda tz=None: datetime.datetime.now(tz or datetime.timezone.utc)
     util.dt = dt
 
     ha.config_entries = config_entries
