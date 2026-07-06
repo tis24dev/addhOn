@@ -15,6 +15,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from yarl import URL
 
@@ -490,7 +491,9 @@ class HonAuth:
         # fast-path with tokens that may no longer be valid. The previous
         # `AUTH_API.split("/")[-2]` was '' (AUTH_API has no trailing slash), so
         # clear_domain('') was a no-op and never cleared anything; use the real host.
-        auth_host = URL(AUTH_API).host
+        # urlsplit().netloc (stdlib) mirrors how oauth._AUTH_HOST is derived and, unlike
+        # yarl.URL(...).host, works under the CI's minimal URL stub (which has no .host).
+        auth_host = urlsplit(AUTH_API).netloc
         if auth_host:
             self._session.cookie_jar.clear_domain(auth_host)
         self.cognito_token = ""
