@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate with hassfest
-        uses: home-assistant/actions/hassfest@master
+        uses: home-assistant/actions/hassfest@f4ca6f671bd429efb108c0f2fa0ae8af0215986c
 
   hacs:
     name: hacs
@@ -59,7 +59,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate with HACS
-        uses: hacs/action@main
+        uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa
         with:
           category: integration
           # Brand icons ship in custom_components/addhon/brand/ (HA 2026.3 brands
