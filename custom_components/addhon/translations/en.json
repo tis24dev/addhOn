@@ -53,6 +53,7 @@
       "already_configured": "This hOn account is already configured.",
       "reauth_successful": "Re-authentication was successful.",
       "reauth_account_mismatch": "The new credentials must belong to the same hOn account.",
+      "reauth_entry_not_found": "The configuration entry no longer exists. Please add the integration again.",
       "mfa_no_challenge": "The two-factor session expired. Please start again."
     }
   },
