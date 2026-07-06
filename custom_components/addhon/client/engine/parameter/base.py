@@ -110,5 +110,14 @@ class HonParameter:
                     param[rule.param_key] = rule.param_data.get("defaultValue", "")
         return result
 
+    def reset_triggers(self) -> None:
+        """Replace the trigger table with a fresh empty one.
+
+        Used by `HonCommand.__copy__`: a shallow-copied parameter shares this dict with the
+        original, whose rule callbacks close over the original command. Rebinding to a NEW
+        dict (not `.clear()`, which would empty the shared/original table) lets the copy's
+        rules be re-attached against the copy without touching the base."""
+        self._triggers = {}
+
     def reset(self) -> None:
         self._set_attributes()

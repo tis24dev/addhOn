@@ -66,6 +66,15 @@ class HonCommand:
         new = self.__class__.__new__(self.__class__)
         new.__dict__.update(self.__dict__)
         new._parameters = {name: copy(param) for name, param in self._parameters.items()}
+        # A shallow-copied parameter still SHARES its `_triggers` table with the base, and
+        # every rule callback in it closes over THIS command -- so setting a value on the
+        # copy would fire rules that mutate the base's parameters (the exact corruption the
+        # `_parameters` isolation above prevents, via the trigger back-door). Give each
+        # copied param a fresh trigger table and rebind the rule sets to the copy, so its
+        # rules act only on itself.
+        for parameter in new._parameters.values():
+            parameter.reset_triggers()
+        new._rules = [ruleset.rebound(new) for ruleset in self._rules]
         return new
 
     @property

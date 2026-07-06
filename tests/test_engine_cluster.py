@@ -13,6 +13,7 @@ import asyncio
 import json
 import sys
 import unittest
+from copy import copy
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -379,6 +380,33 @@ class ClusterBehaviorTest(unittest.TestCase):
         fav = start.categories["MyFav"]
         self.assertEqual(float(fav.parameters["tempSel"].value), 7.0)
         self.assertEqual(str(fav.parameters["favourite"].value), "1")
+
+    def test_favourite_copy_rules_do_not_corrupt_base(self) -> None:
+        # Regression: isolating `_parameters` in __copy__ was not enough. A shallow-copied
+        # parameter SHARED its trigger table with the base, and every rule callback closed
+        # over the BASE command. Applying a favourite sets values on the copy (see
+        # command_loader._update_base_command_with_data), which fires check_trigger -> the
+        # rule ran against the BASE program and mutated it. __copy__ now gives the copy its
+        # own trigger tables + rule sets bound to itself.
+        attrs = {
+            "parameters": {
+                "mode": _enum("cold", ["cold", "hot"]),
+                "temp": _range(default="20", lo="16", hi="30", inc="1"),
+            },
+            "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "28"}}}})},
+        }
+        base = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())
+        fav = copy(base)
+        # Applying the favourite fires the rule ON THE COPY: mode=hot -> temp=28.
+        fav.parameters["mode"].value = "hot"
+        self.assertEqual(fav.parameters["temp"].value, 28)  # the copy IS constrained
+        # ...and the base program keeps its own default, uncorrupted.
+        self.assertEqual(base.parameters["temp"].value, 20)  # bug: became 28
+        self.assertEqual(base.parameters["mode"].value, "cold")
+        # White-box: the copy's rule set is a distinct object bound to the copy, and the
+        # copied parameter's trigger table is not shared with the base.
+        self.assertIsNot(fav._rules[0], base._rules[0])
+        self.assertIsNot(fav.parameters["mode"]._triggers, base.parameters["mode"]._triggers)
 
     def test_favourites_malformed_do_not_crash(self) -> None:
         # Stale/malformed favourites payloads must not stop the loader.

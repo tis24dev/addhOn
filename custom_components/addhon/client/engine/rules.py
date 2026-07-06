@@ -244,9 +244,30 @@ class HonRuleSet:
 
     def patch(self) -> None:
         self._duplicate_for_extra_conditions()
+        self._attach_triggers()
+        self._apply_config_rules()
+
+    def _attach_triggers(self) -> None:
+        """Register every (already-expanded) rule as a trigger on its command's params."""
         for name, parameter in self._command.parameters.items():
             if name not in self._rules:
                 continue
             for data in self._rules.get(name, []):
                 self._add_trigger(parameter, data)
-        self._apply_config_rules()
+
+    def rebound(self, command: Any) -> "HonRuleSet":
+        """A copy of this (already-expanded) rule set bound to `command`, with its
+        triggers attached to `command`'s parameters.
+
+        `HonCommand.__copy__` uses this: a shallow-copied command shares each parameter's
+        trigger table, and every rule callback closes over the ORIGINAL command -- so
+        setting a value on the copy (applying a favourite) would fire rules that mutate the
+        BASE command. `_duplicate_for_extra_conditions` is NOT re-run (self is already
+        expanded); HonRule entries are read-only in the apply path, so they are shared."""
+        new = HonRuleSet.__new__(HonRuleSet)
+        new._command = command
+        new._rules = {key: list(rules) for key, rules in self._rules.items()}
+        new._config_rules = list(self._config_rules)
+        new._attach_triggers()
+        new._apply_config_rules()
+        return new
