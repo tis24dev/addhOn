@@ -452,7 +452,12 @@ class NativeMqttClient:
             mqtt5.SubscribePacket([mqtt5.Subscription(topic)])
         )
         try:
-            await asyncio.wait_for(asyncio.wrap_future(future), _SUBSCRIBE_TIMEOUT)
+            # Fast-path already-resolved futures. This avoids a tiny wait_for timeout
+            # racing the event-loop callback that copies the concurrent Future result.
+            if future.done():
+                future.result()
+            else:
+                await asyncio.wait_for(asyncio.wrap_future(future), _SUBSCRIBE_TIMEOUT)
         except asyncio.TimeoutError as err:
             # Attribute the stall to a stable code. No identity in the message
             # (the topic embeds the MAC) -> the bare timeout str only.

@@ -110,7 +110,11 @@ class HonBaseEntity(CoordinatorEntity):
 
     @property
     def _appliance_data(self) -> dict:
-        return self.coordinator.data.get(self._appliance_id, {})
+        data = self.coordinator.data
+        if not isinstance(data, dict):
+            return {}
+        entry = data.get(self._appliance_id, {})
+        return entry if isinstance(entry, dict) else {}
 
     @property
     def _attributes(self) -> dict:
