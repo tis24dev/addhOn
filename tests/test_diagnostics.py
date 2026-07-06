@@ -365,6 +365,15 @@ class DiagnosticsValuesTest(unittest.TestCase):
         self.assertNotIn("3C:71:BF:BD:32:2C", dumped)
         self.assertEqual(out["someInfo"], "***_1699999999")
 
+    def test_mac_in_value_wrapped_object_is_masked(self):
+        # _jsonable also unwraps a HonAttribute/HonParameter-like object via `.value`;
+        # a MAC carried inside that `.value` must be masked too, so wrapping it does
+        # not smuggle the identity into the dump in cleartext.
+        out = diagnostics._redact({"deviceInfo": FakeWrapper("mac 3C:71:BF:BD:32:2C")})
+        dumped = json.dumps(out)
+        self.assertNotIn("3C:71:BF:BD:32:2C", dumped)
+        self.assertEqual(out["deviceInfo"], "mac ***")
+
 
 class DiagnosticsCoverageTest(unittest.TestCase):
     def test_unmapped_bare_attribute_surfaces(self):
