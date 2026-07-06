@@ -85,6 +85,7 @@ controls where they have been mapped.
 ### Tested on real hardware
 
 - **AC Unit:** Haier AS35PBPHRA-PRE
+- **AC Unit:** Haier AD71S2SM3FA(H)
 - **Washing Machine:** Haier HW80-B14959TU1IT
 - **Washing Machine:** Candy TCA286TM5-S
 - **Tumble Dryer:** Haier HD100-C367GU1-IT

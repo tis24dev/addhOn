@@ -347,6 +347,59 @@ class ConnectionTest(unittest.TestCase):
         self.assertTrue(all(isinstance(r, NativeAuthError) for r in results))
         self.assertEqual(conn._refresh_gen, 1)        # advanced once, even on failure
 
+    def test_reauth_cancelled_not_cached_advances_generation(self) -> None:
+        # A CancelledError during the single-flight re-auth is specific to THIS task,
+        # not a shared auth failure. Unlike a NativeAuthError (cached above so siblings
+        # reuse it), it must NOT land in _reauth_error -- otherwise the sibling branch
+        # would re-raise a cancellation into requests that were never cancelled. It
+        # still advances the generation (create() reset auth to token-less) and re-raises.
+        class CancelAuth(FakeAuth):
+            async def authenticate(self) -> None:
+                self.authenticate_calls += 1
+                raise asyncio.CancelledError()
+
+        auth = CancelAuth()
+        conn = _conn(auth, FakeSession([]))
+
+        async def _fake_create():
+            return conn
+
+        conn.create = _fake_create
+
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(conn._reauth_after_rejection(conn._refresh_gen))
+        self.assertIsNone(conn._reauth_error)   # cancellation NOT cached
+        self.assertEqual(conn._refresh_gen, 1)  # generation still advanced
+
+    def test_reauth_cancelled_not_inherited_by_sibling(self) -> None:
+        # Counterpart to test_concurrent_reauth_single_flight_on_failure: a NativeAuthError
+        # is cached and re-raised into siblings, but a CancelledError is not. A sibling
+        # "sent" at the pre-cancel generation must fall through to reuse (return), not
+        # inherit the cancellation, since a cancellation belongs only to its own task.
+        class CancelAuth(FakeAuth):
+            async def authenticate(self) -> None:
+                self.authenticate_calls += 1
+                raise asyncio.CancelledError()
+
+        auth = CancelAuth()
+        conn = _conn(auth, FakeSession([]))
+
+        async def _fake_create():
+            return conn
+
+        conn.create = _fake_create
+
+        async def run():
+            gen = conn._refresh_gen  # both "sent" at the same generation
+            with self.assertRaises(asyncio.CancelledError):
+                await conn._reauth_after_rejection(gen)  # the cancelled task unwinds
+            await conn._reauth_after_rejection(gen)      # the sibling returns quietly
+
+        asyncio.run(run())
+        self.assertIsNone(conn._reauth_error)
+        self.assertEqual(auth.authenticate_calls, 1)  # sibling did NOT re-login
+        self.assertEqual(conn._refresh_gen, 1)
+
     def test_retry_on_403_refreshes(self) -> None:
         # Same branch as the 401 (the code treats them identically) but made explicit
         # to avoid regressions on the 403 (CodeRabbit nitpick).

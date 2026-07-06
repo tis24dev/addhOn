@@ -421,9 +421,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         return False
     if "email" not in entry.data and entry.data.get("username"):
-        hass.config_entries.async_update_entry(
-            entry, data={**entry.data, "email": email}
-        )
+        # Drop the legacy "username" key in the same update so the migrated entry
+        # data carries only "email" (no stale key left for diagnostics/iteration).
+        migrated = {k: v for k, v in entry.data.items() if k != "username"}
+        migrated["email"] = email
+        hass.config_entries.async_update_entry(entry, data=migrated)
 
     hon_client = HonClient(email=email, password=password, refresh_token=refresh_token)
 
