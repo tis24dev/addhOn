@@ -66,6 +66,14 @@ class HonConnection:
         # a concurrent burst collapses to a single refresh without gating on
         # token_expires_soon (a non-expiry 401 must still refresh once). See CR#3.
         self._refresh_gen = 0
+        # Single-flight the loop-1 re-auth even when it FAILS. If authenticate()
+        # raises (typically MFAChallengeRequired), the generation is still advanced
+        # and the exception cached against the generation that was rejected, so the
+        # other siblings of the burst reuse THIS error instead of each firing their
+        # own create()+authenticate() -- N sequential logins / OTP prompts on a 2FA
+        # account, exactly when the login is already failing.
+        self._reauth_error: BaseException | None = None
+        self._reauth_error_gen = -1
 
     @property
     def device(self) -> HonDevice:
@@ -176,9 +184,27 @@ class HonConnection:
         # keeps the whole re-login inside the lock so the burst collapses to exactly one.
         async with self._refresh_lock:
             if self._refresh_gen != gen_at_send:
+                # A sibling already ran the re-auth for this generation. If it FAILED
+                # (e.g. MFA), re-raise its cached error instead of recursing to loop 2
+                # -- where _check_headers would see the token-less auth create() left
+                # behind and fire our OWN login (another OTP). Collapsing the FAILING
+                # burst to one attempt is the whole point on a 2FA account.
+                if self._reauth_error is not None and self._reauth_error_gen == gen_at_send:
+                    raise self._reauth_error
                 return  # a sibling already re-authenticated; reuse its fresh tokens
-            await self.create()
-            await self.auth.authenticate()
+            try:
+                await self.create()
+                await self.auth.authenticate()
+            except BaseException as err:
+                # Advance the generation and cache the error so the siblings above
+                # skip their own login and reuse this one. create() has already reset
+                # self._auth to a token-less HonAuth, so leaving the gen unbumped would
+                # let every sibling re-login through loop-2 _check_headers.
+                self._reauth_error = err
+                self._reauth_error_gen = gen_at_send
+                self._refresh_gen += 1
+                raise
+            self._reauth_error = None
             self._refresh_token = self.auth.refresh_token
             self._refresh_gen += 1
 
