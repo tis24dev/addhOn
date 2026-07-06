@@ -408,6 +408,53 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertIsNot(fav._rules[0], base._rules[0])
         self.assertIsNot(fav.parameters["mode"]._triggers, base.parameters["mode"]._triggers)
 
+    def test_malformed_fixed_value_rule_skipped_at_runtime(self) -> None:
+        # A rule whose fixedValue is non-numeric for a RANGE target must NOT raise out
+        # of the runtime trigger (the range setter rejects "x" with ValueError). The
+        # rule is skipped and the parameter keeps its value; setup is not aborted.
+        attrs = {
+            "parameters": {
+                "mode": _enum("cold", ["cold", "hot"]),
+                "temp": _range(default="20", lo="16", hi="30", inc="1"),
+            },
+            "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "not-a-number"}}}})},
+        }
+        cmd = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())
+        cmd.parameters["mode"].value = "hot"  # fires the bad rule -> must be swallowed
+        self.assertEqual(cmd.parameters["temp"].value, 20)  # unchanged
+
+    def test_malformed_fixed_value_rule_skipped_at_construction(self) -> None:
+        # Same malformed rule, but the trigger value equals the param DEFAULT, so the
+        # immediate-fire runs during construction (patch()). Building the command must
+        # not raise -- the ValueError from _apply_fixed used to abort the whole load.
+        attrs = {
+            "parameters": {
+                "mode": _enum("hot", ["cold", "hot"]),  # default already == trigger
+                "temp": _range(default="20", lo="16", hi="30", inc="1"),
+            },
+            "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "not-a-number"}}}})},
+        }
+        cmd = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())  # must not raise
+        self.assertEqual(cmd.parameters["temp"].value, 20)  # unchanged
+
+    def test_copy_rebinds_program_param_backrefs(self) -> None:
+        # A HonParameterProgram carries `_command` (the base command); its value-setter
+        # does `self._command.category = value` (swapping appliance.commands). A shallow
+        # copy shares that back-reference, so a write on the copy's program parameter
+        # could reach the base. __copy__ now rebinds `_command`/`_programs` to the copy.
+        from custom_components.addhon.client.engine.parameter.program import (
+            HonParameterProgram,
+        )
+
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=_RICH_FAVOURITES))
+        base = app.commands["startProgram"].categories["super_cool"]
+        self.assertIsInstance(base.parameters["program"], HonParameterProgram)
+        fav = copy(base)
+        fav_prog = fav.parameters["program"]
+        self.assertIs(fav_prog._command, fav)       # rebound to the copy...
+        self.assertIsNot(fav_prog._command, base)   # ...not the base command
+        self.assertIs(fav_prog._programs, fav.categories)
+
     def test_favourites_malformed_do_not_crash(self) -> None:
         # Stale/malformed favourites payloads must not stop the loader.
         bad_favs = [

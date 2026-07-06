@@ -74,6 +74,17 @@ class HonCommand:
         # rules act only on itself.
         for parameter in new._parameters.values():
             parameter.reset_triggers()
+            # A copied HonParameterProgram keeps its base back-references intact:
+            # `_command` points at the BASE command and its value-setter does
+            # `self._command.category = value` (which swaps `appliance.commands`).
+            # Rebind them to the copy so a write on the copy's program parameter can
+            # never reach the base command. The current favourite loader never hits
+            # this (the raw "PROGRAMS.X" value is not in the cleaned `.values`, so the
+            # setter raises a suppressed ValueError), but rebinding removes the latent
+            # back-door for good.
+            if isinstance(parameter, HonParameterProgram):
+                parameter._command = new
+                parameter._programs = new.categories
         new._rules = [ruleset.rebound(new) for ruleset in self._rules]
         return new
 
