@@ -20,6 +20,7 @@ import logging
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN
+from .param_rollback import restore_params, snapshot_params
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -133,18 +134,10 @@ async def async_send_command(
                 )
             # Snapshot of the complete internal state of EVERY parameter BEFORE pre_send.
             # Assigning a trigger parameter fires the rules, which mutate the siblings
-            # (value AND values/min/max). On a pre_send or send() failure we restore by
-            # copying __dict__ DIRECTLY, without going through the setters: this way we
-            # do NOT re-fire the rules and we also restore values/min/max. A rollback
-            # via setter would leave the .values restricted and would raise on
-            # revalidation -> corrupted state that would contaminate later sends. The
-            # parameters REPLACE the lists (never mutated in-place), so a shallow copy
-            # of __dict__ is enough.
-            snapshots: dict = {
-                key: dict(attr.__dict__)
-                for key, attr in command_params.items()
-                if hasattr(attr, "__dict__")
-            }
+            # (value AND values/min/max); on a pre_send or send() failure we restore the
+            # full pre-mutation state via the shared param_rollback helper (copies
+            # __dict__ directly, so rules are not re-fired and values/min/max come back).
+            snapshots = snapshot_params(command_params)
             try:
                 if pre_send is not None:
                     pre_send(command_params)
@@ -153,12 +146,7 @@ async def async_send_command(
                     _LOGGER.debug("Command %s: '%s' = %s", command_name, key, value)
                 await command.send()
             except Exception:
-                for key, snap in snapshots.items():
-                    attr = command_params.get(key)
-                    if attr is None or not hasattr(attr, "__dict__"):
-                        continue
-                    attr.__dict__.clear()
-                    attr.__dict__.update(snap)
+                restore_params(command_params, snapshots)
                 raise
             _LOGGER.debug(
                 "Command %s: send completed (params=%s)", command_name, list(params)

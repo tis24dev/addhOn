@@ -195,6 +195,16 @@ class HonConnection:
             try:
                 await self.create()
                 await self.auth.authenticate()
+            except asyncio.CancelledError:
+                # A cancellation is specific to THIS task, not a shared auth failure:
+                # caching it in _reauth_error would re-raise it into sibling requests
+                # (the branch above) that were never cancelled. Still advance the
+                # generation -- create() already reset self._auth to a token-less
+                # HonAuth, so an unbumped gen would let every sibling re-login through
+                # loop-2 _check_headers -- but do NOT store it; re-raise so only this
+                # task unwinds.
+                self._refresh_gen += 1
+                raise
             except BaseException as err:
                 # Advance the generation and cache the error so the siblings above
                 # skip their own login and reuse this one. create() has already reset

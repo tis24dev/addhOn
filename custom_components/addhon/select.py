@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .base_entity import HonBaseEntity
+from .base_entity import HonBaseEntity, coordinator_data_map
 from .const import (
     AC_ATTR_SWING_H,
     AC_ATTR_SWING_V,
@@ -218,7 +218,7 @@ async def async_setup_entry(
     coordinator = entry_data["coordinator"]
     client = entry_data["client"]
     entities = []
-    data_map = coordinator.data if isinstance(coordinator.data, dict) else {}
+    data_map = coordinator_data_map(coordinator)
     for appliance_id, data in data_map.items():
         appliance = data.get("appliance")
         app_type = data.get("type")

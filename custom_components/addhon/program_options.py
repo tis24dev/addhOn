@@ -35,6 +35,7 @@ from .base_entity import HonBaseEntity
 from .const import DOMAIN, PROGRAM_PARAM_NAMES, PROGRAM_PENDING_OPTIONS
 from .debug_utils import redact_id
 from .hon_commands import get_command, get_commands, param_range, param_values
+from .param_rollback import restore_params, snapshot_params
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -91,11 +92,7 @@ async def async_send_program(hass, client, appliance, program_code: str) -> None
             # poll. The command-pointer reset below is the load-bearing undo for the swap;
             # the param-__dict__ restore covers the value-mutating (prCode) case.
             original_command = command
-            snapshots: dict = {
-                key: dict(attr.__dict__)
-                for key, attr in params.items()
-                if hasattr(attr, "__dict__")
-            }
+            snapshots = snapshot_params(params)
             try:
                 applied = False
                 for pname in PROGRAM_PARAM_NAMES:
@@ -119,15 +116,10 @@ async def async_send_program(hass, client, appliance, program_code: str) -> None
                     command = refreshed
                 await command.send()
             except Exception:
-                # Restore the pre-swap parameter state (copy __dict__ directly, bypassing
-                # the setters so a value-mutating param does not re-fire its rules) and
+                # Restore the pre-swap parameter state (shared helper copies __dict__
+                # directly, so a value-mutating param does not re-fire its rules) and
                 # reset the swapped command pointer to the original.
-                for key, snap in snapshots.items():
-                    attr = params.get(key)
-                    if attr is None or not hasattr(attr, "__dict__"):
-                        continue
-                    attr.__dict__.clear()
-                    attr.__dict__.update(snap)
+                restore_params(params, snapshots)
                 commands[STARTPROGRAM_COMMAND] = original_command
                 raise
             _LOGGER.debug(

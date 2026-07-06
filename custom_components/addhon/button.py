@@ -22,6 +22,7 @@ from .const import (
 )
 from .debug_utils import command_names, param_snapshot, redact_id, redact_store
 from .logging_utils import reset_integration_log_level, silence_mqtt_noise
+from .param_rollback import restore_params, snapshot_params
 from .program_options import apply_pending_options
 
 _LOGGER = logging.getLogger(__name__)
@@ -156,26 +157,9 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
         # category. Populated inside _inner BEFORE the mutation and consumed by the
         # except below, so a send failure does not leave the appliance pointing at a
         # program/command the cloud never accepted (which would otherwise skew the
-        # per-program option ranges until the next poll self-heals it). Mirrors the
-        # snapshot/restore in hon_commands.async_send_command.
+        # per-program option ranges until the next poll self-heals it). Uses the shared
+        # snapshot/restore in param_rollback (same as hon_commands.async_send_command).
         rollback: dict = {}
-
-        def _snapshot_params(ps):
-            if not isinstance(ps, dict):
-                return {}
-            return {k: dict(p.__dict__) for k, p in ps.items() if hasattr(p, "__dict__")}
-
-        def _restore_params(ps, snap):
-            if not isinstance(ps, dict):
-                return
-            for key, saved in snap.items():
-                param = ps.get(key)
-                if param is not None and hasattr(param, "__dict__"):
-                    # Restore via __dict__ (not the setter) so rules are not re-fired
-                    # and values/min/max are restored too.
-                    param.__dict__.clear()
-                    param.__dict__.update(saved)
-
         try:
             def _do():
                 async def _inner():
@@ -192,7 +176,7 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                     rollback["commands"] = commands
                     rollback["name"] = self._command_name
                     rollback["original_command"] = command
-                    rollback["snapshots"] = [(params, _snapshot_params(params))]
+                    rollback["snapshots"] = [(params, snapshot_params(params))]
                     if _LOGGER.isEnabledFor(logging.DEBUG):
                         _LOGGER.debug(
                             "Button debug: before command '%s' params=%s",
@@ -243,7 +227,7 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                         params = getattr(command, "parameters", {})
                         # Snapshot the post-swap command's params too, so options/fixed
                         # applied below are rolled back with the swap on a send failure.
-                        rollback["snapshots"].append((params, _snapshot_params(params)))
+                        rollback["snapshots"].append((params, snapshot_params(params)))
                     # (b) Apply the buffered program options to the POST-SWAP command
                     # (#35): selecting the program swaps the active startProgram command,
                     # so the options must land on the new one. apply_pending_options skips
@@ -328,7 +312,7 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                 if isinstance(cmds, dict) and original is not None and cmds.get(name) is not original:
                     cmds[name] = original
                 for ps, snap in reversed(rollback.get("snapshots", [])):
-                    _restore_params(ps, snap)
+                    restore_params(ps, snap)
             _LOGGER.error(
                 "Button %s: command error: %s",
                 self._command_name, err, exc_info=True,

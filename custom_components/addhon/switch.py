@@ -25,6 +25,7 @@ from .const import (
     WM_ATTR_STATUS,
 )
 from .debug_utils import redact_id
+from .param_rollback import restore_params, snapshot_params
 from .program_options import (
     HonProgramOptionEntity,
     normalize_code,
@@ -272,9 +273,10 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
                     )
                     if isinstance(params, dict) and "pause" in params:
                         pause_param = params["pause"]
-                        if hasattr(pause_param, "__dict__"):
-                            restore_pause["param"] = pause_param
-                            restore_pause["snap"] = dict(pause_param.__dict__)
+                        # Snapshot only the pause param (shared helper, keyed dict form)
+                        # so a send failure restores it without re-firing rules.
+                        restore_pause["params"] = params
+                        restore_pause["snap"] = snapshot_params({"pause": pause_param})
                         previous = getattr(pause_param, "value", None)
                         pause_param.value = pause_value
                         _LOGGER.debug(
@@ -296,11 +298,7 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
             _LOGGER.info("Pause: %s sent", command_name)
             await self._async_request_command_refresh()
         except Exception as err:
-            param = restore_pause.get("param")
-            snap = restore_pause.get("snap")
-            if param is not None and isinstance(snap, dict):
-                param.__dict__.clear()
-                param.__dict__.update(snap)
+            restore_params(restore_pause.get("params"), restore_pause.get("snap", {}))
             _LOGGER.error("Pause %s: Error: %s", command_name, err, exc_info=True)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

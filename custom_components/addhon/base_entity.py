@@ -14,6 +14,17 @@ from .debug_utils import debug_key_sample, redact_id
 _LOGGER = logging.getLogger(__name__)
 
 
+def coordinator_data_map(coordinator) -> dict:
+    """The coordinator's per-appliance data dict, or ``{}`` if not yet a dict.
+
+    Shared guard for the platform setup loops (sensor / binary_sensor / select):
+    ``coordinator.data`` can be ``None`` before the first successful refresh, so
+    every platform coerces it to a dict before iterating. Centralized here so the
+    guard stays consistent instead of being inlined identically in each platform.
+    """
+    return coordinator.data if isinstance(coordinator.data, dict) else {}
+
+
 def account_device_info(entry, sw_version: str | None = None) -> DeviceInfo:
     """DeviceInfo for the synthetic per-account "diagnostics" device.
 

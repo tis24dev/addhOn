@@ -216,7 +216,8 @@ def _param_value(param):
 
 
 def _param_schema(param) -> dict:
-    """Full schema of one command parameter: value + enum + range + metadata."""
+    """Schema of one command parameter: value + metadata, plus range (min/max/step)
+    for a range param OR enum as a fallback only when the param is not a range."""
     schema: dict = {
         "value": _param_value(param),
         "typology": getattr(param, "typology", None),
