@@ -617,6 +617,28 @@ class ConfigRuleTest(unittest.TestCase):
         c = self._build(None)  # field absent -> does not fire (fallback like the app)
         self.assertEqual(c.parameters["remoteActionable"].value, 1)
 
+    def test_malformed_config_rule_skipped_not_aborting_build(self) -> None:
+        # A $installationType config rule whose fixedValue is non-numeric for a RANGE
+        # target must NOT raise out of HonCommand construction: patch() runs in
+        # __init__ and the loader does not wrap it, so an escaping ValueError would drop
+        # every command -- and thus every entity -- of the device. The bad rule is
+        # skipped per-iteration (like the runtime trigger path) while a sibling good
+        # config rule still fires.
+        bad = json.loads(json.dumps(_AC_SELF_CLEAN))
+        bad["ancillaryParameters"]["programRules"]["fixedValue"] = {
+            "remoteActionable": {
+                "$installationType": {"1toN": {"fixedValue": "not-a-number",
+                                               "typology": "fixed"}}},
+            "remoteVisible": {
+                "$installationType": {"1toN": {"fixedValue": "0", "typology": "fixed"}}},
+        }
+        c = NaCommand("c", bad, _ConfigApp("1toN"),
+                      category_name="PROGRAMS.AC.IOT_SELF_CLEAN")
+        # Construction did not raise; all params built; the malformed rule was skipped
+        # (target keeps its default 1) but the sibling good rule still applied (-> 0).
+        self.assertEqual(c.parameters["remoteActionable"].value, 1)
+        self.assertEqual(c.parameters["remoteVisible"].value, 0)
+
 
 class _HassStub:
     async def async_add_executor_job(self, fn, *a):

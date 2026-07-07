@@ -266,6 +266,24 @@ class GateTest(unittest.TestCase):
         self.assertEqual(option_choices(RangeParam(12, 14, 1)), ["12", "13", "14"])
         self.assertEqual(option_choices(RangeParam(0, 360, 360)), ["0", "360"])
 
+    def test_option_choices_decimal_step_keeps_last_point_no_drift(self) -> None:
+        # Regression: the old `current += step` accumulator drifted on decimal steps
+        # ("20.700000000000003") and could drop the final grid point. Index-based
+        # enumeration rounds each point to the lo/step precision -> clean tokens, last
+        # point kept, distinct half-degree points not collapsed.
+        from custom_components.addhon.program_options import option_choices
+
+        toks = option_choices(RangeParam(20.0, 25.0, 0.1))
+        self.assertEqual(len(toks), 51)
+        self.assertEqual(toks[0], "20")
+        self.assertEqual(toks[-1], "25")
+        self.assertNotIn("20.700000000000003", toks)
+        self.assertTrue(all("." not in t or len(t.split(".")[1]) <= 1 for t in toks))
+        self.assertEqual(
+            option_choices(RangeParam(16.5, 20.5, 1.0)),
+            ["16.5", "17.5", "18.5", "19.5", "20.5"],
+        )
+
     def test_option_choices_drops_sentinels(self) -> None:
         from custom_components.addhon.const import DRY_LEVEL_SENTINELS
         from custom_components.addhon.program_options import option_choices
