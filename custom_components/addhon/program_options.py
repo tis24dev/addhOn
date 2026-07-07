@@ -28,6 +28,7 @@ so the entity is never created (auto-removes the fixed toggles on the user's mod
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 
 from homeassistant.exceptions import HomeAssistantError
 
@@ -166,6 +167,15 @@ def _num_str(value) -> str:
     return str(int(number)) if number.is_integer() else str(number)
 
 
+def _grid_decimals(number: float) -> int:
+    """Fractional-digit count of a numeric value (0.1 -> 1, 1 -> 0).
+
+    Mirrors HonParameterRange._decimals; used to round the enumerated grid points to the
+    lo/step precision so a decimal step renders "20.7", not "20.700000000000003"."""
+    exponent = Decimal(str(float(number))).normalize().as_tuple().exponent
+    return -exponent if isinstance(exponent, int) and exponent < 0 else 0
+
+
 def normalize_code(value) -> str | None:
     """Normalize a raw device/schema value to its canonical option code.
 
@@ -217,16 +227,21 @@ def option_choices(param, drop: tuple[str, ...] = ()) -> list[str]:
         if step <= 0:
             return []
         out: list[str] = []
-        current = lo
-        count = 0
-        # Tight upper bound (+1e-9 only for float-accumulation drift, NOT step/2): a step
-        # that overshoots the max (e.g. 0..10 step 20) must NOT emit a value beyond hi.
-        while current <= hi + 1e-9 and count < _MAX_RANGE_CHOICES:
+        # Index-based enumeration (lo + i*step), NOT a `+= step` accumulator: the
+        # accumulator compounds float error on decimal steps and can DROP the final grid
+        # point -- the exact defect range.py.values was rewritten to avoid. Each point is
+        # rounded to the lo/step precision so a decimal step renders "20.7", not
+        # "20.700000000000003". The +1e-9 only absorbs the i*step rounding drift; a step
+        # that overshoots the max (e.g. 0..10 step 20) still emits a single value, never
+        # one beyond hi. Bounded by _MAX_RANGE_CHOICES so a malformed range cannot loop.
+        ndigits = max(_grid_decimals(lo), _grid_decimals(step))
+        for index in range(_MAX_RANGE_CHOICES):
+            current = round(lo + index * step, ndigits)
+            if current > hi + 1e-9:
+                break
             token = _num_str(current)
             if token not in drop and token not in out:
                 out.append(token)
-            current += step
-            count += 1
         return out
     return option_value_set(param, drop)
 
