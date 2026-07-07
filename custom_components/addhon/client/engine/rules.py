@@ -235,11 +235,26 @@ class HonRuleSet:
                 continue
             if not (param := self._command.parameters.get(param_key)):
                 continue
-            if fixed_value := action.get("fixedValue", ""):
-                self._apply_fixed(param, fixed_value)
-            elif action.get("typology") == "enum":
-                self._apply_enum(
-                    param, HonRule(dollar_key, str(device_value), param_key, action)
+            # Same guard as the runtime trigger path (_add_trigger.apply): a malformed
+            # config rule (non-numeric/off-grid fixedValue on a range, or a bad enum
+            # value) must skip ONLY that rule, never abort the whole command build.
+            # patch() runs in HonCommand.__init__ and command_loader does NOT wrap the
+            # construction, so an escaping ValueError/TypeError would drop every command
+            # -- and thus every entity -- of the device.
+            try:
+                if fixed_value := action.get("fixedValue", ""):
+                    self._apply_fixed(param, fixed_value)
+                elif action.get("typology") == "enum":
+                    self._apply_enum(
+                        param, HonRule(dollar_key, str(device_value), param_key, action)
+                    )
+            except (ValueError, TypeError) as err:
+                _LOGGER.debug(
+                    "addhOn: skipping unapplicable config rule for '%s' (%s=%s): %s",
+                    param_key,
+                    dollar_key,
+                    device_value,
+                    err,
                 )
 
     def patch(self) -> None:
