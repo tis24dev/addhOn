@@ -28,11 +28,11 @@ so the entity is never created (auto-removes the fixed toggles on the user's mod
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
 
 from homeassistant.exceptions import HomeAssistantError
 
 from .base_entity import HonBaseEntity
+from .client.engine.parameter.range import HonParameterRange
 from .const import DOMAIN, PROGRAM_PARAM_NAMES, PROGRAM_PENDING_OPTIONS
 from .debug_utils import redact_id
 from .hon_commands import get_command, get_commands, param_range, param_values
@@ -167,15 +167,6 @@ def _num_str(value) -> str:
     return str(int(number)) if number.is_integer() else str(number)
 
 
-def _grid_decimals(number: float) -> int:
-    """Fractional-digit count of a numeric value (0.1 -> 1, 1 -> 0).
-
-    Mirrors HonParameterRange._decimals; used to round the enumerated grid points to the
-    lo/step precision so a decimal step renders "20.7", not "20.700000000000003"."""
-    exponent = Decimal(str(float(number))).normalize().as_tuple().exponent
-    return -exponent if isinstance(exponent, int) and exponent < 0 else 0
-
-
 def normalize_code(value) -> str | None:
     """Normalize a raw device/schema value to its canonical option code.
 
@@ -234,7 +225,9 @@ def option_choices(param, drop: tuple[str, ...] = ()) -> list[str]:
         # "20.700000000000003". The +1e-9 only absorbs the i*step rounding drift; a step
         # that overshoots the max (e.g. 0..10 step 20) still emits a single value, never
         # one beyond hi. Bounded by _MAX_RANGE_CHOICES so a malformed range cannot loop.
-        ndigits = max(_grid_decimals(lo), _grid_decimals(step))
+        # Reuse HonParameterRange._decimals (single source of truth for grid precision)
+        # so this matches range.py.values' rounding and the tokens keep round-tripping.
+        ndigits = max(HonParameterRange._decimals(lo), HonParameterRange._decimals(step))
         for index in range(_MAX_RANGE_CHOICES):
             current = round(lo + index * step, ndigits)
             if current > hi + 1e-9:
