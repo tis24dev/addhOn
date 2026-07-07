@@ -617,6 +617,50 @@ class ConfigRuleTest(unittest.TestCase):
         c = self._build(None)  # field absent -> does not fire (fallback like the app)
         self.assertEqual(c.parameters["remoteActionable"].value, 1)
 
+    def test_malformed_config_rule_skipped_not_aborting_build(self) -> None:
+        # A $installationType config rule whose fixedValue is non-numeric for a RANGE
+        # target must NOT raise out of HonCommand construction: patch() runs in
+        # __init__ and the loader does not wrap it, so an escaping ValueError would drop
+        # every command -- and thus every entity -- of the device. The bad rule is
+        # skipped per-iteration (like the runtime trigger path) while a sibling good
+        # config rule still fires.
+        bad = json.loads(json.dumps(_AC_SELF_CLEAN))
+        bad["ancillaryParameters"]["programRules"]["fixedValue"] = {
+            "remoteActionable": {
+                "$installationType": {"1toN": {"fixedValue": "not-a-number",
+                                               "typology": "fixed"}}},
+            "remoteVisible": {
+                "$installationType": {"1toN": {"fixedValue": "0", "typology": "fixed"}}},
+        }
+        c = NaCommand("c", bad, _ConfigApp("1toN"),
+                      category_name="PROGRAMS.AC.IOT_SELF_CLEAN")
+        # Construction did not raise; all params built; the malformed rule was skipped
+        # (target keeps its default 1) but the sibling good rule still applied (-> 0).
+        self.assertEqual(c.parameters["remoteActionable"].value, 1)
+        self.assertEqual(c.parameters["remoteVisible"].value, 0)
+
+    def test_malformed_config_rule_rolls_back_partial_mutation(self) -> None:
+        # A fixedValue BEYOND max AND off the min/step grid widens the range's max
+        # (numeric > max) BEFORE the value setter rejects it as off-grid. Skipping the
+        # rule is not enough: without a rollback the param is left with the widened max
+        # and the old value, so the entity would expose a wrong range. The guard must
+        # restore the pre-apply state; a sibling well-formed rule still fires.
+        bad = json.loads(json.dumps(_AC_SELF_CLEAN))
+        bad["ancillaryParameters"]["programRules"]["fixedValue"] = {
+            "remoteActionable": {
+                "$installationType": {"1toN": {"fixedValue": "1.5", "typology": "fixed"}}},
+            "remoteVisible": {
+                "$installationType": {"1toN": {"fixedValue": "0", "typology": "fixed"}}},
+        }
+        c = NaCommand("c", bad, _ConfigApp("1toN"),
+                      category_name="PROGRAMS.AC.IOT_SELF_CLEAN")
+        ra = c.parameters["remoteActionable"]
+        # Rolled back: max is the original 1 (NOT the transiently-widened 1.5) and the
+        # value is untouched. The sibling well-formed config rule still applied (-> 0).
+        self.assertEqual(ra.max, 1)
+        self.assertEqual(ra.value, 1)
+        self.assertEqual(c.parameters["remoteVisible"].value, 0)
+
 
 class _HassStub:
     async def async_add_executor_job(self, fn, *a):

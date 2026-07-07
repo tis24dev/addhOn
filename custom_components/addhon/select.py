@@ -67,6 +67,24 @@ _REF_MODE_FLAG_TO_PROGRAM: dict[str, str] = {
 _LOGGER = logging.getLogger(__name__)
 
 
+def disambiguate_labels(base: dict[str, str]) -> dict[str, str]:
+    """Make a ``code -> label`` map collision-safe for a select's options.
+
+    Two codes sharing a display label would collapse in the reverse map, leaving one code
+    unreachable from the UI and mapping the lost code's current_option onto the survivor.
+    Suffix ONLY the colliding labels with their code so every code stays selectable and the
+    reverse map is injective; unique labels are untouched (they keep their translatable
+    string). Insertion order is preserved. Shared by every select that builds options from a
+    code/label map (program, program-option, AC direction) so the behavior can't drift."""
+    counts: dict[str, int] = {}
+    for label in base.values():
+        counts[label] = counts.get(label, 0) + 1
+    return {
+        code: (f"{label} ({code})" if counts[label] > 1 else label)
+        for code, label in base.items()
+    }
+
+
 @dataclass(frozen=True, kw_only=True)
 class HonProgramOptionSelectDescription:
     """A categorical program option rendered as a select (#35).
@@ -322,19 +340,11 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         if appliance is not None:
             self._program_map = self._load_programs(appliance)
 
-        # Disambiguate collided labels: two program CODES sharing a display label would
-        # otherwise collapse in the reverse map, leaving one program unreachable from the
-        # UI and mapping current_option of the lost code onto the survivor's code. Suffix
-        # ONLY the colliding labels with their raw code so every code stays selectable and
-        # the reverse map is injective (mirrors HonProgramOptionSelect). Unique labels are
-        # untouched, keeping their translatable string.
-        label_counts: dict[str, int] = {}
-        for label in self._program_map.values():
-            label_counts[label] = label_counts.get(label, 0) + 1
-        self._program_display: dict[str, str] = {
-            code: (f"{label} ({code})" if label_counts[label] > 1 else label)
-            for code, label in self._program_map.items()
-        }
+        # Disambiguate collided labels so every program CODE stays selectable and the
+        # reverse map is injective (two codes sharing a display label would otherwise
+        # collapse, leaving one program unreachable and mapping current_option of the lost
+        # code onto the survivor). See disambiguate_labels.
+        self._program_display: dict[str, str] = disambiguate_labels(self._program_map)
         self._program_reverse: dict[str, str] = {
             display: code for code, display in self._program_display.items()
         }
@@ -603,16 +613,9 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
         # Collision-aware disambiguation (PR #38 / Greptile P2): when two EXPOSED raw codes
         # share a label (DRY_LEVEL_LABELS_TD maps e.g. 1 & 12 both to "iron_dry"), suffixing
         # ONLY the colliding ones with their raw code keeps every code selectable and keeps
-        # the reverse map injective (otherwise one raw would be unreachable). Non-colliding
-        # labels are untouched, so the common case keeps its translatable `state.<key>`; a
-        # suffixed colliding key has no translation and renders literally (rare-model-only).
-        label_counts: dict[str, int] = {}
-        for label in base_keys.values():
-            label_counts[label] = label_counts.get(label, 0) + 1
-        self._raw_to_key: dict[str, str] = {
-            raw: (f"{label} ({raw})" if label_counts[label] > 1 else label)
-            for raw, label in base_keys.items()
-        }
+        # the reverse map injective. Non-colliding labels keep their translatable
+        # `state.<key>`; a suffixed colliding key renders literally (rare-model-only).
+        self._raw_to_key: dict[str, str] = disambiguate_labels(base_keys)
         self._key_to_raw: dict[str, str] = {key: raw for raw, key in self._raw_to_key.items()}
         # One distinct option per exposed raw code (keys are now unique; order preserved).
         self._attr_options = list(self._raw_to_key.values())
@@ -886,12 +889,18 @@ class HonAcDirectionSelect(HonBaseEntity, SelectEntity):
         # unknown. For the real per-model enums (clean small integers) this is a no-op.
         # param_allowed_values([]/None) yields [] (gated-out params never reach here).
         # Mirrors HonProgramOptionSelect / option_value_set, which already normalize.
-        self._raw_to_key: dict[str, str] = {}
+        base_keys: dict[str, str] = {}
         for raw in param_allowed_values(param):
             code = normalize_code(raw)
             if code is None:
                 continue
-            self._raw_to_key[code] = label_map.get(code, code)
+            base_keys[code] = label_map.get(code, code)
+        # Collision-aware disambiguation (mirrors HonProgramOptionSelect): if two codes
+        # share a label, suffix the colliding ones so every code stays selectable and
+        # _key_to_raw never drops one. The current FAN_DIR maps are injective (numeric
+        # fallbacks), so this is a no-op today; it removes the latent duplicate-option /
+        # lossy-reverse trap if a map ever gains a shared label. See disambiguate_labels.
+        self._raw_to_key: dict[str, str] = disambiguate_labels(base_keys)
         self._key_to_raw: dict[str, str] = {
             key: raw for raw, key in self._raw_to_key.items()
         }

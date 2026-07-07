@@ -160,6 +160,12 @@ class HonRuleSet:
         if isinstance(param, HonParameterEnum) and set(param.values) != {str(value)}:
             param.values = [str(value)]
             param.value = str(value)
+            # Return so we do NOT fall through to the trailing `param.value = str(value)`:
+            # a second set would fire the value trigger a second time, and (were a cascade
+            # ever to rewrite this param's own values) could raise AFTER the first set
+            # already succeeded -- past the point _rollback can undo the cascade's effect
+            # on sibling params. One validated set keeps the skip/rollback contract exact.
+            return
         elif isinstance(param, HonParameterRange):
             numeric = float(value)
             if numeric < param.min:
@@ -185,12 +191,32 @@ class HonRuleSet:
             # Degenerate case, not verifiable offline -> deferred to live-AC.
             param.value = default_value
 
+    @staticmethod
+    def _rollback(param: HonParameter, snapshot: dict[str, Any]) -> None:
+        """Restore ``param`` to a pre-apply ``__dict__`` snapshot so a SKIPPED malformed
+        rule leaves NO partial mutation.
+
+        ``_apply_fixed`` can widen ``min``/``max`` and ``_apply_enum`` can replace
+        ``values`` BEFORE the value setter raises, so catching the error alone would keep
+        the narrowed/widened bounds or swapped options while the old value stays in place
+        -- the entity would then expose the wrong range/options or reject the device's
+        current value. Copy ``__dict__`` directly (same mechanism as ``param_rollback`` on
+        the send path): it bypasses the setter, so no trigger re-fires, and every mutated
+        field (``min``/``max``/``values``/``_value``) reverts together. The value setters
+        validate BEFORE assigning ``_value`` (range ``_on_grid`` / enum membership) and no
+        apply re-sets the value after a successful set (see ``_apply_fixed``'s early
+        return), so a raise is never preceded by a cascade into sibling params -- the
+        single-param snapshot is a complete rollback."""
+        param.__dict__.clear()
+        param.__dict__.update(snapshot)
+
     def _add_trigger(self, parameter: HonParameter, data: HonRule) -> None:
         def apply(rule: HonRule) -> None:
             if not self._extra_rules_matches(rule):
                 return
             if not (param := self._command.parameters.get(rule.param_key)):
                 return
+            snapshot = dict(param.__dict__)
             try:
                 if fixed_value := rule.param_data.get("fixedValue", ""):
                     self._apply_fixed(param, fixed_value)
@@ -202,8 +228,10 @@ class HonRuleSet:
                 # immediate-fire in `HonParameter.add_trigger` runs at construction
                 # time, so an escaping ValueError from `_apply_fixed` (e.g. float("x")
                 # or an off-step value rejected by the range setter) would fail setup
-                # for every entity of the device. Log and skip the bad rule instead;
-                # the runtime path already tolerates this via the entity write-path.
+                # for every entity of the device. Roll the param back (a partial
+                # mutation is worse than an untouched one) then log and skip the bad
+                # rule; the runtime path already tolerates this via the entity write-path.
+                self._rollback(param, snapshot)
                 _LOGGER.debug(
                     "addhOn: skipping unapplicable rule for '%s' (trigger %s=%s): %s",
                     rule.param_key,
@@ -235,11 +263,29 @@ class HonRuleSet:
                 continue
             if not (param := self._command.parameters.get(param_key)):
                 continue
-            if fixed_value := action.get("fixedValue", ""):
-                self._apply_fixed(param, fixed_value)
-            elif action.get("typology") == "enum":
-                self._apply_enum(
-                    param, HonRule(dollar_key, str(device_value), param_key, action)
+            # Same guard as the runtime trigger path (_add_trigger.apply): a malformed
+            # config rule (non-numeric/off-grid fixedValue on a range, or a bad enum
+            # value) must skip ONLY that rule, never abort the whole command build.
+            # patch() runs in HonCommand.__init__ and command_loader does NOT wrap the
+            # construction, so an escaping ValueError/TypeError would drop every command
+            # -- and thus every entity -- of the device. Snapshot first so a rule that
+            # raises mid-apply is rolled back, not left with partial bounds/options.
+            snapshot = dict(param.__dict__)
+            try:
+                if fixed_value := action.get("fixedValue", ""):
+                    self._apply_fixed(param, fixed_value)
+                elif action.get("typology") == "enum":
+                    self._apply_enum(
+                        param, HonRule(dollar_key, str(device_value), param_key, action)
+                    )
+            except (ValueError, TypeError) as err:
+                self._rollback(param, snapshot)
+                _LOGGER.debug(
+                    "addhOn: skipping unapplicable config rule for '%s' (%s=%s): %s",
+                    param_key,
+                    dollar_key,
+                    device_value,
+                    err,
                 )
 
     def patch(self) -> None:
