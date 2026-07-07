@@ -350,5 +350,28 @@ class AcFanDirectionI18nTest(unittest.TestCase):
             )
 
 
+class DisambiguateLabelsTest(unittest.TestCase):
+    """The shared collision helper backing every code/label select (program,
+    program-option, AC direction): only colliding labels get suffixed, so the reverse
+    map stays injective while unique (translatable) labels are untouched."""
+
+    def test_no_collision_is_identity(self) -> None:
+        base = {"1": "low", "2": "mid", "3": "high"}
+        self.assertEqual(select.disambiguate_labels(base), base)
+
+    def test_collision_suffixes_only_the_colliding_labels(self) -> None:
+        # 1 and 12 both map to "iron_dry"; "auto" is unique.
+        out = select.disambiguate_labels({"1": "iron_dry", "12": "iron_dry", "0": "auto"})
+        self.assertEqual(out, {"1": "iron_dry (1)", "12": "iron_dry (12)", "0": "auto"})
+        # Every code stays selectable and the reverse map loses nothing.
+        self.assertEqual(len(set(out.values())), len(out))
+        self.assertEqual({v: k for k, v in out.items()},
+                         {"iron_dry (1)": "1", "iron_dry (12)": "12", "auto": "0"})
+
+    def test_insertion_order_preserved(self) -> None:
+        base = {"c": "x", "a": "x", "b": "y"}
+        self.assertEqual(list(select.disambiguate_labels(base)), ["c", "a", "b"])
+
+
 if __name__ == "__main__":
     unittest.main()
