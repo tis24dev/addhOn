@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceEntryType
@@ -15,14 +16,16 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def coordinator_data_map(coordinator) -> dict:
-    """The coordinator's per-appliance data dict, or ``{}`` if not yet a dict.
+    """The coordinator's per-appliance data map, or ``{}`` if not yet a mapping.
 
     Shared guard for the platform setup loops (sensor / binary_sensor / select):
     ``coordinator.data`` can be ``None`` before the first successful refresh, so
-    every platform coerces it to a dict before iterating. Centralized here so the
-    guard stays consistent instead of being inlined identically in each platform.
+    every platform coerces it before iterating. Centralized here so the guard
+    stays consistent instead of being inlined identically in each platform. The
+    check is ``Mapping`` (not ``dict``) so any mapping-typed coordinator payload
+    is honored rather than silently dropped.
     """
-    return coordinator.data if isinstance(coordinator.data, dict) else {}
+    return coordinator.data if isinstance(coordinator.data, Mapping) else {}
 
 
 def account_device_info(entry, sw_version: str | None = None) -> DeviceInfo:
@@ -110,8 +113,11 @@ class HonBaseEntity(CoordinatorEntity):
 
     @property
     def _appliance_data(self) -> dict:
+        # Guard ``data`` as a Mapping (not strictly ``dict``) so a mapping-typed
+        # coordinator payload isn't silently reduced to no appliances; the entry
+        # itself is still returned only when it's a plain dict (the read contract).
         data = self.coordinator.data
-        if not isinstance(data, dict):
+        if not isinstance(data, Mapping):
             return {}
         entry = data.get(self._appliance_id, {})
         return entry if isinstance(entry, dict) else {}
