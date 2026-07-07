@@ -886,12 +886,24 @@ class HonAcDirectionSelect(HonBaseEntity, SelectEntity):
         # unknown. For the real per-model enums (clean small integers) this is a no-op.
         # param_allowed_values([]/None) yields [] (gated-out params never reach here).
         # Mirrors HonProgramOptionSelect / option_value_set, which already normalize.
-        self._raw_to_key: dict[str, str] = {}
+        base_keys: dict[str, str] = {}
         for raw in param_allowed_values(param):
             code = normalize_code(raw)
             if code is None:
                 continue
-            self._raw_to_key[code] = label_map.get(code, code)
+            base_keys[code] = label_map.get(code, code)
+        # Collision-aware disambiguation (mirrors HonProgramOptionSelect): if two codes
+        # share a label, suffix the colliding ones with their raw code so every code stays
+        # selectable and _key_to_raw never drops one. The current FAN_DIR maps are
+        # injective (numeric fallbacks), so this is a no-op today; it removes the latent
+        # duplicate-option / lossy-reverse trap if a map ever gains a shared label.
+        label_counts: dict[str, int] = {}
+        for label in base_keys.values():
+            label_counts[label] = label_counts.get(label, 0) + 1
+        self._raw_to_key: dict[str, str] = {
+            code: (f"{label} ({code})" if label_counts[label] > 1 else label)
+            for code, label in base_keys.items()
+        }
         self._key_to_raw: dict[str, str] = {
             key: raw for raw, key in self._raw_to_key.items()
         }
