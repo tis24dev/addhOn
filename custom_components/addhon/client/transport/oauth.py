@@ -6,7 +6,8 @@ Deterministic pieces of the login flow:
 
 The URL and the "by hand" encoding of the parameters (scope with NON encoded spaces,
 pre-quoted `redirect_uri`) are the contract the server expects, so they are built
-exactly. Constants are inline (like the other transport modules). The HTTP
+exactly. Server-dictated constants live in values.py with their provenance (imported
+below); this module keeps only the URL-assembly and page-parsing logic. The HTTP
 orchestration that uses these pieces lives in the session/auth.
 """
 from __future__ import annotations
