@@ -23,9 +23,12 @@ Independence is verified per module by the harness in `tests/independence/`
     audit (pyhOn ships no HA layer to copy) -- note the harness gates cover the
     transport package only, not the HA layer, so that assessment is not gate-enforced.
   * STILL DERIVED from pyhOn (declared debt, marked xfail): the transport modules
-    auth.py, api.py, mqtt.py, connection.py, oauth.py, device.py (each still
-    reproduces >= 50% of a pyhOn module's structure), and the client `engine/` package
-    (a separate, larger body of copied code not addressed on this branch).
+    auth.py, api.py, mqtt.py, connection.py, oauth.py, device.py -- known-derived by the
+    line-level provenance audit (copied literals/structure), which is the source of
+    truth. Each also trips the structural tripwire (reproducing >= 50% of a pyhOn
+    module's shape -- a conservative, necessary-not-sufficient signal, not the proof of
+    copying). Plus the client `engine/` package (a separate, larger body of copied code
+    not addressed on this branch).
 
 Because substantial derived portions remain, the MIT requirement to retain the
 original copyright notice applies to them. Until the clean-room rewrite is complete,

@@ -1,5 +1,5 @@
 {
- "_README": "Gate B (tests/independence/test_provenance.py) machine-checks this manifest. One row per module-level literal constant in custom_components/addhon/client/transport/values.py. `class`: OBSERVED = Haier dictates it (any correct client sends it; identity with pyhOn is interop, not copying) | CLIENT-CHOSEN = addhOn's own identity | UNRESOLVED = still needs an independent capture (APK / mitmproxy) to be legitimately sourced. `must_differ_from_pyhon`: true for values a placeholder-inheriting copy would leave equal to pyhOn's. `pyhon_value` records pyhOn's literal (a FACT, not creative expression) purely for the anti-copy assertion. Human-readable companion: VALUES-PROVENANCE.md. Spec anchors point into docs/protocol/HAIER-HON-TRANSPORT.md.",
+ "_README": "Gate B (tests/independence/test_provenance.py) machine-checks this manifest. One row per module-level literal constant in custom_components/addhon/client/transport/values.py. `class`: OBSERVED = Haier dictates it (any correct client sends it; identity with pyhOn is interop, not copying) | CLIENT-CHOSEN = addhOn's own identity | UNRESOLVED = still needs an independent capture (APK / mitmproxy) to be legitimately sourced. `must_differ_from_pyhon`: true for values a placeholder-inheriting copy would leave equal to pyhOn's. `pyhon_value` records pyhOn's literal (a FACT, not creative expression) purely for the anti-copy assertion. `source`: how the literal is justified -- haier-required (Haier's endpoint mandates this exact value, so it is identical across clients by necessity; NOT a claim of independent re-capture -- several coincide byte-for-byte with pyhOn precisely because Haier dictates them) | addhon-identity (addhOn's own choice) | UNRESOLVED (still needs an owner capture from the APK / mitmproxy). Human-readable companion: VALUES-PROVENANCE.md. Spec anchors point into docs/protocol/HAIER-HON-TRANSPORT.md.",
  "version": 1,
  "module": "custom_components/addhon/client/transport/values.py",
  "constants": [
@@ -8,7 +8,7 @@
    "value": "https://account2.hon-smarthome.com",
    "spec": "HHT-sec2",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "https://account2.hon-smarthome.com",
    "note": "OAuth/login host. Any client hitting the hOn cloud must use it."
@@ -18,7 +18,7 @@
    "value": "hon",
    "spec": "HHT-sec2",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "hon",
    "note": "Custom redirect scheme (hon://mobilesdk/detect/oauth/done) the connected app is registered for."
@@ -28,7 +28,7 @@
    "value": "3MVG9QDx8IX8nP5T2Ha8ofvlmjLZl5L_gvfbT9.HJvpHGKoAS_dcMN8LYpTSYeVFCraUnV.2Ag1Ki7m4znVO6",
    "spec": "HHT-sec5",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "3MVG9QDx8IX8nP5T2Ha8ofvlmjLZl5L_gvfbT9.HJvpHGKoAS_dcMN8LYpTSYeVFCraUnV.2Ag1Ki7m4znVO6",
    "note": "Salesforce connected-app id the authorize endpoint validates against the redirect URI."
@@ -38,7 +38,7 @@
    "value": "token+id_token",
    "spec": "HHT-sec5",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "token+id_token",
    "note": "Implicit-flow response_type; the literal '+' is sent unencoded exactly as the server expects."
@@ -48,7 +48,7 @@
    "value": "api openid refresh_token web",
    "spec": "HHT-sec5",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "api openid refresh_token web",
    "note": "Authorize scope; spaces are sent unencoded exactly as the server expects."
@@ -58,7 +58,7 @@
    "value": "https://api-iot.he.services",
    "spec": "HHT-sec2",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "https://api-iot.he.services",
    "note": "IoT command-API host."
@@ -68,7 +68,7 @@
    "value": "a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com",
    "spec": "HHT-sec10",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com",
    "note": "AWS IoT-Data ATS endpoint for the MQTT-over-WebSocket surface."
@@ -78,7 +78,7 @@
    "value": "candy-iot-authorizer",
    "spec": "HHT-sec10",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "candy-iot-authorizer",
    "note": "Name of Haier's AWS IoT custom authorizer Lambda."
@@ -88,7 +88,7 @@
    "value": "application/json",
    "spec": "HHT-sec4",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "application/json",
    "note": "JSON command endpoints reject form bodies; this is the standard media type, not a pyhOn choice."
@@ -98,7 +98,7 @@
    "value": "android",
    "spec": "HHT-sec3",
    "class": "OBSERVED",
-   "source": "observed-traffic",
+   "source": "haier-required",
    "must_differ_from_pyhon": false,
    "pyhon_value": "android",
    "note": "The `os` field value in the device descriptor; the server reads it verbatim."

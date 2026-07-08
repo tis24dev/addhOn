@@ -13,9 +13,12 @@ means every value passes one provenance gate (see
 ``tests/independence/provenance.json`` + ``VALUES-PROVENANCE.md`` and the spec
 ``docs/protocol/HAIER-HON-TRANSPORT.md``). Each value is classified as:
 
-  * OBSERVED       -- read off Haier's own HTTPS traffic / required by its endpoints.
-                      Any correct client MUST send it, so identity with another client
-                      is interop, not copying.
+  * OBSERVED       -- required verbatim by Haier's endpoints: any correct client MUST
+                      send this exact value, so identity with another client (pyhOn
+                      included) is interop, not copying. This is NOT a claim that addhOn
+                      independently re-captured the literal off the wire -- several
+                      coincide byte-for-byte with pyhOn precisely because Haier dictates
+                      them (see tests/independence/provenance.json `source`).
   * CLIENT-CHOSEN  -- addhOn's own identity (not required verbatim by the server).
   * UNRESOLVED     -- a value that still needs an independent capture (APK / mitmproxy)
                       to be legitimately sourced. Kept working, but flagged so the
