@@ -1,0 +1,157 @@
+{
+ "_README": "Gate B (tests/independence/test_provenance.py) machine-checks this manifest. One row per module-level literal constant in custom_components/addhon/client/transport/values.py. `class`: OBSERVED = Haier dictates it (any correct client sends it; identity with pyhOn is interop, not copying) | CLIENT-CHOSEN = addhOn's own identity | UNRESOLVED = still needs an independent capture (APK / mitmproxy) to be legitimately sourced. `must_differ_from_pyhon`: true for values a placeholder-inheriting copy would leave equal to pyhOn's. `pyhon_value` records pyhOn's literal (a FACT, not creative expression) purely for the anti-copy assertion. `source`: how the literal is justified -- haier-required (Haier's endpoint mandates this exact value, so it is identical across clients by necessity; NOT a claim of independent re-capture -- several coincide byte-for-byte with pyhOn precisely because Haier dictates them) | addhon-identity (addhOn's own choice) | UNRESOLVED (still needs an owner capture from the APK / mitmproxy). Human-readable companion: VALUES-PROVENANCE.md. Spec anchors point into docs/protocol/HAIER-HON-TRANSPORT.md.",
+ "version": 1,
+ "module": "custom_components/addhon/client/transport/values.py",
+ "constants": [
+  {
+   "id": "AUTH_API",
+   "value": "https://account2.hon-smarthome.com",
+   "spec": "HHT-sec2",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "https://account2.hon-smarthome.com",
+   "note": "OAuth/login host. Any client hitting the hOn cloud must use it."
+  },
+  {
+   "id": "APP",
+   "value": "hon",
+   "spec": "HHT-sec2",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "hon",
+   "note": "Custom redirect scheme (hon://mobilesdk/detect/oauth/done) the connected app is registered for."
+  },
+  {
+   "id": "CLIENT_ID",
+   "value": "3MVG9QDx8IX8nP5T2Ha8ofvlmjLZl5L_gvfbT9.HJvpHGKoAS_dcMN8LYpTSYeVFCraUnV.2Ag1Ki7m4znVO6",
+   "spec": "HHT-sec5",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "3MVG9QDx8IX8nP5T2Ha8ofvlmjLZl5L_gvfbT9.HJvpHGKoAS_dcMN8LYpTSYeVFCraUnV.2Ag1Ki7m4znVO6",
+   "note": "Salesforce connected-app id the authorize endpoint validates against the redirect URI."
+  },
+  {
+   "id": "OAUTH_RESPONSE_TYPE",
+   "value": "token+id_token",
+   "spec": "HHT-sec5",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "token+id_token",
+   "note": "Implicit-flow response_type; the literal '+' is sent unencoded exactly as the server expects."
+  },
+  {
+   "id": "OAUTH_SCOPE",
+   "value": "api openid refresh_token web",
+   "spec": "HHT-sec5",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "api openid refresh_token web",
+   "note": "Authorize scope; spaces are sent unencoded exactly as the server expects."
+  },
+  {
+   "id": "API_URL",
+   "value": "https://api-iot.he.services",
+   "spec": "HHT-sec2",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "https://api-iot.he.services",
+   "note": "IoT command-API host."
+  },
+  {
+   "id": "AWS_ENDPOINT",
+   "value": "a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com",
+   "spec": "HHT-sec10",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com",
+   "note": "AWS IoT-Data ATS endpoint for the MQTT-over-WebSocket surface."
+  },
+  {
+   "id": "AWS_AUTHORIZER",
+   "value": "candy-iot-authorizer",
+   "spec": "HHT-sec10",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "candy-iot-authorizer",
+   "note": "Name of Haier's AWS IoT custom authorizer Lambda."
+  },
+  {
+   "id": "CONTENT_TYPE",
+   "value": "application/json",
+   "spec": "HHT-sec4",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "application/json",
+   "note": "JSON command endpoints reject form bodies; this is the standard media type, not a pyhOn choice."
+  },
+  {
+   "id": "OS",
+   "value": "android",
+   "spec": "HHT-sec3",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "pyhon_value": "android",
+   "note": "The `os` field value in the device descriptor; the server reads it verbatim."
+  },
+  {
+   "id": "DEVICE_MODEL",
+   "value": "addhon",
+   "spec": "HHT-sec3",
+   "class": "CLIENT-CHOSEN",
+   "source": "addhon-identity",
+   "must_differ_from_pyhon": true,
+   "pyhon_value": "pyhOn",
+   "note": "addhOn's own client identity. pyhOn sent 'pyhOn'; inheriting that string would be a copy tell."
+  },
+  {
+   "id": "MOBILE_ID",
+   "value": "addhon",
+   "spec": "HHT-sec3",
+   "class": "CLIENT-CHOSEN",
+   "source": "addhon-identity",
+   "must_differ_from_pyhon": true,
+   "pyhon_value": "pyhOn",
+   "note": "addhOn's fixed headless mobileId. The real app sends a per-install id; pyhOn sent 'pyhOn'."
+  },
+  {
+   "id": "APP_VERSION",
+   "value": "2.27.9",
+   "spec": "HHT-sec3",
+   "class": "UNRESOLVED",
+   "source": "UNRESOLVED",
+   "must_differ_from_pyhon": true,
+   "pyhon_value": "2.6.5",
+   "note": "OWNER-ACTION: confirm the current hOn app version from the APK BuildConfig.VERSION_NAME. Differs from pyhOn's stale 2.6.5, but is still an un-captured placeholder."
+  },
+  {
+   "id": "OS_VERSION",
+   "value": 34,
+   "spec": "HHT-sec3",
+   "class": "UNRESOLVED",
+   "source": "UNRESOLVED",
+   "must_differ_from_pyhon": true,
+   "pyhon_value": 999,
+   "note": "OWNER-ACTION: capture the real Android API level the app presents. pyhOn's 999 is a sentinel that must not be inherited; 34 is a plausible level but not yet captured."
+  },
+  {
+   "id": "USER_AGENT",
+   "value": "Chrome/999.999.999.999",
+   "spec": "HHT-sec4",
+   "class": "UNRESOLVED",
+   "source": "UNRESOLVED",
+   "must_differ_from_pyhon": true,
+   "pyhon_value": "Chrome/999.999.999.999",
+   "note": "OWNER-ACTION: capture the real device/WebView User-Agent from the hOn APK or a mitmproxy session and replace this. 'Chrome/999.999.999.999' is a synthetic sentinel no real client emits; it is currently inherited verbatim from pyhOn, so Gate B's anti-copy check for this row is wired xfail until an owner captures the real UA."
+  }
+ ]
+}

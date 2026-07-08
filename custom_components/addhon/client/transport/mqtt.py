@@ -10,7 +10,7 @@ Lifecycle and message-handling notes:
 - `stop()` cancels and awaits the watchdog BEFORE stopping the client, so a `_start()`
   in flight does not recreate an orphan connection (which would leak one AWS IoT
   connection per reload);
-- `_on_publish_received` is defensive: appliance not found for the topic / missing
+- `_on_message` is defensive: appliance not found for the topic / missing
   parameters -> skip instead of crash. A `parName` never seen before over MQTT is
   SKIPPED (it is recovered at the next HTTP poll); only parameters already present in
   `attributes["parameters"]` (seeded by the `load_attributes` HTTP poll) are updated.
@@ -33,14 +33,11 @@ from awscrt import mqtt5
 from awsiot import mqtt5_client_builder  # type: ignore[import-untyped]
 
 from .device import MOBILE_ID
+from .values import AWS_AUTHORIZER, AWS_ENDPOINT
 from ...debug_utils import redact_id, redact_identity, redact_topic
 from ...error_codes import HonCodedError, MQTT_SUBSCRIBE_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
-
-# AWS IoT endpoint/authorizer of the hOn cloud.
-AWS_ENDPOINT = "a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com"
-AWS_AUTHORIZER = "candy-iot-authorizer"
 
 _WATCHDOG_INTERVAL = 5  # seconds
 _SUBSCRIBE_TIMEOUT = 10  # seconds
@@ -197,10 +194,10 @@ class NativeMqttClient:
             return True
         return False
 
-    def _on_lifecycle_stopped(self, data: "mqtt5.LifecycleStoppedData") -> None:
+    def _on_link_stopped(self, data: "mqtt5.LifecycleStoppedData") -> None:
         _LOGGER.info("Lifecycle Stopped: %s", data)
 
-    def _on_lifecycle_connection_success(
+    def _on_link_up(
         self, data: "mqtt5.LifecycleConnectSuccessData", generation: int
     ) -> None:
         if self._is_stale_generation(generation):
@@ -208,12 +205,12 @@ class NativeMqttClient:
         self._connection = True
         _LOGGER.info("Lifecycle Connection Success: %s", data)
 
-    def _on_lifecycle_attempting_connect(
+    def _on_link_connecting(
         self, data: "mqtt5.LifecycleAttemptingConnectData"
     ) -> None:
         _LOGGER.info("Lifecycle Attempting Connect: %s", data)
 
-    def _on_lifecycle_connection_failure(
+    def _on_link_failed(
         self, data: "mqtt5.LifecycleConnectFailureData", generation: int
     ) -> None:
         if self._is_stale_generation(generation):
@@ -227,18 +224,18 @@ class NativeMqttClient:
         self._subscribed_topics_set = set()
         _LOGGER.info("Lifecycle Connection Failure: %s", data)
 
-    def _on_lifecycle_disconnection(
+    def _on_link_dropped(
         self, data: "mqtt5.LifecycleDisconnectData", generation: int
     ) -> None:
         if self._is_stale_generation(generation):
             return
         self._connection = False
-        # See _on_lifecycle_connection_failure: a disconnect drops subscriptions, so
+        # See _on_link_failed: a disconnect drops subscriptions, so
         # the watchdog must re-establish them after the auto-reconnect. Rebind (atomic).
         self._subscribed_topics_set = set()
         _LOGGER.info("Lifecycle Disconnection: %s", data)
 
-    def _on_publish_received(self, data: "mqtt5.PublishReceivedData") -> None:
+    def _on_message(self, data: "mqtt5.PublishReceivedData") -> None:
         if not (data and data.publish_packet and data.publish_packet.payload):
             return
         topic = data.publish_packet.topic
@@ -421,19 +418,23 @@ class NativeMqttClient:
             auth_authorizer_signature=await self._api.load_aws_token(),
             auth_token_key_name="token",
             auth_token_value=self._api.auth.id_token,
+            # AWS-IoT requires a UNIQUE MQTT clientId (awsiot docs). Keep the EXACT
+            # historical on-wire shape `<mobile_id>_<16 hex>`: the custom-authorizer
+            # IoT policy may pin the clientId separator/length, so we do not change it
+            # without a live capture. This is interop, not a free stylistic choice.
             client_id=f"{self._mobile_id}_{secrets.token_hex(8)}",
-            on_lifecycle_stopped=self._on_lifecycle_stopped,
+            on_lifecycle_stopped=self._on_link_stopped,
             on_lifecycle_connection_success=functools.partial(
-                self._on_lifecycle_connection_success, generation=generation
+                self._on_link_up, generation=generation
             ),
-            on_lifecycle_attempting_connect=self._on_lifecycle_attempting_connect,
+            on_lifecycle_attempting_connect=self._on_link_connecting,
             on_lifecycle_connection_failure=functools.partial(
-                self._on_lifecycle_connection_failure, generation=generation
+                self._on_link_failed, generation=generation
             ),
             on_lifecycle_disconnection=functools.partial(
-                self._on_lifecycle_disconnection, generation=generation
+                self._on_link_dropped, generation=generation
             ),
-            on_publish_received=self._on_publish_received,
+            on_publish_received=self._on_message,
         )
         self.client.start()
 

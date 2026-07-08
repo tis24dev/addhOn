@@ -1,0 +1,54 @@
+addhOn — attribution & provenance NOTICE
+========================================
+
+This is an interim, good-faith disclosure of third-party provenance. It is NOT a
+change to the project's LICENSE strategy (that decision is the maintainers').
+
+Origin
+------
+addhOn's cloud client began as a vendored copy of **pyhOn** by **Andre Basche**
+(https://github.com/Andre0512/pyhOn), and the Home Assistant surface was informed by
+**hon** (https://github.com/Andre0512/hon). Both are licensed MIT, © 2023 Andre
+Basche. The vendored `_vendor/pyhon/` tree was removed at v4.0.0 and the code has been
+progressively re-authored since.
+
+Current derivation status (honest, machine-tracked)
+---------------------------------------------------
+Independence is verified per module by the harness in `tests/independence/`
+(structural containment + provenance gates). As of this branch:
+
+  * Genuinely re-authored: the transport modules headers.py / parse.py / tokens.py /
+    values.py clear both independence gates (Gate A structure + Gate B provenance).
+    The Home Assistant platform layer was assessed independent by the originality
+    audit (pyhOn ships no HA layer to copy) -- note the harness gates cover the
+    transport package only, not the HA layer, so that assessment is not gate-enforced.
+  * STILL DERIVED from pyhOn (declared debt, marked xfail): the transport modules
+    auth.py, api.py, mqtt.py, connection.py, oauth.py, device.py -- known-derived by the
+    line-level provenance audit (copied literals/structure), which is the source of
+    truth. Each also trips the structural tripwire (reproducing >= 50% of a pyhOn
+    module's shape -- a conservative, necessary-not-sufficient signal, not the proof of
+    copying). Plus the client `engine/` package (a separate, larger body of copied code
+    not addressed on this branch).
+
+Because substantial derived portions remain, the MIT requirement to retain the
+original copyright notice applies to them. Until the clean-room rewrite is complete,
+this NOTICE preserves that attribution.
+
+pyhOn / hon — MIT License, Copyright (c) 2023 Andre Basche
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of
+  this software and associated documentation files (the "Software"), to deal in the
+  Software without restriction, including without limitation the rights to use, copy,
+  modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
+  and to permit persons to whom the Software is furnished to do so, subject to the
+  following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

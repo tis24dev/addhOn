@@ -1,21 +1,20 @@
-"""HTTP headers of the addhOn transport.
+"""HTTP headers of the addhOn transport (spec: HHT-sec4).
 
 Authenticated header construction: every authenticated request carries
 user-agent + Content-Type + the two tokens (cognito-token, id-token).
 
-PURE function: the tokens are inputs, no hardcoded secret. `USER_AGENT` is the
-value sent to the cloud (pinned by the test); the real app value will enter as a
-separate step.
+PURE function: the tokens are inputs, no hardcoded secret. The header VALUES
+(``USER_AGENT``, ``CONTENT_TYPE``) live in ``values.py`` with their provenance;
+this module only assembles them. The two token header NAMES are Haier-mandated (the
+API looks up ``cognito-token`` / ``id-token`` verbatim -- HHT-sec4.2).
 """
 from __future__ import annotations
 
 from typing import Mapping
 
-# User-Agent value sent to the cloud (impersonation placeholder).
-USER_AGENT = "Chrome/999.999.999.999"
-CONTENT_TYPE = "application/json"
+from .values import CONTENT_TYPE, USER_AGENT
 
-# Base headers present on EVERY request.
+# Base headers present on EVERY request (values sourced from values.py).
 BASE_HEADERS: dict[str, str] = {
     "user-agent": USER_AGENT,
     "Content-Type": CONTENT_TYPE,

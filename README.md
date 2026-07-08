@@ -157,6 +157,13 @@ Issues and pull requests are welcome! Please include:
 - Device model number
 - Steps to reproduce
 
+## Attribution
+
+addhOn's cloud client originated from [pyhOn](https://github.com/Andre0512/pyhOn)
+(MIT © 2023 Andre Basche) and still contains portions derived from it, tracked
+per-module by the independence harness in [`tests/independence/`](tests/independence/).
+See [`NOTICE`](NOTICE) for the current derivation status and attribution.
+
 ## Support
 
 - **Issues:** GitHub Issues

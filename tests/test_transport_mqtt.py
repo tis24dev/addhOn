@@ -2,7 +2,7 @@
 
 awscrt/awsiot are stubbed in sys.modules (the module imports them at the top): so
 we dry-test OUR logic - `stop()` (cancels+awaits the watchdog, stops the client)
-and `_on_publish_received` (updates parameters/connection + notify, with the
+and `_on_message` (updates parameters/connection + notify, with the
 defensive branches) - without network or native dependencies. The parts that use
 the awscrt API (`_start`/`_subscribe`) are validated live.
 """
@@ -221,7 +221,10 @@ class CreatePathTest(unittest.TestCase):
         self.assertEqual(b["auth_authorizer_signature"], "SIGNED")
         self.assertEqual(b["auth_token_value"], "IDT")
         self.assertEqual(b["auth_token_key_name"], "token")
+        # clientId keeps the EXACT historical on-wire shape `<mobile_id>_<16 hex>`
+        # (the authorizer IoT policy may pin separator/length -- not a free choice).
         self.assertTrue(b["client_id"].startswith("MID_"))
+        self.assertEqual(len(b["client_id"].rsplit("_", 1)[1]), 16)  # secrets.token_hex(8)
         # client started + subscribe for each topic + watchdog created and then stopped
         self.assertTrue(fake_client.started)
         self.assertEqual(len(fake_client.subscribed), 1)
@@ -419,7 +422,7 @@ class PublishReceivedTest(unittest.TestCase):
         topic = "haier/things/MAC/event/appliancestatus/update"
         app = FakeAppliance(topic)
         m, hon = self._client(app)
-        m._on_publish_received(_packet(topic, {"parameters": [
+        m._on_message(_packet(topic, {"parameters": [
             {"parName": "temp", "parValue": "5"},
             {"parName": "ignota", "parValue": "x"},  # not in parameters -> skip (defensive)
         ]}))
@@ -436,7 +439,7 @@ class PublishReceivedTest(unittest.TestCase):
         topic = "haier/things/MAC/event/appliancestatus/update"
         app = FakeAppliance(topic)
         m, hon = self._client(app)
-        m._on_publish_received(_packet(topic, {"parameters": [
+        m._on_message(_packet(topic, {"parameters": [
             None,
             {"parName": "temp", "parValue": "5"},
             "garbage",
@@ -450,8 +453,8 @@ class PublishReceivedTest(unittest.TestCase):
         topic = "haier/things/MAC/event/appliancestatus/update"
         app = FakeAppliance(topic)
         m, hon = self._client(app)
-        m._on_publish_received(_packet(topic, {"parameters": None}))
-        m._on_publish_received(_packet(topic, {"parameters": {"x": 1}}))
+        m._on_message(_packet(topic, {"parameters": None}))
+        m._on_message(_packet(topic, {"parameters": {"x": 1}}))
         self.assertEqual(hon.notified, 2)  # both still processed + notified
 
     def test_non_dict_parameter_no_warning(self) -> None:
@@ -460,7 +463,7 @@ class PublishReceivedTest(unittest.TestCase):
         app = FakeAppliance(topic)
         m, _ = self._client(app)
         with self.assertNoLogs(self._LOGGER_NAME, level="WARNING"):
-            m._on_publish_received(_packet(topic, {"parameters": [None, "x"]}))
+            m._on_message(_packet(topic, {"parameters": [None, "x"]}))
 
     def test_non_dict_parameter_does_not_leak_mac_value(self) -> None:
         # CR#4: a bare MAC-shaped element must NOT reach the log. The skip line logs
@@ -472,7 +475,7 @@ class PublishReceivedTest(unittest.TestCase):
         m, hon = self._client(app)
         mac = "AA:BB:CC:DD:EE:FF"
         with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as cm:
-            m._on_publish_received(_packet(topic, {"parameters": [
+            m._on_message(_packet(topic, {"parameters": [
                 mac,
                 {"parName": "temp", "parValue": "5"},
             ]}))
@@ -492,7 +495,7 @@ class PublishReceivedTest(unittest.TestCase):
         bad.info = {"topics": None}
         hon = FakeHon([bad, good])
         m = NativeMqttClient(hon, "MID")
-        m._on_publish_received(_packet("haier/X/appliancestatus",
+        m._on_message(_packet("haier/X/appliancestatus",
                                        {"parameters": [{"parName": "temp", "parValue": "9"}]}))
         self.assertEqual(good.attributes["parameters"]["temp"].updated,
                          {"parName": "temp", "parValue": "9"})
@@ -507,7 +510,7 @@ class PublishReceivedTest(unittest.TestCase):
         app.connection = False  # previously reported offline (stale REST disconnect)
         m, hon = self._client(app)
         ts = "2026-06-25T16:04:21.1Z"
-        m._on_publish_received(_packet(topic, {
+        m._on_message(_packet(topic, {
             "timestamp": ts,
             "parameters": [{"parName": "temp", "parValue": "5"}],
         }))
@@ -522,7 +525,7 @@ class PublishReceivedTest(unittest.TestCase):
         topic = "haier/things/MAC/event/appliancestatus/update"
         app = FakeAppliance(topic)
         m, _ = self._client(app)
-        m._on_publish_received(_packet(topic, {
+        m._on_message(_packet(topic, {
             "parameters": [{"parName": "temp", "parValue": "5"}],
         }))
         self.assertEqual(app.realtime_seen, [None])
@@ -531,7 +534,7 @@ class PublishReceivedTest(unittest.TestCase):
         topic = "haier/things/MAC/event/disconnected"
         app = FakeAppliance(topic)
         m, hon = self._client(app)
-        m._on_publish_received(_packet(topic, {"disconnectReason": "x"}))
+        m._on_message(_packet(topic, {"disconnectReason": "x"}))
         self.assertFalse(app.connection)
         self.assertEqual(hon.notified, 1)
 
@@ -540,7 +543,7 @@ class PublishReceivedTest(unittest.TestCase):
         app = FakeAppliance(topic)
         app.connection = False
         m, _ = self._client(app)
-        m._on_publish_received(_packet(topic, {}))
+        m._on_message(_packet(topic, {}))
         self.assertTrue(app.connection)
 
     def test_session_presence_connected_does_not_touch_connectivity(self) -> None:
@@ -550,7 +553,7 @@ class PublishReceivedTest(unittest.TestCase):
         app = FakeAppliance(topic)
         app.connection = False  # genuinely offline
         m, hon = self._client(app)
-        m._on_publish_received(_packet(topic, {"clientId": "myclient", "eventType": "connected"}))
+        m._on_message(_packet(topic, {"clientId": "myclient", "eventType": "connected"}))
         self.assertFalse(app.connection)        # not pinned online by our session
         self.assertEqual(app.realtime_seen, [])  # liveness not armed
         self.assertEqual(hon.notified, 0)        # session presence: no HA state push
@@ -563,7 +566,7 @@ class PublishReceivedTest(unittest.TestCase):
         app = FakeAppliance(topic)
         app.connection = True  # appliance is live (streaming appliancestatus)
         m, hon = self._client(app)
-        m._on_publish_received(_packet(topic, {"clientId": "myclient", "eventType": "disconnected"}))
+        m._on_message(_packet(topic, {"clientId": "myclient", "eventType": "disconnected"}))
         self.assertTrue(app.connection)          # still live
         self.assertEqual(app.disconnected_calls, 0)  # marks NOT cleared
         self.assertEqual(hon.notified, 0)        # session presence: no HA state push
@@ -577,7 +580,7 @@ class PublishReceivedTest(unittest.TestCase):
         app = FakeAppliance(topic)
         app.connection = False
         m, _ = self._client(app)
-        m._on_publish_received(_packet(topic, {"timestamp": "2026-06-25T16:04:16Z"}))
+        m._on_message(_packet(topic, {"timestamp": "2026-06-25T16:04:16Z"}))
         self.assertTrue(app.connection)
         self.assertEqual(app.realtime_seen, [])  # liveness NOT armed by presence
 
@@ -586,13 +589,13 @@ class PublishReceivedTest(unittest.TestCase):
         # pyhOn did next(...) -> StopIteration).
         app = FakeAppliance("haier/known/appliancestatus")
         m, hon = self._client(app)
-        m._on_publish_received(_packet("haier/UNKNOWN/topic", {"parameters": []}))
+        m._on_message(_packet("haier/UNKNOWN/topic", {"parameters": []}))
         self.assertEqual(hon.notified, 0)
 
     def test_empty_payload_ignored(self) -> None:
         app = FakeAppliance("t/appliancestatus")
         m, hon = self._client(app)
-        m._on_publish_received(types.SimpleNamespace(publish_packet=None))
+        m._on_message(types.SimpleNamespace(publish_packet=None))
         self.assertEqual(hon.notified, 0)
 
     def test_non_json_payload_skipped_no_crash(self) -> None:
@@ -605,7 +608,7 @@ class PublishReceivedTest(unittest.TestCase):
                 topic="t/appliancestatus", payload=b"not json {"
             )
         )
-        m._on_publish_received(bad)  # must not raise
+        m._on_message(bad)  # must not raise
         self.assertEqual(hon.notified, 0)
 
     def test_valid_json_but_non_object_skipped_no_crash(self) -> None:
@@ -618,7 +621,7 @@ class PublishReceivedTest(unittest.TestCase):
                 topic="t/appliancestatus", payload=json.dumps([1, 2, 3]).encode()
             )
         )
-        m._on_publish_received(pkt)  # must not raise
+        m._on_message(pkt)  # must not raise
         self.assertEqual(hon.notified, 0)
 
 
@@ -640,7 +643,7 @@ class PublishReceivedRedactionTest(unittest.TestCase):
         m = self._client(app)
         mac = "AA:BB:CC:DD:EE:FF"
         with self.assertLogs(self._LOGGER_NAME, level="INFO") as cm:
-            m._on_publish_received(
+            m._on_message(
                 _packet(
                     topic,
                     {
@@ -660,7 +663,7 @@ class PublishReceivedRedactionTest(unittest.TestCase):
         app.nick_name = "MySecretNick"
         m = self._client(app)
         with self.assertLogs(self._LOGGER_NAME, level="INFO") as cm:
-            m._on_publish_received(_packet(topic, {"disconnectReason": "x"}))
+            m._on_message(_packet(topic, {"disconnectReason": "x"}))
         blob = "\n".join(cm.output)
         self.assertNotIn("MySecretNick", blob)
         self.assertIn("Disconnected ***", blob)
@@ -671,7 +674,7 @@ class PublishReceivedRedactionTest(unittest.TestCase):
         app.nick_name = "MySecretNick"
         m = self._client(app)
         with self.assertLogs(self._LOGGER_NAME, level="INFO") as cm:
-            m._on_publish_received(_packet(topic, {}))
+            m._on_message(_packet(topic, {}))
         blob = "\n".join(cm.output)
         self.assertNotIn("MySecretNick", blob)
         self.assertIn("Connected ***", blob)
@@ -684,7 +687,7 @@ class PublishReceivedRedactionTest(unittest.TestCase):
         app = FakeAppliance(topic)
         m = self._client(app)
         with self.assertLogs(self._LOGGER_NAME, level="INFO") as cm:
-            m._on_publish_received(
+            m._on_message(
                 _packet(topic, {"parameters": [{"parName": "temp", "parValue": "5"}]})
             )
         blob = "\n".join(cm.output)
@@ -704,7 +707,7 @@ class PublishReceivedRedactionTest(unittest.TestCase):
             )
         )
         with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as cm:
-            m._on_publish_received(pkt)
+            m._on_message(pkt)
         blob = "\n".join(cm.output)
         self.assertNotIn(mac, blob)
         self.assertIn("type=str", blob)
@@ -836,21 +839,21 @@ class StaleLifecycleCallbackTest(unittest.TestCase):
         # Pretend we are on the 2nd client generation.
         m._generation = 2
         # The current generation's success marks the connection up.
-        m._on_lifecycle_connection_success(None, generation=2)
+        m._on_link_up(None, generation=2)
         self.assertTrue(m._connection)
         # A late disconnection/failure from the OLD generation (1) is ignored.
-        m._on_lifecycle_disconnection(None, generation=1)
+        m._on_link_dropped(None, generation=1)
         self.assertTrue(m._connection)
-        m._on_lifecycle_connection_failure(None, generation=1)
+        m._on_link_failed(None, generation=1)
         self.assertTrue(m._connection)
         # The current generation's disconnection still takes effect.
-        m._on_lifecycle_disconnection(None, generation=2)
+        m._on_link_dropped(None, generation=2)
         self.assertFalse(m._connection)
 
 
 class PublishReceivedRobustnessTest(unittest.TestCase):
     """ITEM B: a VALID dict payload that makes the engine raise (param.update,
-    sync_params_to_command, or notify) must NOT propagate out of _on_publish_received
+    sync_params_to_command, or notify) must NOT propagate out of _on_message
     (it runs on the awscrt callback thread, where a raise would silence every later
     push), and the failure must be logged at WARNING so it stays diagnosable."""
 
@@ -867,7 +870,7 @@ class PublishReceivedRobustnessTest(unittest.TestCase):
         hon = FakeHon([app])
         m = NativeMqttClient(hon, "MID")
         with self.assertLogs(self._LOGGER_NAME, level="WARNING") as cm:
-            m._on_publish_received(_packet(topic, {"parameters": [
+            m._on_message(_packet(topic, {"parameters": [
                 {"parName": "temp", "parValue": "5"},
             ]}))  # must NOT raise
         self.assertEqual(hon.notified, 0)  # raised before notify()
@@ -884,7 +887,7 @@ class PublishReceivedRobustnessTest(unittest.TestCase):
         hon.notify = boom
         m = NativeMqttClient(hon, "MID")
         with self.assertLogs(self._LOGGER_NAME, level="WARNING") as cm:
-            m._on_publish_received(_packet(topic, {}))  # must NOT raise
+            m._on_message(_packet(topic, {}))  # must NOT raise
         self.assertTrue(any("handler failed" in r.getMessage() for r in cm.records))
 
 
@@ -1504,7 +1507,7 @@ class SubscribedFlagLifecycleTest(unittest.TestCase):
         m._generation = 1
         m._connection = True
         m._subscribed_topics_set = {"t"}
-        m._on_lifecycle_disconnection(None, generation=1)
+        m._on_link_dropped(None, generation=1)
         self.assertFalse(m._connection)
         self.assertEqual(m._subscribed_topics_set, set())
 
@@ -1513,7 +1516,7 @@ class SubscribedFlagLifecycleTest(unittest.TestCase):
         m._generation = 1
         m._connection = True
         m._subscribed_topics_set = {"t"}
-        m._on_lifecycle_connection_failure(None, generation=1)
+        m._on_link_failed(None, generation=1)
         self.assertFalse(m._connection)
         self.assertEqual(m._subscribed_topics_set, set())
 
@@ -1523,7 +1526,7 @@ class SubscribedFlagLifecycleTest(unittest.TestCase):
         # watchdog must recover, incl. awscrt's clean-session auto-reconnect).
         m = NativeMqttClient(FakeHon([]), "MID")
         m._generation = 1
-        m._on_lifecycle_connection_success(None, generation=1)
+        m._on_link_up(None, generation=1)
         self.assertTrue(m._connection)
         self.assertEqual(m._subscribed_topics_set, set())
 
@@ -1534,7 +1537,7 @@ class SubscribedFlagLifecycleTest(unittest.TestCase):
         m._generation = 2
         m._connection = True
         m._subscribed_topics_set = {"t"}
-        m._on_lifecycle_disconnection(None, generation=1)  # stale
+        m._on_link_dropped(None, generation=1)  # stale
         self.assertTrue(m._connection)
         self.assertEqual(m._subscribed_topics_set, {"t"})
 
@@ -1955,7 +1958,7 @@ class WatchdogDisconnectMidSubscribeClearsSetTest(unittest.TestCase):
             # removed, the stale topic survives -> "healthy on a dropped session". This
             # ordering makes the assertion genuinely depend on the guard (the callback
             # alone leaving the set empty would pass vacuously).
-            m._on_lifecycle_disconnection(None, generation=1)
+            m._on_link_dropped(None, generation=1)
             m._subscribed_topics_set.add("t/x")
 
         async def fake_sleep(_interval):
@@ -2003,8 +2006,8 @@ class SubscribeMissingRebindRaceTest(unittest.TestCase):
         async def subscribe_then_reconnect(_topic):
             # SUBACK in flight: a disconnect rebinds the set to a fresh empty one, then
             # an auto-reconnect on the SAME generation flips _connection back to True.
-            m._on_lifecycle_disconnection(None, generation=1)       # rebinds set -> S2
-            m._on_lifecycle_connection_success(None, generation=1)  # _connection=True
+            m._on_link_dropped(None, generation=1)       # rebinds set -> S2
+            m._on_link_up(None, generation=1)  # _connection=True
             # await returns: the OLD session's SUBACK finally lands.
 
         m._subscribe_topic = subscribe_then_reconnect  # type: ignore[assignment]
