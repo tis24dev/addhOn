@@ -24,11 +24,24 @@ round 2, N1). So a FAIL here means "re-derive and re-check", and a PASS is
 necessary-not-sufficient.
 
 The six modules api / auth / connection / device / mqtt / oauth are the audit's
-known-derived set (declared debt) and are marked xfail; only headers / parse / tokens
-/ values are asserted independent -- and those also score low here (0.06-0.26). NO
-threshold was lowered to fake a pass; a genuine de-paraphrase flips a deferred module
-to xpass. Known follow-up (N1): size-normalise the metric or score each module only
-against its named pyhOn counterpart to remove the small-reference inflation.
+known-derived set (declared debt) and are marked xfail (strict for all but oauth.py --
+see the ratchet note below); only headers / parse / tokens / values are asserted
+independent -- and those also score low here (0.06-0.26). NO threshold was lowered to
+fake a pass.
+
+The deferred xfails are STRICT, so a genuine de-paraphrase that drops a module under
+both ceilings turns its xpass into a HARD FAILURE -- the ratchet: CI goes red until the
+module is moved out of _DEFERRED into the asserted set, so a re-authoring WIN is
+recorded, never silently absorbed. The regression direction is already covered -- the
+four asserted modules fail CI if they ever climb over a ceiling.
+
+ONE exception is NOT armed strict: oauth.py clears the ceiling by a single shared k-gram
+(containment 0.502) and is itself slated for active structural edits (plan #15-18), so
+arming it would risk a FALSE xpass on a routine refactor while the module is still
+pyhOn-derived per the line-level audit (the source of truth). oauth stays non-strict
+until the N1 follow-up (size-normalise the metric, or score each module only against its
+named pyhOn counterpart) removes the small-reference inflation and lets oauth clear its
+razor margin honestly -- then it too can ratchet.
 """
 from __future__ import annotations
 
@@ -92,11 +105,18 @@ def _params():
     for path in sorted(_TRANSPORT.glob("*.py")):
         if path.name == "__init__.py":
             continue
-        marks = (
-            [pytest.mark.xfail(reason=_DEFERRED_REASON, strict=False)]
-            if path.name in _DEFERRED
-            else []
-        )
+        marks = []
+        if path.name in _DEFERRED:
+            # strict=True ratchets: a genuine re-authoring under both ceilings turns the
+            # xpass into a HARD failure, forcing the module out of _DEFERRED instead of
+            # passing silently. EXCEPTION -- oauth.py: it clears the ceiling by a single
+            # shared k-gram (containment 0.502) AND is slated for active structural edits
+            # (plan #15-18), so a routine refactor could shed that k-gram and trip a
+            # FALSE xpass while the module is still pyhOn-derived per the line-level audit
+            # (the source of truth). oauth alone stays non-strict until N1 (size-normalise
+            # the metric) clears its razor margin honestly; the other five ratchet now.
+            strict = path.name != "oauth.py"
+            marks = [pytest.mark.xfail(reason=_DEFERRED_REASON, strict=strict)]
         yield pytest.param(path, id=path.name, marks=marks)
 
 

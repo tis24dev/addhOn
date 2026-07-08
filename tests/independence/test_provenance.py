@@ -5,10 +5,12 @@ Every module-level literal constant in values.py must be declared in provenance.
 constant flagged ``must_differ_from_pyhon`` must NOT still equal pyhOn's value (so an
 inherited placeholder cannot survive silently).
 
-The single known-inherited value -- the User-Agent -- is checked in its own test
-wired ``xfail``: the debt stays VISIBLE (the row is flagged, the check exists) while
-the suite stays green until an owner captures the real UA (see VALUES-PROVENANCE.md
-and the OWNER-ACTION note in values.py).
+The single known-inherited value -- the User-Agent -- is checked in its own STRICT
+``xfail``: the debt stays VISIBLE (the row is flagged, the check exists) and the suite
+stays green while the UA is still the inherited sentinel. Because the xfail is strict,
+the day an owner captures a real, differing UA the check xpasses and CI goes RED until
+the marker is removed -- so the debt cannot be closed and then left mislabelled as
+still-owed (see VALUES-PROVENANCE.md and the OWNER-ACTION note in values.py).
 """
 from __future__ import annotations
 
@@ -85,9 +87,13 @@ def test_client_chosen_constants_are_not_copied_from_pyhon() -> None:
     reason=(
         "OWNER-ACTION: USER_AGENT is still pyhOn's synthetic sentinel "
         "'Chrome/999.999.999.999'; capture the real UA from the hOn APK / mitmproxy "
-        "and replace it (see VALUES-PROVENANCE.md). Debt is tracked, suite stays green."
+        "and replace it (see VALUES-PROVENANCE.md). Debt is tracked; the suite stays "
+        "green while the sentinel stands, and a real differing UA reds this strict xfail."
     ),
-    strict=False,
+    # strict=True: the day a real, differing UA is captured this test xpasses and CI
+    # goes red until the marker is removed -- the debt cannot be quietly closed and
+    # left mislabelled as still-owed (the ratchet).
+    strict=True,
 )
 def test_user_agent_is_independently_sourced() -> None:
     row = _ROWS["USER_AGENT"]

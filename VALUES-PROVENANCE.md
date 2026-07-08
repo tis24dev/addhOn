@@ -56,9 +56,10 @@ path+offset) alongside the new value when you land it.
    is not a value any real client emits and is inherited verbatim from the legacy
    library. Capture the real device/WebView User-Agent and replace it. This is the sole
    row that still equals the legacy value, so its anti-copy check
-   (`test_user_agent_is_independently_sourced`) is wired **xfail**: the suite stays
-   green while the debt stays visible. When the real UA lands, the xfail flips to a pass
-   — remove the marker.
+   (`test_user_agent_is_independently_sourced`) is wired a **strict `xfail`**: the suite
+   stays green while the debt stays visible. When the real UA lands, the strict xfail
+   turns into an xpass that reds CI, forcing removal of the marker — the debt cannot be
+   closed silently and left mislabelled as still-owed.
 2. **`APP_VERSION` / `OS_VERSION`** — currently placeholders (`2.27.9` / `34`). They
    already differ from the legacy library's stale values, so Gate B passes, but they are
    still un-captured. Confirm the real values from the APK `BuildConfig`
