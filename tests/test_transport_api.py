@@ -588,27 +588,23 @@ class CommandTimestampTest(unittest.TestCase):
         api_mod.datetime = _Frozen
         self.addCleanup(lambda: setattr(api_mod, "datetime", real))
 
-    def test_identical_to_pyhon_on_common_path(self) -> None:
-        # microseconds != 0: our output and the pyhOn formula [:-3]+"Z" coincide.
+    def test_iso8601_millis_utc_z_on_common_path(self) -> None:
+        # sec8: the transactionId timestamp is ISO-8601 UTC with exactly 3-digit
+        # milliseconds and a 'Z' zone suffix. Oracle = ISO-8601, not pyhOn.
         self._frozen("2026-06-18T12:34:56.789012")
-        pyhon_formula = "2026-06-18T12:34:56.789012"[:-3] + "Z"
-        self.assertEqual(api_mod._command_timestamp(), pyhon_formula)
         self.assertEqual(api_mod._command_timestamp(), "2026-06-18T12:34:56.789Z")
 
     def test_truncates_not_rounds_at_boundary(self) -> None:
-        # Guard: timespec="milliseconds" TRUNCATES (like pyhOn's [:-3]), it does not round.
+        # Guard: timespec="milliseconds" TRUNCATES, it does not round:
         # .789999 -> .789Z (not .790Z). Hardens against a future change of semantics.
         self._frozen("2026-06-18T12:34:56.789999")
         self.assertEqual(api_mod._command_timestamp(), "2026-06-18T12:34:56.789Z")
-        self.assertEqual(
-            api_mod._command_timestamp(), "2026-06-18T12:34:56.789999"[:-3] + "Z"
-        )
 
-    def test_fixes_pyhon_bug_when_microsecond_zero(self) -> None:
-        # microseconds == 0: pyhOn would produce "...T12:34Z" (seconds lost); we do not.
+    def test_millis_always_three_digits_when_microsecond_zero(self) -> None:
+        # sec8: milliseconds are ALWAYS 3 digits, even at .000 -- the seconds are never
+        # lost. (A naive strip of the last 3 microsecond digits would drop ':56' here;
+        # timespec="milliseconds" keeps the full ISO-8601 shape.)
         self._frozen("2026-06-18T12:34:56")
-        pyhon_buggy = "2026-06-18T12:34:56"[:-3] + "Z"  # -> "2026-06-18T12:34Z"
-        self.assertEqual(pyhon_buggy, "2026-06-18T12:34Z")  # documents the pyhOn bug
         self.assertEqual(api_mod._command_timestamp(), "2026-06-18T12:34:56.000Z")
 
 

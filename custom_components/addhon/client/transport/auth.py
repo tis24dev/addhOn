@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -45,22 +45,27 @@ from .oauth import (
     is_oauth_done,
     parse_remoting_result,
 )
-from .tokens import parse_token_fragment
+from .tokens import parse_token_fragment, token_expiry
+from .values import API_URL
 
 _LOGGER = logging.getLogger(__name__)
 
-API_URL = "https://api-iot.he.services"
+# Token freshness is derived from the id_token's own JWT `exp` (spec: HHT-sec6.3), so
+# the pyhOn 8h/7h invented heuristic is gone. These two apply ONLY when a token is
+# opaque (no readable exp): a SHORT conservative window, never hours-stale.
+_OPAQUE_TTL_SECONDS = 55 * 60      # common Cognito/OAuth access-token life
+_REFRESH_SKEW_SECONDS = 5 * 60     # refresh this long before the stated expiry
 
-_TOKEN_EXPIRES_AFTER_HOURS = 8
-_TOKEN_EXPIRE_WARNING_HOURS = 7
-
-# Extracts fwuid + loaded from the Salesforce login page (aura).
-_FWUID_RE = re.compile('"fwuid":"(.*?)","loaded":(\\{.*?})')
-# Extracts the href of the token page (post-login). Two different regexes are
-# used: (.+?) on the first page, (.*?) in the ProgressiveLogin branch; the second
-# also matches an empty href, which the flow accepts.
-_HREF_RE = re.compile("href\\s*=\\s*[\"'](.+?)[\"']")
-_HREF_RE_PROGRESSIVE = re.compile("href\\s*=\\s*[\"'](.*?)[\"']")
+# Aura framework bootstrap (spec: HHT-sec5): the login page embeds the framework
+# descriptor as JSON `{"fwuid":"<hash>","loaded":{...},...}`. Authored from that JSON
+# shape -- read the fwuid hash and the adjacent `loaded` object.
+_FWUID_RE = re.compile(r'"fwuid":"(?P<fwuid>.*?)","loaded":(?P<loaded>\{.*?\})')
+# Post-login redirect pages (spec: HHT-sec5) carry the next hop as an `href="..."`
+# (double- or single-quoted). Two authored variants: the strict one requires a
+# non-empty target (the token page); the progressive one also accepts an empty href,
+# which the ProgressiveLogin branch legitimately yields.
+_HREF_RE = re.compile(r"""href\s*=\s*["'](?P<target>.+?)["']""")
+_HREF_RE_PROGRESSIVE = re.compile(r"""href\s*=\s*["'](?P<target>.*?)["']""")
 
 
 class NativeAuthError(Exception):
@@ -129,6 +134,9 @@ class HonAuth:
         self._password = password
         self._device = device
         self._expires = datetime.now(timezone.utc)
+        # Epoch seconds of the id_token's JWT `exp`, or None for an opaque token
+        # (then the conservative opaque window applies). Set by _remember_expiry().
+        self._access_expiry: float | None = None
         self.access_token = ""
         self.refresh_token = ""
         self.cognito_token = ""
@@ -148,16 +156,27 @@ class HonAuth:
             extra = " ".join(f"{k}={v}" for k, v in fields.items())
             _LOGGER.debug("auth phase %s%s", name, f": {extra}" if extra else "")
 
-    def _expired(self, hours: int) -> bool:
-        return datetime.now(timezone.utc) >= self._expires + timedelta(hours=hours)
+    def _remember_expiry(self) -> None:
+        """Record the id_token's own expiry (its JWT `exp`) after it is (re)assigned,
+        so freshness tracks the token itself rather than an invented constant."""
+        self._access_expiry = token_expiry(self.id_token)
+
+    def _opaque_deadline(self) -> float:
+        """Fallback expiry epoch for an opaque token: a short window from when it was
+        obtained (never pyhOn's 8h)."""
+        return self._expires.timestamp() + _OPAQUE_TTL_SECONDS
 
     @property
     def token_is_expired(self) -> bool:
-        return self._expired(_TOKEN_EXPIRES_AFTER_HOURS)
+        now = datetime.now(timezone.utc).timestamp()
+        deadline = self._opaque_deadline() if self._access_expiry is None else self._access_expiry
+        return now >= deadline
 
     @property
     def token_expires_soon(self) -> bool:
-        return self._expired(_TOKEN_EXPIRE_WARNING_HOURS)
+        now = datetime.now(timezone.utc).timestamp()
+        deadline = self._opaque_deadline() if self._access_expiry is None else self._access_expiry
+        return now >= deadline - _REFRESH_SKEW_SECONDS
 
     def _ua(self, extra: dict | None = None) -> dict:
         headers = {"user-agent": USER_AGENT}
@@ -174,14 +193,12 @@ class HonAuth:
             login_url = extract_login_url(text)
             if login_url is None:
                 if is_oauth_done(text):
-                    # Append a trailing '&' so parse_token_fragment captures the LAST
-                    # fragment field too: its regex is `name=(.*?)&`, so a token at the
-                    # end without a trailing '&' (typically id_token) is dropped -> ""
-                    # -> _api_auth later fails with an empty id-token even though the SSO
-                    # cookies were valid. Then require .complete before committing the
-                    # tokens, mirroring _resume_tokens_after_2fa, instead of proceeding
-                    # with a half-parsed fragment.
-                    t = parse_token_fragment(text + "&")
+                    # SSO fast-path: the authorize page already carried the token
+                    # fragment. parse_token_fragment reads the last field with no
+                    # trailing '&' (RFC 6749 sec4.2.2), so no hand-appended '&' is
+                    # needed; require .complete before committing, mirroring
+                    # _resume_tokens_after_2fa, rather than proceeding half-parsed.
+                    t = parse_token_fragment(text)
                     if not t.complete:
                         self._phase(
                             "introduce", status=resp.status,
@@ -193,6 +210,7 @@ class HonAuth:
                     self.access_token = t.access_token
                     self.refresh_token = t.refresh_token
                     self.id_token = t.id_token
+                    self._remember_expiry()
                     self._phase("introduce", status=resp.status, no_auth_needed=True)
                     raise _NoAuthNeeded()
                 self._phase("introduce", status=resp.status, login_url=False)
@@ -298,6 +316,7 @@ class HonAuth:
         self.access_token = tokens.access_token
         self.refresh_token = tokens.refresh_token
         self.id_token = tokens.id_token
+        self._remember_expiry()
 
     async def _api_auth(self) -> None:
         self._phase("api_auth")
@@ -431,11 +450,11 @@ class HonAuth:
         self._expires = datetime.now(timezone.utc)
         # Extract the done-URL FIRST and parse only it (mirrors the live-validated probe).
         # Parsing the whole page first would let a stray `*_token=...&` substring elsewhere
-        # on the page (inline JS, echoed state) be captured instead of the real token. The
-        # trailing '&' lets parse_token_fragment capture the last fragment field.
+        # on the page (inline JS, echoed state) be captured instead of the real token.
+        # parse_token_fragment reads the last field with no trailing '&' (RFC 6749).
         done_url = extract_login_url(text)
         if done_url and "access_token" in done_url:
-            tokens = parse_token_fragment(done_url + "&")
+            tokens = parse_token_fragment(done_url)
         else:
             tokens = parse_token_fragment(text)
         if not tokens.complete:
@@ -444,6 +463,7 @@ class HonAuth:
         self.access_token = tokens.access_token
         self.refresh_token = tokens.refresh_token
         self.id_token = tokens.id_token
+        self._remember_expiry()
 
     async def refresh(self, refresh_token: str = "") -> bool:
         if refresh_token:
@@ -475,6 +495,7 @@ class HonAuth:
         self._expires = datetime.now(timezone.utc)
         self.id_token = id_token
         self.access_token = access_token
+        self._remember_expiry()
         # Honour refresh_token rotation: if the IdP returned a new one, persist it
         # (otherwise the old token is reused and a future refresh would fail).
         if new_refresh := (data.get("refresh_token") if isinstance(data, dict) else None):
@@ -500,3 +521,4 @@ class HonAuth:
         self.id_token = ""
         self.access_token = ""
         self.refresh_token = ""
+        self._access_expiry = None

@@ -1,10 +1,12 @@
-"""Differential test of the native transport's 2nd piece: parse_appliance_list.
+"""Contract test of the transport's appliance-list parser: parse_appliance_list.
 
-pyhOn's extraction logic lives INLINE in the async+HTTP method
-`api.load_appliances`, so it is not importable on its own: the oracle is its
-VERBATIM transcription (`_pyhon_extract` below). We compare our parser against
-the oracle on many responses; plus the INTENTIONAL DIVERGENCE cases where pyhOn
-crashes (a `.get()` chain on a non-dict intermediate) and we fall back to `[]`.
+Oracle = the unified-api appliance-list contract in
+docs/protocol/HAIER-HON-TRANSPORT.md sec9 -- NOT a transcription of pyhOn's inline
+extraction. The contract: return the list at
+`modules.applianceList.payload.appliances`; ANY unexpected shape (missing key,
+non-dict intermediate level, non-list final value) -> `[]` (sec9 fail-safe), and a
+truthy non-list final value additionally logs a warning. parse.py is stdlib-only, so
+it is loaded in isolation.
 """
 from __future__ import annotations
 
@@ -16,6 +18,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _OUR_PARSE = _ROOT / "custom_components" / "addhon" / "client" / "transport" / "parse.py"
 
+_REAL = [{"a": 1}, {"b": 2}]
+
 
 def _load(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -25,54 +29,36 @@ def _load(path: Path, name: str):
     return module
 
 
-def _pyhon_extract(result):
-    """Oracle: VERBATIM transcription of pyhon api.load_appliances' parsing (minus
-    the logging). NOT importable on its own because it is inline in an async+HTTP method."""
-    appliances = []
-    if isinstance(result, dict):
-        raw = (
-            result.get("modules", {})
-            .get("applianceList", {})
-            .get("payload", {})
-            .get("appliances", [])
-        )
-        if isinstance(raw, list):
-            appliances = raw
-        elif raw:
-            pass  # pyhon logs a warning here; only the return value matters for the comparison
-    return appliances
-
-
-# Well-formed / missing / empty responses: our parser MUST give the same result
-# as pyhOn.
-_EQUAL = [
-    {"modules": {"applianceList": {"payload": {"appliances": [{"a": 1}, {"b": 2}]}}}},
-    {"modules": {"applianceList": {"payload": {"appliances": []}}}},
-    {"modules": {"applianceList": {"payload": {"appliances": {"x": 1}}}}},  # non-list truthy
-    {"modules": {"applianceList": {"payload": {"appliances": 0}}}},          # non-list falsy
-    {"modules": {"applianceList": {"payload": {"appliances": None}}}},
-    {"modules": {"applianceList": {"payload": {}}}},
-    {"modules": {"applianceList": {}}},
-    {"modules": {}},
-    {},
-    None,
-    [],
-    "x",
-    123,
+# (response, expected) -- expected is the sec9-stated result. Only a well-formed list
+# survives; everything else (missing/empty/non-list/non-dict intermediate) -> [].
+_CASES = [
+    ({"modules": {"applianceList": {"payload": {"appliances": _REAL}}}}, _REAL),
+    ({"modules": {"applianceList": {"payload": {"appliances": []}}}}, []),
+    ({"modules": {"applianceList": {"payload": {"appliances": {"x": 1}}}}}, []),  # truthy non-list
+    ({"modules": {"applianceList": {"payload": {"appliances": 0}}}}, []),          # falsy non-list
+    ({"modules": {"applianceList": {"payload": {"appliances": None}}}}, []),
+    ({"modules": {"applianceList": {"payload": {}}}}, []),
+    ({"modules": {"applianceList": {}}}, []),
+    ({"modules": {}}, []),
+    ({}, []),
+    (None, []),
+    ([], []),
+    ("x", []),
+    (123, []),
 ]
 
-# Malformed shapes with a NON-dict intermediate level: pyhOn crashes
-# (AttributeError), we fall back to [] (intentional hardening).
-_HARDENED = [
+# Non-dict intermediate levels: sec9 fail-safe returns [] (a .get() walk over a
+# non-dict would otherwise raise; the parser guards each level with isinstance).
+_FAILSAFE = [
     {"modules": "x"},
     {"modules": []},
-    {"modules": None},                                       # None intermediate
+    {"modules": None},
     {"modules": {"applianceList": "y"}},
     {"modules": {"applianceList": []}},
     {"modules": {"applianceList": None}},
     {"modules": {"applianceList": {"payload": []}}},
     {"modules": {"applianceList": {"payload": "z"}}},
-    {"modules": {"applianceList": {"payload": None}}},       # None intermediate (payload)
+    {"modules": {"applianceList": {"payload": None}}},
 ]
 
 
@@ -80,24 +66,21 @@ class ParseApplianceListTest(unittest.TestCase):
     def setUp(self) -> None:
         self.parse = _load(_OUR_PARSE, "addhon_transport_parse").parse_appliance_list
 
-    def test_matches_pyhon_on_wellformed(self) -> None:
-        for result in _EQUAL:
+    def test_matches_spec_contract(self) -> None:
+        for result, expected in _CASES:
             with self.subTest(result=result):
-                self.assertEqual(self.parse(result), _pyhon_extract(result))
+                self.assertEqual(self.parse(result), expected)
 
     def test_pinned_real_shape(self) -> None:
-        full = {"modules": {"applianceList": {"payload": {"appliances": [{"a": 1}, {"b": 2}]}}}}
-        self.assertEqual(self.parse(full), [{"a": 1}, {"b": 2}])
-        # returns the REAL list (same object, not a copy): like pyhOn
+        full = {"modules": {"applianceList": {"payload": {"appliances": _REAL}}}}
+        self.assertEqual(self.parse(full), _REAL)
+        # returns the REAL list object (no copy) so the caller sees the live data.
         self.assertIs(self.parse(full), full["modules"]["applianceList"]["payload"]["appliances"])
 
-    def test_hardened_vs_pyhon_crash_on_intermediate_non_dict(self) -> None:
-        for result in _HARDENED:
+    def test_failsafe_on_non_dict_intermediate(self) -> None:
+        for result in _FAILSAFE:
             with self.subTest(result=result):
-                # pyhOn crashes on these (documents the fragility we removed)...
-                with self.assertRaises(AttributeError):
-                    _pyhon_extract(result)
-                # ...we fall back to [] (fail-safe).
+                # sec9: schema drift is treated as "0 appliances", never a crash.
                 self.assertEqual(self.parse(result), [])
 
 

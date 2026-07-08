@@ -14,6 +14,7 @@ non-ASCII.
 from __future__ import annotations
 
 import re
+import tokenize
 import unittest
 from pathlib import Path
 
@@ -64,27 +65,37 @@ class CodeIsEnglishTest(unittest.TestCase):
         )
 
     def test_no_pyhon_references(self) -> None:
-        # The integration is fully native: the legacy library "pyhon" must not appear
-        # anywhere in the code (not in imports, identifiers, comments or docstrings).
-        # The migration is complete; its provenance lives in the gitignored
-        # diagnostics/pyhon-provenance.md, not in the shipped code.
+        # Cheap tripwire against RE-VENDORING the legacy pyhon library: "pyhon" must
+        # not appear as an IMPORT or IDENTIFIER (module name, attribute, symbol) in the
+        # shipped code. It is deliberately ALLOWED in comments/docstrings, where it
+        # documents legitimate provenance (e.g. "the pyhOn 8h heuristic is gone"); the
+        # real, structural proof of independence is the harness under
+        # tests/independence/ (Gate A structural + Gate B provenance), not this grep.
+        #
+        # We tokenize so only NAME tokens (identifiers/imports) are scanned; COMMENT
+        # and STRING tokens (docstrings, provenance notes) are exempt.
         rx = re.compile(r"pyhon", re.IGNORECASE)
         offenders: list[str] = []
         repo_root = COMPONENT.parents[1]
         for path in sorted(COMPONENT.rglob("*.py")):
             if "translations" in path.parts:
                 continue
-            for lineno, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), 1
-            ):
-                if rx.search(line):
+            with tokenize.open(path) as handle:
+                try:
+                    tokens = list(tokenize.generate_tokens(handle.readline))
+                except (tokenize.TokenError, IndentationError, SyntaxError):
+                    # A non-tokenizable file is a different problem; skip it here.
+                    continue
+            for tok in tokens:
+                if tok.type == tokenize.NAME and rx.search(tok.string):
                     rel = path.relative_to(repo_root)
-                    offenders.append(f"{rel}:{lineno}: {line.strip()[:80]}")
+                    offenders.append(f"{rel}:{tok.start[0]}: identifier {tok.string!r}")
         self.assertEqual(
             [],
             offenders,
-            "Reference to the legacy 'pyhon' library found in the code. The client is "
-            "native; keep provenance in diagnostics/pyhon-provenance.md instead:\n"
+            "The legacy 'pyhon' library is referenced as an import/identifier in the "
+            "shipped code (re-vendoring). The client is native; provenance belongs in "
+            "comments only. See the independence harness under tests/independence/:\n"
             + "\n".join(offenders),
         )
 

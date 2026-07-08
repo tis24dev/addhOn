@@ -1,17 +1,27 @@
-"""Parsing of the OAuth tokens from the hOn login redirect (addhOn transport).
+"""OAuth token parsing + lifetime derivation for the addhOn transport (spec: HHT-sec6).
 
-From the redirect
-`.../mobilesdk/detect/oauth/done#access_token=...&refresh_token=...&id_token=...`
-it extracts the three tokens via the regex `name=(.*?)&` (up to the first `&`).
+Two independent pieces, both authored from public contracts (RFC 6749 / RFC 7519):
 
-The tokens are passed to the cloud unchanged, so the parsing rules are exact:
-- only `refresh_token` is URL-decoded (`unquote`); access/id stay raw;
-- a token at the end WITHOUT a trailing `&` is NOT captured (the regex requires the `&`);
-- `complete` = all three patterns HAVE matched; an empty captured value is still
-  accepted, so this is "all three matched", not "all values non-empty".
+1. :func:`parse_token_fragment` -- read access/refresh/id tokens out of the OAuth2
+   implicit-flow redirect (RFC 6749 sec4.2.2: the tokens come back in the URL
+   *fragment* as ``&``-delimited ``name=value`` fields). Deliberate, cloud-safe
+   divergences from a naive ``parse_qs``:
+     * access_token / id_token are kept RAW -- the cloud is handed the exact bytes,
+       so they are NOT percent-decoded;
+     * only refresh_token is percent-decoded once (``unquote``);
+     * a field is "present" if its key appears (an empty value still counts);
+     * the LAST field needs NO trailing ``&`` (a real fragment need not end in one).
+   The field name is anchored to a fragment delimiter so ``access_token`` cannot
+   match inside a longer key.
+
+2. :func:`token_expiry` -- read the JWT ``exp`` claim (RFC 7519 sec4.1.4) so the
+   transport trusts the token's own stated lifetime instead of a guessed constant.
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import re
 from dataclasses import dataclass
 from urllib.parse import unquote
@@ -31,22 +41,51 @@ class OAuthTokens:
     complete: bool = False
 
 
+def _field(name: str, text: str) -> str | None:
+    """First value of fragment field ``name`` in ``text``, or None if absent.
+
+    RFC 6749 sec4.2.2: fragment fields are ``&``-delimited, so a value runs up to the
+    next ``&`` OR the end of the string. The name is anchored to a delimiter boundary
+    (start, ``#``, ``?`` or ``&``) so it cannot match a substring of another key.
+    """
+    # Value class excludes whitespace so a whole-page parse cannot absorb trailing
+    # markup/newline into a token (which would forward a malformed id-token header);
+    # real OAuth token values never contain whitespace.
+    match = re.search(r"(?:\A|[#?&])" + re.escape(name) + r"=([^&\s]*)", text)
+    return match.group(1) if match else None
+
+
 def parse_token_fragment(text: str) -> OAuthTokens:
     """Extract access/refresh/id token from the OAuth redirect text."""
-
-    def _match(name: str) -> str | None:
-        found = re.findall(f"{name}=(.*?)&", text)
-        return found[0] if found else None
-
-    access = _match("access_token")
-    refresh = _match("refresh_token")
-    id_token = _match("id_token")
+    access = _field("access_token", text)
+    refresh = _field("refresh_token", text)
+    id_token = _field("id_token", text)
     return OAuthTokens(
         access_token=access or "",
-        # Only the refresh token is URL-decoded.
+        # Only the refresh token is URL-decoded (access/id are forwarded verbatim).
         refresh_token=unquote(refresh) if refresh is not None else "",
         id_token=id_token or "",
-        # What counts is that the pattern MATCHED (not that the value is
-        # non-empty), hence `None not in (...)`.
+        # "Present" = the field key appeared, even with an empty value.
         complete=None not in (access, refresh, id_token),
     )
+
+
+def token_expiry(jwt: str) -> float | None:
+    """Unverified read of a JWT's ``exp`` claim as epoch seconds (RFC 7519 sec4.1.4).
+
+    The signature is NOT checked (the IdP already validated it and we only need the
+    stated lifetime, so we never send a token past its own ``exp``). Returns None for
+    anything that is not a readable JWT with a numeric ``exp`` -- the caller then falls
+    back to a conservative window rather than trusting a made-up lifetime.
+    """
+    try:
+        payload_b64 = jwt.split(".")[1]
+    except (AttributeError, IndexError):
+        return None
+    payload_b64 += "=" * (-len(payload_b64) % 4)  # restore base64url padding
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload_b64))
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return None
+    exp = claims.get("exp") if isinstance(claims, dict) else None
+    return float(exp) if isinstance(exp, (int, float)) and not isinstance(exp, bool) else None

@@ -28,13 +28,11 @@ from typing import Any
 from . import device as _device
 from .connection import HonConnection
 from .parse import parse_appliance_list
+from .values import API_URL
 from ...debug_utils import redact_identity
 from ...error_codes import APPLIANCE_LIST_EMPTY
 
 _LOGGER = logging.getLogger(__name__)
-
-# Base URL of the hOn cloud.
-API_URL = "https://api-iot.he.services"
 
 
 def _command_timestamp() -> str:

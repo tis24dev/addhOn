@@ -1,19 +1,21 @@
-"""Differential test of the transport's 3rd piece: parse_token_fragment.
+"""Contract test of the transport's OAuth token parser: parse_token_fragment.
 
-Oracle = VERBATIM transcription of pyhon auth._parse_token_data (the self._auth
-mutation becomes a local dict; the method is on HonAuth, which pulls in
-connection/handler/aiohttp, so it is not importable on its own). We compare the
-three tokens + the `complete` flag over many redirects, including the quirks
-(unquote of the refresh only, final token without `&`, empty values, urlencoding).
+Oracle = the OAuth2 implicit-flow redirect contract (RFC 6749 sec4.2.2), documented
+in docs/protocol/HAIER-HON-TRANSPORT.md sec6 -- NOT a transcription of pyhOn's
+`name=(.*?)&` regex. tokens.py is stdlib-only, so it is loaded in isolation.
+
+We assert the three tokens + the `complete` flag against the spec-stated result over
+a matrix of redirects, including the deliberate, cloud-safe divergences from a naive
+parse_qs: access/id kept RAW, only refresh percent-decoded once, an empty value still
+counts as "present", and -- unlike pyhOn -- a final field with NO trailing `&` IS
+captured (a real fragment need not end in one).
 """
 from __future__ import annotations
 
 import importlib.util
-import re
 import sys
 import unittest
 from pathlib import Path
-from urllib.parse import unquote
 
 _ROOT = Path(__file__).resolve().parents[1]
 _OUR_TOKENS = _ROOT / "custom_components" / "addhon" / "client" / "transport" / "tokens.py"
@@ -27,45 +29,34 @@ def _load(path: Path, name: str):
     return module
 
 
-def _pyhon_parse(text):
-    """Oracle: verbatim of pyhon auth._parse_token_data (mutation -> dict)."""
-    auth = {"access_token": "", "refresh_token": "", "id_token": ""}
-    access_token = re.findall("access_token=(.*?)&", text)
-    if access_token:
-        auth["access_token"] = access_token[0]
-    refresh_token = re.findall("refresh_token=(.*?)&", text)
-    if refresh_token:
-        auth["refresh_token"] = unquote(refresh_token[0])
-    id_token = re.findall("id_token=(.*?)&", text)
-    if id_token:
-        auth["id_token"] = id_token[0]
-    complete = bool(access_token and refresh_token and id_token)
-    return auth, complete
-
-
-_FIXTURES = [
-    # Complete realistic redirect (refresh urlencoded: %2F -> /).
-    "blah url='/x' oauth/done#access_token=AAA&refresh_token=r%2Ftok&id_token=CCC&state=z&",
-    # Different order, other parameters around.
-    "#token_type=Bearer&id_token=ID1&access_token=AC1&refresh_token=RF1&expires=3600&",
+# (fragment, expected access, refresh, id, complete) -- each expectation is the
+# spec-stated result (HHT-sec6), authored from RFC 6749 sec4.2.2, not from pyhOn.
+_CASES = [
+    # Complete realistic redirect; refresh is percent-decoded once (%2F -> /).
+    ("blah url='/x' oauth/done#access_token=AAA&refresh_token=r%2Ftok&id_token=CCC&state=z&",
+     "AAA", "r/tok", "CCC", True),
+    # Different order, other params around -> still complete.
+    ("#token_type=Bearer&id_token=ID1&access_token=AC1&refresh_token=RF1&expires=3600&",
+     "AC1", "RF1", "ID1", True),
     # Missing id_token -> incomplete.
-    "#access_token=AAA&refresh_token=BBB&foo=bar&",
+    ("#access_token=AAA&refresh_token=BBB&foo=bar&", "AAA", "BBB", "", False),
     # Missing refresh -> incomplete.
-    "#access_token=AAA&id_token=CCC&",
-    # Final token WITHOUT a trailing '&': id_token not captured (regex quirk).
-    "#access_token=AAA&refresh_token=BBB&id_token=CCC",
-    # Empty value but pattern matched (access_token=&): pyhOn counts it as present.
-    "#access_token=&refresh_token=BBB&id_token=CCC&",
-    # refresh with urlencoded characters that are NOT separators (%26 = literal & in the value).
-    "#access_token=A&refresh_token=a%26b%3Dc&id_token=I&",
-    # Double occurrence: the first one is used.
-    "#access_token=FIRST&x=1&access_token=SECOND&refresh_token=R&id_token=I&",
-    # No token.
-    "completely unrelated text without tokens",
-    # Empty.
-    "",
-    # Only scattered '&'.
-    "&&&access_token=ZZ&&&refresh_token=YY&&&id_token=XX&&&",
+    ("#access_token=AAA&id_token=CCC&", "AAA", "", "CCC", False),
+    # Final field WITHOUT a trailing '&': RFC 6749 sec4.2.2 -- the value runs to the
+    # end of the fragment, so id_token IS captured and the redirect is complete.
+    # (This is the concrete quirk pyhOn had and we deliberately do NOT share.)
+    ("#access_token=AAA&refresh_token=BBB&id_token=CCC", "AAA", "BBB", "CCC", True),
+    # Empty value but the key is present (access_token=&) -> counts as present.
+    ("#access_token=&refresh_token=BBB&id_token=CCC&", "", "BBB", "CCC", True),
+    # refresh value with encoded non-separators (%26 = literal '&' inside the value).
+    ("#access_token=A&refresh_token=a%26b%3Dc&id_token=I&", "A", "a&b=c", "I", True),
+    # Double occurrence: the FIRST value is used.
+    ("#access_token=FIRST&x=1&access_token=SECOND&refresh_token=R&id_token=I&",
+     "FIRST", "R", "I", True),
+    # No token / empty / scattered '&'.
+    ("completely unrelated text without tokens", "", "", "", False),
+    ("", "", "", "", False),
+    ("&&&access_token=ZZ&&&refresh_token=YY&&&id_token=XX&&&", "ZZ", "YY", "XX", True),
 ]
 
 
@@ -73,15 +64,14 @@ class ParseTokenFragmentTest(unittest.TestCase):
     def setUp(self) -> None:
         self.parse = _load(_OUR_TOKENS, "addhon_transport_tokens").parse_token_fragment
 
-    def test_matches_pyhon(self) -> None:
-        for text in _FIXTURES:
+    def test_matches_spec_contract(self) -> None:
+        for text, access, refresh, id_token, complete in _CASES:
             with self.subTest(text=text):
-                ours = self.parse(text)
-                ref, complete = _pyhon_parse(text)
-                self.assertEqual(ours.access_token, ref["access_token"])
-                self.assertEqual(ours.refresh_token, ref["refresh_token"])
-                self.assertEqual(ours.id_token, ref["id_token"])
-                self.assertEqual(ours.complete, complete)
+                got = self.parse(text)
+                self.assertEqual(got.access_token, access)
+                self.assertEqual(got.refresh_token, refresh)
+                self.assertEqual(got.id_token, id_token)
+                self.assertEqual(got.complete, complete)
 
     def test_pinned(self) -> None:
         t = self.parse(
@@ -93,16 +83,29 @@ class ParseTokenFragmentTest(unittest.TestCase):
         self.assertTrue(t.complete)
 
     def test_only_refresh_is_unquoted(self) -> None:
-        # %2F stays raw in access/id, decoded only in the refresh.
+        # %2F stays raw in access/id, decoded only in the refresh (sec6: the cloud is
+        # handed access/id verbatim).
         t = self.parse("#access_token=a%2Fb&refresh_token=c%2Fd&id_token=e%2Ff&")
         self.assertEqual(t.access_token, "a%2Fb")
         self.assertEqual(t.refresh_token, "c/d")
         self.assertEqual(t.id_token, "e%2Ff")
 
-    def test_trailing_token_without_amp_not_captured(self) -> None:
+    def test_trailing_token_without_amp_is_captured(self) -> None:
+        # RFC 6749 sec4.2.2 (HHT-sec6): a final field with no trailing '&' runs to the
+        # end of the fragment. The last id_token IS captured -> the redirect is
+        # complete. This is the fix over pyhOn's `name=(.*?)&`, which silently dropped
+        # a last field lacking the '&'.
         t = self.parse("#access_token=AAA&refresh_token=BBB&id_token=CCC")
-        self.assertEqual(t.id_token, "")
-        self.assertFalse(t.complete)
+        self.assertEqual(t.id_token, "CCC")
+        self.assertTrue(t.complete)
+
+    def test_trailing_field_does_not_absorb_markup(self) -> None:
+        # Regression (refuter round 1, R2-4): when parsing a WHOLE PAGE (not just the
+        # clean fragment) a token value must stop at whitespace, so trailing markup /
+        # newline can't be folded into id_token and forwarded as a malformed id-token
+        # header. OAuth token values never contain whitespace.
+        t = self.parse("#access_token=AAA&refresh_token=BBB&id_token=CCC\n<html>junk")
+        self.assertEqual(t.id_token, "CCC")
 
 
 if __name__ == "__main__":

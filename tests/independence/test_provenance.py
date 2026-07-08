@@ -1,0 +1,97 @@
+"""Gate B -- provenance-manifest completeness & anti-copy (catches inherited values).
+
+Every module-level literal constant in values.py must be declared in provenance.json
+(so a value can never be added without recording where it came from), and every
+constant flagged ``must_differ_from_pyhon`` must NOT still equal pyhOn's value (so an
+inherited placeholder cannot survive silently).
+
+The single known-inherited value -- the User-Agent -- is checked in its own test
+wired ``xfail``: the debt stays VISIBLE (the row is flagged, the check exists) while
+the suite stays green until an owner captures the real UA (see VALUES-PROVENANCE.md
+and the OWNER-ACTION note in values.py).
+"""
+from __future__ import annotations
+
+import ast
+import json
+import pathlib
+
+import pytest
+
+_HERE = pathlib.Path(__file__).resolve().parent
+_REPO = _HERE.parents[1]
+_VALUES = _REPO / "custom_components" / "addhon" / "client" / "transport" / "values.py"
+
+_MANIFEST = json.loads((_HERE / "provenance.json").read_text())
+_ROWS = {row["id"]: row for row in _MANIFEST["constants"]}
+
+
+def _values_constants() -> dict[str, object]:
+    """Module-level ``UPPER_CASE = <literal>`` assignments in values.py."""
+    out: dict[str, object] = {}
+    for node in ast.parse(_VALUES.read_text()).body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.isupper():
+                    out[target.id] = node.value.value
+    return out
+
+
+_CONSTANTS = _values_constants()
+
+
+def test_every_constant_is_declared_in_manifest() -> None:
+    missing = sorted(name for name in _CONSTANTS if name not in _ROWS)
+    assert not missing, (
+        f"values.py constants absent from provenance.json: {missing}. Every literal "
+        f"needs a provenance row (see tests/independence/provenance.json)."
+    )
+
+
+def test_manifest_values_match_source() -> None:
+    """The manifest must not drift from the actual literal in values.py."""
+    drifted = [
+        f"{name}: manifest={_ROWS[name]['value']!r} source={value!r}"
+        for name, value in _CONSTANTS.items()
+        if name in _ROWS and _ROWS[name]["value"] != value
+    ]
+    assert not drifted, "provenance.json out of sync with values.py: " + "; ".join(drifted)
+
+
+def test_manifest_has_no_orphan_rows() -> None:
+    orphans = sorted(name for name in _ROWS if name not in _CONSTANTS)
+    assert not orphans, (
+        f"provenance.json rows with no matching values.py constant: {orphans}."
+    )
+
+
+def test_client_chosen_constants_are_not_copied_from_pyhon() -> None:
+    """must_differ rows (excluding the UA, which is xfail'd below) must differ."""
+    copied = []
+    for name, value in _CONSTANTS.items():
+        row = _ROWS.get(name)
+        if not row or name == "USER_AGENT":
+            continue
+        if row.get("must_differ_from_pyhon") and "pyhon_value" in row:
+            if value == row["pyhon_value"]:
+                copied.append(f"{name}={value!r} still equals pyhOn")
+    assert not copied, (
+        "client-chosen constants still inherited verbatim from pyhOn: "
+        + "; ".join(copied)
+    )
+
+
+@pytest.mark.xfail(
+    reason=(
+        "OWNER-ACTION: USER_AGENT is still pyhOn's synthetic sentinel "
+        "'Chrome/999.999.999.999'; capture the real UA from the hOn APK / mitmproxy "
+        "and replace it (see VALUES-PROVENANCE.md). Debt is tracked, suite stays green."
+    ),
+    strict=False,
+)
+def test_user_agent_is_independently_sourced() -> None:
+    row = _ROWS["USER_AGENT"]
+    assert row.get("must_differ_from_pyhon") is True
+    assert _CONSTANTS["USER_AGENT"] != row["pyhon_value"], (
+        "USER_AGENT is still equal to pyhOn's inherited placeholder"
+    )
