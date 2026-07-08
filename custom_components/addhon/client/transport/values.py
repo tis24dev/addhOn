@@ -65,7 +65,7 @@ USER_AGENT = "Chrome/999.999.999.999"
 # -- Client identity descriptor -- HHT-sec3 ------------------------------------
 # CLIENT-CHOSEN: addhOn runs headless, so it presents a fixed identity. DEVICE_MODEL
 # and MOBILE_ID are addhOn's own (pyhOn sent "pyhOn"). APP_VERSION / OS_VERSION track
-# the current app but are still un-captured placeholders (OWNER ACTION: confirm from
+# the current app but are still uncaptured placeholders (OWNER ACTION: confirm from
 # the APK BuildConfig -- see VALUES-PROVENANCE.md).
 APP_VERSION = "2.27.9"
 OS_VERSION = 34

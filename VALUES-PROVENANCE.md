@@ -68,7 +68,7 @@ path+offset) alongside the new value when you land it.
    closed silently and left mislabelled as still-owed.
 2. **`APP_VERSION` / `OS_VERSION`** — currently placeholders (`2.27.9` / `34`). They
    already differ from the legacy library's stale values, so Gate B passes, but they are
-   still un-captured. Confirm the real values from the APK `BuildConfig`
+   still uncaptured. Confirm the real values from the APK `BuildConfig`
    (`VERSION_NAME`) and the Android API level the app presents.
 
 ## How this is enforced
