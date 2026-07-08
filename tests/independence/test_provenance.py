@@ -83,6 +83,52 @@ def test_client_chosen_constants_are_not_copied_from_pyhon() -> None:
     )
 
 
+_ALLOWED_CLASSES = {"OBSERVED", "CLIENT-CHOSEN", "UNRESOLVED"}
+
+
+def test_every_row_class_is_valid_and_consistent() -> None:
+    """The ``class`` label is not decorative: it decides whether a value is ALLOWED to
+    equal pyhOn. OBSERVED = Haier-dictated interop (may legitimately be identical);
+    CLIENT-CHOSEN / UNRESOLVED = addhOn's own or a to-be-captured value, which MUST
+    assert difference so a copied literal cannot hide in a mislabelled row.
+
+    Enforce both the vocabulary and the class<->must_differ tie. Previously ``class``
+    was read by no test, so a genuinely inherited value could be parked as OBSERVED /
+    must_differ=false to dodge the anti-copy check entirely; now the label and the
+    must_differ flag must agree (must_differ iff the class is not OBSERVED)."""
+    problems = []
+    for name, row in _ROWS.items():
+        cls = row.get("class")
+        if cls not in _ALLOWED_CLASSES:
+            problems.append(f"{name}: class {cls!r} not in {sorted(_ALLOWED_CLASSES)}")
+            continue
+        expected = cls != "OBSERVED"  # only interop (OBSERVED) values may match pyhOn
+        if bool(row.get("must_differ_from_pyhon")) != expected:
+            problems.append(
+                f"{name}: class {cls} requires must_differ_from_pyhon={expected}, "
+                f"got {row.get('must_differ_from_pyhon')!r}"
+            )
+    assert not problems, (
+        "provenance class / must_differ inconsistencies:\n" + "\n".join(problems)
+    )
+
+
+def test_must_differ_rows_declare_a_pyhon_value() -> None:
+    """A ``must_differ`` row with no ``pyhon_value`` would be SILENTLY SKIPPED by the
+    anti-copy check (it can only compare against a value it actually has), so an
+    inherited literal could hide simply by omitting the field. Require every must_differ
+    row to carry the pyhOn value it must differ from -- so the check can never no-op."""
+    missing = sorted(
+        name
+        for name, row in _ROWS.items()
+        if row.get("must_differ_from_pyhon") and "pyhon_value" not in row
+    )
+    assert not missing, (
+        "must_differ rows missing 'pyhon_value' (the anti-copy check would skip them): "
+        f"{missing}. Add the pyhOn value each must differ from."
+    )
+
+
 @pytest.mark.xfail(
     reason=(
         "OWNER-ACTION: USER_AGENT is still pyhOn's synthetic sentinel "

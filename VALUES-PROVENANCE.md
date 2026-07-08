@@ -24,6 +24,12 @@ legacy library's).
 legacy library's; Gate B fails on any such row that still matches (the User-Agent row
 is the one known offender, wired `xfail`).
 
+The class fixes `must-differ`, and Gate B enforces the tie (`must_differ == class !=
+OBSERVED`): **OBSERVED** rows are Haier-mandated so they MAY equal the legacy value
+(`must-differ = no`); **CLIENT-CHOSEN** and **UNRESOLVED** rows are addhOn's own or
+still-to-capture, so they MUST differ (`must-differ = yes`) — this stops a genuinely
+inherited literal from hiding as OBSERVED to dodge the anti-copy check.
+
 | Constant | Value | Spec | Class | must-differ | Status |
 |---|---|---|---|---|---|
 | `AUTH_API` | `https://account2.hon-smarthome.com` | sec2 | OBSERVED | no | ✅ sourced |
