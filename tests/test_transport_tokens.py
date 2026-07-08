@@ -57,6 +57,20 @@ _CASES = [
     ("completely unrelated text without tokens", "", "", "", False),
     ("", "", "", "", False),
     ("&&&access_token=ZZ&&&refresh_token=YY&&&id_token=XX&&&", "ZZ", "YY", "XX", True),
+    # WHOLE-PAGE parse, single-quoted href: oauth._LOGIN_URL_RE matches url='...'/
+    # href='...', so the redirect (with the token fragment) is embedded in single
+    # quotes and the LAST token is immediately followed by `'` + markup. The value must
+    # stop at the quote -> `CCC`, never `CCC'</script>` (which would be sent as a
+    # malformed id-token header). RFC 6749 values are percent-encoded, so `'`,`"`,`<`,`>`
+    # never occur literally in a real token.
+    ("<script>location='hon://mobilesdk/detect/oauth/done"
+     "#access_token=AAA&refresh_token=BBB&id_token=CCC'</script>",
+     "AAA", "BBB", "CCC", True),
+    # Double-quoted href variant, trailing '>'.
+    ('junk href="/x#access_token=AAA&refresh_token=BBB&id_token=CCC">click',
+     "AAA", "BBB", "CCC", True),
+    # A NON-final token also wrapped in a quote must not absorb it either.
+    ("a='#access_token=AAA'&refresh_token=BBB&id_token=CCC&", "AAA", "BBB", "CCC", True),
 ]
 
 
@@ -106,6 +120,47 @@ class ParseTokenFragmentTest(unittest.TestCase):
         # header. OAuth token values never contain whitespace.
         t = self.parse("#access_token=AAA&refresh_token=BBB&id_token=CCC\n<html>junk")
         self.assertEqual(t.id_token, "CCC")
+
+    def test_whole_page_stops_at_quote_and_bracket(self) -> None:
+        # The exact Greptile-flagged case: the redirect URL is scraped from a
+        # single/double-quoted href, so a whole-page parse sees the last token followed
+        # by `'`/`"`/`>` with NO whitespace. The value must stop at those markup chars,
+        # otherwise a malformed id-token (`CCC'>`) is forwarded to the API/MQTT auth.
+        # Scope note: this pins value TERMINATION (where a field value ends). WHICH
+        # fragment is picked when several appear on a page is a separate property --
+        # _field uses re.search (first match); see the decoy test below.
+        for suffix, why in [
+            ("'", "single quote (href='...')"),
+            ('"', "double quote (href=\"...\")"),
+            (">", "angle bracket"),
+            ("'></a>", "single quote + closing tag"),
+            ('"/></html>', "double quote + self-closing tag"),
+        ]:
+            with self.subTest(suffix=why):
+                t = self.parse(
+                    f"#access_token=AAA&refresh_token=BBB&id_token=CCC{suffix}"
+                )
+                self.assertEqual(t.id_token, "CCC")
+                self.assertEqual(t.access_token, "AAA")
+                self.assertTrue(t.complete)
+
+    def test_selection_is_first_match_known_limitation(self) -> None:
+        # DOCUMENTED LIMITATION (pre-existing, NOT introduced by the char-class fix):
+        # _field uses re.search, so when several well-formed fragments appear on one
+        # page the FIRST is selected -- a value-SELECTION property, distinct from value
+        # TERMINATION (which the char-class fix hardens). In the live flow the pages are
+        # same-origin and host-pinned (oauth.absolutize) so this is not attacker-driven,
+        # but a benign inline example placed before the real fragment WOULD be picked.
+        # This test pins the current behaviour so any future change to selection is
+        # deliberate; hardening selection (e.g. anchoring to the extracted done-URL at
+        # the _get_token/_introduce call sites) is tracked as a separate follow-up.
+        page = (
+            "example: #access_token=DECOY_A&refresh_token=DECOY_R&id_token=DECOY_I\n"
+            "real: #access_token=AAA&refresh_token=BBB&id_token=CCC"
+        )
+        t = self.parse(page)
+        self.assertEqual(t.access_token, "DECOY_A")  # first match wins (documented)
+        self.assertEqual(t.id_token, "DECOY_I")
 
 
 if __name__ == "__main__":

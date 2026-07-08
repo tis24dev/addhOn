@@ -48,10 +48,15 @@ def _field(name: str, text: str) -> str | None:
     next ``&`` OR the end of the string. The name is anchored to a delimiter boundary
     (start, ``#``, ``?`` or ``&``) so it cannot match a substring of another key.
     """
-    # Value class excludes whitespace so a whole-page parse cannot absorb trailing
-    # markup/newline into a token (which would forward a malformed id-token header);
-    # real OAuth token values never contain whitespace.
-    match = re.search(r"(?:\A|[#?&])" + re.escape(name) + r"=([^&\s]*)", text)
+    # The value class stops at any character that cannot legitimately appear in a
+    # fragment field value: `&` (the field delimiter), whitespace, and the quote /
+    # angle-bracket markup that wraps the redirect URL inside a page (`href='...'`,
+    # `href="..."`, `...>`). RFC 6749 sec4.2.2 values are application/x-www-form-
+    # urlencoded, so `"`, `'`, `<`, `>` and whitespace are always percent-encoded and
+    # never appear literally in a real token; excluding them means a WHOLE-PAGE parse
+    # cannot fold the surrounding markup into a token (which would otherwise forward a
+    # malformed id-token header to the cloud -- e.g. `id_token=CCC'>` -> `CCC`).
+    match = re.search(r"(?:\A|[#?&])" + re.escape(name) + r"=([^&\s\"'<>]*)", text)
     return match.group(1) if match else None
 
 

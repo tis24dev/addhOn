@@ -158,6 +158,32 @@ class NativeAuthFlowTest(unittest.TestCase):
         self.assertEqual(auth.refresh_token, "r/b")  # only refresh url-decoded
         self.assertEqual(auth.cognito_token, "COG123")
 
+    def test_get_token_whole_page_strips_wrapping_markup(self) -> None:
+        # REACHABLE-PATH regression for the token-parser char-class fix. _get_token
+        # parses the ENTIRE final token page -- parse_token_fragment(await resp.text())
+        # -- not a pre-extracted fragment, and extract_login_url does NOT run ahead of
+        # it. Real pages wrap the redirect in a single-quoted href / JS location (see
+        # oauth._LOGIN_URL_RE = "url|href='...'"), so the LAST token sits directly
+        # against the closing `'` + markup. The parsed id_token must come out CLEAN
+        # ("CCC"), never "CCC')</script>...", which would be forwarded as a malformed
+        # id-token header to _api_auth. Fails on the old `[^&\s]*` class; passes on
+        # `[^&\s"'<>]*`.
+        responses = _happy_responses()
+        responses[6] = FakeResp(
+            text=(
+                "<html><body><script>window.location.replace("
+                "'hon://mobilesdk/detect/oauth/done"
+                "#access_token=AAA&refresh_token=r%2Fb&id_token=CCC')"
+                "</script></body></html>"
+            )
+        )
+        auth = self._auth(responses)
+        asyncio.run(auth.authenticate())
+        self.assertEqual(auth.id_token, "CCC")
+        self.assertEqual(auth.access_token, "AAA")
+        self.assertEqual(auth.refresh_token, "r/b")  # only refresh url-decoded
+        self.assertEqual(auth.cognito_token, "COG123")
+
     def test_no_auth_needed(self) -> None:
         # The authorize page is already the redirect with the tokens: the login steps
         # are skipped, but _api_auth STILL runs so cognito_token is minted (connection.py
