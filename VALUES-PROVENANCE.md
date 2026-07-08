@@ -94,3 +94,4 @@ deferred structural rewrite of those modules.
 | `"79;a"`, `apex://LightningLoginCustomController/ACTION$login`, `siteforce:loginApp2`, `other.LightningLoginCustom.login` | `oauth.py` `build_login_payload` (sec5) | OBSERVED | Salesforce Lightning/Aura login descriptor — the login endpoint pins these exact identifiers. |
 | `transactionId=f"{mac}_{ts}"`, `attributes={channel:"mobileApp", origin:"standardProgram", energyLabel:"0"}` | `api.py` command send (sec8) | OBSERVED | hOn command envelope shape required by the IoT API. |
 | login/href/fwuid regexes | `oauth.py` / `auth.py` (sec5) | OBSERVED | Behaviour-matched to Haier's login page markup; not free expression. |
+| `client_id=f"{mobile_id}_{token_hex(8)}"` | `mqtt.py` MQTT connect (sec10) | OBSERVED | AWS-IoT clientId; the custom-authorizer IoT policy may pin the `<mobileId>_<hex>` separator/length, so the shape is kept for interop — only the random suffix is re-minted per connection. |

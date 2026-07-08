@@ -21,9 +21,13 @@ transport speaks to the Haier hOn cloud. It was authored from:
 No clause here is transcribed from any GPL/MIT third-party client. Where a value
 coincides with another client's, it is because **Haier dictates it** (interop); such
 values are classified `OBSERVED` in the provenance manifest and are legitimately
-identical. Values a client is free to choose (User-Agent, nonce/clientId *format*,
-token-lifetime heuristic, client identity strings) are **re-derived** here and MUST
-NOT be inherited — see `VALUES-PROVENANCE.md` and `tests/independence/`.
+identical. Values a client is genuinely free to choose (User-Agent, the OAuth
+`nonce`, token-lifetime heuristic, client identity strings) are **re-derived** here
+and MUST NOT be inherited — see `VALUES-PROVENANCE.md` and `tests/independence/`. The
+MQTT `clientId` *format* is a deliberate exception: AWS-IoT needs only uniqueness, but
+the custom-authorizer IoT policy may pin the separator/length, so its
+`<mobileId>_<hex>` shape is kept as interop (`OBSERVED`) and only its random suffix is
+re-minted — see sec10.
 
 ## sec1 — Classification rule
 
@@ -179,8 +183,12 @@ MQTT-over-WebSocket to `AWS_ENDPOINT` via the AWS IoT **custom authorizer**
 `awscrt`/`aws-iot-device-sdk` custom-authorizer API + Haier's authorizer config:
 `auth_authorizer_name`, `auth_authorizer_signature` (the introspection token),
 `auth_token_key_name = "token"`, `auth_token_value = <id_token>`, `client_id`. The MQTT
-**clientId** must merely be *unique* — its format is a free client choice, so addhOn
-derives it from a `uuid4`. Lifecycle callback method *names* are addhOn's own.
+**clientId** is `<mobileId>_<16 hex>` — a fresh `secrets.token_hex(8)` suffix minted
+per connection. AWS-IoT only requires the clientId to be *unique*, but the shape is
+treated as `OBSERVED`/interop and kept byte-compatible with the historical client: the
+custom-authorizer IoT policy may pin the separator/length, so only the random suffix is
+regenerated, not the format (`mqtt.py`). Lifecycle callback method *names* are addhOn's
+own.
 
 ## sec11 — Error & retry semantics
 
