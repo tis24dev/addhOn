@@ -2,7 +2,7 @@ addhOn — attribution & provenance NOTICE
 ========================================
 
 This NOTICE preserves third-party attribution and provenance. The project is
-licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE). The MIT
+licensed under the GNU Affero General Public License v3.0 (see LICENSE). The MIT
 attribution below applies to the portions still derived from pyhOn, per the MIT
 requirement to retain the original copyright and permission notice. When the
 clean-room rewrite removes those portions, this NOTICE can be retired.

@@ -1,5 +1,5 @@
 # Copyright (C) 2026 tis24dev
-# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """Cross-check: every entity translation_key used by the platforms exists in the
 translations, and vice versa (exact set equality per platform, for en AND it).

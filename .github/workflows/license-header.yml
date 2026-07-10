@@ -23,12 +23,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Check SPDX PolyForm-Noncommercial-1.0.0 headers on Python sources
+      - name: Check SPDX AGPL-3.0-or-later headers on Python sources
         run: |
           missing=0
           while IFS= read -r f; do
-            if ! grep -Iq 'SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0' "$f"; then
-              echo "::error file=$f::missing SPDX PolyForm-Noncommercial-1.0.0 header"
+            if ! grep -Iq 'SPDX-License-Identifier: AGPL-3.0-or-later' "$f"; then
+              echo "::error file=$f::missing SPDX AGPL-3.0-or-later header"
               missing=1
             fi
           done < <(git ls-files '*.py')

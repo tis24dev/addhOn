@@ -1,5 +1,5 @@
 # Copyright (C) 2026 tis24dev
-# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """Golden test of the native ROOT appliance (Phase 4). Freezes properties + the
 end-to-end load on the real fridge dump. It used to be differential vs pyhOn

@@ -1,5 +1,5 @@
 # Copyright (C) 2026 tis24dev
-# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """Helpers for the native engine golden tests (Phase 4 slice 5b).
 

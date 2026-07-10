@@ -1,5 +1,5 @@
 # Copyright (C) 2026 tis24dev
-# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """Golden test of the native parameters (Phase 4). Reuses the 67 REAL fridge
 parameters (apk/dump/ref_10136/commands.json: range+enum+fixed) and freezes their
