@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """addhOn MQTT client (AWS IoT realtime push).
 
 Realtime push client built on awscrt directly.

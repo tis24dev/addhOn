@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Program parameter.
 
 A "program" parameter is not an enum of data: it is a VIEW over the command's

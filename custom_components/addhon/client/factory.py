@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Factory for the native hOn session and appliance.
 
 Building the session and the appliance behind these two functions keeps

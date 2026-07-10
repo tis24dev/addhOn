@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Contract test of the native device descriptor: `client/transport/device.HonDevice`.
 
 Pins the identity payload sent to the hOn cloud (appVersion/mobileId/os/osVersion/

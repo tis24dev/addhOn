@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the stable error-code catalog (issue #30).
 
 Covers catalog integrity (unique codes/slugs, label format), the classify()

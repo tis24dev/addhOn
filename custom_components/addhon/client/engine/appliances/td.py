@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """TD (tumble dryer) per-type appliance logic.
 
 `active` is derived from `activity`. `pause`: derived by value (machMode == 3); the

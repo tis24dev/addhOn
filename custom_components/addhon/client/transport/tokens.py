@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """OAuth token parsing + lifetime derivation for the addhOn transport (spec: HHT-sec6).
 
 Two independent pieces, both authored from public contracts (RFC 6749 / RFC 7519):

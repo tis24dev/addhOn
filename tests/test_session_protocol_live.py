@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """LIVE check that the real `NativeHon` satisfies the seam's HonSession Protocol.
 
 This is the "load-bearing" session check: the adapter returns a `NativeHon`

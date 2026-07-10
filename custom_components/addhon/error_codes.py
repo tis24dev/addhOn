@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Stable error-code catalog for addhOn.
 
 Every setup/connection failure is mapped to a stable ``ADDHON-NNN`` code plus a

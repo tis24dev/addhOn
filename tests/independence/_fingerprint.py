@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Structure-only AST fingerprinting for the independence harness (Gate A).
 
 The goal is to detect a *paraphrase* of pyhOn: code whose control-flow / call

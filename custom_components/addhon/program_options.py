@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Writable program-option controls for the washing group (WM/WD/TD), discussion #35.
 
 The washer/dryer expose start/stop/pause + a program select, but no way to tune the

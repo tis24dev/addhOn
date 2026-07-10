@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Control of the diagnostic log levels for the integration.
 
 The MQTT client (now OUR ``client.transport.mqtt``) emits an

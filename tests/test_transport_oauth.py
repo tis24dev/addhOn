@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Contract test of the OAuth login pieces: build_authorize_url / extract_login_url /
 absolutize / is_oauth_done / generate_nonce / build_login_payload.
 

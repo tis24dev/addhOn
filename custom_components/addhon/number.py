@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Haier hOn numbers (Tier 3): writable temperature setpoints.
 
 Cross-reference between the runtime schema (ground truth: dump of the real

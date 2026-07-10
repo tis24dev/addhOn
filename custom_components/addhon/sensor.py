@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Haier hOn sensors, defined per appliance type via a description table.
 
 The sensor set depends on the type (AC / WM / WD / TD): the washing machine (WM)

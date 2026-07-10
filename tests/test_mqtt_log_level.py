@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for silencing pyhOn MQTT noise and enabling integration debug logs.
 
 pyhOn's MQTT client (logger 'pyhon.connection.mqtt') logs one INFO line per

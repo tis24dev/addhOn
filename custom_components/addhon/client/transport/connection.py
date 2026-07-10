@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Native authenticated HTTP connection (addhOn transport).
 
 get/post with per-request token injection (`build_auth_headers`) and retry on

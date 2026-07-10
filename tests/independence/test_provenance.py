@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Gate B -- provenance-manifest completeness & anti-copy (catches inherited values).
 
 Every module-level literal constant in values.py must be declared in provenance.json

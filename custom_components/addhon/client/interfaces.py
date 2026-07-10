@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """The Protocols that define the EXACT surface of the hOn client that the
 integration depends on.
 

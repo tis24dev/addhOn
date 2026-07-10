@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Shared debug logging helpers for Haier hOn."""
 from __future__ import annotations
 

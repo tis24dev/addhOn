@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Native hOn client of addhOn.
 
 The whole client (auth/transport, command/parameter/rules engine, appliance) is OUR

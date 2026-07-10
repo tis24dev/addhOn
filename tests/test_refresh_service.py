@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the domain-wide ``addhon.refresh`` service.
 
 The service forces an immediate cloud poll on every loaded config entry: the

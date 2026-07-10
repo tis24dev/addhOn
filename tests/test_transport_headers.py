@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Contract test for build_auth_headers (spec: HHT-sec4).
 
 Oracle = the header contract authored in docs/protocol/HAIER-HON-TRANSPORT.md (sec4),

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Shared snapshot/restore of engine parameter state for send-path rollback.
 
 Assigning a value to a HonParameter (or applying a program) mutates the parameter

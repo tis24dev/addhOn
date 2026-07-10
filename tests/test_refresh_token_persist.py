@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Behavioral tests for `_persist_refresh_token` (#1/#2 unified refresh-token persist).
 
 The helper must write a rotated token into entry.data exactly once and only on a real

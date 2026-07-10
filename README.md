@@ -10,7 +10,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/tis24dev/addhOn/ci.yml?branch=dev&label=CI&logo=github)](https://github.com/tis24dev/addhOn/actions/workflows/ci.yml)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?logo=homeassistant&logoColor=white)](https://hacs.xyz/)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.12%2B-41BDF5.svg?logo=homeassistant&logoColor=white)](https://www.home-assistant.io/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: PolyForm NC](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
 [![Last commit](https://img.shields.io/github/last-commit/tis24dev/addhOn?logo=github)](https://github.com/tis24dev/addhOn/commits)
 [![💖 Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
 
@@ -163,6 +163,20 @@ addhOn's cloud client originated from [pyhOn](https://github.com/Andre0512/pyhOn
 (MIT © 2023 Andre Basche) and still contains portions derived from it, tracked
 per-module by the independence harness in [`tests/independence/`](tests/independence/).
 See [`NOTICE`](NOTICE) for the current derivation status and attribution.
+
+## License
+
+Copyright (C) 2026 tis24dev
+
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use,
+modify, and share this integration for any noncommercial purpose, and
+contributions back via pull request are welcome. Any commercial use requires a
+separate license from the copyright holder. Previously released under MIT.
+
+Portions remain derived from pyhOn (MIT © 2023 Andre Basche); that attribution is
+preserved in [`NOTICE`](NOTICE) and applies to those portions.
+
+See <https://polyformproject.org/licenses/noncommercial/1.0.0/> for the full terms.
 
 ## Support
 

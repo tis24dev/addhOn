@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Native HonAttribute.
 
 hOn attribute: a state value (`HonAttribute`) read from the device shadow

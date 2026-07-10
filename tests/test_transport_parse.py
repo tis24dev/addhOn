@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Contract test of the transport's appliance-list parser: parse_appliance_list.
 
 Oracle = the unified-api appliance-list contract in

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """WH (water heater) per-type appliance logic.
 
 `active` = onOffStatus==1, compared by value. The derived field is not currently

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Golden + behavioral test of the native per-type layer (Phase 4). It used to be
 differential vs pyhOn; with `_vendor/` deleted it is golden (native output proven
 == pyhOn at checkpoint 5a) + pins for the app-priority FIXES (modeZ/pause/wh-active

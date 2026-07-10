@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Shared sending of the air conditioner's `settings` command.
 
 Both the climate entity (mode/temp/fan/swing) and the AC switches modify the SAME

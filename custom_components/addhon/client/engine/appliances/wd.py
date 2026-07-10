@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """WD (washer-dryer) per-type appliance logic.
 
 Like TD but without the dryLevel tweak. `pause` derived by value (see td.py/base.py).

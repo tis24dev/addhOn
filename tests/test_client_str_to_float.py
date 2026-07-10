@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Characterization of str_to_float (client/helpers.py).
 
 It used to be a differential test vs pyhOn's str_to_float (_vendor/pyhon/helper.py);

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Behavioural tests for the writable program options (discussion #35).
 
 Covers the design-of-record:

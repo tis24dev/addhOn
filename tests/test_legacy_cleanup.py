@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for _remove_legacy_entities (#22): the legacy 'power' cleanup must be
 scoped to the switch domain, so the legitimate WH `power` and KT `current_power`
 SENSORS (which also end in '_power') are not purged on every setup.

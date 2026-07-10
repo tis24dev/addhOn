@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Native ROOT HonAppliance.
 
 Puts together our whole engine: native attributes (engine.attributes), native loader/

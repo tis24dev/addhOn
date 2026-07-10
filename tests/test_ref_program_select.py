@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the fridge (REF/FR/FRE) writable program/mode select, discussion #40.
 
 The fridge modes (super cool, super freeze, holiday, iot_* presets) are startProgram

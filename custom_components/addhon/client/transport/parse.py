@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Parser of the hOn cloud responses (addhOn transport).
 
 Appliance-list extraction from the endpoint

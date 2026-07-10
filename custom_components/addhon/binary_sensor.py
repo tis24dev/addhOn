@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Haier hOn binary sensors (wash group): door, locks, maintenance alarms.
 
 The entities are CAPABILITY-GATED: a description is created only if the device

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Static guard for the #32/#34/#35 cluster: device identity must never reach the
 logs raw.
 

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Offline test of the native auth flow (HonAuth) with a MOCKED session.
 
 The happy path is already LIVE-validated (apk/validate_auth_live.py: real login ->

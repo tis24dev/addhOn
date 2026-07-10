@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Diagnostics support for Haier hOn (Extended).
 
 This dump is what a user attaches to a GitHub issue when an appliance is "not

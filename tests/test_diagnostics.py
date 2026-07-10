@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the enriched diagnostics dump.
 
 The dump is what a user sends when an appliance is not mapped or mapped badly, so

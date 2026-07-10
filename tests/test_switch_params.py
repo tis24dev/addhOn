@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Validate that switch.py `_AC_SWITCHES` `param` names exist on a real Haier AC.
 
 The per-type entity tests validate the entity `key` (the slug) but NOT the `param`

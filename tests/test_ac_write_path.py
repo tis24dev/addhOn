@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the AC write-path: climate setters, AC switches, and the shared
 ``ac_command`` sender.
 

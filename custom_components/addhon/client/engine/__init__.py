@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """addhOn native parser engine (commands/parameters/rules/program/appliance).
 
 OUR code (commands/parameter/rules/command_loader/appliance), validated against

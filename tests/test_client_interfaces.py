@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the migration seam (client/interfaces.py).
 
 interfaces.py has NO dependencies (only typing): we load it in total isolation

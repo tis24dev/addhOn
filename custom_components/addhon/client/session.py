@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """addhOn `NativeHon` session orchestration.
 
 Coordinates the setup on top of the native transport (`transport.connection.HonConnection` +

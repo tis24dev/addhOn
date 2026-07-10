@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Fixed parameter for hOn commands.
 
 `value` defaults to "0" if empty. The setter does NOT validate (fixed values are not

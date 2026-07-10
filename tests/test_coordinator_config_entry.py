@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Regression tests for binding the DataUpdateCoordinator to its config entry.
 
 Covers the fix that passes config_entry=entry to DataUpdateCoordinator. That

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Test for the LOW fix: auth error classification (wrong-password -> reauth).
 
 `_is_auth_error` now also checks the NAME of the exception class, so errors from

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Offline tests for the 2FA (email-OTP) support on the Salesforce path.
 
 Covers the pure scrape/build helpers in transport.oauth, the HonAuth resume flow

@@ -1,8 +1,11 @@
 addhOn — attribution & provenance NOTICE
 ========================================
 
-This is an interim, good-faith disclosure of third-party provenance. It is NOT a
-change to the project's LICENSE strategy (that decision is the maintainers').
+This NOTICE preserves third-party attribution and provenance. The project is
+licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE). The MIT
+attribution below applies to the portions still derived from pyhOn, per the MIT
+requirement to retain the original copyright and permission notice. When the
+clean-room rewrite removes those portions, this NOTICE can be retired.
 
 Origin
 ------

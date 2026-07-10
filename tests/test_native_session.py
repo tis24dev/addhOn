@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Offline test of the native `Hon` orchestration (NativeHon, Phase 3 piece 3).
 
 Verifies the setup SEQUENCE faithful to pyhOn `Hon.setup` (load_appliances ->

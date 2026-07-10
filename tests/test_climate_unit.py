@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Regression guard: climate must use the HA temperature-unit constant.
 
 Covers the M4 cleanup (replace the hardcoded "°C" literal with

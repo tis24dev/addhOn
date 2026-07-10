@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Native per-type layer.
 
 Per-type CLIENT-SIDE derivations (programName, modes, active/pause, available) and

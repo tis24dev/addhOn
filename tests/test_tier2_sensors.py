@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the Tier 2 read-only appliance types (capability-gated).
 
 Tier 2 adds sensor + binary_sensor support for the appliance types that are

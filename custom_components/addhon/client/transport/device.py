@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Client device descriptor for the addhOn transport.
 
 Builds the "who am I" identity (app version, OS, model, mobileId) sent to the hOn

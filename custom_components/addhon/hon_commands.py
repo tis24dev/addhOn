@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Shared helpers to send hOn commands to the controls (Tier 3).
 
 Generalizes the pattern already used by button.py (sending a command while

@@ -1,0 +1,35 @@
+name: License Headers
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  headers:
+    name: SPDX header check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Check SPDX PolyForm-Noncommercial-1.0.0 headers on Python sources
+        run: |
+          missing=0
+          while IFS= read -r f; do
+            if ! grep -Iq 'SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0' "$f"; then
+              echo "::error file=$f::missing SPDX PolyForm-Noncommercial-1.0.0 header"
+              missing=1
+            fi
+          done < <(git ls-files '*.py')
+          exit $missing

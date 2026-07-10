@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for debug_utils.redact_email.
 
 Covers the privacy fix that stops logging the full account email at INFO: the

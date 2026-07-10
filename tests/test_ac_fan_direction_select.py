@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the AC manual fan-direction position selects (discussion #37).
 
 Two capability-gated selects per AC -- vertical + horizontal louver position --

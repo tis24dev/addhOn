@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Shared test stubs for the addhon suite.
 
 There is no real `homeassistant` package in the test environment; each test module

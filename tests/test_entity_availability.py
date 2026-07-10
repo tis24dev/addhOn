@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for HonBaseEntity's per-appliance `available` override.
 
 Covers the fix that makes an entity go unavailable when its appliance is no

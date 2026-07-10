@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Offline test of the native MQTT (NativeMqttClient, Phase 3 piece 4b).
 
 awscrt/awsiot are stubbed in sys.modules (the module imports them at the top): so

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """REF (refrigerator) per-type appliance logic.
 
 modeZ1/modeZ2 are derived by VALUE from the holiday/intelligence/quickMode flags.

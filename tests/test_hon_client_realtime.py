@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the MQTT realtime wiring (#4): HonClient.subscribe_updates /
 build_realtime_snapshot, plus source-guards for the async_setup_entry wiring.
 

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Numeric utilities of the native hOn client.
 
 `str_to_float` converts hOn values (usually strings) to numbers and is used by the

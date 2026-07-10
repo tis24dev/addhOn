@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Authenticated HTTP API client of the hOn cloud (addhOn transport).
 
 Implements the authenticated methods on top of `HonConnection` (which injects the

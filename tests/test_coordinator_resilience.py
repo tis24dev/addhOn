@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Per-appliance resilience of the coordinator poll (async_get_appliances_data).
 
 A non-auth failure on ONE appliance (a transient cloud 5xx that outlived the

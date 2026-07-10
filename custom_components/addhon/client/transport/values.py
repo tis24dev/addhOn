@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Haier-cloud interop values -- the provenance-tracked home for the transport's
 module-level endpoint and identity literals.
 

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the error-code surfacing in the config flow (issue #30).
 
 A coded CannotConnect/InvalidAuth from validate_input must drive both the form

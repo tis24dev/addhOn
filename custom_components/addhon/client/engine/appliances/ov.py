@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """OV (oven) per-type appliance logic.
 
 `active` = onOffStatus==1 (compared by `.value`). Robustness: `.get`/no-op on absent

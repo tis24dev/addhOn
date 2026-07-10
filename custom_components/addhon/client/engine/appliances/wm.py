@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """WM (washing machine) per-type appliance logic.
 
 `active`/`pause` (machMode==3) derived. No offline zeroing: availability is

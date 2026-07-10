@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Validate the #35 program-option catalogs against erpayo's REAL device schemas.
 
 The per-type entity tests validate entity `key`s (slugs) but not the `param`

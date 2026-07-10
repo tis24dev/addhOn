@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Climate entity for Haier hOn - air conditioner AS35PBPHRA-PRE."""
 from __future__ import annotations
 

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the Options flow debug toggles (enable_debug, enable_mqtt_debug).
 
 Two independent, persisted toggles on the integration's Configure screen:

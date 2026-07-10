@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Guard for the TOTAL detachment from pyhOn (Phase 4 completed).
 
 History: the hOn session went through the bridge adapter `factory` (the only

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Haier hOn switches: washer/dryer pause + air conditioner toggles."""
 from __future__ import annotations
 

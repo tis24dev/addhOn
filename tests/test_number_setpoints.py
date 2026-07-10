@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the Tier 3 number platform (writable temperature setpoints).
 
 Modeled on the REAL fridge schema (pyhOn dump, REF HDPW5620CNPK): a `settings`

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Regression tests for the restored program select and power cleanup.
 
 Covers the Option B fix (regression that appeared in the public release 2.4.0,

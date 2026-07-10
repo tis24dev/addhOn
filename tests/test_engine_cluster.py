@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Golden + behavioral test of the native engine CLUSTER (commands/command_loader/
 rules/program). It used to be differential vs pyhOn; with `_vendor/` deleted it is
 golden (native output proven == pyhOn at checkpoint 5a) + behavioral pins.

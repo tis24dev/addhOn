@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Golden test of the native attribute (Phase 4). Freezes construction/update/lock
 of HonAttribute on the REAL fridge shadow data + synthetic cases.
 

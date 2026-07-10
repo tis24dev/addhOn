@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Guard: the integration code is English / ASCII.
 
 Every `.py` under custom_components/addhon (excluding translations/) must contain

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Range parameter (min/max/step) for hOn commands.
 
 min/max/step/default via `str_to_float` (reuses client.helpers). `step` falls back to 1

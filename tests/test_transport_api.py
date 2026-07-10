@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Differential test of the native HTTP api (addhOn transport, Phase 3 piece 2).
 
 pyhOn's `connection/api.HonAPI` methods live INLINE in async+HTTP methods, so they

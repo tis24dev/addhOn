@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Contract test of the transport's OAuth token parser: parse_token_fragment.
 
 Oracle = the OAuth2 implicit-flow redirect contract (RFC 6749 sec4.2.2), documented

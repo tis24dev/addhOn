@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Tests for the account-level debug panel entities (switches, sensors, buttons).
 
 The integration exposes its debug controls on a dedicated per-account

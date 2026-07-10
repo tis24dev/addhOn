@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 """Offline test of the native connection wrapper (HonConnection).
 
 Verifies the novel logic: per-request token injection (build_auth_headers) +
