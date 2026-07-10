@@ -62,6 +62,9 @@ def _install_stubs() -> None:
 _install_stubs()
 
 from custom_components.addhon.client.transport import oauth as o  # noqa: E402
+from custom_components.addhon.client.transport.tokens import (  # noqa: E402
+    parse_token_fragment,
+)
 from custom_components.addhon.client.transport.values import (  # noqa: E402
     APP,
     AUTH_API,
@@ -184,6 +187,30 @@ class OAuthPiecesTest(unittest.TestCase):
     def test_is_oauth_done(self) -> None:
         self.assertTrue(o.is_oauth_done("...oauth/done#access_token=AAA&..."))
         self.assertFalse(o.is_oauth_done("normal login page"))
+
+    def test_oauth_done_fragment_slices_from_marker(self) -> None:
+        page = "junk before ...oauth/done#access_token=AAA&refresh_token=BBB&id_token=CCC'>"
+        self.assertEqual(
+            o.oauth_done_fragment(page),
+            "oauth/done#access_token=AAA&refresh_token=BBB&id_token=CCC'>",
+        )
+        self.assertIsNone(o.oauth_done_fragment("normal login page"))
+
+    def test_sso_fast_path_ignores_stray_earlier_token(self) -> None:
+        # Regression (greptile P1): a whole authorize page with a stray earlier
+        # `access_token=` (e.g. echoed state) BEFORE the real oauth/done redirect.
+        # Anchoring on the marker must select the REAL token, not the stray one.
+        page = (
+            "<a href='https://x/#access_token=STRAY&refresh_token=OLD&id_token=OLD'>x</a>"
+            "...hon://mobilesdk/detect/oauth/done#access_token=REAL&refresh_token=RT&id_token=IT'>"
+        )
+        # Naive whole-page parse would grab the stray token first.
+        self.assertEqual(parse_token_fragment(page).access_token, "STRAY")
+        # The fix parses from the oauth/done marker and gets the real token.
+        fixed = parse_token_fragment(o.oauth_done_fragment(page))
+        self.assertEqual(fixed.access_token, "REAL")
+        self.assertEqual(fixed.id_token, "IT")
+        self.assertTrue(fixed.complete)
 
     def test_absolutize_is_byte_identical_to_concat_where_concat_was_valid(self) -> None:
         # sec5: on-host relative/empty/query/fragment hrefs resolve exactly like the

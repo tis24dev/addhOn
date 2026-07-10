@@ -46,6 +46,7 @@ from .oauth import (
     extract_login_url,
     generate_nonce,
     is_oauth_done,
+    oauth_done_fragment,
     parse_remoting_result,
 )
 from .tokens import parse_token_fragment, token_expiry
@@ -197,11 +198,12 @@ class HonAuth:
             if login_url is None:
                 if is_oauth_done(text):
                     # SSO fast-path: the authorize page already carried the token
-                    # fragment. parse_token_fragment reads the last field with no
-                    # trailing '&' (RFC 6749 sec4.2.2), so no hand-appended '&' is
-                    # needed; require .complete before committing, mirroring
-                    # _resume_tokens_after_2fa, rather than proceeding half-parsed.
-                    t = parse_token_fragment(text)
+                    # fragment. Parse from the real `oauth/done#` marker (not the whole
+                    # page) so a stray earlier `*_token=` elsewhere cannot be first-
+                    # matched; parse_token_fragment then reads the last field with no
+                    # trailing '&' (RFC 6749 sec4.2.2). Require .complete before
+                    # committing, mirroring _resume_tokens_after_2fa.
+                    t = parse_token_fragment(oauth_done_fragment(text) or text)
                     if not t.complete:
                         self._phase(
                             "introduce", status=resp.status,

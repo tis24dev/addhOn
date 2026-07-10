@@ -78,6 +78,19 @@ def is_oauth_done(text: str) -> bool:
     return "oauth/done#access_token=" in text
 
 
+def oauth_done_fragment(text: str) -> str | None:
+    """The `oauth/done#...` redirect tail (from the marker to the end), or None.
+
+    The SSO fast path may parse a whole authorize page. Slicing from the real
+    `oauth/done#` marker first stops a stray earlier `*_token=` on the page (inline
+    JS, echoed state) from being first-matched instead of the real token, mirroring
+    the done-URL-first extraction in _resume_tokens_after_2fa. parse_token_fragment's
+    value class then stops each token at the surrounding markup.
+    """
+    i = text.find("oauth/done#")
+    return text[i:] if i != -1 else None
+
+
 def extract_login_url(text: str) -> str | None:
     """Login URL from the authorize page, or None if absent.
 
