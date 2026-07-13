@@ -446,6 +446,35 @@ class CreatePathTest(unittest.TestCase):
         self.assertIs(mod._retryable_startup_code(outage), MQTT_CONNECT_TIMEOUT)
         self.assertIsNone(mod._retryable_startup_code(invalid))
 
+    def test_auth_marked_transport_errors_propagate_instead_of_retrying(self) -> None:
+        import custom_components.addhon.client.transport.mqtt as mod
+
+        class ClientConnectionError(Exception):
+            pass
+
+        class ServerDisconnectedError(Exception):
+            pass
+
+        errors = (
+            ConnectionError("api_auth: status 401"),
+            ClientConnectionError("HTTP 401 unauthorized"),
+            ServerDisconnectedError("token rejected"),
+        )
+        for err in errors:
+            with self.subTest(error=type(err).__name__):
+                self.assertIsNone(mod._retryable_startup_code(err))
+
+                mqtt_client = NativeMqttClient(FakeHon([]), "MID")
+
+                async def rejected(error=err):
+                    raise error
+
+                mqtt_client._start = rejected  # type: ignore[assignment]
+                with self.assertRaises(type(err)):
+                    _run(mqtt_client.create())
+                self.assertIsNone(mqtt_client._watchdog_task)
+                self.assertIsNone(mqtt_client._client)
+
     def test_create_stops_client_when_subscribe_fails(self) -> None:
         # #21: _start() already started the awscrt client; if a later step raises,
         # create() must stop it before re-raising (otherwise NativeHon never gets a

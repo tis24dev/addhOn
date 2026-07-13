@@ -183,23 +183,19 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
 
     Order is most-specific-first. A carried code wins; then rate-limit/5xx (which
     must beat the auth-named-class rule, like the existing classifier); then
-    timeouts (attributed to ``phase`` when known); then TLS/DNS/refused; then the
-    native auth-step messages; finally the coarse buckets via the existing
-    ``hon_client`` predicates.
+    timeouts (attributed to ``phase`` when known); then explicit auth rejections,
+    TLS/DNS/refused and native auth-step messages; finally broad transport types
+    and the coarse buckets via the existing ``hon_client`` predicates.
     """
     code = getattr(err, "error_code", None)
     if isinstance(code, HonErrorCode):
         return code
 
-    # Type-first decoding/transport cases. Their ordinary messages do not reliably
-    # contain "decode error", "refused" or a status, so substring-only classification
-    # turns real transient AWS introspection failures into UNKNOWN. Keep this module
-    # dependency-free: aiohttp errors are recognized by their stable public class names
-    # (the same name-based seam already used below for auth/TLS exception families).
+    # Decode types are unambiguous even when their ordinary messages do not contain
+    # "decode error". Broad connection types are deliberately handled later: their
+    # messages may still carry a more-specific 5xx or explicit auth rejection.
     if isinstance(err, (json.JSONDecodeError, UnicodeDecodeError)):
         return DECODE_ERROR
-    if isinstance(err, ConnectionError):
-        return CONNECTION_REFUSED
 
     name = type(err).__name__.lower()
     class_names = " ".join(cls.__name__.lower() for cls in type(err).__mro__)
@@ -225,6 +221,45 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
         return SERVER_ERROR
     if _is_timeout(err) or "timed out" in hay or "timeout" in hay:
         return phase_timeout_code(phase)
+
+    # A transport-shaped exception can wrap a real HTTP/token rejection. Detect only
+    # explicit rejection markers here (not a bare "auth"/"token", which may merely be
+    # an endpoint name) so bad credentials propagate to HA reauth instead of being
+    # converted to MQTT polling-only retries. Retryable 429/5xx/timeouts above retain
+    # priority, including NativeAuthError("api_auth: status 503").
+    auth_rejected = (
+        "unauthorized" in hay
+        or any(
+            marker in hay
+            for marker in (
+                "http 401",
+                "http 403",
+                "status 401",
+                "status 403",
+                "status=401",
+                "status=403",
+                "token rejected",
+                "rejected token",
+                "invalid token",
+                "token invalid",
+                "expired token",
+                "token expired",
+                "invalid credential",
+                "credential rejected",
+            )
+        )
+    )
+    if auth_rejected:
+        if "api_auth" in hay:
+            return AUTH_API_AUTH
+        if "get_token" in hay or "token page" in hay or "progressive" in hay:
+            return AUTH_GET_TOKEN
+        if "login page" in hay or "introduce" in hay or "no fwuid" in hay:
+            return AUTH_INTRODUCE
+        if "login:" in hay or "can't login" in hay or "login failed" in hay:
+            return AUTH_LOGIN
+        return INVALID_CREDENTIALS
+
     # TLS/certificate: key off the exception CLASS NAME or explicit certificate text,
     # NOT a bare "ssl" in the message. aiohttp's ClientConnectorError __str__ ALWAYS
     # contains "ssl:default" for ANY HTTPS connect failure (a plain outage, not a TLS
@@ -253,17 +288,6 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
         return CONNECTION_REFUSED
     if "clientpayloaderror" in class_names:
         return DECODE_ERROR
-    if any(
-        family in class_names
-        for family in (
-            "clientconnectionerror",
-            "clientconnectorerror",
-            "clientoserror",
-            "serverconnectionerror",
-            "serverdisconnectederror",
-        )
-    ):
-        return CONNECTION_REFUSED
     if "decode error" in hay:
         return DECODE_ERROR
     if "api_auth" in hay:
@@ -276,6 +300,23 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
         return AUTH_LOGIN
     if "appliance" in hay and "empty" in hay:
         return APPLIANCE_LIST_EMPTY
+
+    # Broad transport fallbacks come after the semantic markers above. Otherwise a
+    # ConnectionError/ClientConnectionError carrying "401 unauthorized" becomes
+    # ADDHON-430 and MQTT treats a credential rejection as a retryable outage.
+    if isinstance(err, ConnectionError):
+        return CONNECTION_REFUSED
+    if any(
+        family in class_names
+        for family in (
+            "clientconnectionerror",
+            "clientconnectorerror",
+            "clientoserror",
+            "serverconnectionerror",
+            "serverdisconnectederror",
+        )
+    ):
+        return CONNECTION_REFUSED
 
     # Coarse fallback via the existing routing predicates (single source of truth).
     from .hon_client import _is_auth_error, _is_retryable_server_error

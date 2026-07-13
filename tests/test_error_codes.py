@@ -150,6 +150,31 @@ class ClassifyTest(unittest.TestCase):
             ec.DECODE_ERROR,
         )
 
+    def test_auth_rejections_beat_broad_connection_types(self) -> None:
+        class AuthConnectionError(ConnectionError):
+            pass
+
+        class ClientConnectionError(Exception):
+            pass
+
+        class ServerDisconnectedError(Exception):
+            pass
+
+        cases = (
+            (AuthConnectionError("api_auth: status 401"), ec.AUTH_API_AUTH),
+            (ClientConnectionError("HTTP 401 unauthorized"), ec.INVALID_CREDENTIALS),
+            (ServerDisconnectedError("token rejected"), ec.INVALID_CREDENTIALS),
+        )
+        for err, expected in cases:
+            with self.subTest(error=type(err).__name__):
+                self.assertIs(ec.classify(err), expected)
+                self.assertTrue(hc._requires_reauth(err))
+
+    def test_server_status_beats_builtin_connection_type(self) -> None:
+        err = ConnectionError("503 server error")
+        self.assertIs(ec.classify(err), ec.SERVER_ERROR)
+        self.assertFalse(hc._requires_reauth(err))
+
     def test_aiohttp_connect_failure_is_not_tls(self) -> None:
         # aiohttp's ClientConnectorError __str__ ALWAYS carries "ssl:default" for any
         # HTTPS connect failure; that is a plain outage, NOT a TLS problem (refuter F1).
