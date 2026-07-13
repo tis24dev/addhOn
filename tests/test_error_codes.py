@@ -121,6 +121,35 @@ class ClassifyTest(unittest.TestCase):
         self.assertIs(ec.classify(RuntimeError("getaddrinfo failed")), ec.DNS_FAILURE)
         self.assertIs(ec.classify(RuntimeError("Connection refused")), ec.CONNECTION_REFUSED)
 
+    def test_real_decode_and_disconnect_types_are_not_unknown(self) -> None:
+        self.assertIs(
+            ec.classify(json.JSONDecodeError("Expecting value", "", 0)),
+            ec.DECODE_ERROR,
+        )
+        self.assertIs(
+            ec.classify(UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")),
+            ec.DECODE_ERROR,
+        )
+        self.assertIs(
+            ec.classify(ConnectionError("connection aborted")),
+            ec.CONNECTION_REFUSED,
+        )
+
+        class ServerDisconnectedError(Exception):
+            pass
+
+        class ClientPayloadError(Exception):
+            pass
+
+        self.assertIs(
+            ec.classify(ServerDisconnectedError("Server disconnected")),
+            ec.CONNECTION_REFUSED,
+        )
+        self.assertIs(
+            ec.classify(ClientPayloadError("Response payload is not completed")),
+            ec.DECODE_ERROR,
+        )
+
     def test_aiohttp_connect_failure_is_not_tls(self) -> None:
         # aiohttp's ClientConnectorError __str__ ALWAYS carries "ssl:default" for any
         # HTTPS connect failure; that is a plain outage, NOT a TLS problem (refuter F1).

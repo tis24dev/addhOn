@@ -38,7 +38,21 @@ from awsiot import mqtt5_client_builder  # type: ignore[import-untyped]
 from .device import MOBILE_ID
 from .values import AWS_AUTHORIZER, AWS_ENDPOINT
 from ...debug_utils import redact_id, redact_identity, redact_topic
-from ...error_codes import HonCodedError, MQTT_SUBSCRIBE_TIMEOUT
+from ...error_codes import (
+    AWS_TOKEN_FAILED,
+    CONNECTION_REFUSED,
+    DECODE_ERROR,
+    DNS_FAILURE,
+    MQTT_CONNECT_TIMEOUT,
+    MQTT_SUBSCRIBE_TIMEOUT,
+    NETWORK_TIMEOUT,
+    RATE_LIMITED,
+    SERVER_ERROR,
+    TLS_FAILURE,
+    UNKNOWN,
+    HonCodedError,
+    classify,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,6 +77,71 @@ _RECONNECT_BACKOFF_CAP = 60
 # to a full rebuild PROMPTLY -- skipping the _RECONNECT_AFTER_FAILED_TICKS grace wait,
 # since this connection is already known dead. Reset to 0 on ANY successful subscribe.
 _MAX_RESUBSCRIBE_FAILURES = 3
+
+# Only operational failures are allowed to make the initial MQTT connection
+# polling-only while the watchdog retries. UNKNOWN is deliberately absent: an
+# ImportError, TypeError, AttributeError or invalid builder contract is a code/config
+# regression and must fail setup visibly instead of being hidden forever.
+_RETRYABLE_STARTUP_CODES = frozenset(
+    {
+        AWS_TOKEN_FAILED,
+        MQTT_CONNECT_TIMEOUT,
+        NETWORK_TIMEOUT,
+        DNS_FAILURE,
+        TLS_FAILURE,
+        CONNECTION_REFUSED,
+        RATE_LIMITED,
+        SERVER_ERROR,
+        DECODE_ERROR,
+    }
+)
+
+
+class MqttStartupUnavailable(HonCodedError):
+    """Retryable failure before the MQTT client's watchdog could be started."""
+
+
+_STRUCTURAL_ERRORS = (
+    AssertionError,
+    AttributeError,
+    ImportError,
+    IndexError,
+    KeyError,
+    NameError,
+    TypeError,
+)
+
+
+def _is_structural_error(error: BaseException) -> bool:
+    """True for deterministic code/schema errors which retry cannot repair."""
+    if isinstance(error, _STRUCTURAL_ERRORS):
+        return True
+    # JSONDecodeError and UnicodeDecodeError are ValueErrors but represent unreadable
+    # cloud responses, not deterministic builder/schema faults.
+    return isinstance(error, ValueError) and not isinstance(
+        error, (json.JSONDecodeError, UnicodeDecodeError)
+    )
+
+
+def _retryable_startup_code(error: BaseException):
+    """Return a stable retry code, or None for a fail-fast setup error."""
+    if _is_structural_error(error):
+        return None
+    code = classify(error, phase="aws_token")
+    if code in _RETRYABLE_STARTUP_CODES:
+        return code
+    # awscrt surfaces native connection/runtime failures through one generic class.
+    # Invalid argument/state errors are deterministic builder-contract faults; other
+    # CRT failures are operational and should use the existing MQTT connect code.
+    if type(error).__name__ == "AwsCrtError":
+        crt_name = str(getattr(error, "name", "")).upper()
+        if any(
+            marker in crt_name
+            for marker in ("INVALID_ARGUMENT", "INVALID_STATE", "ALREADY_STARTED")
+        ):
+            return None
+        return MQTT_CONNECT_TIMEOUT
+    return None
 
 
 def _subscribed_topics(appliance) -> list:
@@ -135,7 +214,26 @@ class NativeMqttClient:
     async def create(self) -> "NativeMqttClient":
         try:
             self._set_setup_phase("mqtt_connect")
-            await self._start()
+            try:
+                await self._start()
+            except Exception as err:
+                code = _retryable_startup_code(err)
+                if code is None:
+                    raise
+                # MQTT is an acceleration channel; HTTP polling remains the source of
+                # truth. Retain THIS NativeMqttClient and start its existing watchdog so
+                # a temporary AWS-token outage heals without a config-entry reload. Stop
+                # a partially-created native client first: it owns sockets/worker threads
+                # and cannot be left beside the later watchdog-created generation.
+                await self.stop()
+                await self._start_watchdog()
+                _LOGGER.warning(
+                    "[%s] MQTT startup deferred; continuing with HTTP polling and "
+                    "retrying in the background",
+                    code.label,
+                    exc_info=True,
+                )
+                return self
             gen = self._generation
             self._set_setup_phase("mqtt_subscribe")
             await self._subscribe_missing()
@@ -161,6 +259,23 @@ class NativeMqttClient:
             raise
         return self
 
+    def _stop_client(self) -> None:
+        """Stop and clear only the native client, leaving watchdog ownership alone."""
+        client, self._client = self._client, None
+        self._connection = False
+        self._subscribed_topics_set = set()
+        if client is None:
+            return
+        # Invalidate callbacks BEFORE stop(): awscrt shutdown is asynchronous and can
+        # emit a queued success/failure after stop. Without the bump that late event is
+        # still "current" and can resurrect a false connected state on a client we no
+        # longer own, causing the watchdog to skip recovery (especially with zero topics).
+        self._generation += 1
+        try:
+            client.stop()
+        except Exception as err:  # pragma: no cover - defensive
+            _LOGGER.debug("addhOn: MQTT client stop failed: %s", err)
+
     async def stop(self) -> None:
         """Stop watchdog (cancel+await) and then the awscrt client. Idempotent."""
         if self._watchdog_task is not None:
@@ -172,12 +287,7 @@ class NativeMqttClient:
             except Exception as err:  # pragma: no cover - defensive
                 _LOGGER.debug("addhOn: awaiting MQTT watchdog cancel failed: %s", err)
             self._watchdog_task = None
-        if self._client is not None:
-            try:
-                self._client.stop()
-            except Exception as err:  # pragma: no cover - defensive
-                _LOGGER.debug("addhOn: MQTT client stop failed: %s", err)
-            self._client = None
+        self._stop_client()
 
     # -- lifecycle callbacks ---------------------------------------------------
     # The callbacks that write self._connection are registered (in _start) bound to the
@@ -388,12 +498,10 @@ class NativeMqttClient:
         # without stopping the previous one leaks its native AWS IoT connection
         # (socket + worker threads are NOT released by GC, only by .stop()), so a
         # sustained disconnection would spawn a new orphan client every cycle.
-        if self._client is not None:
-            try:
-                self._client.stop()
-            except Exception as err:  # pragma: no cover - defensive
-                _LOGGER.debug("addhOn: stopping previous MQTT client failed: %s", err)
-            self._client = None
+        # _stop_client invalidates the old generation BEFORE stop(), so even a success
+        # callback synchronously/late emitted by native shutdown cannot resurrect a
+        # false connected state during the rebuild.
+        self._stop_client()
         # A fresh client carries over no subscriptions: clear the set here (the caller
         # -- create() or the watchdog rebuild path -- re-populates it only after the
         # subscribe succeeds). Rebind (atomic) rather than .clear().
@@ -406,19 +514,19 @@ class NativeMqttClient:
         # healthy), but a rebuild whose subscribe then fails would leave a
         # stale connected-but-unsubscribed state on a client that is not actually up yet,
         # sending the next tick down the in-place re-subscribe path against a dead client
-        # instead of rebuilding. The only late callback the stopped client can still emit
-        # is a disconnection (-> False), never a spurious success, and the generation bump
-        # below rejects every other stale event; so this reset cannot be flipped True.
+        # instead of rebuilding. _stop_client already invalidated every old callback;
+        # this reset establishes the initial state for the new generation.
         self._connection = False
         # Tag this client's state-mutating callbacks with a fresh generation so a late
         # event from the client just stopped cannot flip self._connection (see
         # _is_stale_generation).
         self._generation += 1
         generation = self._generation
+        signature = await self._load_aws_signature()
         self._client = mqtt5_client_builder.websockets_with_custom_authorizer(
             endpoint=AWS_ENDPOINT,
             auth_authorizer_name=AWS_AUTHORIZER,
-            auth_authorizer_signature=await self._api.load_aws_token(),
+            auth_authorizer_signature=signature,
             auth_token_key_name="token",
             auth_token_value=self._api.auth.id_token,
             # AWS-IoT requires a UNIQUE MQTT clientId (awsiot docs). Keep the EXACT
@@ -440,6 +548,31 @@ class NativeMqttClient:
             on_publish_received=self._on_message,
         )
         self.client.start()
+
+    async def _load_aws_signature(self) -> str:
+        """Load the custom-authorizer signature and type retryable startup errors.
+
+        This is the only synchronous network step before the awscrt client exists.
+        Once ``client.start()`` succeeds, awscrt owns broker reconnects and our
+        watchdog owns token refresh/rebuilds. Keeping the boundary here prevents a
+        broad ``except Exception`` from hiding builder/programming regressions.
+        """
+        try:
+            signature = await self._api.load_aws_token()
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            code = _retryable_startup_code(err)
+            if code is not None:
+                raise MqttStartupUnavailable(
+                    code, "MQTT startup is temporarily unavailable"
+                ) from err
+            raise
+        if not signature:
+            raise MqttStartupUnavailable(
+                AWS_TOKEN_FAILED, "AWS IoT token response was empty"
+            )
+        return signature
 
     def _all_topics(self) -> set[str]:
         """Union of the subscribe topics of every appliance (the target set)."""
@@ -638,16 +771,31 @@ class NativeMqttClient:
                 backoff = 0  # rebuild succeeded
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as err:
                 # Only the REBUILD path (load_aws_token / _start / the rebuild's
                 # _subscribe_missing) can land here now: the in-place re-subscribe uses
                 # _subscribe_missing(), which swallows a per-topic HonCodedError (the
                 # blackout escalation is driven inline by resubscribe_failures, not by a
                 # raise). Back off (capped, reset on recovery) so a persistent 5xx from
                 # the AWS authorizer is not hammered every tick.
+                code = _retryable_startup_code(err)
+                if code is None and _is_structural_error(err):
+                    # A deterministic code/schema error cannot heal. Stop the partial
+                    # transport and surface it loudly; do not spin forever. Non-
+                    # structural UNKNOWN runtime failures retain the old watchdog
+                    # resilience below, because terminating the supervisor would make
+                    # realtime permanently dead for this session.
+                    self._stop_client()
+                    _LOGGER.error(
+                        "MQTT watchdog stopped after a structural recovery error",
+                        exc_info=True,
+                    )
+                    return
+                code = code or UNKNOWN
                 backoff = min(backoff + _WATCHDOG_INTERVAL, _RECONNECT_BACKOFF_CAP)
                 _LOGGER.warning(
-                    "MQTT watchdog: reconnect failed, retrying in %ss",
+                    "[%s] MQTT watchdog: reconnect failed, retrying in %ss",
+                    code.label,
                     _WATCHDOG_INTERVAL + backoff,
                     exc_info=True,
                 )

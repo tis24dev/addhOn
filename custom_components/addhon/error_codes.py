@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 from dataclasses import dataclass
 
 CODE_PREFIX = "ADDHON"
@@ -190,7 +191,18 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
     if isinstance(code, HonErrorCode):
         return code
 
+    # Type-first decoding/transport cases. Their ordinary messages do not reliably
+    # contain "decode error", "refused" or a status, so substring-only classification
+    # turns real transient AWS introspection failures into UNKNOWN. Keep this module
+    # dependency-free: aiohttp errors are recognized by their stable public class names
+    # (the same name-based seam already used below for auth/TLS exception families).
+    if isinstance(err, (json.JSONDecodeError, UnicodeDecodeError)):
+        return DECODE_ERROR
+    if isinstance(err, ConnectionError):
+        return CONNECTION_REFUSED
+
     name = type(err).__name__.lower()
+    class_names = " ".join(cls.__name__.lower() for cls in type(err).__mro__)
     text = str(err).lower()
     hay = f"{text} {name}"
 
@@ -237,6 +249,19 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
         or "reset by peer" in hay
         or "cannot connect to host" in hay
         or "network is unreachable" in text
+    ):
+        return CONNECTION_REFUSED
+    if "clientpayloaderror" in class_names:
+        return DECODE_ERROR
+    if any(
+        family in class_names
+        for family in (
+            "clientconnectionerror",
+            "clientconnectorerror",
+            "clientoserror",
+            "serverconnectionerror",
+            "serverdisconnectederror",
+        )
     ):
         return CONNECTION_REFUSED
     if "decode error" in hay:
