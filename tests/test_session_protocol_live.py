@@ -17,7 +17,6 @@ trick pre-registers empty packages to skip the heavy integration __init__).
 """
 from __future__ import annotations
 
-import importlib.util
 import subprocess
 import sys
 import textwrap
@@ -28,20 +27,18 @@ _ROOT = Path(__file__).resolve().parents[1]
 
 
 def _deps_available() -> bool:
-    # Importing the real Hon requires aiohttp AND awscrt (hon.py imports mqtt.py
-    # which does `from awscrt import mqtt5`). Both are needed or the subprocess
-    # would fail the import instead of skipping. Robust against modules STUBBED by
-    # other tests (another test module may register a fake `aiohttp` in
-    # sys.modules: find_spec on a module without __spec__ raises ValueError, and a
-    # real module always has spec.origin) -> when in doubt: not available, skip.
-    for name in ("aiohttp", "awscrt", "yarl"):
-        try:
-            spec = importlib.util.find_spec(name)
-        except (ValueError, ImportError):
-            return False
-        if spec is None or spec.origin is None:
-            return False
-    return True
+    # Probe in a clean interpreter. Other test modules deliberately install fake
+    # aiohttp/awscrt packages in this process during collection; inspecting
+    # sys.modules/find_spec here consequently skipped this live test even when all
+    # real dependencies were installed. The protocol assertion already runs in a
+    # subprocess, so its dependency gate must use the same isolation boundary.
+    result = subprocess.run(
+        [sys.executable, "-c", "import aiohttp, awscrt, yarl"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return result.returncode == 0
 
 
 class LiveSessionProtocolTest(unittest.TestCase):

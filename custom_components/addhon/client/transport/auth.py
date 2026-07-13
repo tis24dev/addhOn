@@ -338,11 +338,20 @@ class HonAuth:
             headers=self._ua({"id-token": self.id_token}),
             json=device_payload,
         ) as resp:
+            if resp.status != 200:
+                self._phase("api_auth", status=resp.status, cognito_token=False)
+                # Preserve the HTTP status in the exception: the setup classifier uses
+                # it to distinguish retryable server/rate-limit failures from an actual
+                # credentials problem. Without it, every 5xx looked like invalid auth
+                # and unnecessarily opened Home Assistant's reauth/2FA flow.
+                raise NativeAuthError(f"api_auth: status {resp.status}")
             data = await resp.json(content_type=None)
         self.cognito_token = data.get("cognitoUser", {}).get("Token", "")
         if not self.cognito_token:
             self._phase("api_auth", status=resp.status, cognito_token=False)
-            raise NativeAuthError("api_auth: no cognito token")
+            raise NativeAuthError(
+                f"api_auth: no cognito token (status {resp.status})"
+            )
         self._phase("api_auth", status=resp.status, cognito_token=True)
 
     async def authenticate(self) -> None:
