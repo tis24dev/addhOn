@@ -534,6 +534,35 @@ class NativeSessionSetupTest(unittest.TestCase):
         self.assertEqual(h.mqtt_calls, [])
         self.assertIsNone(nh._mqtt_client)
 
+    def test_mqtt_start_failure_keeps_http_polling_available(self) -> None:
+        h = _Harness(self, [])
+        h.install()
+
+        async def mqtt_boom(_hon):
+            raise ConnectionError("AWS token service status 503")
+
+        self._patch(NativeHon, "_make_mqtt", mqtt_boom)
+        nh = self._nh_with_api(h, enable_mqtt=True)
+        with self.assertLogs(session_mod._LOGGER, level="WARNING") as logs:
+            _run(nh.setup())
+
+        self.assertIsNone(nh._mqtt_client)
+        self.assertEqual(nh._setup_phase, "")
+        self.assertIn("continuing with HTTP polling", "\n".join(logs.output))
+
+    def test_mqtt_start_cancellation_still_propagates(self) -> None:
+        h = _Harness(self, [])
+        h.install()
+
+        async def mqtt_cancelled(_hon):
+            raise asyncio.CancelledError()
+
+        self._patch(NativeHon, "_make_mqtt", mqtt_cancelled)
+        nh = self._nh_with_api(h, enable_mqtt=True)
+        with self.assertRaises(asyncio.CancelledError):
+            _run(nh.setup())
+        self.assertIsNone(nh._mqtt_client)
+
     def test_minimal_skips_per_appliance_loads_and_mqtt(self) -> None:
         # #30: config-flow validation builds + counts the appliances but does NOT run
         # the per-appliance load_commands/attributes/statistics, and never starts MQTT.

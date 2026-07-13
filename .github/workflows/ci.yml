@@ -31,8 +31,22 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
+      - name: Install test and runtime dependencies
+        run: |
+          # Home Assistant supplies aiohttp, so it is intentionally absent from the
+          # integration manifest; standalone CI must install it explicitly.
+          python -m pip install --upgrade pip pytest aiohttp
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          with open("custom_components/addhon/manifest.json", encoding="utf-8") as file:
+              requirements = json.load(file)["requirements"]
+          subprocess.check_call(
+              [sys.executable, "-m", "pip", "install", *requirements]
+          )
+          PY
 
       - name: Run tests
         run: python -m pytest tests/ -q

@@ -214,7 +214,16 @@ class NativeAuthFlowTest(unittest.TestCase):
         responses = _happy_responses()
         responses[-1] = FakeResp(json={"cognitoUser": {}})  # no Token
         auth = self._auth(responses)
-        with self.assertRaises(NativeAuthError):
+        with self.assertRaisesRegex(
+            NativeAuthError, r"api_auth: no cognito token \(status 200\)"
+        ):
+            asyncio.run(auth.authenticate())
+
+    def test_api_auth_server_error_preserves_status_for_retry_routing(self) -> None:
+        responses = _happy_responses()
+        responses[-1] = FakeResp(status=503, json={})
+        auth = self._auth(responses)
+        with self.assertRaisesRegex(NativeAuthError, r"api_auth: status 503"):
             asyncio.run(auth.authenticate())
 
     def test_progressive_login_without_href_raises(self) -> None:
