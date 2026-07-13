@@ -214,7 +214,9 @@ class NativeAuthFlowTest(unittest.TestCase):
         responses = _happy_responses()
         responses[-1] = FakeResp(json={"cognitoUser": {}})  # no Token
         auth = self._auth(responses)
-        with self.assertRaisesRegex(NativeAuthError, r"status 200"):
+        with self.assertRaisesRegex(
+            NativeAuthError, r"api_auth: no cognito token \(status 200\)"
+        ):
             asyncio.run(auth.authenticate())
 
     def test_api_auth_server_error_preserves_status_for_retry_routing(self) -> None:

@@ -33,6 +33,8 @@ jobs:
 
       - name: Install test and runtime dependencies
         run: |
+          # Home Assistant supplies aiohttp, so it is intentionally absent from the
+          # integration manifest; standalone CI must install it explicitly.
           python -m pip install --upgrade pip pytest aiohttp
           python - <<'PY'
           import json

@@ -253,7 +253,9 @@ class NativeHon:
                 # asyncio.CancelledError inherits BaseException on supported Python.
                 self._mqtt_client = None
                 _LOGGER.warning(
-                    "MQTT startup failed; continuing with HTTP polling: %s", error
+                    "MQTT startup failed; continuing with HTTP polling: %s",
+                    error,
+                    exc_info=True,
                 )
         # Setup done: clear the phase so a later (non-setup) loop timeout is not
         # mis-attributed to a setup step.

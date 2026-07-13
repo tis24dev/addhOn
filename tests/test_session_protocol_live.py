@@ -26,7 +26,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 
 
-def _deps_available() -> bool:
+def _probe_dependencies() -> tuple[bool, str]:
     # Probe in a clean interpreter. Other test modules deliberately install fake
     # aiohttp/awscrt packages in this process during collection; inspecting
     # sys.modules/find_spec here consequently skipped this live test even when all
@@ -38,13 +38,19 @@ def _deps_available() -> bool:
         text=True,
         timeout=30,
     )
-    return result.returncode == 0
+    detail = (result.stderr or result.stdout).strip()
+    return result.returncode == 0, detail
 
 
 class LiveSessionProtocolTest(unittest.TestCase):
     def test_real_hon_satisfies_honsession(self) -> None:
-        if not _deps_available():
-            self.skipTest("aiohttp/awscrt/yarl not available: skipping the real Hon check")
+        available, detail = _probe_dependencies()
+        if not available:
+            suffix = f" ({detail})" if detail else ""
+            self.skipTest(
+                "aiohttp/awscrt/yarl not available: skipping the real Hon check"
+                f"{suffix}"
+            )
         script = textwrap.dedent(
             f"""
             import sys, types, importlib.util
