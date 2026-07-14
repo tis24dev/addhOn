@@ -846,6 +846,53 @@ class AcSwitchWritePathTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("inner_sw", getattr(ctx.exception, "translation_key", None))
 
 
+class WithSelfCleanOffTest(unittest.TestCase):
+    def _ac_settings(self, params: dict):
+        return types.SimpleNamespace(commands={"settings": RecordingCommand(params)})
+
+    def test_injects_zero_for_exposed_flags(self) -> None:
+        appliance = self._ac_settings(
+            {
+                "onOffStatus": Param("0"),
+                "machMode": Param("0"),
+                "selfCleaningStatus": Param("1"),
+                "selfCleaning56Status": Param("1"),
+            }
+        )
+        out = ac_command.with_self_clean_off(
+            appliance, {"onOffStatus": "1", "machMode": "1"}
+        )
+        self.assertEqual(
+            {
+                "onOffStatus": "1",
+                "machMode": "1",
+                "selfCleaningStatus": "0",
+                "selfCleaning56Status": "0",
+            },
+            out,
+        )
+
+    def test_skips_flags_the_device_does_not_expose(self) -> None:
+        appliance = self._ac_settings(
+            {"onOffStatus": Param("0"), "machMode": Param("0")}
+        )
+        out = ac_command.with_self_clean_off(
+            appliance, {"onOffStatus": "1", "machMode": "1"}
+        )
+        self.assertEqual({"onOffStatus": "1", "machMode": "1"}, out)
+
+    def test_does_not_override_caller_supplied_value(self) -> None:
+        appliance = self._ac_settings({"selfCleaningStatus": Param("0")})
+        out = ac_command.with_self_clean_off(appliance, {"selfCleaningStatus": "1"})
+        self.assertEqual("1", out["selfCleaningStatus"])
+
+    def test_does_not_mutate_input(self) -> None:
+        appliance = self._ac_settings({"selfCleaningStatus": Param("1")})
+        params = {"onOffStatus": "1"}
+        ac_command.with_self_clean_off(appliance, params)
+        self.assertEqual({"onOffStatus": "1"}, params)
+
+
 class AcCommandUnitTest(unittest.IsolatedAsyncioTestCase):
     """Pure helpers of ac_command + the requested-value-wins integration."""
 

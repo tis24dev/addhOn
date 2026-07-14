@@ -35,6 +35,25 @@ def settings_param(appliance, name):
     return None
 
 
+# Self-clean flags. On the settings write path these must be 0 whenever HA starts or
+# resumes an operating mode: the Haier app's startProgram payload always carries
+# selfCleaningStatus=0 for a normal mode, and on single-split (1to1) installs the
+# fixed-0 programRule is inert, so a mode command could otherwise ship machMode together
+# with a cached selfCleaningStatus=1 and the unit runs the fan with the compressor off.
+AC_SELF_CLEAN_PARAMS = ("selfCleaningStatus", "selfCleaning56Status")
+
+
+def with_self_clean_off(appliance, params: dict) -> dict:
+    """Return a copy of `params` with the self-clean flags forced to '0', for the flags
+    the device exposes on its settings command. Capability-gated (an absent flag is not
+    injected). setdefault so a caller that set the flag itself is never overridden."""
+    out = dict(params)
+    for name in AC_SELF_CLEAN_PARAMS:
+        if settings_param(appliance, name) is not None:
+            out.setdefault(name, "0")
+    return out
+
+
 def param_allowed_values(param) -> list[str]:
     """Allowed values (as strings) of an enum parameter, or [] if not an enum."""
     values = getattr(param, "values", None)
