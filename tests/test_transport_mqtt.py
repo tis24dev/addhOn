@@ -152,6 +152,24 @@ class StopTest(unittest.TestCase):
         _run(m.stop())  # no client/watchdog -> no-op, does not raise
         _run(m.stop())
 
+    def test_stop_invalidates_late_success_callback(self) -> None:
+        class FakeClient:
+            def stop(self) -> None:
+                return None
+
+        m = NativeMqttClient(FakeHon([]), "MID")
+        m._generation = 7
+        m._connection = True
+        m._subscribed_topics_set = {_RECOVERY_TOPIC}
+        m._client = FakeClient()
+        _run(m.stop())
+
+        self.assertEqual(m._generation, 8)
+        self.assertFalse(m._connection)
+        self.assertEqual(m._subscribed_topics_set, set())
+        m._on_link_up(None, generation=7)  # queued callback from the stopped client
+        self.assertFalse(m._connection)
+
 
 class CreatePathTest(unittest.TestCase):
     """Drives the REAL path create()->_start->_subscribe->watchdog with richer awscrt
@@ -234,6 +252,228 @@ class CreatePathTest(unittest.TestCase):
         self.assertTrue(had_watchdog)
         self.assertTrue(fake_client.stopped)
         self.assertIsNone(m._watchdog_task)
+
+    def test_retryable_initial_failure_retains_client_and_recovers(self) -> None:
+        import custom_components.addhon.client.transport.mqtt as mod
+
+        async def body():
+            m = NativeMqttClient(FakeHon([FakeAppliance(_RECOVERY_TOPIC)]), "MID")
+            starts = 0
+            subscribed = asyncio.Event()
+
+            async def flaky_start():
+                nonlocal starts
+                starts += 1
+                if starts == 1:
+                    raise RuntimeError("hOn server error (status 503)")
+                m._connection = True
+
+            async def subscribe_missing():
+                m._subscribed_topics_set = {_RECOVERY_TOPIC}
+                subscribed.set()
+
+            m._start = flaky_start  # type: ignore[assignment]
+            m._subscribe_missing = subscribe_missing  # type: ignore[assignment]
+            old_ticks = mod._RECONNECT_AFTER_FAILED_TICKS
+            old_interval = mod._WATCHDOG_INTERVAL
+            mod._RECONNECT_AFTER_FAILED_TICKS = 1
+            mod._WATCHDOG_INTERVAL = 0
+            try:
+                with self.assertLogs(mod._LOGGER, level="WARNING") as logs:
+                    result = await m.create()
+                    watchdog = m._watchdog_task
+                    await asyncio.wait_for(subscribed.wait(), 1)
+                self.assertIn("ADDHON-450", "\n".join(logs.output))
+                recovered_topics = set(m._subscribed_topics_set)
+                await m.stop()
+                return result, m, watchdog, starts, recovered_topics
+            finally:
+                mod._RECONNECT_AFTER_FAILED_TICKS = old_ticks
+                mod._WATCHDOG_INTERVAL = old_interval
+
+        result, m, watchdog, starts, recovered_topics = _run(body())
+        self.assertIs(result, m)
+        self.assertEqual(starts, 2)
+        self.assertIsNotNone(watchdog)
+        self.assertTrue(watchdog.done())
+        self.assertIsNone(m._watchdog_task)
+        self.assertEqual(recovered_topics, {_RECOVERY_TOPIC})
+        self.assertEqual(m._subscribed_topics_set, set())
+
+    def test_stop_cancels_deferred_startup_retry(self) -> None:
+        import custom_components.addhon.client.transport.mqtt as mod
+
+        async def body():
+            m = NativeMqttClient(FakeHon([]), "MID")
+            starts = 0
+
+            async def unavailable():
+                nonlocal starts
+                starts += 1
+                raise RuntimeError("hOn server error (status 503)")
+
+            m._start = unavailable  # type: ignore[assignment]
+            with self.assertLogs(mod._LOGGER, level="WARNING"):
+                result = await m.create()
+            watchdog = m._watchdog_task
+            await asyncio.sleep(0)  # let the watchdog enter its first backoff sleep
+            await m.stop()
+            await asyncio.sleep(0)
+            return result, m, watchdog, starts
+
+        result, m, watchdog, starts = _run(body())
+        self.assertIs(result, m)
+        self.assertEqual(starts, 1)
+        self.assertIsNotNone(watchdog)
+        self.assertTrue(watchdog.done())
+        self.assertIsNone(m._watchdog_task)
+
+    def test_unexpected_initial_failure_is_not_hidden_or_retried(self) -> None:
+        m = NativeMqttClient(FakeHon([]), "MID")
+
+        async def broken_builder_contract():
+            raise TypeError("builder returned 503 invalid arguments")
+
+        m._start = broken_builder_contract  # type: ignore[assignment]
+        with self.assertRaisesRegex(TypeError, "503 invalid arguments"):
+            _run(m.create())
+        self.assertIsNone(m._watchdog_task)
+        self.assertIsNone(m._client)
+
+    def test_aws_token_failures_are_typed_without_hiding_unknown_errors(self) -> None:
+        import custom_components.addhon.client.transport.mqtt as mod
+        from custom_components.addhon.error_codes import AWS_TOKEN_FAILED, SERVER_ERROR
+
+        class Api:
+            def __init__(self, result=None, error=None) -> None:
+                self.result = result
+                self.error = error
+
+            async def load_aws_token(self):
+                if self.error is not None:
+                    raise self.error
+                return self.result
+
+        async def load(api):
+            hon = FakeHon([])
+            hon.api = api
+            return await NativeMqttClient(hon, "MID")._load_aws_signature()
+
+        with self.assertRaises(mod.MqttStartupUnavailable) as empty:
+            _run(load(Api(result="")))
+        self.assertIs(empty.exception.error_code, AWS_TOKEN_FAILED)
+
+        with self.assertRaises(mod.MqttStartupUnavailable) as outage:
+            _run(load(Api(error=RuntimeError("hOn server error (status 503)"))))
+        self.assertIs(outage.exception.error_code, SERVER_ERROR)
+        self.assertIsInstance(outage.exception.__cause__, RuntimeError)
+
+        with self.assertRaises(mod.MqttStartupUnavailable) as malformed:
+            _run(load(Api(error=json.JSONDecodeError("Expecting value", "", 0))))
+        from custom_components.addhon.error_codes import DECODE_ERROR
+
+        self.assertIs(malformed.exception.error_code, DECODE_ERROR)
+
+        with self.assertRaises(mod.MqttStartupUnavailable) as bad_charset:
+            _run(
+                load(
+                    Api(
+                        error=UnicodeDecodeError(
+                            "utf-8", b"\xff", 0, 1, "invalid start byte"
+                        )
+                    )
+                )
+            )
+        self.assertIs(bad_charset.exception.error_code, DECODE_ERROR)
+
+        with self.assertRaises(mod.MqttStartupUnavailable) as disconnected:
+            _run(load(Api(error=ConnectionError("connection aborted"))))
+        from custom_components.addhon.error_codes import CONNECTION_REFUSED
+
+        self.assertIs(disconnected.exception.error_code, CONNECTION_REFUSED)
+
+        class ServerDisconnectedError(Exception):
+            pass
+
+        class ClientPayloadError(Exception):
+            pass
+
+        with self.assertRaises(mod.MqttStartupUnavailable) as server_disconnect:
+            _run(load(Api(error=ServerDisconnectedError("Server disconnected"))))
+        self.assertIs(server_disconnect.exception.error_code, CONNECTION_REFUSED)
+        with self.assertRaises(mod.MqttStartupUnavailable) as bad_payload:
+            _run(load(Api(error=ClientPayloadError("payload incomplete"))))
+        self.assertIs(bad_payload.exception.error_code, DECODE_ERROR)
+
+        with self.assertRaisesRegex(TypeError, "503 schema regression"):
+            _run(load(Api(error=TypeError("503 schema regression"))))
+
+    def test_cancellation_during_aws_token_load_cleans_up_and_propagates(self) -> None:
+        class Api:
+            def __init__(self) -> None:
+                self.started = asyncio.Event()
+
+            async def load_aws_token(self):
+                self.started.set()
+                await asyncio.Event().wait()
+
+        async def body():
+            api = Api()
+            hon = FakeHon([])
+            hon.api = api
+            m = NativeMqttClient(hon, "MID")
+            task = asyncio.create_task(m.create())
+            await api.started.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            return m
+
+        m = _run(body())
+        self.assertIsNone(m._client)
+        self.assertIsNone(m._watchdog_task)
+
+    def test_awscrt_operational_error_retries_but_invalid_argument_fails_fast(self) -> None:
+        import custom_components.addhon.client.transport.mqtt as mod
+        from custom_components.addhon.error_codes import MQTT_CONNECT_TIMEOUT
+
+        AwsCrtError = type("AwsCrtError", (Exception,), {})
+        outage = AwsCrtError("socket closed")
+        outage.name = "AWS_IO_SOCKET_CLOSED"
+        invalid = AwsCrtError("invalid")
+        invalid.name = "AWS_ERROR_INVALID_ARGUMENT"
+
+        self.assertIs(mod._retryable_startup_code(outage), MQTT_CONNECT_TIMEOUT)
+        self.assertIsNone(mod._retryable_startup_code(invalid))
+
+    def test_auth_marked_transport_errors_propagate_instead_of_retrying(self) -> None:
+        import custom_components.addhon.client.transport.mqtt as mod
+
+        class ClientConnectionError(Exception):
+            pass
+
+        class ServerDisconnectedError(Exception):
+            pass
+
+        errors = (
+            ConnectionError("api_auth: status 401"),
+            ClientConnectionError("HTTP 401 unauthorized"),
+            ServerDisconnectedError("token rejected"),
+        )
+        for err in errors:
+            with self.subTest(error=type(err).__name__):
+                self.assertIsNone(mod._retryable_startup_code(err))
+
+                mqtt_client = NativeMqttClient(FakeHon([]), "MID")
+
+                async def rejected(error=err):
+                    raise error
+
+                mqtt_client._start = rejected  # type: ignore[assignment]
+                with self.assertRaises(type(err)):
+                    _run(mqtt_client.create())
+                self.assertIsNone(mqtt_client._watchdog_task)
+                self.assertIsNone(mqtt_client._client)
 
     def test_create_stops_client_when_subscribe_fails(self) -> None:
         # #21: _start() already started the awscrt client; if a later step raises,
@@ -721,7 +961,6 @@ class StartReconnectTest(unittest.TestCase):
     previous awscrt client before building a new one, instead of leaking it."""
 
     def test_start_stops_previous_client_before_rebuild(self) -> None:
-        import awscrt
         import awsiot
 
         built: list = []
@@ -955,6 +1194,52 @@ class StartGenerationWiringTest(unittest.TestCase):
         gen2["on_lifecycle_disconnection"](None)
         self.assertFalse(m._connection)
 
+    def test_rebuild_invalidates_success_emitted_during_old_client_stop(self) -> None:
+        import awsiot
+
+        builds: list = []
+
+        class FakeClient:
+            def __init__(self, callbacks) -> None:
+                self.callbacks = callbacks
+
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                # Adversarial interleaving: native shutdown emits a queued success
+                # synchronously. It must already be stale when stop() is entered.
+                self.callbacks["on_lifecycle_connection_success"](None)
+
+        def fake_builder(**kwargs):
+            builds.append(kwargs)
+            return FakeClient(kwargs)
+
+        awsiot.mqtt5_client_builder.websockets_with_custom_authorizer = fake_builder
+
+        class FakeAuth:
+            id_token = "IDT"
+
+        class FakeApi:
+            auth = FakeAuth()
+
+            async def load_aws_token(self):
+                return "SIGNED"
+
+        hon = FakeHon([])
+        hon.api = FakeApi()
+        m = NativeMqttClient(hon, "MID")
+
+        async def body():
+            await m._start()
+            builds[0]["on_lifecycle_connection_success"](None)
+            self.assertTrue(m._connection)
+            await m._start()
+
+        _run(body())
+        self.assertEqual(len(builds), 2)
+        self.assertFalse(m._connection)
+
 
 class WatchdogResilienceTest(unittest.TestCase):
     """#3: the watchdog must survive a transient rebuild error (instead of dying and
@@ -1002,7 +1287,7 @@ class WatchdogResilienceTest(unittest.TestCase):
 
         async def boom():
             starts.append(True)
-            raise RuntimeError("load_aws_token 5xx")
+            raise RuntimeError("hOn server error (status 503)")
 
         self._drive([False] * 7, boom)  # two rebuild windows
         # Pre-fix the first raise would end the task -> starts == 1. Surviving -> >= 2.
@@ -1035,7 +1320,7 @@ class WatchdogResilienceTest(unittest.TestCase):
         from custom_components.addhon.client.transport.mqtt import _WATCHDOG_INTERVAL
 
         async def boom():
-            raise RuntimeError("x")
+            raise RuntimeError("hOn server error (status 503)")
 
         intervals = self._drive([False] * 9 + [True], boom)
         base = _WATCHDOG_INTERVAL
@@ -1053,7 +1338,7 @@ class WatchdogResilienceTest(unittest.TestCase):
         async def flaky_start():
             calls["n"] += 1
             if calls["n"] <= 2:
-                raise RuntimeError("transient")
+                raise RuntimeError("hOn server error (status 503)")
 
         intervals = self._drive([False] * 14, flaky_start)  # connection never comes up
         base = _WATCHDOG_INTERVAL
@@ -1067,10 +1352,30 @@ class WatchdogResilienceTest(unittest.TestCase):
         )
 
         async def boom():
-            raise RuntimeError("x")
+            raise RuntimeError("hOn server error (status 503)")
 
         intervals = self._drive([False] * 60, boom)
         self.assertLessEqual(max(intervals), _WATCHDOG_INTERVAL + _RECONNECT_BACKOFF_CAP)
+
+    def test_watchdog_keeps_retrying_unknown_runtime_error(self) -> None:
+        starts = []
+
+        async def unknown_runtime_failure():
+            starts.append(True)
+            raise RuntimeError("opaque native runtime failure")
+
+        self._drive([False] * 7, unknown_runtime_failure)
+        self.assertGreaterEqual(len(starts), 2)
+
+    def test_watchdog_stops_on_structural_error(self) -> None:
+        starts = []
+
+        async def structural_failure():
+            starts.append(True)
+            raise TypeError("builder returned 503 invalid arguments")
+
+        self._drive([False] * 7, structural_failure)
+        self.assertEqual(len(starts), 1)
 
 
 class SubscribeNonBlockingTest(unittest.TestCase):
@@ -1545,7 +1850,6 @@ class SubscribedFlagLifecycleTest(unittest.TestCase):
         self.assertEqual(m._subscribed_topics_set, {"t"})
 
     def test_start_resets_subscribed(self) -> None:
-        import awscrt
         import awsiot
 
         class FakeClient:

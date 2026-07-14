@@ -534,21 +534,19 @@ class NativeSessionSetupTest(unittest.TestCase):
         self.assertEqual(h.mqtt_calls, [])
         self.assertIsNone(nh._mqtt_client)
 
-    def test_mqtt_start_failure_keeps_http_polling_available(self) -> None:
+    def test_unexpected_mqtt_start_failure_propagates(self) -> None:
         h = _Harness(self, [])
         h.install()
 
         async def mqtt_boom(_hon):
-            raise ConnectionError("AWS token service status 503")
+            raise TypeError("builder contract regression")
 
         self._patch(NativeHon, "_make_mqtt", mqtt_boom)
         nh = self._nh_with_api(h, enable_mqtt=True)
-        with self.assertLogs(session_mod._LOGGER, level="WARNING") as logs:
+        with self.assertRaisesRegex(TypeError, "builder contract regression"):
             _run(nh.setup())
 
         self.assertIsNone(nh._mqtt_client)
-        self.assertEqual(nh._setup_phase, "")
-        self.assertIn("continuing with HTTP polling", "\n".join(logs.output))
 
     def test_mqtt_start_cancellation_still_propagates(self) -> None:
         h = _Harness(self, [])

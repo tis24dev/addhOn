@@ -244,19 +244,11 @@ class NativeHon:
                     await self._create_appliance(appliance.copy(), zone=zone + 1)
             await self._create_appliance(appliance)
         if self._enable_mqtt and not self._mqtt_client:
-            try:
-                self._mqtt_client = await self._make_mqtt()
-            except Exception as error:  # noqa: BLE001 - realtime is optional
-                # MQTT is an acceleration channel; the HTTP poller remains the source
-                # of truth. An AWS token/transport outage must therefore not make the
-                # whole config entry unavailable. Cancellation still propagates because
-                # asyncio.CancelledError inherits BaseException on supported Python.
-                self._mqtt_client = None
-                _LOGGER.warning(
-                    "MQTT startup failed; continuing with HTTP polling: %s",
-                    error,
-                    exc_info=True,
-                )
+            # NativeMqttClient owns MQTT recovery. On a retryable AWS token/transport
+            # outage create() returns a retained, temporarily-disconnected client whose
+            # watchdog retries in the background; unexpected programming/configuration
+            # errors still propagate instead of being silently converted to polling-only.
+            self._mqtt_client = await self._make_mqtt()
         # Setup done: clear the phase so a later (non-setup) loop timeout is not
         # mis-attributed to a setup step.
         self._setup_phase = ""
