@@ -46,6 +46,7 @@ from .ac_command import (
     fixed_vertical_value,
     param_allowed_values,
     settings_param,
+    with_self_clean_off,
 )
 from .hon_commands import async_send_command, param_range, param_values
 from .program_options import async_send_program, startprogram_command
@@ -445,7 +446,11 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
                 )
 
                 await self._send_command_in_executor(
-                    client, appliance, {"onOffStatus": "1", "machMode": str(mode_key)}
+                    client,
+                    appliance,
+                    with_self_clean_off(
+                        appliance, {"onOffStatus": "1", "machMode": str(mode_key)}
+                    ),
                 )
             await self._async_request_command_refresh()
         except Exception as err:
@@ -487,7 +492,7 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
             else:
                 _LOGGER.debug("Climate debug: turn_on -> onOffStatus=1 (mode preserved)")
                 await self._send_command_in_executor(
-                    client, appliance, {"onOffStatus": "1"}
+                    client, appliance, with_self_clean_off(appliance, {"onOffStatus": "1"})
                 )
             await self._async_request_command_refresh()
         except Exception as err:
