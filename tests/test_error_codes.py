@@ -197,6 +197,40 @@ class ClassifyTest(unittest.TestCase):
             with self.subTest(error=type(err).__name__):
                 self.assertIs(ec.classify(err), ec.CONNECTION_REFUSED)
 
+    def test_classify_and_requires_reauth_agree_on_auth_phrasings(self) -> None:
+        # Coherence guard against drift: classify()'s auth-rejection gate and
+        # hon_client._requires_reauth's keyword predicate are two independent
+        # lists. For an EXPLICIT rejection phrasing both must route to reauth; for
+        # a plain outage neither must. Bare endpoint names ("api_auth" alone) are
+        # out of scope here: the two predicates intentionally differ on those. If
+        # a new rejection phrase is added to one side only, this test goes red.
+        reauth_phrasings = (
+            "unauthorized",
+            "HTTP 401",
+            "HTTP 403",
+            "status 401",
+            "token rejected",
+            "invalid token",
+            "expired token",
+            "invalid credential",
+            "api_auth: status 401",
+        )
+        non_reauth_phrasings = (
+            "503 service unavailable",
+            "429 too many requests",
+            "connection reset by peer",
+        )
+        for phrase in reauth_phrasings:
+            err = RuntimeError(phrase)
+            with self.subTest(reauth=phrase):
+                self.assertTrue(ec.classify(err).requires_reauth)
+                self.assertTrue(hc._requires_reauth(err))
+        for phrase in non_reauth_phrasings:
+            err = RuntimeError(phrase)
+            with self.subTest(non_reauth=phrase):
+                self.assertFalse(ec.classify(err).requires_reauth)
+                self.assertFalse(hc._requires_reauth(err))
+
     def test_server_status_beats_builtin_connection_type(self) -> None:
         err = ConnectionError("503 server error")
         self.assertIs(ec.classify(err), ec.SERVER_ERROR)
