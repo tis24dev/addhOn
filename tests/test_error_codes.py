@@ -170,6 +170,33 @@ class ClassifyTest(unittest.TestCase):
                 self.assertIs(ec.classify(err), expected)
                 self.assertTrue(hc._requires_reauth(err))
 
+    def test_connection_class_names_without_auth_are_refused(self) -> None:
+        # aiohttp-style connection classes with a plain outage message (no auth
+        # marker, no refused/reset/DNS/TLS keyword) must reach the class-name
+        # family fallback and classify as CONNECTION_REFUSED. Guards the family
+        # list in classify() so dropping a name there is caught by a test.
+        class ClientConnectionError(Exception):
+            pass
+
+        class ClientConnectorError(Exception):
+            pass
+
+        class ClientOSError(Exception):
+            pass
+
+        class ServerConnectionError(Exception):
+            pass
+
+        cases = (
+            ClientConnectionError("connection lost"),
+            ClientConnectorError("host unreachable"),
+            ClientOSError("socket failure"),
+            ServerConnectionError("peer gone"),
+        )
+        for err in cases:
+            with self.subTest(error=type(err).__name__):
+                self.assertIs(ec.classify(err), ec.CONNECTION_REFUSED)
+
     def test_server_status_beats_builtin_connection_type(self) -> None:
         err = ConnectionError("503 server error")
         self.assertIs(ec.classify(err), ec.SERVER_ERROR)
