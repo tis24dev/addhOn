@@ -121,8 +121,9 @@ class CoordinatorErrorClassificationTest(unittest.TestCase):
         # Auth-named class but a 5xx message -> retryable wins -> NotReady (retry),
         # NOT a reauth prompt.
         _AF, NotReady, _UF, setup, _upd = self._imports()
-        with self.assertRaises(NotReady):
-            setup(NativeAuthError("boom status 500"))
+        for status in (500, 501, 505, 507, 511, 599):
+            with self.subTest(status=status), self.assertRaises(NotReady):
+                setup(NativeAuthError(f"boom status {status}"))
 
     def test_update_auth_error_is_config_entry_auth_failed(self) -> None:
         AuthFailed, _NotReady, _UF, _setup, upd = self._imports()
@@ -136,8 +137,9 @@ class CoordinatorErrorClassificationTest(unittest.TestCase):
 
     def test_update_retryable_5xx_is_update_failed_not_auth(self) -> None:
         _AF, _NotReady, UpdateFailed, _setup, upd = self._imports()
-        with self.assertRaises(UpdateFailed):
-            upd(NativeAuthError("boom status 500"))
+        for status in (500, 501, 505, 507, 511, 599):
+            with self.subTest(status=status), self.assertRaises(UpdateFailed):
+                upd(NativeAuthError(f"boom status {status}"))
 
     def test_setup_mfa_challenge_is_config_entry_auth_failed(self) -> None:
         # A 2FA challenge during a BACKGROUND setup cannot prompt -> must route to the

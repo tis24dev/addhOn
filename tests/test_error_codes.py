@@ -113,18 +113,33 @@ class ClassifyTest(unittest.TestCase):
 
     def test_server_and_rate_limit_win_over_auth_name(self) -> None:
         # Retryable 5xx / 429 must beat the auth-named class (existing routing rule).
-        for status in (500, 501, 502, 503, 504, 505, 507, 511, 599):
+        for status in range(500, 600):
             err = NativeAuthError(f"api_auth: status {status}")
             with self.subTest(status=status):
                 self.assertIs(ec.classify(err), ec.SERVER_ERROR)
                 self.assertFalse(hc._requires_reauth(err))
         self.assertIs(ec.classify(NativeAuthError("429 too many requests")), ec.RATE_LIMITED)
 
+    def test_server_status_format_variants(self) -> None:
+        for message in (
+            "api_auth: status=501",
+            "api_auth: HTTP 505",
+            "api_auth: response (507)",
+            "api_auth: upstream [511]",
+            "599 server response",
+        ):
+            with self.subTest(message=message):
+                err = NativeAuthError(message)
+                self.assertIs(ec.classify(err), ec.SERVER_ERROR)
+                self.assertFalse(hc._requires_reauth(err))
+
     def test_status_matching_does_not_accept_longer_identifiers(self) -> None:
-        # A model/id-like token containing 500 must not masquerade as an HTTP 5xx.
-        err = NativeAuthError("api_auth: model H5000 unavailable")
-        self.assertIs(ec.classify(err), ec.AUTH_API_AUTH)
-        self.assertTrue(hc._requires_reauth(err))
+        # Model/id-like and out-of-range tokens must not masquerade as an HTTP 5xx.
+        for token in ("H500", "X599Y", "5000", "1500", "499", "600"):
+            with self.subTest(token=token):
+                err = NativeAuthError(f"api_auth: model {token} unavailable")
+                self.assertIs(ec.classify(err), ec.AUTH_API_AUTH)
+                self.assertTrue(hc._requires_reauth(err))
 
     def test_network_classes(self) -> None:
         self.assertIs(ec.classify(RuntimeError("certificate verify failed")), ec.TLS_FAILURE)
