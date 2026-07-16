@@ -370,6 +370,11 @@ class CreatePathTest(unittest.TestCase):
                 self.assertIs(outage.exception.error_code, SERVER_ERROR)
                 self.assertIsInstance(outage.exception.__cause__, RuntimeError)
 
+        with self.assertRaises(mod.MqttStartupUnavailable) as textual_outage:
+            _run(load(Api(error=RuntimeError("hOn Internal Server Error"))))
+        self.assertIs(textual_outage.exception.error_code, SERVER_ERROR)
+        self.assertIsInstance(textual_outage.exception.__cause__, RuntimeError)
+
         with self.assertRaises(mod.MqttStartupUnavailable) as malformed:
             _run(load(Api(error=json.JSONDecodeError("Expecting value", "", 0))))
         from custom_components.addhon.error_codes import DECODE_ERROR

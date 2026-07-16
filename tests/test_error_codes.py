@@ -133,6 +133,23 @@ class ClassifyTest(unittest.TestCase):
                 self.assertIs(ec.classify(err), ec.SERVER_ERROR)
                 self.assertFalse(hc._requires_reauth(err))
 
+    def test_textual_server_errors_are_case_insensitive(self) -> None:
+        for message in (
+            "hOn server error",
+            "Internal Server Error",
+            "Bad Gateway",
+            "Gateway Timeout",
+            "Temporarily Unavailable",
+        ):
+            with self.subTest(message=message):
+                err = NativeAuthError(message)
+                self.assertIs(ec.classify(err), ec.SERVER_ERROR)
+                self.assertFalse(hc._requires_reauth(err))
+
+        rate_limit = NativeAuthError("Too Many Requests")
+        self.assertIs(ec.classify(rate_limit), ec.RATE_LIMITED)
+        self.assertFalse(hc._requires_reauth(rate_limit))
+
     def test_status_matching_does_not_accept_longer_identifiers(self) -> None:
         # Model/id-like and out-of-range tokens must not masquerade as an HTTP 5xx.
         for token in ("H500", "X599Y", "5000", "1500", "499", "600"):
