@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _golden import REPO, frozen, install_stubs, normalize  # noqa: E402
+from _golden import frozen, install_stubs, normalize  # noqa: E402
 
 install_stubs()
 

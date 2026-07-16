@@ -12,7 +12,6 @@ test_coordinator_config_entry.py).
 from __future__ import annotations
 
 import asyncio
-import logging
 import sys
 import types
 import unittest

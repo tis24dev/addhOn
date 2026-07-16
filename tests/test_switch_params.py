@@ -15,7 +15,6 @@ stack); no real Home Assistant install required.
 """
 from __future__ import annotations
 
-import dataclasses
 import json
 import sys
 import types
