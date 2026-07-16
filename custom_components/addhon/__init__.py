@@ -464,7 +464,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             summary = [
                 {
                     "id": redact_mac(appliance_id),
-                    "name": appliance_data.get("name"),
+                    "name": redact_id(appliance_data.get("name")),
                     "type": appliance_data.get("type"),
                     "mac": redact_mac(appliance_data.get("mac")),
                     "attributes": len(appliance_data.get("attributes", {}))

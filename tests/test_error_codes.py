@@ -113,8 +113,18 @@ class ClassifyTest(unittest.TestCase):
 
     def test_server_and_rate_limit_win_over_auth_name(self) -> None:
         # Retryable 5xx / 429 must beat the auth-named class (existing routing rule).
-        self.assertIs(ec.classify(NativeAuthError("boom status 500")), ec.SERVER_ERROR)
+        for status in (500, 501, 502, 503, 504, 505, 507, 511, 599):
+            err = NativeAuthError(f"api_auth: status {status}")
+            with self.subTest(status=status):
+                self.assertIs(ec.classify(err), ec.SERVER_ERROR)
+                self.assertFalse(hc._requires_reauth(err))
         self.assertIs(ec.classify(NativeAuthError("429 too many requests")), ec.RATE_LIMITED)
+
+    def test_status_matching_does_not_accept_longer_identifiers(self) -> None:
+        # A model/id-like token containing 500 must not masquerade as an HTTP 5xx.
+        err = NativeAuthError("api_auth: model H5000 unavailable")
+        self.assertIs(ec.classify(err), ec.AUTH_API_AUTH)
+        self.assertTrue(hc._requires_reauth(err))
 
     def test_network_classes(self) -> None:
         self.assertIs(ec.classify(RuntimeError("certificate verify failed")), ec.TLS_FAILURE)

@@ -140,6 +140,14 @@ class CoordinatorConfigEntryTest(unittest.TestCase):
                     _is_redact_mac(kv[field]),
                     f"summary '{field}' must be a redact_mac(...) call",
                 )
+            name_value = kv["name"]
+            self.assertIsInstance(name_value, ast.Call)
+            name_func = name_value.func
+            self.assertTrue(
+                (isinstance(name_func, ast.Name) and name_func.id == "redact_id")
+                or (isinstance(name_func, ast.Attribute) and name_func.attr == "redact_id"),
+                "summary 'name' must be a redact_id(...) call",
+            )
 
     def test_manifest_has_no_invalid_homeassistant_key(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

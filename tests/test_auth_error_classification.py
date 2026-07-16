@@ -79,10 +79,12 @@ class AuthErrorClassificationTest(unittest.TestCase):
         self.assertFalse(hc._requires_reauth(err))
 
     def test_auth_class_but_5xx_does_not_reauth(self) -> None:
-        # Class name = auth, but message 500 -> retryable -> NOT reauth.
-        err = NativeAuthError("boom status 500")
-        self.assertTrue(hc._is_auth_error(err))      # via class name
-        self.assertFalse(hc._requires_reauth(err))   # but retryable wins
+        # Class name = auth, but every 5xx status is retryable -> NOT reauth.
+        for status in (500, 501, 505, 507, 511, 599):
+            err = NativeAuthError(f"boom status {status}")
+            with self.subTest(status=status):
+                self.assertTrue(hc._is_auth_error(err))      # via class name
+                self.assertFalse(hc._requires_reauth(err))   # but retryable wins
 
     def test_message_based_classification_still_works(self) -> None:
         self.assertTrue(hc._is_auth_error(RuntimeError("HTTP 401 unauthorized")))

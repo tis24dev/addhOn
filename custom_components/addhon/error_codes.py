@@ -26,9 +26,39 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import re
 from dataclasses import dataclass
 
 CODE_PREFIX = "ADDHON"
+
+# HTTP status tokens must be standalone numbers. Besides avoiding false positives
+# such as a model/identifier ending in ``5000``, this covers the complete 5xx range
+# instead of the previous hand-picked 500/502/503/504 subset.
+_HTTP_STATUS_RE = re.compile(r"(?<![A-Za-z0-9])([1-5]\d{2})(?!\d)")
+
+
+def _http_statuses(text: str) -> set[int]:
+    """Return standalone HTTP-like status numbers found in *text*."""
+    return {int(match.group(1)) for match in _HTTP_STATUS_RE.finditer(text)}
+
+
+def _is_rate_limited_text(text: str) -> bool:
+    """Whether an error message represents HTTP rate limiting."""
+    return 429 in _http_statuses(text) or "too many requests" in text
+
+
+def _is_server_failure_text(text: str) -> bool:
+    """Whether an error message represents a retryable server-side failure."""
+    return any(500 <= status <= 599 for status in _http_statuses(text)) or any(
+        marker in text
+        for marker in (
+            "internal server error",
+            "server error",
+            "bad gateway",
+            "gateway timeout",
+            "temporarily unavailable",
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -202,22 +232,9 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
     text = str(err).lower()
     hay = f"{text} {name}"
 
-    if "429" in hay or "too many requests" in hay:
+    if _is_rate_limited_text(hay):
         return RATE_LIMITED
-    if any(
-        token in hay
-        for token in (
-            "500",
-            "502",
-            "503",
-            "504",
-            "internal server error",
-            "server error",
-            "bad gateway",
-            "gateway timeout",
-            "temporarily unavailable",
-        )
-    ):
+    if _is_server_failure_text(hay):
         return SERVER_ERROR
     if _is_timeout(err) or "timed out" in hay or "timeout" in hay:
         return phase_timeout_code(phase)
