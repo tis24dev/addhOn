@@ -363,10 +363,17 @@ class CreatePathTest(unittest.TestCase):
             _run(load(Api(result="")))
         self.assertIs(empty.exception.error_code, AWS_TOKEN_FAILED)
 
-        with self.assertRaises(mod.MqttStartupUnavailable) as outage:
-            _run(load(Api(error=RuntimeError("hOn server error (status 503)"))))
-        self.assertIs(outage.exception.error_code, SERVER_ERROR)
-        self.assertIsInstance(outage.exception.__cause__, RuntimeError)
+        for status in (500, 501, 505, 507, 511, 599):
+            with self.subTest(status=status):
+                with self.assertRaises(mod.MqttStartupUnavailable) as outage:
+                    _run(load(Api(error=RuntimeError(f"api_auth: status {status}"))))
+                self.assertIs(outage.exception.error_code, SERVER_ERROR)
+                self.assertIsInstance(outage.exception.__cause__, RuntimeError)
+
+        with self.assertRaises(mod.MqttStartupUnavailable) as textual_outage:
+            _run(load(Api(error=RuntimeError("hOn Internal Server Error"))))
+        self.assertIs(textual_outage.exception.error_code, SERVER_ERROR)
+        self.assertIsInstance(textual_outage.exception.__cause__, RuntimeError)
 
         with self.assertRaises(mod.MqttStartupUnavailable) as malformed:
             _run(load(Api(error=json.JSONDecodeError("Expecting value", "", 0))))

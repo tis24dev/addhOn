@@ -18,6 +18,8 @@ from .error_codes import (
     HonCodedError,
     HonErrorCode,
     classify,
+    is_rate_limited_text,
+    is_server_failure_text,
     phase_timeout_code,
 )
 
@@ -220,19 +222,12 @@ def _is_retryable_server_error(err: BaseException) -> bool:
     if isinstance(err, (asyncio.TimeoutError, concurrent.futures.TimeoutError, TimeoutError)):
         return True
     err_str = _error_text(err)
-    return any(k in err_str for k in (
-        "internal server error",
-        "server error",
-        "500",
-        "502",
-        "503",
-        "504",
-        "timeout",
-        "timed out",
-        "temporarily unavailable",
-        "too many requests",
-        "429",
-    ))
+    return (
+        is_rate_limited_text(err_str)
+        or is_server_failure_text(err_str)
+        or "timeout" in err_str
+        or "timed out" in err_str
+    )
 
 
 def _is_missing_session_error(err: BaseException) -> bool:

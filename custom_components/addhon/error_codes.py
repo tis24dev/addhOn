@@ -26,9 +26,41 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import re
 from dataclasses import dataclass
 
 CODE_PREFIX = "ADDHON"
+
+# Retry-relevant HTTP status tokens must be standalone numbers. Besides avoiding
+# false positives such as model/identifier H500 or 5000, this covers rate limiting
+# (429) and the complete 5xx range instead of the previous hand-picked subset.
+_HTTP_STATUS_RE = re.compile(r"(?<![A-Za-z0-9])(429|5\d{2})(?!\d)")
+
+
+def _http_statuses(text: str) -> set[int]:
+    """Return standalone retry-relevant HTTP status numbers found in *text*."""
+    return {int(match.group(1)) for match in _HTTP_STATUS_RE.finditer(text)}
+
+
+def is_rate_limited_text(text: str) -> bool:
+    """Whether an error message represents HTTP rate limiting."""
+    text = text.lower()
+    return 429 in _http_statuses(text) or "too many requests" in text
+
+
+def is_server_failure_text(text: str) -> bool:
+    """Whether an error message represents a retryable server-side failure."""
+    text = text.lower()
+    return any(500 <= status <= 599 for status in _http_statuses(text)) or any(
+        marker in text
+        for marker in (
+            "internal server error",
+            "server error",
+            "bad gateway",
+            "gateway timeout",
+            "temporarily unavailable",
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -202,22 +234,9 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
     text = str(err).lower()
     hay = f"{text} {name}"
 
-    if "429" in hay or "too many requests" in hay:
+    if is_rate_limited_text(hay):
         return RATE_LIMITED
-    if any(
-        token in hay
-        for token in (
-            "500",
-            "502",
-            "503",
-            "504",
-            "internal server error",
-            "server error",
-            "bad gateway",
-            "gateway timeout",
-            "temporarily unavailable",
-        )
-    ):
+    if is_server_failure_text(hay):
         return SERVER_ERROR
     if _is_timeout(err) or "timed out" in hay or "timeout" in hay:
         return phase_timeout_code(phase)

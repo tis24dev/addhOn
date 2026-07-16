@@ -79,10 +79,12 @@ class AuthErrorClassificationTest(unittest.TestCase):
         self.assertFalse(hc._requires_reauth(err))
 
     def test_auth_class_but_5xx_does_not_reauth(self) -> None:
-        # Class name = auth, but message 500 -> retryable -> NOT reauth.
-        err = NativeAuthError("boom status 500")
-        self.assertTrue(hc._is_auth_error(err))      # via class name
-        self.assertFalse(hc._requires_reauth(err))   # but retryable wins
+        # Class name = auth, but every 5xx status is retryable -> NOT reauth.
+        for status in (500, 501, 505, 507, 511, 599):
+            err = NativeAuthError(f"boom status {status}")
+            with self.subTest(status=status):
+                self.assertTrue(hc._is_auth_error(err))      # via class name
+                self.assertFalse(hc._requires_reauth(err))   # but retryable wins
 
     def test_message_based_classification_still_works(self) -> None:
         self.assertTrue(hc._is_auth_error(RuntimeError("HTTP 401 unauthorized")))
@@ -119,8 +121,9 @@ class CoordinatorErrorClassificationTest(unittest.TestCase):
         # Auth-named class but a 5xx message -> retryable wins -> NotReady (retry),
         # NOT a reauth prompt.
         _AF, NotReady, _UF, setup, _upd = self._imports()
-        with self.assertRaises(NotReady):
-            setup(NativeAuthError("boom status 500"))
+        for status in (500, 501, 505, 507, 511, 599):
+            with self.subTest(status=status), self.assertRaises(NotReady):
+                setup(NativeAuthError(f"boom status {status}"))
 
     def test_update_auth_error_is_config_entry_auth_failed(self) -> None:
         AuthFailed, _NotReady, _UF, _setup, upd = self._imports()
@@ -134,8 +137,9 @@ class CoordinatorErrorClassificationTest(unittest.TestCase):
 
     def test_update_retryable_5xx_is_update_failed_not_auth(self) -> None:
         _AF, _NotReady, UpdateFailed, _setup, upd = self._imports()
-        with self.assertRaises(UpdateFailed):
-            upd(NativeAuthError("boom status 500"))
+        for status in (500, 501, 505, 507, 511, 599):
+            with self.subTest(status=status), self.assertRaises(UpdateFailed):
+                upd(NativeAuthError(f"boom status {status}"))
 
     def test_setup_mfa_challenge_is_config_entry_auth_failed(self) -> None:
         # A 2FA challenge during a BACKGROUND setup cannot prompt -> must route to the

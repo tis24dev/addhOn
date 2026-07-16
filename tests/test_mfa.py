@@ -281,8 +281,6 @@ class MfaResumeTest(unittest.TestCase):
     def test_remoting_debug_line_is_redacted(self) -> None:
         # With DEBUG on, the remoting breadcrumb runs and emits the method + redacted
         # summary, never the response body/secret.
-        import logging
-
         auth = self._auth([FakeResp(text='[{"result":false,"message":"SECRET-MSG"}]')])
         with self.assertLogs(
             "custom_components.addhon.client.transport.auth", level="DEBUG"

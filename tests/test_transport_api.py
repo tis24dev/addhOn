@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-import re
 import sys
 import types
 import unittest
