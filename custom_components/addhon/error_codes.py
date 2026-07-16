@@ -42,13 +42,13 @@ def _http_statuses(text: str) -> set[int]:
     return {int(match.group(1)) for match in _HTTP_STATUS_RE.finditer(text)}
 
 
-def _is_rate_limited_text(text: str) -> bool:
+def is_rate_limited_text(text: str) -> bool:
     """Whether an error message represents HTTP rate limiting."""
     text = text.lower()
     return 429 in _http_statuses(text) or "too many requests" in text
 
 
-def _is_server_failure_text(text: str) -> bool:
+def is_server_failure_text(text: str) -> bool:
     """Whether an error message represents a retryable server-side failure."""
     text = text.lower()
     return any(500 <= status <= 599 for status in _http_statuses(text)) or any(
@@ -234,9 +234,9 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
     text = str(err).lower()
     hay = f"{text} {name}"
 
-    if _is_rate_limited_text(hay):
+    if is_rate_limited_text(hay):
         return RATE_LIMITED
-    if _is_server_failure_text(hay):
+    if is_server_failure_text(hay):
         return SERVER_ERROR
     if _is_timeout(err) or "timed out" in hay or "timeout" in hay:
         return phase_timeout_code(phase)

@@ -17,9 +17,9 @@ from .error_codes import (
     UNKNOWN,
     HonCodedError,
     HonErrorCode,
-    _is_rate_limited_text,
-    _is_server_failure_text,
     classify,
+    is_rate_limited_text,
+    is_server_failure_text,
     phase_timeout_code,
 )
 
@@ -223,8 +223,8 @@ def _is_retryable_server_error(err: BaseException) -> bool:
         return True
     err_str = _error_text(err)
     return (
-        _is_rate_limited_text(err_str)
-        or _is_server_failure_text(err_str)
+        is_rate_limited_text(err_str)
+        or is_server_failure_text(err_str)
         or "timeout" in err_str
         or "timed out" in err_str
     )
