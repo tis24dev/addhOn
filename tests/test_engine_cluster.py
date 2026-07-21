@@ -566,6 +566,24 @@ class ClusterBehaviorTest(unittest.TestCase):
         app.sync_params_to_command("settings")
         self.assertEqual(command.settings["tempSel"].value, 17)
 
+    def test_sync_params_out_of_range_shadow_keeps_command_value(self) -> None:
+        # GUARD (PR #66 review): an OUT-OF-RANGE shadow value (stale local metadata) must NOT
+        # be snapped/clamped into the command, or a later send would overwrite the command's
+        # current (here user-set) value with a boundary guess. Sync leaves the command as-is.
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        command = NaCommand(
+            "settings",
+            {"parameters": {"tempSel": _range(default="5", lo="5", hi="20", inc="1")}},
+            FakeAppliance(),
+        )
+        app = NaAppliance(FakeApi(), dict(_INFO), zone=0)
+        app._commands = {"settings": command}
+        command.settings["tempSel"].value = "18"   # a good, user-set value on the command
+        app._attributes = {"parameters": {"tempSel": HonAttribute({"parNewVal": "25"})}}
+        app.sync_params_to_command("settings")
+        self.assertEqual(command.settings["tempSel"].value, 18)  # preserved, not clamped to 20
+
     def test_ac_eco_nested_rule_fires(self) -> None:
         # REAL AC structure (apk/dump/ac_live): ecoMode=1 with machMode fixed=1
         # must constrain tempSel to 26 and the wind-direction (nested extra-condition).

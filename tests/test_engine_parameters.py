@@ -303,10 +303,20 @@ class RangeSnapToGridTest(unittest.TestCase):
         self.assertEqual(p.snap_to_grid("12.2"), 12)
         self.assertEqual(p.snap_to_grid(17.6), 18)     # rounds to nearest
 
-    def test_snaps_within_bounds(self) -> None:
+    def test_out_of_range_raises_not_clamped(self) -> None:
+        # An out-of-range shadow value (stale metadata) must NOT be clamped to a boundary:
+        # clamping + a later send would overwrite the command's current (possibly user-set)
+        # value. snap raises so sync_params_to_command skips it and keeps the command value.
         p = self._range("5", "20", "1")
-        self.assertEqual(p.snap_to_grid("2"), 5)       # below min -> clamp to min
-        self.assertEqual(p.snap_to_grid("99"), 20)     # above max -> clamp to max
+        with self.assertRaises(ValueError):
+            p.snap_to_grid("2")    # below min
+        with self.assertRaises(ValueError):
+            p.snap_to_grid("99")   # above max
+
+    def test_non_numeric_raises(self) -> None:
+        p = self._range("5", "20", "1")
+        with self.assertRaises(ValueError):
+            p.snap_to_grid("bad")
 
     def test_on_grid_value_unchanged(self) -> None:
         p = self._range("16", "30", "0.5")
