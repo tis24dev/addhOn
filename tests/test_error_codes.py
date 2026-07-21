@@ -158,6 +158,16 @@ class ClassifyTest(unittest.TestCase):
                 self.assertIs(ec.classify(err), ec.AUTH_API_AUTH)
                 self.assertTrue(hc._requires_reauth(err))
 
+    def test_rate_limit_status_does_not_accept_longer_identifiers(self) -> None:
+        # 429 must match only as a standalone HTTP status, not embedded in longer tokens
+        # (mirror of the 5xx guard; _HTTP_STATUS_RE also feeds is_rate_limited_text).
+        for token in ("H429", "X429Y", "4290", "1429", "428", "430"):
+            with self.subTest(token=token):
+                err = NativeAuthError(f"api_auth: model {token} unavailable")
+                self.assertFalse(ec.is_rate_limited_text(str(err)))
+                self.assertIs(ec.classify(err), ec.AUTH_API_AUTH)
+                self.assertTrue(hc._requires_reauth(err))
+
     def test_network_classes(self) -> None:
         self.assertIs(ec.classify(RuntimeError("certificate verify failed")), ec.TLS_FAILURE)
         self.assertIs(ec.classify(RuntimeError("getaddrinfo failed")), ec.DNS_FAILURE)

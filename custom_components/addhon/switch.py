@@ -355,6 +355,11 @@ class HonSettingsSwitch(HonBaseEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
+        # Read the mirrored shadow value only. A settings-command param that the device
+        # does not mirror into the shadow is refreshed only at load time / by our own
+        # writes (sync_params_to_command skips shadow-absent keys), so falling back to the
+        # command value would manufacture a confidently-stale state; honest unknown (None)
+        # is correct. The real WC/AC mirror lightStatus, so this returns a value in practice.
         raw = self._get_attr(self._desc.param)
         if raw is None:
             return None

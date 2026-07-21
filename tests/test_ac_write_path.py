@@ -856,6 +856,8 @@ class AcSwitchWritePathTest(unittest.IsolatedAsyncioTestCase):
     async def test_is_on_reads_param(self) -> None:
         on, _, _ = self._switch({"echoStatus": Param("1")}, {"echoStatus": "1"})
         off, _, _ = self._switch({"echoStatus": Param("0")}, {"echoStatus": "0"})
+        # not mirrored into the shadow -> honest unknown (we do NOT fall back to the
+        # command value, which the device never refreshes per poll and would be stale)
         absent, _, _ = self._switch({"echoStatus": Param("0")}, {})
         self.assertIs(True, on.is_on)
         self.assertIs(False, off.is_on)

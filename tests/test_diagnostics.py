@@ -675,6 +675,9 @@ class WcSettingsSwitchCoverageTest(unittest.TestCase):
         cov = diagnostics._coverage("WC", {}, {}, self._wc_appliance())
         self.assertNotIn("lightStatus", cov["command_params_unmapped"])
         self.assertNotIn("lightStatus", cov["command_params_unmapped_meta"])
+        # positive control: an un-mapped writable IS still reported, proving the coverage
+        # machinery ran and the lists are populated (guards against a vacuous pass).
+        self.assertIn("sabbathStatus", cov["command_params_unmapped"])
 
 
 class IdentityKeysDriftGuardTest(unittest.TestCase):
