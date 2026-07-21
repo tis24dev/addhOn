@@ -210,10 +210,11 @@ def _collect_code_keys() -> dict[str, set[str]]:
     used["number"] = {
         _tk(d) for descs in number.NUMBERS.values() for d in descs
     } | {d.translation_key for d in number._PROGRAM_OPTION_NUMBERS}
-    # HonAcSwitch names from description.key; the pause + debug switches use fixed keys;
-    # the program-option switches (#35) come from their description key.
+    # HonSettingsSwitch names from description.key (AC toggles + wine-cooler light); the
+    # pause + debug switches use fixed keys; the program-option switches (#35) come from
+    # their description key.
     used["switch"] = (
-        {d.key for d in switch._AC_SWITCHES}
+        {d.key for descs in switch._SETTINGS_SWITCHES.values() for d in descs}
         | {d.key for d in switch._PROGRAM_OPTION_SWITCHES}
         | {"pause", "debug_logging", "mqtt_realtime_debug"}
     )

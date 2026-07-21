@@ -1,7 +1,7 @@
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Haier hOn switches: washer/dryer pause + air conditioner toggles."""
+"""Haier hOn switches: washer/dryer pause + air conditioner toggles + wine-cooler light."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,6 +20,7 @@ from .const import (
     APPLIANCE_AC,
     APPLIANCE_TD,
     APPLIANCE_WASH_GROUP,
+    APPLIANCE_WC,
     APPLIANCE_WD,
     APPLIANCE_WM,
     CONF_ENABLE_DEBUG,
@@ -39,11 +40,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
-class HonAcSwitchDescription:
-    """Boolean AC switch acting on a 0/1 parameter of the settings command.
+class HonSettingsSwitchDescription:
+    """Boolean switch acting on a 0/1 (or range[0,1]) parameter of the `settings` command.
 
     `param` is both the parameter name in the `settings` command (write) and
-    the direct 0/1 attribute read via _get_attr (read).
+    the direct 0/1 attribute read via _get_attr (read). Used by the air conditioner
+    toggles and the wine-cooler interior light (same settings-command convention).
     """
 
     key: str            # unique_id suffix
@@ -53,24 +55,40 @@ class HonAcSwitchDescription:
 
 # AC switches: 0/1 parameters confirmed in the settings command of Roberto's AC.
 # Capability-gated: each is created only if the device actually exposes the parameter.
-_AC_SWITCHES: tuple[HonAcSwitchDescription, ...] = (
-    HonAcSwitchDescription(key="sleep", param="silentSleepStatus", icon="mdi:power-sleep"),
-    HonAcSwitchDescription(key="mute", param="muteStatus", icon="mdi:volume-off"),
-    HonAcSwitchDescription(key="eco", param="echoStatus", icon="mdi:leaf"),
-    HonAcSwitchDescription(key="rapid", param="rapidMode", icon="mdi:fan-plus"),
-    HonAcSwitchDescription(key="health", param="healthMode", icon="mdi:heart-pulse"),
-    HonAcSwitchDescription(key="self_clean", param="selfCleaningStatus", icon="mdi:spray-bottle"),
-    HonAcSwitchDescription(key="self_clean_56", param="selfCleaning56Status", icon="mdi:spray"),
-    HonAcSwitchDescription(key="display", param="screenDisplayStatus", icon="mdi:monitor"),
-    HonAcSwitchDescription(key="light", param="lightStatus", icon="mdi:lightbulb"),
-    HonAcSwitchDescription(key="ten_degree_heating", param="10degreeHeatingStatus", icon="mdi:snowflake-melt"),
-    HonAcSwitchDescription(key="child_lock", param="lockStatus", icon="mdi:lock"),
-    HonAcSwitchDescription(key="human_sensing", param="humanSensingStatus", icon="mdi:motion-sensor"),
-    HonAcSwitchDescription(key="electric_heating", param="electricHeatingStatus", icon="mdi:radiator"),
-    HonAcSwitchDescription(key="fresh_air", param="freshAirStatus", icon="mdi:air-filter"),
-    HonAcSwitchDescription(key="half_degree", param="halfDegreeSettingStatus", icon="mdi:thermometer-lines"),
-    HonAcSwitchDescription(key="energy_saving", param="energySavingStatus", icon="mdi:meter-electric"),
+_AC_SWITCHES: tuple[HonSettingsSwitchDescription, ...] = (
+    HonSettingsSwitchDescription(key="sleep", param="silentSleepStatus", icon="mdi:power-sleep"),
+    HonSettingsSwitchDescription(key="mute", param="muteStatus", icon="mdi:volume-off"),
+    HonSettingsSwitchDescription(key="eco", param="echoStatus", icon="mdi:leaf"),
+    HonSettingsSwitchDescription(key="rapid", param="rapidMode", icon="mdi:fan-plus"),
+    HonSettingsSwitchDescription(key="health", param="healthMode", icon="mdi:heart-pulse"),
+    HonSettingsSwitchDescription(key="self_clean", param="selfCleaningStatus", icon="mdi:spray-bottle"),
+    HonSettingsSwitchDescription(key="self_clean_56", param="selfCleaning56Status", icon="mdi:spray"),
+    HonSettingsSwitchDescription(key="display", param="screenDisplayStatus", icon="mdi:monitor"),
+    HonSettingsSwitchDescription(key="light", param="lightStatus", icon="mdi:lightbulb"),
+    HonSettingsSwitchDescription(key="ten_degree_heating", param="10degreeHeatingStatus", icon="mdi:snowflake-melt"),
+    HonSettingsSwitchDescription(key="child_lock", param="lockStatus", icon="mdi:lock"),
+    HonSettingsSwitchDescription(key="human_sensing", param="humanSensingStatus", icon="mdi:motion-sensor"),
+    HonSettingsSwitchDescription(key="electric_heating", param="electricHeatingStatus", icon="mdi:radiator"),
+    HonSettingsSwitchDescription(key="fresh_air", param="freshAirStatus", icon="mdi:air-filter"),
+    HonSettingsSwitchDescription(key="half_degree", param="halfDegreeSettingStatus", icon="mdi:thermometer-lines"),
+    HonSettingsSwitchDescription(key="energy_saving", param="energySavingStatus", icon="mdi:meter-electric"),
 )
+
+
+# Wine cooler (WC) switches: interior light. Ground-truthed on a real HWS77GDAU1 (discussion
+# #62): the settings command carries lightStatus as range[0,1] (writable). Capability-gated
+# like the AC switches, so a WC without a writable lightStatus creates no entity.
+_WC_SWITCHES: tuple[HonSettingsSwitchDescription, ...] = (
+    HonSettingsSwitchDescription(key="light", param="lightStatus", icon="mdi:lightbulb"),
+)
+
+
+# Per-type settings-command switch tables. Every appliance here shares HonSettingsSwitch:
+# each switch reads/writes a 0/1 parameter of the device's `settings` command, capability-gated.
+_SETTINGS_SWITCHES: dict[str, tuple[HonSettingsSwitchDescription, ...]] = {
+    APPLIANCE_AC: _AC_SWITCHES,
+    APPLIANCE_WC: _WC_SWITCHES,
+}
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -179,17 +197,17 @@ async def async_setup_entry(
                 app_type,
                 created_opts,
             )
-        elif app_type == APPLIANCE_AC:
+        elif app_type in _SETTINGS_SWITCHES:
             created: list[str] = []
-            for desc in _AC_SWITCHES:
+            for desc in _SETTINGS_SWITCHES[app_type]:
                 # capability-gate: only if the parameter exists in the settings command
                 if settings_param(appliance, desc.param) is None:
                     continue
-                entities.append(HonAcSwitch(coordinator, appliance_id, desc, client))
+                entities.append(HonSettingsSwitch(coordinator, appliance_id, desc, client))
                 created.append(desc.key)
             _LOGGER.debug(
-                "Switch debug: AC '%s' id=%s -> %d switches %s",
-                data.get("name"), redact_id(appliance_id), len(created), created,
+                "Switch debug: settings switches '%s' id=%s type=%s -> %d %s",
+                data.get("name"), redact_id(appliance_id), app_type, len(created), created,
             )
         else:
             _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
@@ -316,10 +334,14 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
         await self._send_pause_command("resumeProgram", "0")
 
 
-class HonAcSwitch(HonBaseEntity, SwitchEntity):
-    """Boolean air conditioner switch on a parameter of the settings command."""
+class HonSettingsSwitch(HonBaseEntity, SwitchEntity):
+    """Boolean switch on a parameter of the `settings` command.
 
-    def __init__(self, coordinator, appliance_id: str, description: HonAcSwitchDescription, client=None) -> None:
+    Serves the air conditioner toggles and the wine-cooler interior light: both write
+    a 0/1 parameter of the same `settings` command and read it back via _get_attr.
+    """
+
+    def __init__(self, coordinator, appliance_id: str, description: HonSettingsSwitchDescription, client=None) -> None:
         super().__init__(coordinator, appliance_id, client)
         self._desc = description
         self._attr_translation_key = description.key
@@ -327,7 +349,7 @@ class HonAcSwitch(HonBaseEntity, SwitchEntity):
         if description.icon:
             self._attr_icon = description.icon
         _LOGGER.debug(
-            "Switch debug: initialized AC switch '%s' id=%s param=%s",
+            "Switch debug: initialized settings switch '%s' id=%s param=%s",
             redact_id(self._attr_unique_id, appliance_id), redact_id(appliance_id), description.param,
         )
 

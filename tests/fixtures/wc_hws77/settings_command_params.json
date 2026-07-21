@@ -1,0 +1,15 @@
+{
+    "_comment": "Real settings-command parameter NAMES of a live Haier wine cooler (model HWS77GDAU1) captured from the redacted config-entry diagnostics dump on 2026-07-21 (discussion #62). Param NAMES only (no values, no identity). Validates that switch.py _WC_SWITCHES param names exist on a real device, so a wrong name (a capability-gated switch that would then never be created) is caught by a test.",
+    "model": "HWS77GDAU1",
+    "type": "WC",
+    "source": "config_entry diagnostics (.data.appliances[].commands.settings), redacted",
+    "captured": "2026-07-21",
+    "settings_command_params": [
+        "category",
+        "lightStatus",
+        "sabbathStatus",
+        "tempSel",
+        "tempSelZ2",
+        "tempUnit"
+    ]
+}

@@ -653,6 +653,30 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
         self.assertEqual(len(cov["command_params_unmapped"]), cov["command_params_total"])
 
 
+class WcSettingsSwitchCoverageTest(unittest.TestCase):
+    """The wine-cooler light switch writes settings.lightStatus, so lightStatus must be
+    counted as mapped (not falsely reported as an unmapped writable in the gold signal).
+    Regression guard for _mapped_sets/_coverage being AC-only before the WC switch shipped
+    (discussion #62)."""
+
+    def _wc_appliance(self):
+        # Mirrors the real HWS77GDAU1 settings command (tests/fixtures/wc_hws77).
+        return FakeAppliance(commands={"settings": FakeCommand({
+            "lightStatus": FakeParam(value="0", typology="range", rng=(0, 1, 1)),  # WC switch -> mapped
+            "sabbathStatus": FakeParam(value="0", typology="enum", values=["0", "1"]),  # no entity -> signal
+            "tempUnit": FakeParam(value="0", typology="enum", values=["0", "1"]),
+        })})
+
+    def test_lightstatus_in_mapped_params(self):
+        _, mapped_params = diagnostics._mapped_sets("WC")
+        self.assertIn("lightStatus", mapped_params)
+
+    def test_lightstatus_not_reported_unmapped(self):
+        cov = diagnostics._coverage("WC", {}, {}, self._wc_appliance())
+        self.assertNotIn("lightStatus", cov["command_params_unmapped"])
+        self.assertNotIn("lightStatus", cov["command_params_unmapped_meta"])
+
+
 class IdentityKeysDriftGuardTest(unittest.TestCase):
     """The shared log redactor (debug_utils._IDENTITY_KEYS) must redact at least
     everything the Download-Diagnostics path (diagnostics._TO_REDACT) does, so a

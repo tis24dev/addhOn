@@ -1,7 +1,8 @@
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Validate that switch.py `_AC_SWITCHES` `param` names exist on a real Haier AC.
+"""Validate that switch.py settings-command `param` names exist on real Haier devices
+(AC via `_AC_SWITCHES`, wine cooler via `_WC_SWITCHES`).
 
 The per-type entity tests validate the entity `key` (the slug) but NOT the `param`
 (the Haier command-parameter name the switch reads/writes). A wrong `param` makes a
@@ -26,6 +27,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 _AC_FIXTURE = REPO / "tests" / "fixtures" / "ac_as35" / "settings_command_params.json"
+_WC_FIXTURE = REPO / "tests" / "fixtures" / "wc_hws77" / "settings_command_params.json"
 
 
 def _mod(name: str) -> types.ModuleType:
@@ -111,6 +113,11 @@ def _real_ac_settings_params() -> set[str]:
     return set(data["settings_command_params"])
 
 
+def _real_wc_settings_params() -> set[str]:
+    data = json.loads(_WC_FIXTURE.read_text(encoding="utf-8"))
+    return set(data["settings_command_params"])
+
+
 class AcSwitchParamRealityTest(unittest.TestCase):
     """The `param` of every AC switch must exist in a real AC's settings schema."""
 
@@ -166,6 +173,52 @@ class AcSwitchPinTest(unittest.TestCase):
 
     def test_ac_switches_pinned(self):
         actual = {desc.key: desc.param for desc in switch._AC_SWITCHES}
+        self.assertEqual(actual, self._PINNED)
+
+
+class WcSwitchParamRealityTest(unittest.TestCase):
+    """The `param` of every wine-cooler switch must exist in a real WC settings schema.
+
+    Fixture tests/fixtures/wc_hws77/, captured live on 2026-07-21 from an HWS77GDAU1
+    (discussion #62), guards against a wrong param name that would make a capability-gated
+    switch silently never created on any wine cooler.
+    """
+
+    def test_every_wc_switch_param_exists_on_real_device(self):
+        real = _real_wc_settings_params()
+        missing = {desc.param for desc in switch._WC_SWITCHES} - real
+        self.assertEqual(
+            missing,
+            set(),
+            "These _WC_SWITCHES params are absent from the real HWS77GDAU1 settings schema "
+            "(a capability-gated switch would then NEVER be created on any wine cooler): "
+            f"{sorted(missing)}. Verify against a real device before changing.",
+        )
+
+    def test_fixture_is_sane(self):
+        # Guard against an empty/garbled fixture silently passing the check above.
+        real = _real_wc_settings_params()
+        self.assertGreater(len(real), 3)
+        self.assertIn("lightStatus", real)  # the writable interior-light param (range[0,1])
+
+    def test_wc_switch_keys_and_params_unique(self):
+        keys = [desc.key for desc in switch._WC_SWITCHES]
+        params = [desc.param for desc in switch._WC_SWITCHES]
+        self.assertEqual(len(keys), len(set(keys)), "duplicate WC switch key")
+        self.assertEqual(len(params), len(set(params)), "duplicate WC switch param")
+
+
+class WcSwitchPinTest(unittest.TestCase):
+    """Drift guard: the wine-cooler (key -> param) mapping is pinned to the value verified
+    against a real HWS77GDAU1 diagnostics dump on 2026-07-21 (discussion #62). Any change
+    here must be re-verified against a real device (see the reality test above)."""
+
+    _PINNED = {
+        "light": "lightStatus",
+    }
+
+    def test_wc_switches_pinned(self):
+        actual = {desc.key: desc.param for desc in switch._WC_SWITCHES}
         self.assertEqual(actual, self._PINNED)
 
 

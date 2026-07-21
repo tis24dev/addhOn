@@ -273,7 +273,7 @@ def _mapped_sets(app_type) -> tuple[set[str], set[str]]:
         from .binary_sensor import BINARY_SENSORS, _CONNECTIVITY, _UNIVERSAL_GATED
         from .number import NUMBERS
         from .sensor import SENSORS
-        from .switch import _AC_SWITCHES
+        from .switch import _SETTINGS_SWITCHES
     except Exception:  # pragma: no cover - diagnostics must never crash
         _LOGGER.debug(
             "Diagnostics debug: coverage registries unavailable", exc_info=True
@@ -291,9 +291,10 @@ def _mapped_sets(app_type) -> tuple[set[str], set[str]]:
 
     for desc in NUMBERS.get(app_type, ()):
         mapped_params.add(desc.param)
+    # Settings-command switches (AC toggles + wine-cooler light) map their write param.
+    for desc in _SETTINGS_SWITCHES.get(app_type, ()):
+        mapped_params.add(desc.param)
     if app_type == APPLIANCE_AC:
-        for desc in _AC_SWITCHES:
-            mapped_params.add(desc.param)
         mapped_params |= _AC_CLIMATE_PARAMS
     if app_type in APPLIANCE_WASH_GROUP:
         mapped_params.update(PROGRAM_PARAM_NAMES)

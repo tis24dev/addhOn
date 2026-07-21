@@ -590,10 +590,10 @@ class AcClimateWritePathTest(unittest.IsolatedAsyncioTestCase):
     async def test_self_clean_switch_turn_on_still_sets_one(self) -> None:
         settings = RecordingCommand({"selfCleaningStatus": Param("0")})
         coordinator = FakeCoordinator(_ac({"settings": settings}))
-        desc = switch.HonAcSwitchDescription(
+        desc = switch.HonSettingsSwitchDescription(
             key="self_clean", param="selfCleaningStatus"
         )
-        sw = switch.HonAcSwitch(coordinator, "ac-1", desc, FakeClient())
+        sw = switch.HonSettingsSwitch(coordinator, "ac-1", desc, FakeClient())
         sw.hass = FakeHass()
         await sw.async_turn_on()
         self.assertEqual("1", settings.sent["selfCleaningStatus"])
@@ -830,14 +830,14 @@ class AcClimateReadPathTest(unittest.IsolatedAsyncioTestCase):
 
 
 class AcSwitchWritePathTest(unittest.IsolatedAsyncioTestCase):
-    """switch.HonAcSwitch send semantics."""
+    """switch.HonSettingsSwitch send semantics."""
 
-    _DESC = switch.HonAcSwitchDescription(key="eco", param="echoStatus", icon="mdi:leaf")
+    _DESC = switch.HonSettingsSwitchDescription(key="eco", param="echoStatus", icon="mdi:leaf")
 
     def _switch(self, params: dict, attributes: dict | None = None, *, failing=False):
         cmd = (FailingCommand if failing else RecordingCommand)(params)
         coordinator = FakeCoordinator(_ac({"settings": cmd}, attributes))
-        entity = switch.HonAcSwitch(coordinator, "ac-1", self._DESC, FakeClient())
+        entity = switch.HonSettingsSwitch(coordinator, "ac-1", self._DESC, FakeClient())
         entity.hass = FakeHass()
         return entity, cmd, coordinator
 
@@ -871,7 +871,7 @@ class AcSwitchWritePathTest(unittest.IsolatedAsyncioTestCase):
     async def test_set_param_client_none_raises(self) -> None:
         cmd = RecordingCommand({"echoStatus": Param("0")})
         coordinator = FakeCoordinator(_ac({"settings": cmd}))
-        entity = switch.HonAcSwitch(coordinator, "ac-1", self._DESC, None)
+        entity = switch.HonSettingsSwitch(coordinator, "ac-1", self._DESC, None)
         entity.hass = FakeHass()
         with self.assertRaises(HomeAssistantError) as ctx:
             await entity.async_turn_on()
@@ -884,7 +884,7 @@ class AcSwitchWritePathTest(unittest.IsolatedAsyncioTestCase):
     async def test_reraises_domain_error_unchanged(self) -> None:
         cmd = DomainErrorCommand({"echoStatus": Param("0")}, key="inner_sw")
         coordinator = FakeCoordinator(_ac({"settings": cmd}))
-        entity = switch.HonAcSwitch(coordinator, "ac-1", self._DESC, FakeClient())
+        entity = switch.HonSettingsSwitch(coordinator, "ac-1", self._DESC, FakeClient())
         entity.hass = FakeHass()
         with self.assertRaises(HomeAssistantError) as ctx:
             await entity.async_turn_on()
