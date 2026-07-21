@@ -544,6 +544,28 @@ class ClusterBehaviorTest(unittest.TestCase):
         app.sync_params_to_command("settings")
         self.assertEqual(command.settings["temp"].value, 22.5)
 
+    def test_sync_params_to_command_snaps_off_grid_shadow(self) -> None:
+        # REGRESSION (discussion #62): a wine cooler reports its setpoint OFF-GRID in the
+        # shadow (a measured 17.2 for a step-1 tempSel). The old code let the range setter
+        # raise on 17.2 and then SKIPPED the key, leaving the command at its load-time
+        # default (min=5). A later full-command send (fired by the light switch) then wrote
+        # 5C back to the device, clobbering the real setpoint. The fix snaps the off-grid
+        # shadow value onto the grid so the command carries the true setpoint (17), not 5.
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        command = NaCommand(
+            "settings",
+            {"parameters": {"tempSel": _range(default="5", lo="5", hi="20", inc="1")}},
+            FakeAppliance(),
+        )
+        app = NaAppliance(FakeApi(), dict(_INFO), zone=0)
+        app._commands = {"settings": command}
+        # sanity: without a sync the command sits at the min default, not the real setpoint
+        self.assertEqual(command.settings["tempSel"].value, 5)
+        app._attributes = {"parameters": {"tempSel": HonAttribute({"parNewVal": "17.2"})}}
+        app.sync_params_to_command("settings")
+        self.assertEqual(command.settings["tempSel"].value, 17)
+
     def test_ac_eco_nested_rule_fires(self) -> None:
         # REAL AC structure (apk/dump/ac_live): ecoMode=1 with machMode fixed=1
         # must constrain tempSel to 26 and the wind-direction (nested extra-condition).

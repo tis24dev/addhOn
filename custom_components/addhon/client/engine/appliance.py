@@ -366,6 +366,10 @@ class HonAppliance:
                 new := self.attributes.get("parameters", {}).get(key)
             ) is None or new.value == "":
                 continue
+            setting = command.settings.get(key)
+            if setting is None:
+                continue
+            raw = str(new.value)
             try:
                 # Always assign as a STRING (range params included): the range
                 # setter runs str_to_float, which tries int() first, so a float
@@ -374,7 +378,20 @@ class HonAppliance:
                 # rules.py._apply_fixed). A string preserves the decimals, so a
                 # half-degree setpoint is not silently rounded when synced into
                 # the command and later re-sent to the cloud.
-                command.settings[key].value = str(new.value)
+                setting.value = raw
             except ValueError as error:
-                _LOGGER.info("Can't set %s - %s", key, error)
+                # The device shadow can report an OFF-GRID value for a range setpoint
+                # (a measured 17.2 for a step-1 target). Skipping would leave the command
+                # at its load-time default (min), which a later FULL-command send writes
+                # back to the device -- clobbering the real setpoint (both wine-cooler
+                # zones snapped to 5C when the light switch fired, discussion #62). Snap
+                # the shadow value onto the grid so the command carries the true setpoint.
+                snap = getattr(setting, "snap_to_grid", None)
+                if callable(snap):
+                    try:
+                        setting.value = snap(raw)
+                        continue
+                    except ValueError:
+                        pass
+                _LOGGER.info("Can't sync %s from shadow %r - %s", key, raw, error)
                 continue

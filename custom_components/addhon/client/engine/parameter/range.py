@@ -129,6 +129,28 @@ class HonParameterRange(HonParameter):
         index = round((value - self.min) / step)
         return abs(self.min + index * step - value) <= self._grid_eps(step)
 
+    def snap_to_grid(self, value: str | float) -> float:
+        """Nearest in-range value that lands on the min/step grid.
+
+        Used to sync a device shadow value that is off-grid (e.g. a measured ``17.2`` for a
+        step-1 setpoint) INTO the command without tripping the setter's off-grid ValueError.
+        The setter itself must keep raising -- the climate/number entities rely on it for
+        rollback -- so snapping stays here and is applied explicitly by
+        ``sync_params_to_command``, never implicitly in the setter.
+        """
+        v = str_to_float(str(value))
+        v = min(self.max, max(self.min, v))
+        step = self.step
+        if step <= 0:
+            return v
+        # FLOOR the top index (not round): the last grid point must never exceed max, or
+        # the setter's min<=value<=max check would reject the snapped value and the caller
+        # would fall back to the default. The shared grid epsilon keeps an on-grid max from
+        # being dropped by float drift. The final min(max, ...) is a defensive clamp.
+        max_index = max(0, int((self.max - self.min + self._grid_eps(step)) / step))
+        index = min(max_index, max(0, round((v - self.min) / step)))
+        return min(self.max, self.min + index * step)
+
     def _grid_eps(self, step: float) -> float:
         """Snap/enumeration tolerance for the min/step grid, capped to a fraction of step.
 

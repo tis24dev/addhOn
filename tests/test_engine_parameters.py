@@ -286,6 +286,54 @@ class RangeGridSetterTest(unittest.TestCase):
         self.assertLessEqual(len(p.values), _MAX_RANGE_VALUES)
 
 
+class RangeSnapToGridTest(unittest.TestCase):
+    """snap_to_grid returns the nearest in-range grid value so an off-grid device shadow
+    value (e.g. a measured 17.2 for a step-1 setpoint) can be synced into the command
+    without leaving it at the default (discussion #62). The setter still raises on the raw
+    off-grid value -- snap is applied explicitly, never implicitly in the setter."""
+
+    def _range(self, lo, hi, step):
+        return NaRange("temp", {"category": "command", "typology": "range",
+                                "mandatory": 0, "minimumValue": lo, "maximumValue": hi,
+                                "incrementValue": step, "defaultValue": lo}, "grp")
+
+    def test_snaps_off_grid_to_nearest(self) -> None:
+        p = self._range("5", "20", "1")
+        self.assertEqual(p.snap_to_grid("17.2"), 17)   # the #62 case
+        self.assertEqual(p.snap_to_grid("12.2"), 12)
+        self.assertEqual(p.snap_to_grid(17.6), 18)     # rounds to nearest
+
+    def test_snaps_within_bounds(self) -> None:
+        p = self._range("5", "20", "1")
+        self.assertEqual(p.snap_to_grid("2"), 5)       # below min -> clamp to min
+        self.assertEqual(p.snap_to_grid("99"), 20)     # above max -> clamp to max
+
+    def test_on_grid_value_unchanged(self) -> None:
+        p = self._range("16", "30", "0.5")
+        self.assertEqual(p.snap_to_grid("22.5"), 22.5)  # already on grid, exact
+
+    def test_off_grid_max_never_exceeds_max(self) -> None:
+        # max not on the min/step grid: snapping a near-max value must stay <= max and land
+        # on the grid (last valid point), never round UP past max (which the setter would
+        # then reject, re-creating the #62 default-fallback). Grid tops out below max.
+        p = self._range("5", "22", "3")            # grid: 5,8,11,14,17,20 (23 > 22)
+        self.assertEqual(p.snap_to_grid("22"), 20)
+        p.value = p.snap_to_grid("22")             # must be setter-accepted
+        self.assertEqual(p.value, 20)
+        q = self._range("0", "9.6", "1")           # grid: 0..9 (10 > 9.6)
+        self.assertEqual(q.snap_to_grid("9.6"), 9)
+        q.value = q.snap_to_grid("9.6")
+        self.assertEqual(q.value, 9)
+
+    def test_snapped_value_is_accepted_by_setter(self) -> None:
+        # the whole point: the snapped result must pass the setter that rejected the raw one
+        p = self._range("5", "20", "1")
+        with self.assertRaises(ValueError):
+            p.value = "17.2"
+        p.value = p.snap_to_grid("17.2")
+        self.assertEqual(p.value, 17)
+
+
 class RangeSetterHardeningTest(unittest.TestCase):
     """ITEM A: a fractional float assigned DIRECTLY to the range setter must not be
     truncated. The setter delegated to str_to_float, whose int()-first quirk turned a
