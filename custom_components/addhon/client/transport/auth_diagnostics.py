@@ -145,6 +145,13 @@ _ALLOWED_ATTRS = frozenset(
     }
 )
 _TOKEN_FIELDS = ("access_token", "refresh_token", "id_token")
+_PAYLOAD_FIELDS = {
+    "aura_login": ("message", "aura_context", "aura_page_uri", "aura_token"),
+    "api_auth": ("device",),
+    "mfa_remoting": ("action", "method", "data", "type", "tid", "context"),
+    "mfa_finish": ("view_state", "finish_marker"),
+    "token_refresh": ("client_id", "refresh_token", "grant_type"),
+}
 _TOKEN_RE = re.compile(r"(?:^|[#?&])(?P<key>access_token|refresh_token|id_token)=")
 _TOKEN_HTML_RE = re.compile(
     r"(?:^|&amp;)(?P<key>access_token|refresh_token|id_token)="
@@ -204,6 +211,30 @@ def classify_endpoint(url: Any) -> str:
     if host:
         return "external"
     return "other"
+
+
+def classify_failure_reason(error: BaseException) -> str:
+    """Map an exception to a controlled reason without retaining its message."""
+    message = str(error).lower()
+    if "incomplete token" in message:
+        return "incomplete_tokens"
+    if "no href" in message:
+        return "no_href"
+    if "no login url" in message:
+        return "no_login_url"
+    if "no fwuid" in message:
+        return "no_fwuid"
+    if "no cognito token" in message:
+        return "no_cognito_token"
+    if "status " in message:
+        return "status"
+    if "decode" in message or "json" in message:
+        return "decode_error"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, (ConnectionError, OSError)):
+        return "network_error"
+    return "unexpected"
 
 
 def _header_values(headers: Any, name: str) -> tuple[str, ...]:
@@ -654,6 +685,21 @@ class AuthDiagnosticTrace:
                 ("duplicates", summary.duplicates),
                 ("html_escaped", summary.html_escaped),
                 ("complete", summary.complete),
+            ),
+        )
+
+    def payload(self, phase: Any, kind: Any) -> None:
+        safe_kind = str(kind or "").lower()
+        fields = _PAYLOAD_FIELDS.get(safe_kind)
+        if fields is None:
+            safe_kind = "other"
+            fields = ()
+        self._append(
+            "payload",
+            (
+                ("phase", _phase(phase)),
+                ("kind", safe_kind),
+                ("fields", fields),
             ),
         )
 

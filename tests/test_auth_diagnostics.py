@@ -66,6 +66,7 @@ _install_stubs()
 
 from custom_components.addhon.client.transport.auth_diagnostics import (
     AuthDiagnosticTrace,
+    classify_failure_reason,
     classify_endpoint,
     summarize_html,
     summarize_json,
@@ -76,6 +77,27 @@ from custom_components.addhon.client.transport.auth_diagnostics import (
 
 
 class AuthDiagnosticClassifierTest(unittest.TestCase):
+    def test_failure_reason_classifier_returns_only_controlled_values(self) -> None:
+        secret = "CANARY-secret@example.com"
+        self.assertEqual(
+            "incomplete_tokens",
+            classify_failure_reason(
+                RuntimeError(f"token page: incomplete tokens {secret}")
+            ),
+        )
+        self.assertEqual(
+            "no_href",
+            classify_failure_reason(RuntimeError(f"progressive: no href {secret}")),
+        )
+        self.assertEqual(
+            "status",
+            classify_failure_reason(RuntimeError(f"token page: status 503 {secret}")),
+        )
+        self.assertEqual(
+            "unexpected",
+            classify_failure_reason(RuntimeError(secret)),
+        )
+
     def test_endpoint_classifier_never_returns_url_material(self) -> None:
         secret = "person@example.com"
         self.assertEqual(

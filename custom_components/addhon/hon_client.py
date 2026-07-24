@@ -10,7 +10,10 @@ import logging
 import threading
 from typing import Any
 
-from .client.transport.auth_diagnostics import AuthDiagnosticTrace
+from .client.transport.auth_diagnostics import (
+    AuthDiagnosticTrace,
+    classify_failure_reason,
+)
 from .debug_utils import debug_key_sample, redact_email, redact_id, redact_mac
 from .error_codes import (
     APPLIANCE_LOAD_FAILED,
@@ -590,7 +593,7 @@ class HonClient:
                 self.emit_auth_diagnostics(
                     self.last_error_code,
                     self.last_error_phase or "setup",
-                    "unexpected",
+                    classify_failure_reason(err),
                 )
                 self._close_sync()
                 raise

@@ -11,6 +11,7 @@ responses scripted in call order.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import types
 import unittest
@@ -175,6 +176,97 @@ class NativeAuthFlowTest(unittest.TestCase):
         )
         self.assertIs(auth._auth_trace, trace)
 
+    def test_happy_path_records_complete_structural_trace_without_logging(self) -> None:
+        trace = AuthDiagnosticTrace(enabled=True)
+        auth = HonAuth(
+            FakeSession(_happy_responses()),
+            "user@x.it",
+            "pw",
+            HonDevice(),
+            auth_trace=trace,
+        )
+
+        with self.assertNoLogs(
+            "custom_components.addhon.client.transport.auth_diagnostics",
+            level="WARNING",
+        ):
+            asyncio.run(auth.authenticate())
+
+        events = "\n".join(payload for _sequence, payload in trace._events)
+        self.assertIn("event=request phase=introduce", events)
+        self.assertIn("event=html phase=login_page", events)
+        self.assertIn(
+            "event=payload phase=login_submit kind=aura_login "
+            "fields=message,aura_context,aura_page_uri,aura_token",
+            events,
+        )
+        self.assertIn("event=json phase=login_submit", events)
+        self.assertIn("event=links phase=post_login", events)
+        self.assertIn("event=tokens phase=token_response", events)
+        self.assertIn("event=json phase=api_auth", events)
+
+    def test_incomplete_css_token_page_emits_rich_secret_free_trace(self) -> None:
+        canary = "CANARY-user@example.com-password-token"
+        responses = _happy_responses()[:5]
+        responses.extend(
+            [
+                FakeResp(
+                    text=(
+                        f"<a href='/sCSS/{canary}.css'>css</a>"
+                        f"<a href='/ProgressiveLogin?email={canary}'>continue</a>"
+                    ),
+                    headers={"Content-Type": "text/html; charset=utf-8"},
+                ),
+                FakeResp(
+                    text=f".selector {{ content: '{canary}'; }}",
+                    headers={"Content-Type": "text/css"},
+                ),
+            ]
+        )
+        trace = AuthDiagnosticTrace(enabled=True)
+        auth = HonAuth(
+            FakeSession(responses),
+            canary,
+            canary,
+            HonDevice(),
+            auth_trace=trace,
+        )
+
+        with self.assertRaisesRegex(
+            NativeAuthError, "token page: incomplete tokens"
+        ):
+            asyncio.run(auth.authenticate())
+
+        logger = "tests.addhon.transport_auth_diagnostic"
+        with self.assertLogs(logger, level="WARNING") as captured:
+            trace.flush(
+                logging.getLogger(logger),
+                code="ADDHON-130",
+                phase="get_token",
+                reason="incomplete_tokens",
+            )
+
+        output = "\n".join(captured.output)
+        self.assertIn("event=links phase=post_login", output)
+        self.assertIn(
+            "kinds=static_asset,progressive_login selected_index=0 "
+            "selected_kind=static_asset",
+            output,
+        )
+        self.assertIn("event=response phase=token_response", output)
+        self.assertIn("media=text/css", output)
+        self.assertIn(
+            "event=tokens phase=token_response present=none "
+            "missing=access_token,refresh_token,id_token",
+            output,
+        )
+        self.assertIn(
+            "event=failed code=ADDHON-130 phase=get_token "
+            "reason=incomplete_tokens",
+            output,
+        )
+        self.assertNotIn(canary, output)
+
     def test_get_token_whole_page_strips_wrapping_markup(self) -> None:
         # REACHABLE-PATH regression for the token-parser char-class fix. _get_token
         # parses the ENTIRE final token page -- parse_token_fragment(await resp.text())
@@ -328,6 +420,35 @@ class RefreshTest(unittest.TestCase):
         self.assertEqual("NEWRT", auth.refresh_token)
         self.assertEqual("I", auth.id_token)
         self.assertEqual("A", auth.access_token)
+
+    def test_refresh_records_structural_exchange(self) -> None:
+        trace = AuthDiagnosticTrace(enabled=True)
+        auth = HonAuth(
+            FakeSession(
+                [
+                    FakeResp(
+                        json={
+                            "id_token": "I",
+                            "access_token": "A",
+                            "refresh_token": "R",
+                        }
+                    ),
+                    FakeResp(json={"cognitoUser": {"Token": "COG"}}),
+                ]
+            ),
+            "user@x.it",
+            "pw",
+            HonDevice(),
+            auth_trace=trace,
+        )
+        auth.refresh_token = "old"
+
+        self.assertTrue(asyncio.run(auth.refresh()))
+
+        events = "\n".join(payload for _sequence, payload in trace._events)
+        self.assertIn("event=request phase=refresh", events)
+        self.assertIn("event=json phase=refresh", events)
+        self.assertIn("event=request phase=api_auth", events)
 
     def test_refresh_keeps_token_when_not_rotated(self) -> None:
         auth = self._auth([

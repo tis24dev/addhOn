@@ -51,6 +51,9 @@ from custom_components.addhon.client.transport.auth import (  # noqa: E402
     MFATokenAfterVerifyFailed,
     NativeAuthError,
 )
+from custom_components.addhon.client.transport.auth_diagnostics import (  # noqa: E402
+    AuthDiagnosticTrace,
+)
 from custom_components.addhon.client.transport.device import HonDevice  # noqa: E402
 from custom_components.addhon import error_codes  # noqa: E402
 
@@ -222,6 +225,37 @@ class MfaResumeTest(unittest.TestCase):
         self.assertEqual("r/b", auth.refresh_token)
         self.assertEqual("CCC", auth.id_token)
         self.assertEqual("COG", auth.cognito_token)
+
+    def test_submit_records_complete_mfa_exchange(self) -> None:
+        trace = AuthDiagnosticTrace(enabled=True)
+        auth = HonAuth(
+            FakeSession(
+                [
+                    _verify_remoting(True),
+                    FakeResp(text=""),
+                    FakeResp(
+                        text=(
+                            "...oauth/done#access_token=AAA"
+                            "&refresh_token=BBB&id_token=CCC&..."
+                        )
+                    ),
+                    FakeResp(json={"cognitoUser": {"Token": "COG"}}),
+                ]
+            ),
+            "user@x.it",
+            "pw",
+            HonDevice(),
+            auth_trace=trace,
+        )
+
+        asyncio.run(auth.submit_mfa_code(self._context(), "12345"))
+
+        events = "\n".join(payload for _sequence, payload in trace._events)
+        self.assertIn("event=request phase=mfa_verify", events)
+        self.assertIn("event=json phase=mfa_verify", events)
+        self.assertIn("event=request phase=mfa_finish", events)
+        self.assertIn("event=request phase=resume_token", events)
+        self.assertIn("event=tokens phase=resume_token", events)
 
     def test_submit_valid_code_no_trailing_amp(self) -> None:
         # The done-URL last field (id_token) has NO trailing '&' -> the extract-URL +
