@@ -51,7 +51,7 @@ from custom_components.addhon.client.transport.auth import (  # noqa: E402
     MFATokenAfterVerifyFailed,
     NativeAuthError,
 )
-from custom_components.addhon.client.transport.auth_diagnostics import (  # noqa: E402
+from custom_components.addhon.client.auth_diagnostics import (  # noqa: E402
     AuthDiagnosticTrace,
 )
 from custom_components.addhon.client.transport.device import HonDevice  # noqa: E402

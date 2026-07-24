@@ -64,7 +64,7 @@ def _install_stubs() -> None:
 _install_stubs()
 
 
-from custom_components.addhon.client.transport.auth_diagnostics import (
+from custom_components.addhon.client.auth_diagnostics import (
     AuthDiagnosticTrace,
     classify_failure_reason,
     classify_endpoint,
@@ -195,7 +195,7 @@ class AuthDiagnosticTraceTest(unittest.TestCase):
         self.logger = logging.getLogger("tests.addhon.auth_diagnostics")
 
     @patch(
-        "custom_components.addhon.client.transport.auth_diagnostics.secrets.token_hex",
+        "custom_components.addhon.client.auth_diagnostics.secrets.token_hex",
         return_value="7c19a2e4",
     )
     def test_failure_emits_ordered_warning_lines_once(self, _token_hex) -> None:
@@ -263,7 +263,7 @@ class AuthDiagnosticTraceTest(unittest.TestCase):
             )
 
     @patch(
-        "custom_components.addhon.client.transport.auth_diagnostics.secrets.token_hex",
+        "custom_components.addhon.client.auth_diagnostics.secrets.token_hex",
         return_value="7c19a2e4",
     )
     def test_trace_is_bounded_and_reports_dropped_events(self, _token_hex) -> None:
@@ -285,7 +285,7 @@ class AuthDiagnosticTraceTest(unittest.TestCase):
         self.assertEqual(len(captured.output), 102)
 
     @patch(
-        "custom_components.addhon.client.transport.auth_diagnostics.secrets.token_hex",
+        "custom_components.addhon.client.auth_diagnostics.secrets.token_hex",
         return_value="7c19a2e4",
     )
     def test_emitted_trace_excludes_all_canary_values(self, _token_hex) -> None:

@@ -10,7 +10,7 @@ import logging
 import threading
 from typing import Any
 
-from .client.transport.auth_diagnostics import (
+from .client.auth_diagnostics import (
     AuthDiagnosticTrace,
     classify_failure_reason,
 )

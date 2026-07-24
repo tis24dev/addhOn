@@ -203,6 +203,45 @@ class LogIdentityRedactionTest(unittest.TestCase):
             "redact_identity):\n" + "\n".join(offenders),
         )
 
+    def test_auth_diagnostic_logger_never_references_raw_inputs(self) -> None:
+        """The opt-in WARNING dump may use only already-sanitized local values."""
+        path = COMPONENT / "client/auth_diagnostics.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        raw_names = {
+            "body",
+            "content_type",
+            "content_type_values",
+            "error",
+            "headers",
+            "hrefs",
+            "location_values",
+            "message",
+            "source",
+            "text",
+            "url",
+            "value",
+        }
+        offenders = []
+        for call in ast.walk(tree):
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr in _LOG_METHODS
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "logger"
+            ):
+                continue
+            for argument in (*call.args, *(item.value for item in call.keywords)):
+                for node in ast.walk(argument):
+                    if isinstance(node, ast.Name) and node.id in raw_names:
+                        offenders.append((call.lineno, node.id))
+
+        self.assertEqual(
+            [],
+            offenders,
+            "auth diagnostic logger references raw input variables",
+        )
+
     def test_guard_actually_detects_a_leak(self) -> None:
         # Meta: prove the guard is not vacuous (would catch a regression).
         leak = ast.parse('_LOGGER.debug("x %s", appliance_id)').body[0].value

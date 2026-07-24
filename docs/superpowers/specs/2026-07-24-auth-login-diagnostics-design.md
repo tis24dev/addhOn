@@ -79,7 +79,7 @@ recording or cause duplicate output.
 
 ### `AuthDiagnosticTrace`
 
-A focused module under `client/transport` owns event buffering, validation,
+A focused module at `client/auth_diagnostics.py` owns event buffering, validation,
 serialization, and emission.
 
 It does not expose a generic arbitrary-string logging API. Public record methods accept

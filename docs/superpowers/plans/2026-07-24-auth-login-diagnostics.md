@@ -23,7 +23,7 @@
 ### Task 1: Secret-free diagnostic trace and classifiers
 
 **Files:**
-- Create: `custom_components/addhon/client/transport/auth_diagnostics.py`
+- Create: `custom_components/addhon/client/auth_diagnostics.py`
 - Create: `tests/test_auth_diagnostics.py`
 
 **Interfaces:**
@@ -66,7 +66,7 @@ Expected: all tests pass.
 - [ ] **Step 6: Commit Task 1**
 
 ```bash
-git add custom_components/addhon/client/transport/auth_diagnostics.py tests/test_auth_diagnostics.py
+git add custom_components/addhon/client/auth_diagnostics.py tests/test_auth_diagnostics.py
 git commit -m "feat(auth): add secret-free diagnostic trace"
 ```
 

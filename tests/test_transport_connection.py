@@ -958,7 +958,7 @@ class ConnectionCreateCleanupTest(unittest.TestCase):
 
     def test_create_forwards_diagnostic_trace_to_auth(self) -> None:
         import custom_components.addhon.client.transport.connection as conn_mod
-        from custom_components.addhon.client.transport.auth_diagnostics import (
+        from custom_components.addhon.client.auth_diagnostics import (
             AuthDiagnosticTrace,
         )
 

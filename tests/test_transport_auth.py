@@ -64,7 +64,7 @@ def _install_stubs() -> None:
 _install_stubs()
 
 from custom_components.addhon.client.transport.auth import HonAuth, NativeAuthError  # noqa: E402
-from custom_components.addhon.client.transport.auth_diagnostics import (  # noqa: E402
+from custom_components.addhon.client.auth_diagnostics import (  # noqa: E402
     AuthDiagnosticTrace,
 )
 from custom_components.addhon.client.transport.device import HonDevice  # noqa: E402
@@ -187,7 +187,7 @@ class NativeAuthFlowTest(unittest.TestCase):
         )
 
         with self.assertNoLogs(
-            "custom_components.addhon.client.transport.auth_diagnostics",
+            "custom_components.addhon.client.auth_diagnostics",
             level="WARNING",
         ):
             asyncio.run(auth.authenticate())

@@ -31,7 +31,7 @@ from ...error_codes import (
     MFA_SERVICE_ERROR,
     MFA_TOKEN_AFTER_VERIFY_FAILED,
 )
-from .auth_diagnostics import (
+from ..auth_diagnostics import (
     AuthDiagnosticTrace,
     classify_endpoint,
     summarize_html,

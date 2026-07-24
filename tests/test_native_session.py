@@ -120,7 +120,7 @@ class FakeMqtt:
 
 class AuthTracePropagationTest(unittest.TestCase):
     def test_factory_forwards_trace_to_native_session(self) -> None:
-        from custom_components.addhon.client.transport.auth_diagnostics import (
+        from custom_components.addhon.client.auth_diagnostics import (
             AuthDiagnosticTrace,
         )
 
@@ -138,7 +138,7 @@ class AuthTracePropagationTest(unittest.TestCase):
         self.assertIs(captured["auth_trace"], trace)
 
     def test_native_session_forwards_trace_to_connection(self) -> None:
-        from custom_components.addhon.client.transport.auth_diagnostics import (
+        from custom_components.addhon.client.auth_diagnostics import (
             AuthDiagnosticTrace,
         )
 
