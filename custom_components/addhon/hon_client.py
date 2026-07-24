@@ -1042,3 +1042,12 @@ class HonClient:
 
     async def async_close(self) -> None:
         await asyncio.get_running_loop().run_in_executor(None, self._close_sync)
+
+    def close_sync(self) -> None:
+        """Blocking close, for a caller that has no running loop to await on.
+
+        Public counterpart of :meth:`async_close` (which is this exact teardown handed to
+        an executor). Callers outside this module use THIS name: reaching for the private
+        one degrades to a silent no-op the day it is renamed. Blocking: it waits on the
+        dedicated loop and joins its thread, so never call it from an event loop."""
+        self._close_sync()

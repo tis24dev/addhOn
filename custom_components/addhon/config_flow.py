@@ -49,6 +49,16 @@ def _error_base_and_code(exc: BaseException, fallback_base: str) -> tuple[str, s
     return fallback_base, ""
 
 
+def _discard_diagnostics(client: Any) -> None:
+    """Drop a client's buffered auth trace before closing it.
+
+    Duck-typed: the config-flow tests pass doubles, and a client without the opt-in
+    diagnostics simply has nothing to discard."""
+    discard = getattr(client, "discard_auth_diagnostics", None)
+    if callable(discard):
+        discard()
+
+
 def _redact_email(email: str | None) -> str | None:
     if not email:
         return None
@@ -377,9 +387,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._mfa_reauth_entry = None
         if client is not None:
             try:
-                discard = getattr(client, "discard_auth_diagnostics", None)
-                if callable(discard):
-                    discard()
+                _discard_diagnostics(client)
                 await client.async_close()
             except Exception as err:  # noqa: BLE001 - cleanup must not mask the flow
                 _LOGGER.warning("Error closing HonClient after 2FA: %s", err)
@@ -406,9 +414,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # very warning this method exists to remove.
                 coro.close()
                 _LOGGER.warning("Could not schedule the 2FA client cleanup: %s", err)
-        # No loop to schedule on (very early teardown, or a loop already going away):
-        # tear the client down on THIS thread rather than dropping the reference, which
-        # would leak its loop/thread/session with no owner left to close them.
+            # The blocking teardown waits on the dedicated hOn loop (up to
+            # HonClient._RUN_TIMEOUT) and joins its thread, so it must NOT run on the
+            # event-loop thread: hand it to the executor instead.
+            try:
+                hass.async_add_executor_job(self._close_mfa_client_sync)
+                return
+            except Exception as err:  # noqa: BLE001 - last resort below
+                _LOGGER.warning("Could not offload the 2FA client cleanup: %s", err)
+        # No loop and no executor left (very early teardown, or an HA already going
+        # away): tear the client down on THIS thread rather than dropping the reference,
+        # which would leak its loop/thread/session with no owner left to close them.
         self._close_mfa_client_sync()
 
     def _close_mfa_client_sync(self) -> None:
@@ -421,14 +437,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if client is None:
             return
         try:
-            discard = getattr(client, "discard_auth_diagnostics", None)
-            if callable(discard):
-                discard()
-            # The private teardown is what async_close() itself hands to the executor;
-            # calling it directly is the only way to close without a running loop.
-            closer = getattr(client, "_close_sync", None)
-            if callable(closer):
-                closer()
+            _discard_diagnostics(client)
+            client.close_sync()
         except Exception as err:  # noqa: BLE001 - cleanup must not mask the removal
             _LOGGER.warning("Error closing HonClient after 2FA: %s", err)
 

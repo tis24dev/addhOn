@@ -119,8 +119,17 @@ class _FakeHass:
         self.config_entries = _FakeConfigEntries(entry)
         self.tasks: list = []
 
-    async def async_add_executor_job(self, func, *args):
-        return func(*args)
+    def async_add_executor_job(self, func, *args):
+        # HA's real one is SYNC and returns an awaitable Future, so it works both
+        # awaited (validate_input) and fire-and-forget (the async_remove fallback).
+        future = asyncio.get_running_loop().create_future()
+        try:
+            result = func(*args)
+        except Exception as err:  # noqa: BLE001 - mirror the executor's error carry
+            future.set_exception(err)
+        else:
+            future.set_result(result)
+        return future
 
     def async_create_task(self, coro, *args, **kwargs):
         # HA schedules the coroutine on the running loop and returns the task; mirroring
@@ -157,6 +166,9 @@ class _FakeMfaClient:
         return self._refresh_token
 
     async def async_close(self):
+        self.closed = True
+
+    def close_sync(self):
         self.closed = True
 
     def discard_auth_diagnostics(self):
@@ -389,7 +401,6 @@ class MfaFlowTest(unittest.IsolatedAsyncioTestCase):
         # A loop already going away (or any scheduling refusal) must not silently leak
         # the held client: the teardown then runs on the calling thread.
         client = _FakeMfaClient()
-        client._close_sync = lambda: setattr(client, "closed", True)
 
         async def challenge(hass, data, **kwargs):
             raise _challenge(client)
@@ -402,7 +413,7 @@ class MfaFlowTest(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("event loop is closed")
 
         flow.hass.async_create_task = _refuse
-        flow.async_remove()
+        flow.async_remove()  # falls back to the executor, never blocks the loop
 
         self.assertTrue(client.closed)
         self.assertTrue(client.diagnostics_discarded)

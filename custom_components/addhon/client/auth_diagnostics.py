@@ -565,6 +565,7 @@ class _ShapeParser(HTMLParser):
         self.meta_refresh = False
         self._in_title = False
         self._skip_depth = 0
+        self._form_seen = False
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -581,8 +582,11 @@ class _ShapeParser(HTMLParser):
         mapping = {str(name).lower(): str(value or "") for name, value in attrs}
         if tag == "form":
             self.forms += 1
-            # FIRST form only: the one the user would have to submit.
-            if not self.form_action and not self.form_method:
+            # FIRST form only: the one the user would have to submit. Keyed off a flag,
+            # not off the captured values: a bare <form> would otherwise leave them empty
+            # and let a LATER form claim them, naming the wrong form in the trace.
+            if not self._form_seen:
+                self._form_seen = True
                 self.form_action = mapping.get("action", "")
                 self.form_method = mapping.get("method", "")
         elif tag == "input":
@@ -722,12 +726,15 @@ def _html_summary(
     # Two or more password boxes is never a login form and never a token page: it is a
     # set/change-password step (new + confirm), so it gets its own kind.
     password_change = password_inputs >= 2
-    if oauth_done:
-        page_kind = "oauth_done"
-    elif otp:
+    # Same precedence as classify_token_page: an interstitial can ECHO the OAuth request
+    # it interrupted, and page_kind gates the skeleton emission, so ranking oauth_done
+    # first would drop the shape of exactly the page that needs identifying.
+    if otp:
         page_kind = "mfa"
     elif password_change:
         page_kind = "password_change"
+    elif oauth_done:
+        page_kind = "oauth_done"
     elif progressive_login:
         page_kind = "progressive_login"
     elif login:
