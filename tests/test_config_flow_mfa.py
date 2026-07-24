@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -145,6 +146,7 @@ class _FakeMfaClient:
         self.fail_code = fail_code
         self.send_raises = send_raises
         self.closed = False
+        self.closed_on_thread = ""
         self.sent = 0
         self.submitted: list[str] = []
         self.diagnostics_discarded = False
@@ -170,6 +172,7 @@ class _FakeMfaClient:
 
     def close_sync(self):
         self.closed = True
+        self.closed_on_thread = threading.current_thread().name
 
     def discard_auth_diagnostics(self):
         self.diagnostics_discarded = True
@@ -397,6 +400,41 @@ class MfaFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(asyncio.iscoroutinefunction(ConfigFlow.async_remove))
 
+    async def _wait_closed(self, client, timeout: float = 2.0) -> bool:
+        """Await a teardown that may have been handed to another thread."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while not client.closed and loop.time() < deadline:
+            await asyncio.sleep(0.01)
+        return client.closed
+
+    async def test_async_remove_never_closes_on_the_calling_thread(self) -> None:
+        # The teardown waits on the client's dedicated loop and joins its thread, so even
+        # when HA refuses BOTH of its schedulers it must not run here: HA's event loop
+        # would stall for the whole teardown timeout.
+        client = _FakeMfaClient()
+
+        async def challenge(hass, data, **kwargs):
+            raise _challenge(client)
+
+        self._patch_validate(challenge)
+        flow = _make_flow(_FakeEntry())
+        await flow.async_step_user({"email": "p@x.com", "password": "p"})
+
+        def _refuse(*args, **kwargs):
+            raise RuntimeError("event loop is closed")
+
+        flow.hass.async_create_task = _refuse
+        flow.hass.async_add_executor_job = _refuse
+
+        flow.async_remove()
+
+        self.assertTrue(await self._wait_closed(client))
+        self.assertNotEqual(
+            threading.current_thread().name, client.closed_on_thread
+        )
+        self.assertIsNone(flow._mfa_client)
+
     async def test_async_remove_closes_the_client_without_hass(self) -> None:
         # The other fallback: async_remove() before self.hass is assigned has neither a
         # loop nor an executor, so the teardown must happen on the calling thread.
@@ -412,7 +450,7 @@ class MfaFlowTest(unittest.IsolatedAsyncioTestCase):
 
         flow.async_remove()
 
-        self.assertTrue(client.closed)
+        self.assertTrue(await self._wait_closed(client))
         self.assertTrue(client.diagnostics_discarded)
         self.assertIsNone(flow._mfa_client)
 
