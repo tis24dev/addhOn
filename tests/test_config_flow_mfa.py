@@ -9,6 +9,7 @@ re-prompt on a wrong code / resend. stdlib unittest with HA + voluptuous stubs.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
@@ -116,9 +117,17 @@ class _FakeConfigEntries:
 class _FakeHass:
     def __init__(self, entry):
         self.config_entries = _FakeConfigEntries(entry)
+        self.tasks: list = []
 
     async def async_add_executor_job(self, func, *args):
         return func(*args)
+
+    def async_create_task(self, coro, *args, **kwargs):
+        # HA schedules the coroutine on the running loop and returns the task; mirroring
+        # that lets a test await the teardown that async_remove() only SCHEDULES.
+        task = asyncio.ensure_future(coro)
+        self.tasks.append(task)
+        return task
 
 
 class _FakeMfaClient:
@@ -368,6 +377,14 @@ class MfaFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("create_entry", result["type"])
         self.assertEqual("RT-NEW", result["data"]["refresh_token"])
 
+    async def test_async_remove_is_not_a_coroutine_function(self) -> None:
+        # data_entry_flow calls flow.async_remove() WITHOUT awaiting it. As a coroutine
+        # it was never executed: HA only logged "coroutine 'ConfigFlow.async_remove' was
+        # never awaited" and the held 2FA client kept its loop/thread/session.
+        from custom_components.addhon.config_flow import ConfigFlow
+
+        self.assertFalse(asyncio.iscoroutinefunction(ConfigFlow.async_remove))
+
     async def test_async_remove_closes_abandoned_client(self) -> None:
         client = _FakeMfaClient()
 
@@ -378,7 +395,8 @@ class MfaFlowTest(unittest.IsolatedAsyncioTestCase):
         flow = _make_flow(_FakeEntry())
         await flow.async_step_user({"email": "p@x.com", "password": "p"})  # held client
         self.assertFalse(client.closed)
-        await flow.async_remove()  # HA removes the abandoned flow
+        flow.async_remove()  # HA removes the abandoned flow (SYNC call, never awaited)
+        await asyncio.gather(*flow.hass.tasks)
         self.assertTrue(client.closed)
         self.assertTrue(client.diagnostics_discarded)
 
@@ -394,7 +412,8 @@ class MfaFlowTest(unittest.IsolatedAsyncioTestCase):
         flow = _make_flow(_FakeEntry())
         await flow.async_step_user({"email": "p@x.com", "password": "secret-pw"})
         self.assertIsNotNone(flow._mfa_data)  # cached during the challenge
-        await flow.async_remove()
+        flow.async_remove()
+        await asyncio.gather(*flow.hass.tasks)
         self.assertIsNone(flow._mfa_data)
         self.assertIsNone(flow._mfa_reauth_entry)
 

@@ -384,10 +384,37 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except Exception as err:  # noqa: BLE001 - cleanup must not mask the flow
                 _LOGGER.warning("Error closing HonClient after 2FA: %s", err)
 
-    async def async_remove(self) -> None:
+    def async_remove(self) -> None:
         """Called by HA when the flow is removed/aborted/abandoned: close the held 2FA
-        client so an unfinished verification does not leak its loop/thread/session."""
-        await self._async_close_mfa_client()
+        client so an unfinished verification does not leak its loop/thread/session.
+
+        SYNC on purpose. ``data_entry_flow`` calls ``flow.async_remove()`` WITHOUT
+        awaiting it, so the previous coroutine version was never executed: Home
+        Assistant only logged "coroutine 'ConfigFlow.async_remove' was never awaited"
+        and the 2FA client kept its loop, thread and aiohttp session alive. Scheduling
+        the async teardown on the running loop is what actually closes it."""
+        if self._mfa_client is None:
+            return
+        hass = getattr(self, "hass", None)
+        if hass is None:
+            # No loop to schedule on (very early teardown): tear the client down on this
+            # thread instead of dropping the reference, or the loop/thread/session would
+            # be leaked with no owner left to close them.
+            client, self._mfa_client = self._mfa_client, None
+            self._mfa_context = None
+            self._mfa_data = None
+            self._mfa_reauth_entry = None
+            try:
+                discard = getattr(client, "discard_auth_diagnostics", None)
+                if callable(discard):
+                    discard()
+                closer = getattr(client, "_close_sync", None)
+                if callable(closer):
+                    closer()
+            except Exception as err:  # noqa: BLE001 - cleanup must not mask the removal
+                _LOGGER.warning("Error closing HonClient after 2FA: %s", err)
+            return
+        hass.async_create_task(self._async_close_mfa_client())
 
     async def async_step_2fa(
         self, user_input: dict[str, Any] | None = None
