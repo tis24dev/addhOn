@@ -93,6 +93,9 @@ only fields or structural summaries defined for that event, using integers, bool
 - `links(phase, LinksSummary)`
 - `json_shape(phase, JsonSummary)`, which emits `event=json`
 - `token_shape(phase, TokenSummary)`, which emits `event=tokens`
+- `page(phase, PageSummary)`, which emits `event=page`
+- `skeleton(phase, HtmlSummary)`, which emits `event=skeleton`
+- `verdict(phase, verdict)`, which emits `event=verdict`
 - `payload(phase, kind)`
 - `phase(phase, status, outcome)`
 
@@ -127,6 +130,10 @@ reaches the trace:
 - JSON classifier: allowed structural key names and expected container shapes.
 - Token classifier: required token field presence, missing fields, duplicates,
   delimiter style, and completeness.
+- Page-identity classifier: named path segments, named query parameter names, a hash of
+  the path, vocabulary words present in the page title and in the visible text, the kind
+  of the first form action, its method, and the redirect fingerprints of the page.
+- Token-page verdict: why a page that should carry the OAuth hand-off did not.
 
 Unknown values map to `other` or counters. They are not copied verbatim into events.
 
@@ -277,3 +284,41 @@ The work is complete when:
    tested hostile responses.
 5. The checkbox and trace are temporary and never alter persisted configuration.
 6. Authentication behavior and existing error codes remain unchanged.
+
+## Round 2: page identity and an actionable failure (issue #67)
+
+The first release proved where a sign-in dies but not what it died on. A report showed
+`page_kind=other endpoint=auth_other` for the page that should have carried the tokens,
+which is not enough to answer the user, and asking for another log costs a day per
+round trip. Two additions close that gap.
+
+**Page identity.** Every HTML stop in the flow now also emits `event=page`, built from
+allowlists only:
+
+- `path_markers` and `unknown_segments`: which named path segments the landing URL has,
+  and how many it has that we do not name;
+- `path_hash`: a short hash of the path, so two reports of the same page are comparable
+  and a working sign-in can be diffed against a broken one;
+- `query_names` and `unknown_query`: named query parameter names, never their values;
+- `title_markers` and `text_markers`: which words of a fixed vocabulary appear in the
+  title and in the visible text. Script and style bodies are excluded, otherwise every
+  word in the framework payload would look present;
+- `form_action`, `form_method`, `buttons`: what the page would ask the user to submit;
+- `meta_refresh`, `js_redirect`, `hon_scheme`, `oauth_done_hits`: whether the page is a
+  bounce, and whether it carried the token hand-off after all.
+
+A page the flow did not expect also emits `event=skeleton`: the bounded sequence of its
+tags with their attribute names, values excluded. That is what identifies an unknown
+interstitial without shipping its markup.
+
+**Actionable failure.** `classify_token_page` turns "no tokens" into a verdict:
+`password_change`, `consent`, `login`, `mfa`, `token_link_unparsed`, `empty`, or
+`unknown`. The verdict is emitted as `event=verdict` and, for the two verdicts a user
+can act on, the flow raises `AccountActionRequired` (ADDHON-165) with a message that
+says where to go, instead of repeating the mute ADDHON-130 forever. The detection is
+structural, not textual: a page carrying the OAuth hand-off never holds a password form.
+`token_link_unparsed` is the mirror case and accuses our own parser rather than the
+account.
+
+The verdict runs with diagnostics off as well. A user who never ticks the checkbox still
+has to be told what to do, so only the trace lines are opt-in, not the diagnosis.

@@ -56,6 +56,13 @@ _ENDPOINTS = frozenset(
         "external",
         "other",
         "none",
+        # Post-login interstitials the flow can be diverted to (issue #67). Named so a
+        # landing page that is NOT the token redirect is identifiable from the trace.
+        "change_password",
+        "set_password",
+        "reset_password",
+        "secur",
+        "apex_page",
     }
 )
 _MEDIA_TYPES = frozenset(
@@ -74,6 +81,7 @@ _CHARSETS = frozenset({"utf-8", "utf8", "us-ascii", "iso-8859-1"})
 _REASONS = frozenset(
     {
         "incomplete_tokens",
+        "account_action",
         "no_href",
         "status",
         "no_login_url",
@@ -157,6 +165,146 @@ _TOKEN_RE = re.compile(
 )
 _CODE_RE = re.compile(r"^ADDHON-\d{3}$")
 
+# -- Page-identity vocabulary (issue #67) -------------------------------------
+# A sign-in that dies on "incomplete tokens" is only actionable if the trace says WHICH
+# page the flow landed on. These allowlists turn a page into named structure: nothing
+# outside them is ever emitted (unknown material is only COUNTED), so the identity of
+# an unexpected interstitial is readable without shipping URL, markup or text.
+
+# Path segments the login flow can legitimately reach (Salesforce Experience Cloud /
+# VisualForce URL space). Anything else is counted as an unknown segment.
+_PATH_SEGMENTS = frozenset(
+    {
+        "apex",
+        "aura",
+        "authorize",
+        "changepassword",
+        "checkpasswordresetstatus",
+        "consent",
+        "expid_login",
+        "finaltok",
+        "forgotpassword",
+        "frontdoor",
+        "identity",
+        "login",
+        "newhonlogin",
+        "oauth2",
+        "privacy",
+        "profile",
+        "progressivelogin",
+        "register",
+        "registration",
+        "reset",
+        "resetpassword",
+        "s",
+        "secur",
+        "selfregister",
+        "services",
+        "setpassword",
+        "sfsites",
+        "terms",
+        "token",
+        "verify",
+        "vforcesite",
+    }
+)
+# Query-parameter NAMES worth naming (values are never read).
+_QUERY_NAMES = frozenset(
+    {
+        "client_id",
+        "code",
+        "display",
+        "ec",
+        "error",
+        "error_description",
+        "expid",
+        "inst",
+        "isdtp",
+        "language",
+        "locale",
+        "nonce",
+        "redirect_uri",
+        "registrationsubchannel",
+        "response_type",
+        "returl",
+        "scope",
+        "sid",
+        "startpage",
+        "starturl",
+        "state",
+        "system",
+        "un",
+    }
+)
+# Presence vocabulary, PREFIX-matched against the page's VISIBLE text only (script and
+# style bodies excluded). Authored words carry no account material, and they are what
+# separates a forced password change from a consent wall or a lock-out.
+_TEXT_MARKERS = (
+    "accept",
+    "agree",
+    "blocked",
+    "captcha",
+    "challeng",
+    "complet",
+    "confirm",
+    "consent",
+    "continu",
+    "disabl",
+    "error",
+    "expir",
+    "inactiv",
+    "invalid",
+    "locked",
+    "maintenance",
+    "mandator",
+    "migrat",
+    "otp",
+    "passphrase",
+    "password",
+    "polic",
+    "privacy",
+    "profil",
+    "registr",
+    "renew",
+    "requir",
+    "reset",
+    "session",
+    "suspend",
+    "terms",
+    "unauthor",
+    "unavailab",
+    "updat",
+    "verif",
+    "welcome",
+)
+_JS_REDIRECT_MARKERS = (
+    "location.replace",
+    "location.assign",
+    "location.href",
+    "window.location",
+)
+_PASSWORD_KINDS = frozenset(
+    {"password", "new_password", "confirm_password", "current_password"}
+)
+_MAX_MARKERS = 25
+_MAX_SKELETON_NODES = 60
+_TEXT_SCAN_CHARS = 40_000
+_TITLE_SCAN_CHARS = 200
+# Why a token page carried no tokens. Controlled vocabulary: the two ACCOUNT_ACTION
+# verdicts are the ones the user can act on, so they escalate to their own error code.
+_TOKEN_PAGE_VERDICTS = frozenset(
+    {
+        "password_change",
+        "consent",
+        "login",
+        "mfa",
+        "token_link_unparsed",
+        "empty",
+        "unknown",
+    }
+)
+ACCOUNT_ACTION_VERDICTS = frozenset({"password_change", "consent"})
+
 
 def _enum(value: Any, allowed: frozenset[str], fallback: str = "other") -> str:
     candidate = str(value or "").lower()
@@ -193,6 +341,14 @@ def classify_endpoint(url: Any) -> str:
         return "authorize"
     if path.endswith("/services/oauth2/token"):
         return "token_refresh"
+    # Post-login interstitials (issue #67): checked BEFORE the generic login/apex rules
+    # so a forced password step is named instead of collapsing into "auth_other".
+    if "changepassword" in path or "change_password" in path:
+        return "change_password"
+    if "setpassword" in path or "set_password" in path:
+        return "set_password"
+    if "forgotpassword" in path or "resetpassword" in path or "passwordreset" in path:
+        return "reset_password"
     if "/s/login/" in path:
         return "login"
     if path.endswith("/s/sfsites/aura"):
@@ -201,6 +357,10 @@ def classify_endpoint(url: Any) -> str:
         return "mfa_remoting"
     if path.endswith("/auth/v1/login"):
         return "api_auth"
+    if "/secur/" in path or path.endswith("/frontdoor.jsp"):
+        return "secur"
+    if "/apex/" in path:
+        return "apex_page"
     if not host and not path:
         return "none"
     if host == "account2.hon-smarthome.com" or host.endswith(".salesforce.com"):
@@ -215,6 +375,10 @@ def classify_endpoint(url: Any) -> str:
 def classify_failure_reason(error: BaseException) -> str:
     """Map an exception to a controlled reason without retaining its message."""
     message = str(error).lower()
+    # Checked before the token reasons: the account-action failure IS a token-page
+    # failure, but the reason must say the account needs a user step (issue #67).
+    if "account action required" in message:
+        return "account_action"
     if "incomplete token" in message:
         return "incomplete_tokens"
     if "no href" in message:
@@ -347,16 +511,35 @@ def summarize_response(
 
 
 def _input_kind(attributes: Mapping[str, str]) -> str:
+    """Controlled kind for one input, read from its NAME/ID/TYPE only (never a value).
+
+    Password fields are split into current/new/confirm because that split is what tells
+    a login form apart from a forced password change (issue #67). Matching is by
+    SUBSTRING for the password/ViewState families: VisualForce prefixes every field
+    (``j_id0:theForm:newPassword``), so name equality saw them all as "other".
+    """
     name = attributes.get("name", "").lower()
+    identifier = attributes.get("id", "").lower()
     input_type = attributes.get("type", "").lower()
+    hay = f"{name} {identifier}"
+    if input_type == "password" or "password" in hay or "passwd" in hay:
+        if any(marker in hay for marker in ("confirm", "verify", "repeat", "again")):
+            return "confirm_password"
+        if "new" in hay:
+            return "new_password"
+        if "current" in hay or "old" in hay:
+            return "current_password"
+        return "password"
     if name in {"username", "email", "emailaddress", "login"} or input_type == "email":
         return "username"
-    if name in {"password", "passwd"} or input_type == "password":
-        return "password"
-    if name in {"otp", "code", "verificationcode", "emailotp"}:
+    if name in {"otp", "code", "verificationcode", "emailotp"} or any(
+        marker in hay for marker in ("verificationcode", "emailotp")
+    ):
         return "otp"
-    if name in {"csrf", "viewstate", "token"}:
+    if name in {"csrf", "viewstate", "token"} or "viewstate" in hay:
         return "security"
+    if any(marker in hay for marker in ("consent", "terms", "privacy", "accept")):
+        return "consent"
     return "other"
 
 
@@ -370,6 +553,18 @@ class _ShapeParser(HTMLParser):
         self.scripts = 0
         self.input_kinds: list[str] = []
         self.normalized: list[str] = []
+        # Page-identity extras (issue #67). The captured text is scanned against
+        # _TEXT_MARKERS and then dropped: only the presence booleans leave this module.
+        self.title_chars: list[str] = []
+        self.text_chars: list[str] = []
+        self.title_len = 0
+        self.text_len = 0
+        self.form_action = ""
+        self.form_method = ""
+        self.buttons = 0
+        self.meta_refresh = False
+        self._in_title = False
+        self._skip_depth = 0
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -383,17 +578,48 @@ class _ShapeParser(HTMLParser):
         )
         self.normalized.append(f"{safe_tag}[{','.join(safe_attrs)}]")
         self.tags += 1
+        mapping = {str(name).lower(): str(value or "") for name, value in attrs}
         if tag == "form":
             self.forms += 1
+            # FIRST form only: the one the user would have to submit.
+            if not self.form_action and not self.form_method:
+                self.form_action = mapping.get("action", "")
+                self.form_method = mapping.get("method", "")
         elif tag == "input":
             self.inputs += 1
-            self.input_kinds.append(
-                _input_kind({str(name): str(value or "") for name, value in attrs})
-            )
+            self.input_kinds.append(_input_kind(mapping))
         elif tag in {"a", "link"}:
             self.links += 1
         elif tag == "script":
             self.scripts += 1
+        elif tag == "button":
+            self.buttons += 1
+        elif tag == "meta" and mapping.get("http-equiv", "").lower() == "refresh":
+            self.meta_refresh = True
+        if tag in {"script", "style"}:
+            self._skip_depth += 1
+        elif tag == "title":
+            self._in_title = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"}:
+            self._skip_depth = max(0, self._skip_depth - 1)
+        elif tag == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        # Script/style bodies are NOT text: scanning them would report every vocabulary
+        # word the framework happens to ship (the login page alone is 300+ KB of JS).
+        if self._skip_depth:
+            return
+        if self._in_title:
+            if self.title_len < _TITLE_SCAN_CHARS:
+                self.title_chars.append(data)
+                self.title_len += len(data)
+            return
+        if self.text_len < _TEXT_SCAN_CHARS:
+            self.text_chars.append(data)
+        self.text_len += len(data)
 
 
 @dataclass(frozen=True)
@@ -412,11 +638,35 @@ class HtmlSummary:
     page_kind: str
     dom_fingerprint: str
     parse_error: bool
+    password_inputs: int = 0
+    password_change: bool = False
+    skeleton: tuple[str, ...] = ()
 
 
-def summarize_html(text: Any) -> HtmlSummary:
-    """Summarize recognized HTML structure and boolean protocol markers."""
-    source = str(text or "")
+@dataclass(frozen=True)
+class PageSummary:
+    """Identity of a page, as named structure only (issue #67)."""
+
+    endpoint: str
+    path_depth: int
+    path_markers: tuple[str, ...]
+    unknown_segments: int
+    path_hash: str
+    query_names: tuple[str, ...]
+    unknown_query: int
+    title_markers: tuple[str, ...]
+    text_markers: tuple[str, ...]
+    text_chars: int
+    form_action: str
+    form_method: str
+    buttons: int
+    meta_refresh: bool
+    js_redirect: bool
+    hon_scheme: bool
+    oauth_done_hits: int
+
+
+def _parse(source: str) -> tuple[_ShapeParser, bool]:
     parser = _ShapeParser()
     parse_error = False
     try:
@@ -424,6 +674,34 @@ def summarize_html(text: Any) -> HtmlSummary:
         parser.close()
     except Exception:
         parse_error = True
+    return parser, parse_error
+
+
+def _markers(text: str) -> tuple[str, ...]:
+    lowered = text.lower()
+    return tuple(
+        marker for marker in _TEXT_MARKERS if marker in lowered
+    )[:_MAX_MARKERS]
+
+
+def _path_shape(path: str) -> tuple[tuple[str, ...], int, int]:
+    """(named segments, unknown segment count, depth) for a URL path."""
+    segments = [segment for segment in path.lower().split("/") if segment]
+    markers: list[str] = []
+    unknown = 0
+    for segment in segments:
+        base = segment.split(".", 1)[0]
+        if base in _PATH_SEGMENTS:
+            if base not in markers:
+                markers.append(base)
+        else:
+            unknown += 1
+    return tuple(markers), unknown, len(segments)
+
+
+def _html_summary(
+    source: str, parser: _ShapeParser, parse_error: bool
+) -> HtmlSummary:
     lowered = source.lower()
     normalized = "|".join(parser.normalized).encode("ascii", "strict")
     fingerprint = hashlib.sha256(normalized).hexdigest()[:12]
@@ -438,16 +716,24 @@ def summarize_html(text: Any) -> HtmlSummary:
         marker in lowered for marker in ("privacy", "consent", "terms")
     )
     oauth_done = "oauth/done" in lowered
+    password_inputs = sum(
+        1 for kind in parser.input_kinds if kind in _PASSWORD_KINDS
+    )
+    # Two or more password boxes is never a login form and never a token page: it is a
+    # set/change-password step (new + confirm), so it gets its own kind.
+    password_change = password_inputs >= 2
     if oauth_done:
         page_kind = "oauth_done"
     elif otp:
         page_kind = "mfa"
-    elif privacy:
-        page_kind = "privacy"
+    elif password_change:
+        page_kind = "password_change"
     elif progressive_login:
         page_kind = "progressive_login"
     elif login:
         page_kind = "login"
+    elif privacy:
+        page_kind = "privacy"
     else:
         page_kind = "other"
     return HtmlSummary(
@@ -465,7 +751,111 @@ def summarize_html(text: Any) -> HtmlSummary:
         page_kind=page_kind,
         dom_fingerprint=fingerprint,
         parse_error=parse_error,
+        password_inputs=password_inputs,
+        password_change=password_change,
+        skeleton=tuple(parser.normalized[:_MAX_SKELETON_NODES]),
     )
+
+
+def _page_summary(url: Any, source: str, parser: _ShapeParser) -> PageSummary:
+    try:
+        parts = urlsplit(str(url or ""))
+        path = parts.path or ""
+        query = parts.query or ""
+    except (TypeError, ValueError):
+        path, query = "", ""
+    path_markers, unknown_segments, depth = _path_shape(path)
+    query_names: list[str] = []
+    unknown_query = 0
+    for field in query.split("&"):
+        if not field:
+            continue
+        name = field.partition("=")[0].strip().lower()
+        if name in _QUERY_NAMES:
+            if name not in query_names:
+                query_names.append(name)
+        else:
+            unknown_query += 1
+    lowered = source.lower()
+    return PageSummary(
+        endpoint=classify_endpoint(url),
+        path_depth=depth,
+        path_markers=path_markers,
+        unknown_segments=unknown_segments,
+        # Hash of the PATH only (never the query): two reports of the same landing page
+        # are comparable, and a known-good login can be diffed against a broken one.
+        path_hash=(
+            hashlib.sha256(path.lower().encode("utf-8", "replace")).hexdigest()[:12]
+            if path
+            else "none"
+        ),
+        query_names=tuple(query_names),
+        unknown_query=unknown_query,
+        title_markers=_markers("".join(parser.title_chars)),
+        text_markers=_markers("".join(parser.text_chars)),
+        text_chars=parser.text_len,
+        form_action=(
+            classify_endpoint(parser.form_action) if parser.form_action else "none"
+        ),
+        form_method=_enum(parser.form_method, frozenset({"get", "post"}), "none"),
+        buttons=parser.buttons,
+        meta_refresh=parser.meta_refresh,
+        js_redirect=any(marker in lowered for marker in _JS_REDIRECT_MARKERS),
+        # The token redirect leaves fingerprints even when the tokens are absent: if
+        # these are set the page DID carry the hand-off and our parsing is at fault,
+        # which is the opposite diagnosis from a server-side interstitial.
+        hon_scheme="hon://" in lowered,
+        oauth_done_hits=min(lowered.count("oauth/done"), 99),
+    )
+
+
+def analyze_page(url: Any, text: Any) -> tuple[HtmlSummary, PageSummary]:
+    """Both summaries from a SINGLE parse. Never raises (diagnostics are observational)."""
+    source = str(text or "")
+    try:
+        parser, parse_error = _parse(source)
+        return (
+            _html_summary(source, parser, parse_error),
+            _page_summary(url, source, parser),
+        )
+    except Exception:
+        empty = _ShapeParser()
+        return _html_summary("", empty, True), _page_summary("", "", empty)
+
+
+def summarize_html(text: Any) -> HtmlSummary:
+    """Summarize recognized HTML structure and boolean protocol markers."""
+    return analyze_page("", text)[0]
+
+
+def summarize_page(url: Any, text: Any) -> PageSummary:
+    """Summarize the identity of a page (path/query/text shape), never its content."""
+    return analyze_page(url, text)[1]
+
+
+def classify_token_page(html: HtmlSummary, page: PageSummary) -> str:
+    """Why a token page carried no tokens, as a controlled verdict (issue #67).
+
+    Structural, not textual: a page that carries the OAuth hand-off never holds a
+    password form, so ``password_change``/``consent`` identify a server-side step the
+    USER must complete, while ``token_link_unparsed`` accuses our own parser instead.
+    """
+    if html.oauth_done or page.hon_scheme:
+        return "token_link_unparsed"
+    if html.otp:
+        return "mfa"
+    if html.password_inputs >= 2:
+        return "password_change"
+    if html.tags == 0:
+        return "empty"
+    if html.password_inputs == 1 and "username" in html.input_kinds:
+        return "login"
+    if html.forms and any(
+        marker in page.text_markers
+        for marker in ("consent", "terms", "accept", "agree", "polic")
+    ):
+        return "consent"
+    return "unknown"
 
 
 @dataclass(frozen=True)
@@ -665,6 +1055,57 @@ class AuthDiagnosticTrace:
                 ("page_kind", summary.page_kind),
                 ("dom", summary.dom_fingerprint),
                 ("parse_error", summary.parse_error),
+            ),
+        )
+
+    def page(self, phase: Any, summary: PageSummary) -> None:
+        """Emit the named identity of a page (issue #67)."""
+        self._append(
+            "page",
+            (
+                ("phase", _phase(phase)),
+                ("endpoint", _enum(summary.endpoint, _ENDPOINTS)),
+                ("path_depth", summary.path_depth),
+                ("path_markers", summary.path_markers),
+                ("unknown_segments", summary.unknown_segments),
+                ("path_hash", summary.path_hash),
+                ("query_names", summary.query_names),
+                ("unknown_query", summary.unknown_query),
+                ("title_markers", summary.title_markers),
+                ("text_markers", summary.text_markers),
+                ("text_chars", summary.text_chars),
+                ("form_action", _enum(summary.form_action, _ENDPOINTS)),
+                ("form_method", summary.form_method),
+                ("buttons", summary.buttons),
+                ("meta_refresh", summary.meta_refresh),
+                ("js_redirect", summary.js_redirect),
+                ("hon_scheme", summary.hon_scheme),
+                ("oauth_done_hits", summary.oauth_done_hits),
+            ),
+        )
+
+    def skeleton(self, phase: Any, summary: HtmlSummary) -> None:
+        """Emit the bounded tag/attribute-NAME skeleton of an unexpected page.
+
+        Tags and attribute names are allowlisted upstream (anything else is already
+        "other") and no value is ever included, so the shape identifies the page
+        without shipping its markup."""
+        self._append(
+            "skeleton",
+            (
+                ("phase", _phase(phase)),
+                ("nodes", len(summary.skeleton)),
+                ("shape", "|".join(summary.skeleton) or "none"),
+            ),
+        )
+
+    def verdict(self, phase: Any, verdict: Any) -> None:
+        """Emit why a token page carried no tokens (controlled vocabulary)."""
+        self._append(
+            "verdict",
+            (
+                ("phase", _phase(phase)),
+                ("page", _enum(verdict, _TOKEN_PAGE_VERDICTS, "unknown")),
             ),
         )
 
