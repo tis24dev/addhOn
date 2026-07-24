@@ -245,36 +245,56 @@ class HonAuth:
             ),
         )
 
-    def _diagnostic_page(self, phase: str, url: Any, text: Any) -> None:
+    def _diagnostic_page(
+        self, phase: str, url: Any, text: Any
+    ) -> tuple[Any, Any] | None:
         """Emit the structure AND the named identity of a page (issue #67).
 
         The skeleton is emitted only for a page the flow did not expect: on the known
         stops it would be noise, on an unexpected landing page it is what identifies it
-        without a second round-trip to the reporter."""
+        without a second round-trip to the reporter. Returns the summary pair so a
+        caller that later needs a verdict does not parse the same body twice."""
         if not self._auth_trace.enabled:
-            return
-        shape, page = analyze_page(url, text)
+            return None
+        try:
+            shape, page = analyze_page(url, text)
+        except Exception:  # noqa: BLE001 - diagnostics are observational, never fatal
+            return None
         self._auth_trace.html(phase, shape)
         self._auth_trace.page(phase, page)
         if shape.page_kind not in ("login", "progressive_login", "oauth_done", "mfa"):
             self._auth_trace.skeleton(phase, shape)
+        return shape, page
 
-    def _page_verdict(self, phase: str, url: Any, text: Any) -> str:
+    def _page_verdict(
+        self,
+        phase: str,
+        url: Any,
+        text: Any,
+        summaries: tuple[Any, Any] | None = None,
+    ) -> str:
         """Why a page is a dead end, as a controlled verdict. Runs with the diagnostics
-        OFF too: the actionable error must not depend on the opt-in checkbox."""
+        OFF too: the actionable error must not depend on the opt-in checkbox. Reuses the
+        summaries the trace already built, when there are any."""
         verdict = "unknown"
         try:
-            shape, page = analyze_page(url, text)
+            shape, page = summaries if summaries else analyze_page(url, text)
             verdict = classify_token_page(shape, page)
         except Exception:  # noqa: BLE001 - a diagnostic must never replace the failure
             verdict = "unknown"
         self._auth_trace.verdict(phase, verdict)
         return verdict
 
-    def _guard_account_action(self, phase: str, url: Any, text: Any) -> None:
+    def _guard_account_action(
+        self,
+        phase: str,
+        url: Any,
+        text: Any,
+        summaries: tuple[Any, Any] | None = None,
+    ) -> None:
         """Raise AccountActionRequired when a dead-end page is a step only the USER can
         clear, instead of the mute "no href" the caller would otherwise raise."""
-        verdict = self._page_verdict(phase, url, text)
+        verdict = self._page_verdict(phase, url, text, summaries)
         if verdict in ACCOUNT_ACTION_VERDICTS:
             raise AccountActionRequired(
                 f"{phase}: account action required ({verdict})"
@@ -422,7 +442,9 @@ class HonAuth:
                 raise NativeAuthError(f"get_token: status {resp.status}")
             text = await resp.text()
             self._diagnostic_response("post_login", resp, text, started)
-            self._diagnostic_page("post_login", post_login_url, text)
+            post_login_summaries = self._diagnostic_page(
+                "post_login", post_login_url, text
+            )
             href = _HREF_RE.findall(text)
             self._diagnostic_links(
                 "post_login", href, selected_index=0 if href else -1
@@ -430,7 +452,9 @@ class HonAuth:
         if not href:
             # A post-login page with no next hop may BE the account step (a consent form
             # has no navigation href at all), so name it before failing (issue #67).
-            self._guard_account_action("post_login", post_login_url, text)
+            self._guard_account_action(
+                "post_login", post_login_url, text, post_login_summaries
+            )
             self._phase("get_token", status=resp.status, href=False)
             raise NativeAuthError("get_token: no href")
         if "ProgressiveLogin" in href[0]:
@@ -452,7 +476,9 @@ class HonAuth:
                 # href (absolutized, so the MfaContext host derivation is correct) if the
                 # response object does not expose it (e.g. test doubles).
                 prog_url = str(getattr(resp, "url", "") or absolutize(href[0]))
-                self._diagnostic_page("progressive_page", prog_url, prog_text)
+                prog_summaries = self._diagnostic_page(
+                    "progressive_page", prog_url, prog_text
+                )
             # 2FA: when email OTP is enabled this page IS the verification step (no
             # usable redirect href -- the first one is a CSS asset). Detect it and
             # pause the login with the context to resume; otherwise behave exactly as
@@ -471,7 +497,9 @@ class HonAuth:
                 selected_index=0 if href else -1,
             )
             if not href:  # like the guard after the first findall: no IndexError
-                self._guard_account_action("progressive_page", prog_url, prog_text)
+                self._guard_account_action(
+                    "progressive_page", prog_url, prog_text, prog_summaries
+                )
                 raise NativeAuthError("progressive: no href")
         token_url = absolutize(href[0])
         self._phase("get_token", status=200, href=True)
@@ -488,7 +516,9 @@ class HonAuth:
             self._diagnostic_response(
                 "token_response", resp, token_text, started
             )
-            self._diagnostic_page("token_response", token_url, token_text)
+            token_summaries = self._diagnostic_page(
+                "token_response", token_url, token_text
+            )
             self._diagnostic_tokens("token_response", token_text)
             tokens = parse_token_fragment(token_text)
         if not tokens.complete:
@@ -497,7 +527,9 @@ class HonAuth:
             # only the user can clear, and retrying it forever (ADDHON-130) told them
             # nothing (issue #67). Never let the classification break the login: a
             # diagnostic failure must still raise the original token error.
-            verdict = self._page_verdict("token_response", token_url, token_text)
+            verdict = self._page_verdict(
+                "token_response", token_url, token_text, token_summaries
+            )
             self._phase("get_token", tokens_complete=False, page=verdict)
             if verdict in ACCOUNT_ACTION_VERDICTS:
                 raise AccountActionRequired(

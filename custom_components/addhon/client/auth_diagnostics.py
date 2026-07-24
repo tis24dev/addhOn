@@ -579,7 +579,13 @@ class _ShapeParser(HTMLParser):
         )
         self.normalized.append(f"{safe_tag}[{','.join(safe_attrs)}]")
         self.tags += 1
-        mapping = {str(name).lower(): str(value or "") for name, value in attrs}
+        # Only these three read the attributes, and the Lightning login page carries
+        # thousands of tags: building the mapping for all of them is pure waste.
+        mapping = (
+            {str(name).lower(): str(value or "") for name, value in attrs}
+            if tag in {"form", "input", "meta"}
+            else {}
+        )
         if tag == "form":
             self.forms += 1
             # FIRST form only: the one the user would have to submit. Keyed off a flag,
@@ -676,7 +682,7 @@ def _parse(source: str) -> tuple[_ShapeParser, bool]:
     try:
         parser.feed(source)
         parser.close()
-    except Exception:
+    except Exception:  # noqa: BLE001 - diagnostics are observational, never fatal
         parse_error = True
     return parser, parse_error
 
@@ -825,7 +831,7 @@ def analyze_page(url: Any, text: Any) -> tuple[HtmlSummary, PageSummary]:
             _html_summary(source, parser, parse_error),
             _page_summary(url, source, parser),
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - diagnostics are observational, never fatal
         empty = _ShapeParser()
         return _html_summary("", empty, True), _page_summary("", "", empty)
 

@@ -333,9 +333,12 @@ class TokenPageVerdictTest(unittest.TestCase):
             "<div>hon://mobilesdk/detect/oauth/done#state=x&amp;y</div><div>Your password",
         )
 
-        verdict = self._verdict(f"{AUTH}/apex/ChangePassword", echoed)
+        shape, page = analyze_page(f"{AUTH}/apex/ChangePassword", echoed)
 
-        self.assertEqual("password_change", verdict)
+        self.assertEqual("password_change", classify_token_page(shape, page))
+        # page_kind must agree: it is what gates the event=skeleton emission, so an
+        # oauth_done classification here would drop the shape of this very page.
+        self.assertEqual("password_change", shape.page_kind)
 
     def test_empty_body_is_named_empty(self) -> None:
         self.assertEqual("empty", self._verdict(f"{AUTH}/finaltok", ""))
