@@ -385,6 +385,29 @@ class MfaFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(asyncio.iscoroutinefunction(ConfigFlow.async_remove))
 
+    async def test_async_remove_closes_the_client_when_scheduling_fails(self) -> None:
+        # A loop already going away (or any scheduling refusal) must not silently leak
+        # the held client: the teardown then runs on the calling thread.
+        client = _FakeMfaClient()
+        client._close_sync = lambda: setattr(client, "closed", True)
+
+        async def challenge(hass, data, **kwargs):
+            raise _challenge(client)
+
+        self._patch_validate(challenge)
+        flow = _make_flow(_FakeEntry())
+        await flow.async_step_user({"email": "p@x.com", "password": "p"})
+
+        def _refuse(coro, *args, **kwargs):
+            raise RuntimeError("event loop is closed")
+
+        flow.hass.async_create_task = _refuse
+        flow.async_remove()
+
+        self.assertTrue(client.closed)
+        self.assertTrue(client.diagnostics_discarded)
+        self.assertIsNone(flow._mfa_client)
+
     async def test_async_remove_closes_abandoned_client(self) -> None:
         client = _FakeMfaClient()
 

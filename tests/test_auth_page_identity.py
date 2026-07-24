@@ -324,6 +324,19 @@ class TokenPageVerdictTest(unittest.TestCase):
         self.assertEqual("token_link_unparsed", verdict)
         self.assertNotIn(verdict, ACCOUNT_ACTION_VERDICTS)
 
+    def test_an_echoed_hand_off_does_not_hide_the_password_form(self) -> None:
+        # The reported page carried HTML-escaped markup, and a Salesforce interstitial
+        # echoes the OAuth request it interrupted. Quoting hon://...oauth/done must not
+        # outrank two password boxes, or the real diagnosis flips to "our parser".
+        echoed = CHANGE_PASSWORD_PAGE.replace(
+            "<div>Your password",
+            "<div>hon://mobilesdk/detect/oauth/done#state=x&amp;y</div><div>Your password",
+        )
+
+        verdict = self._verdict(f"{AUTH}/apex/ChangePassword", echoed)
+
+        self.assertEqual("password_change", verdict)
+
     def test_empty_body_is_named_empty(self) -> None:
         self.assertEqual("empty", self._verdict(f"{AUTH}/finaltok", ""))
 

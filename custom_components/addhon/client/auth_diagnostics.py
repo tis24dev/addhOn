@@ -840,12 +840,16 @@ def classify_token_page(html: HtmlSummary, page: PageSummary) -> str:
     password form, so ``password_change``/``consent`` identify a server-side step the
     USER must complete, while ``token_link_unparsed`` accuses our own parser instead.
     """
-    if html.oauth_done or page.hon_scheme:
-        return "token_link_unparsed"
     if html.otp:
         return "mfa"
+    # The password form is checked FIRST: an interstitial can ECHO the OAuth request it
+    # interrupted (the redirect_uri and the escaped oauth/done link show up in the
+    # markup), and a page holding two password boxes is an account step no matter what
+    # it quotes. Only a page with no such form gets to blame our parser.
     if html.password_inputs >= 2:
         return "password_change"
+    if html.oauth_done or page.hon_scheme:
+        return "token_link_unparsed"
     if html.tags == 0:
         return "empty"
     if html.password_inputs == 1 and "username" in html.input_kinds:

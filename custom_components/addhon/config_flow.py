@@ -396,25 +396,41 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._mfa_client is None:
             return
         hass = getattr(self, "hass", None)
-        if hass is None:
-            # No loop to schedule on (very early teardown): tear the client down on this
-            # thread instead of dropping the reference, or the loop/thread/session would
-            # be leaked with no owner left to close them.
-            client, self._mfa_client = self._mfa_client, None
-            self._mfa_context = None
-            self._mfa_data = None
-            self._mfa_reauth_entry = None
+        if hass is not None:
+            coro = self._async_close_mfa_client()
             try:
-                discard = getattr(client, "discard_auth_diagnostics", None)
-                if callable(discard):
-                    discard()
-                closer = getattr(client, "_close_sync", None)
-                if callable(closer):
-                    closer()
-            except Exception as err:  # noqa: BLE001 - cleanup must not mask the removal
-                _LOGGER.warning("Error closing HonClient after 2FA: %s", err)
+                hass.async_create_task(coro)
+                return
+            except Exception as err:  # noqa: BLE001 - fall through to the blocking close
+                # Closing the coroutine matters: an un-awaited one would reproduce the
+                # very warning this method exists to remove.
+                coro.close()
+                _LOGGER.warning("Could not schedule the 2FA client cleanup: %s", err)
+        # No loop to schedule on (very early teardown, or a loop already going away):
+        # tear the client down on THIS thread rather than dropping the reference, which
+        # would leak its loop/thread/session with no owner left to close them.
+        self._close_mfa_client_sync()
+
+    def _close_mfa_client_sync(self) -> None:
+        """Blocking twin of :meth:`_async_close_mfa_client` (same idempotent order)."""
+        client = self._mfa_client
+        self._mfa_client = None
+        self._mfa_context = None
+        self._mfa_data = None
+        self._mfa_reauth_entry = None
+        if client is None:
             return
-        hass.async_create_task(self._async_close_mfa_client())
+        try:
+            discard = getattr(client, "discard_auth_diagnostics", None)
+            if callable(discard):
+                discard()
+            # The private teardown is what async_close() itself hands to the executor;
+            # calling it directly is the only way to close without a running loop.
+            closer = getattr(client, "_close_sync", None)
+            if callable(closer):
+                closer()
+        except Exception as err:  # noqa: BLE001 - cleanup must not mask the removal
+            _LOGGER.warning("Error closing HonClient after 2FA: %s", err)
 
     async def async_step_2fa(
         self, user_input: dict[str, Any] | None = None
