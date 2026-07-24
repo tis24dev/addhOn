@@ -182,7 +182,7 @@ class NativeAuthFlowTest(unittest.TestCase):
             name: Mock(side_effect=AssertionError(f"{name} was called"))
             for name in (
                 "summarize_response",
-                "summarize_html",
+                "analyze_page",
                 "summarize_links",
                 "summarize_json",
                 "summarize_tokens",

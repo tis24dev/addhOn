@@ -38,7 +38,6 @@ from ..auth_diagnostics import (
     analyze_page,
     classify_endpoint,
     classify_token_page,
-    summarize_html,
     summarize_json,
     summarize_links,
     summarize_response,
@@ -245,10 +244,6 @@ class HonAuth:
                 redirects=len(history),
             ),
         )
-
-    def _diagnostic_html(self, phase: str, text: Any) -> None:
-        if self._auth_trace.enabled:
-            self._auth_trace.html(phase, summarize_html(text))
 
     def _diagnostic_page(self, phase: str, url: Any, text: Any) -> None:
         """Emit the structure AND the named identity of a page (issue #67).
