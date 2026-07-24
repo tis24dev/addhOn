@@ -63,6 +63,9 @@ def _install_stubs() -> None:
 _install_stubs()
 
 from custom_components.addhon.client.transport.auth import HonAuth, NativeAuthError  # noqa: E402
+from custom_components.addhon.client.transport.auth_diagnostics import (  # noqa: E402
+    AuthDiagnosticTrace,
+)
 from custom_components.addhon.client.transport.device import HonDevice  # noqa: E402
 
 AUTH = "https://account2.hon-smarthome.com"
@@ -160,6 +163,17 @@ class NativeAuthFlowTest(unittest.TestCase):
         self.assertEqual(auth.access_token, "AAA")
         self.assertEqual(auth.refresh_token, "r/b")  # only refresh url-decoded
         self.assertEqual(auth.cognito_token, "COG123")
+
+    def test_retains_injected_diagnostic_trace(self) -> None:
+        trace = AuthDiagnosticTrace(enabled=True)
+        auth = HonAuth(
+            FakeSession([]),
+            "user@x.it",
+            "pw",
+            HonDevice(),
+            auth_trace=trace,
+        )
+        self.assertIs(auth._auth_trace, trace)
 
     def test_get_token_whole_page_strips_wrapping_markup(self) -> None:
         # REACHABLE-PATH regression for the token-parser char-class fix. _get_token

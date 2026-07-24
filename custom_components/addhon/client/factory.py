@@ -29,6 +29,7 @@ def create_session(
     enable_mqtt: bool = True,
     minimal: bool = False,
     refresh_token: str = "",
+    auth_trace: Any = None,
 ) -> Any:
     """Create the NATIVE hOn session (`client.session.NativeHon`).
 
@@ -51,6 +52,7 @@ def create_session(
         enable_mqtt=enable_mqtt,
         minimal=minimal,
         refresh_token=refresh_token,
+        auth_trace=auth_trace,
     )
 
 

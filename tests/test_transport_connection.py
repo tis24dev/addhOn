@@ -956,6 +956,30 @@ class ConnectionCreateCleanupTest(unittest.TestCase):
             asyncio.run(conn.create())
         self.assertEqual(closed["n"], 1)  # owned session closed on BaseException too
 
+    def test_create_forwards_diagnostic_trace_to_auth(self) -> None:
+        import custom_components.addhon.client.transport.connection as conn_mod
+        from custom_components.addhon.client.transport.auth_diagnostics import (
+            AuthDiagnosticTrace,
+        )
+
+        captured = {}
+
+        def fake_auth(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        self._patch(conn_mod, "HonAuth", fake_auth)
+        trace = AuthDiagnosticTrace(enabled=True)
+        passed_session = types.SimpleNamespace()
+        conn = HonConnection(
+            "u@x",
+            "p",
+            session=passed_session,
+            auth_trace=trace,
+        )
+        asyncio.run(conn.create())
+        self.assertIs(captured["auth_trace"], trace)
+
 
 if __name__ == "__main__":
     unittest.main()

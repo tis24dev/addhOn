@@ -91,6 +91,17 @@ def _client(appliances=None):
     return c
 
 
+class AuthDiagnosticClientTest(unittest.TestCase):
+    def test_constructor_creates_enabled_trace(self) -> None:
+        client = HonClient(
+            email="e@x",
+            password="p",
+            validation=True,
+            auth_diagnostics=True,
+        )
+        self.assertTrue(client._auth_trace.enabled)
+
+
 class _FallbackAppliance:
     """No update() attribute -> _do_update takes the load_* fallback path directly.
     Records which loads ran; load_statistics can be made to raise a chosen error."""

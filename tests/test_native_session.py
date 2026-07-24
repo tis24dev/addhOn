@@ -118,6 +118,72 @@ class FakeMqtt:
         self._harness.stop_calls.append(self)
 
 
+class AuthTracePropagationTest(unittest.TestCase):
+    def test_factory_forwards_trace_to_native_session(self) -> None:
+        from custom_components.addhon.client.transport.auth_diagnostics import (
+            AuthDiagnosticTrace,
+        )
+
+        trace = AuthDiagnosticTrace(enabled=True)
+        captured = {}
+        original = session_mod.NativeHon
+
+        def fake_native_hon(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        session_mod.NativeHon = fake_native_hon
+        self.addCleanup(setattr, session_mod, "NativeHon", original)
+        factory.create_session("u@x", "p", auth_trace=trace)
+        self.assertIs(captured["auth_trace"], trace)
+
+    def test_native_session_forwards_trace_to_connection(self) -> None:
+        from custom_components.addhon.client.transport.auth_diagnostics import (
+            AuthDiagnosticTrace,
+        )
+
+        trace = AuthDiagnosticTrace(enabled=True)
+        captured = {}
+        original_connection = session_mod.HonConnection
+        original_api = session_mod.HonApi
+
+        class FakeConnection:
+            def __init__(self, *args, **kwargs):
+                captured.update(kwargs)
+
+            async def create(self):
+                return self
+
+            async def close(self):
+                pass
+
+        class FakeApiForTrace:
+            def __init__(self, connection):
+                self.auth = types.SimpleNamespace()
+
+            async def load_appliances(self):
+                return []
+
+            async def close(self):
+                pass
+
+        session_mod.HonConnection = FakeConnection
+        session_mod.HonApi = FakeApiForTrace
+        self.addCleanup(setattr, session_mod, "HonConnection", original_connection)
+        self.addCleanup(setattr, session_mod, "HonApi", original_api)
+
+        hon = NativeHon(
+            email="u@x",
+            password="p",
+            enable_mqtt=False,
+            minimal=True,
+            auth_trace=trace,
+        )
+        _run(hon.create())
+        self.assertIs(captured["auth_trace"], trace)
+        _run(hon.close())
+
+
 class _Harness:
     """Patches create_appliance (factory) + NativeHon._make_mqtt + HonConnection/HonApi."""
 

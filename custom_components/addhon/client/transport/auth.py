@@ -32,6 +32,7 @@ from ...error_codes import (
 )
 from .device import HonDevice
 from .headers import USER_AGENT
+from .auth_diagnostics import AuthDiagnosticTrace
 from .oauth import (
     APEXREMOTE_PATH,
     AUTH_API,
@@ -132,11 +133,19 @@ class _NoAuthNeeded(Exception):
 class HonAuth:
     """Native hOn login flow. Assembles the pieces + the HTTP orchestration."""
 
-    def __init__(self, session, email: str, password: str, device: HonDevice) -> None:
+    def __init__(
+        self,
+        session,
+        email: str,
+        password: str,
+        device: HonDevice,
+        auth_trace: AuthDiagnosticTrace | None = None,
+    ) -> None:
         self._session = session
         self._email = email
         self._password = password
         self._device = device
+        self._auth_trace = auth_trace or AuthDiagnosticTrace(enabled=False)
         self._expires = datetime.now(timezone.utc)
         # Epoch seconds of the id_token's JWT `exp`, or None for an opaque token
         # (then the conservative opaque window applies). Set by _remember_expiry().

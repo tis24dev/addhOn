@@ -51,6 +51,7 @@ class NativeHon:
         refresh_token: str = "",
         enable_mqtt: bool = True,
         minimal: bool = False,
+        auth_trace: Any = None,
     ) -> None:
         self._email = email
         self._password = password
@@ -62,6 +63,7 @@ class NativeHon:
         # skip the per-appliance command/attribute/statistics loads (issue #30). The
         # full setup runs at runtime (minimal=False).
         self._minimal = minimal
+        self._auth_trace = auth_trace
         self._connection: HonConnection | None = None
         self._api: HonApi | None = None
         self._appliances: list[Any] = []
@@ -104,6 +106,7 @@ class NativeHon:
                 session=self._session,
                 mobile_id=self._mobile_id,
                 refresh_token=self._refresh_token,
+                auth_trace=self._auth_trace,
             ).create()
             self._api = HonApi(self._connection)
             await self.setup()

@@ -10,6 +10,7 @@ import logging
 import threading
 from typing import Any
 
+from .client.transport.auth_diagnostics import AuthDiagnosticTrace
 from .debug_utils import debug_key_sample, redact_email, redact_id, redact_mac
 from .error_codes import (
     APPLIANCE_LOAD_FAILED,
@@ -314,6 +315,7 @@ class HonClient:
         password: str,
         validation: bool = False,
         refresh_token: str = "",
+        auth_diagnostics: bool = False,
     ) -> None:
         self._email = email
         self._password = password
@@ -324,6 +326,7 @@ class HonClient:
         # validation=True (config-flow): authenticate + count appliances only, no MQTT
         # and no per-appliance loads (issue #30). Runtime keeps the full setup.
         self._validation = validation
+        self._auth_trace = AuthDiagnosticTrace(enabled=auth_diagnostics)
         # Last classified error code (for the downloadable diagnostics / log parity).
         self.last_error_code: Any = None
         # Login phase reached at the last failure ("authenticate"/"mfa_verify"/...), and a
@@ -545,6 +548,7 @@ class HonClient:
                     enable_mqtt=not self._validation,
                     minimal=self._validation,
                     refresh_token=self._refresh_token,
+                    auth_trace=self._auth_trace,
                 )
                 _LOGGER.debug("Hon instance created")
 
@@ -583,6 +587,11 @@ class HonClient:
                     "hOn setup failed [%s] (phase=%s): %s",
                     self.last_error_code.label, self.last_error_phase or "?", err,
                 )
+                self.emit_auth_diagnostics(
+                    self.last_error_code,
+                    self.last_error_phase or "setup",
+                    "unexpected",
+                )
                 self._close_sync()
                 raise
 
@@ -590,6 +599,21 @@ class HonClient:
         """Verify that the setup completed successfully."""
         if self._api is None:
             raise RuntimeError("setup_sync() did not complete the hOn login")
+
+    def emit_auth_diagnostics(
+        self, code: Any, phase: str, reason: str = "unexpected"
+    ) -> None:
+        """Flush the opt-in authentication trace once using controlled fields."""
+        self._auth_trace.flush(
+            _LOGGER,
+            code=getattr(code, "label", code),
+            phase=phase,
+            reason=reason,
+        )
+
+    def discard_auth_diagnostics(self) -> None:
+        """Discard an opt-in trace after successful validation or flow cleanup."""
+        self._auth_trace.discard()
 
     # -- Two-factor (email OTP) resume -----------------------------------------
 

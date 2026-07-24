@@ -47,11 +47,13 @@ class HonConnection:
         session: aiohttp.ClientSession | None = None,
         mobile_id: str = "",
         refresh_token: str = "",
+        auth_trace: Any = None,
     ) -> None:
         self._email = email
         self._password = password
         self._device = HonDevice(mobile_id)
         self._refresh_token = refresh_token
+        self._auth_trace = auth_trace
         self._owns_session = session is None
         self._session = session
         self._auth: HonAuth | None = None
@@ -105,7 +107,13 @@ class HonConnection:
                 )
             )
         try:
-            self._auth = HonAuth(self._session, self._email, self._password, self._device)
+            self._auth = HonAuth(
+                self._session,
+                self._email,
+                self._password,
+                self._device,
+                auth_trace=self._auth_trace,
+            )
         except BaseException:
             # We just created (and own) the ClientSession; if anything after that fails
             # a failed create() must not leak it. close() only closes a session WE own
