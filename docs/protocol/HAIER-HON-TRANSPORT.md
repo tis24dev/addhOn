@@ -117,6 +117,16 @@ with `username`/`password`/`startUrl`), `aura.context`
 `uad=False`), `aura.pageURI`, `aura.token=None`; params `{r:3,
 other.LightningLoginCustom.login:1}`. Key order and encoding are Aura-mandated.
 
+**5.5 Post-login interstitials (CLIENT-CHOSEN handling).** After the login POST is
+accepted, the org can park the session on a page that only the user can clear: a
+set/change-password form, a consent wall. Such a page reaches the flow exactly where the
+token hand-off was expected, so it cannot be told apart by status code. addhOn decides it
+STRUCTURALLY: a page that carries the OAuth hand-off never carries a password form, so
+two or more password fields (or a consent form with no hand-off) mean an account step,
+not a transport failure. That case raises its own code (ADDHON-165) with a message
+pointing the user at the hOn website or app; a page that DOES carry `hon://…oauth/done`
+yet yields no complete fragment is reported as a parser problem on our side instead.
+
 ## sec6 — Token model & lifetimes
 
 **6.1 Inventory.**

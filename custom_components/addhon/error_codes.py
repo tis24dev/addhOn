@@ -122,13 +122,21 @@ MFA_CODE_INVALID = _reg(161, "mfa_code_invalid", "Verification code was rejected
 # Distinguishable 2FA sub-failures (so the user sees "couldn't send" vs "wrong code" vs
 # "server hiccup"). 162/163 are NOT reauth: the credentials and OTP are fine, it's a
 # transient send/verify problem -> cannot_connect/retry. 164 IS reauth (re-drive login).
-# 165 (account-action-required/privacy) is intentionally RESERVED, not registered: the
-# privacy markers live in every ProgressiveLogin page's remoting registry, so it cannot be
-# detected reliably without a captured privacy-only page. 165-168 stay reserved.
 MFA_SEND_FAILED = _reg(162, "mfa_send_failed", "Could not send the verification code", False)
 MFA_SERVICE_ERROR = _reg(163, "mfa_service_error", "Two-factor verification service error", False)
 MFA_TOKEN_AFTER_VERIFY_FAILED = _reg(
     164, "mfa_token_after_verify_failed", "Sign-in could not finish after verification", True
+)
+# 165 was reserved for "account action required" while the only available marker was
+# textual (privacy words appear in EVERY ProgressiveLogin page, so they proved nothing).
+# It is registered now that the detection is STRUCTURAL: the page that should carry the
+# OAuth hand-off instead carries a set/change-password form or a consent form, which a
+# token page never does (issue #67). 166-168 stay reserved.
+ACCOUNT_ACTION_REQUIRED = _reg(
+    165,
+    "account_action_required",
+    "hOn is asking for an extra step on the account before sign-in can finish",
+    True,
 )
 # 2xx - appliance inventory / per-appliance (runtime, logged only)
 APPLIANCE_LIST_FAILED = _reg(200, "appliance_list_failed", "Could not fetch the appliance list")
@@ -309,6 +317,12 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
         return DECODE_ERROR
     if "decode error" in hay:
         return DECODE_ERROR
+    # Before the token-page rule: this IS a token-page failure, but the account needs a
+    # user step, so it must not collapse into the mute ADDHON-130 (issue #67). The
+    # carried code already wins above; this keeps the routing right if the marker
+    # reaches the classifier as plain text.
+    if "account action required" in hay:
+        return ACCOUNT_ACTION_REQUIRED
     if "api_auth" in hay:
         return AUTH_API_AUTH
     if "get_token" in hay or "token page" in hay or "progressive" in hay:

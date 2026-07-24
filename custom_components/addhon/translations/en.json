@@ -47,6 +47,7 @@
       "mfa_send_failed": "Could not send the verification code. Wait a moment and tap Resend. ({error_code})",
       "mfa_service_error": "The verification service had a temporary problem. Try the code again in a moment. ({error_code})",
       "mfa_token_after_verify_failed": "Your code was accepted but sign-in could not finish. Please start the login again. ({error_code})",
+      "account_action_required": "Your password was accepted, but hOn is asking for an extra step on the account (for example a new password to set, or terms to accept). Sign in on the hOn website or app, complete the requested step, then try again here. ({error_code})",
       "appliance_list_failed": "Could not fetch your appliance list. ({error_code})",
       "network_timeout": "Timed out contacting the hOn servers. Check your internet connection. ({error_code})",
       "dns_failure": "Could not resolve the hOn servers (DNS). Check your network and DNS. ({error_code})",
