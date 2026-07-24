@@ -117,6 +117,9 @@ SERVICE_REFRESH = "refresh"
 # logger to DEBUG (silenced to WARNING when off). The two toggles are independent.
 CONF_ENABLE_DEBUG = "enable_debug"
 CONF_ENABLE_MQTT_DEBUG = "enable_mqtt_debug"
+# Temporary config-flow field. It enables one bounded sign-in trace and is stripped
+# before credentials are validated or persisted.
+CONF_AUTH_DIAGNOSTICS = "auth_diagnostics"
 
 # --- Air conditioner attributes -----------------------------------------------
 # Confirmed from the diagnostics of the AS35PBPHRA-PRE device

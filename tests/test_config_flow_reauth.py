@@ -170,7 +170,7 @@ class ReauthFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_reauth_success_updates_only_password(self) -> None:
         seen = {}
 
-        async def ok(hass, data):
+        async def ok(hass, data, **kwargs):
             seen.update(data)
             return {"title": "x", "appliance_count": 1, "refresh_token": "rt-123"}
 
@@ -197,7 +197,7 @@ class ReauthFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_reauth_invalid_auth_reshows_form(self) -> None:
         from custom_components.addhon.config_flow import InvalidAuth
 
-        async def bad(hass, data):
+        async def bad(hass, data, **kwargs):
             raise InvalidAuth("nope")
 
         self._patch_validate(bad)
@@ -212,7 +212,7 @@ class ReauthFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_reauth_cannot_connect_reshows_form(self) -> None:
         from custom_components.addhon.config_flow import CannotConnect
 
-        async def down(hass, data):
+        async def down(hass, data, **kwargs):
             raise CannotConnect("offline")
 
         self._patch_validate(down)
@@ -226,7 +226,7 @@ class ReauthFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_reauth_unexpected_error_maps_to_unknown(self) -> None:
         from custom_components.addhon import config_flow
 
-        async def boom(hass, data):
+        async def boom(hass, data, **kwargs):
             raise RuntimeError("weird")
 
         self._patch_validate(boom)
@@ -238,7 +238,7 @@ class ReauthFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("unknown", result["errors"]["base"])
 
     async def test_reauth_aborts_on_account_mismatch(self) -> None:
-        async def ok(hass, data):
+        async def ok(hass, data, **kwargs):
             return {"title": "x", "appliance_count": 0}
 
         self._patch_validate(ok)
@@ -295,7 +295,7 @@ class UserStepUniqueIdTest(unittest.IsolatedAsyncioTestCase):
 
         flow._abort_if_unique_id_configured = _abort_if_configured
 
-        async def _validate(hass, data):
+        async def _validate(hass, data, **kwargs):
             flow.calls["validated"] = True
             return {"title": "x", "appliance_count": 1}
 
@@ -314,7 +314,7 @@ class UserStepUniqueIdTest(unittest.IsolatedAsyncioTestCase):
             "abort_checked", True
         )
 
-        async def _validate(hass, data):
+        async def _validate(hass, data, **kwargs):
             flow.calls["validated"] = True
             return {"title": "My hOn", "appliance_count": 2}
 

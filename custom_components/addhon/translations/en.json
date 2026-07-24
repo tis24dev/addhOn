@@ -6,14 +6,22 @@
         "description": "Enter your Haier hOn app credentials. Same email and password you use on the mobile app.\n\n⚠️ This integration is unofficial and uses the hOn API without authorization from Haier.",
         "data": {
           "email": "Email",
-          "password": "Password"
+          "password": "Password",
+          "auth_diagnostics": "Collect sign-in diagnostics"
+        },
+        "data_description": {
+          "auth_diagnostics": "If sign-in fails, record detailed sanitized technical information in the Home Assistant log. Credentials, tokens, and personal data are not included."
         }
       },
       "reauth_confirm": {
         "title": "Re-authenticate your hOn account",
         "description": "The credentials for {email} are no longer valid. Enter the password again.",
         "data": {
-          "password": "Password"
+          "password": "Password",
+          "auth_diagnostics": "Collect sign-in diagnostics"
+        },
+        "data_description": {
+          "auth_diagnostics": "If sign-in fails, record detailed sanitized technical information in the Home Assistant log. Credentials, tokens, and personal data are not included."
         }
       },
       "2fa": {

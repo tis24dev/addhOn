@@ -178,6 +178,7 @@ class AuthDiagnosticClassifierTest(unittest.TestCase):
         self.assertTrue(html_shape.progressive_login)
         self.assertTrue(html_shape.otp)
         self.assertTrue(html_shape.privacy)
+        self.assertEqual(html_shape.page_kind, "mfa")
         self.assertEqual(
             links.kinds, ("static_asset", "progressive_login", "external")
         )

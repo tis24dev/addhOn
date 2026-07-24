@@ -410,6 +410,7 @@ class HtmlSummary:
     otp: bool
     privacy: bool
     oauth_done: bool
+    page_kind: str
     dom_fingerprint: str
     parse_error: bool
 
@@ -427,6 +428,29 @@ def summarize_html(text: Any) -> HtmlSummary:
     lowered = source.lower()
     normalized = "|".join(parser.normalized).encode("ascii", "strict")
     fingerprint = hashlib.sha256(normalized).hexdigest()[:12]
+    login = "login" in lowered or "username" in parser.input_kinds
+    progressive_login = "progressivelogin" in lowered
+    otp = (
+        "verifyemailotp" in lowered
+        or "verificationcode" in lowered
+        or "otp" in parser.input_kinds
+    )
+    privacy = any(
+        marker in lowered for marker in ("privacy", "consent", "terms")
+    )
+    oauth_done = "oauth/done" in lowered
+    if oauth_done:
+        page_kind = "oauth_done"
+    elif otp:
+        page_kind = "mfa"
+    elif privacy:
+        page_kind = "privacy"
+    elif progressive_login:
+        page_kind = "progressive_login"
+    elif login:
+        page_kind = "login"
+    else:
+        page_kind = "other"
     return HtmlSummary(
         tags=parser.tags,
         forms=parser.forms,
@@ -434,15 +458,12 @@ def summarize_html(text: Any) -> HtmlSummary:
         links=parser.links,
         scripts=parser.scripts,
         input_kinds=tuple(parser.input_kinds),
-        login=("login" in lowered or "username" in parser.input_kinds),
-        progressive_login="progressivelogin" in lowered,
-        otp=(
-            "verifyemailotp" in lowered
-            or "verificationcode" in lowered
-            or "otp" in parser.input_kinds
-        ),
-        privacy=any(marker in lowered for marker in ("privacy", "consent", "terms")),
-        oauth_done="oauth/done" in lowered,
+        login=login,
+        progressive_login=progressive_login,
+        otp=otp,
+        privacy=privacy,
+        oauth_done=oauth_done,
+        page_kind=page_kind,
         dom_fingerprint=fingerprint,
         parse_error=parse_error,
     )
@@ -644,6 +665,7 @@ class AuthDiagnosticTrace:
                 ("otp", summary.otp),
                 ("privacy", summary.privacy),
                 ("oauth_done", summary.oauth_done),
+                ("page_kind", summary.page_kind),
                 ("dom", summary.dom_fingerprint),
                 ("parse_error", summary.parse_error),
             ),

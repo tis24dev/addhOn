@@ -69,9 +69,12 @@ class TranslationsContentTest(unittest.TestCase):
 
     def test_user_step_exposes_credentials(self) -> None:
         for lang in LANGS:
-            data = self.data[lang]["config"]["step"]["user"]["data"]
+            step = self.data[lang]["config"]["step"]["user"]
+            data = step["data"]
             self.assertIn("email", data)
             self.assertIn("password", data)
+            self.assertIn("auth_diagnostics", data)
+            self.assertIn("auth_diagnostics", step["data_description"])
 
     def test_error_keys_present(self) -> None:
         for lang in LANGS:
@@ -103,6 +106,8 @@ class TranslationsContentTest(unittest.TestCase):
         for lang in LANGS:
             step = self.data[lang]["config"]["step"]["reauth_confirm"]
             self.assertIn("password", step["data"])
+            self.assertIn("auth_diagnostics", step["data"])
+            self.assertIn("auth_diagnostics", step["data_description"])
             self.assertIn(
                 "{email}",
                 step["description"],

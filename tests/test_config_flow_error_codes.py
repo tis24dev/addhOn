@@ -64,6 +64,7 @@ def _install_stubs() -> None:
         class Required:
             def __init__(self, key, *args, **kwargs):
                 self.key = key
+                self.default = kwargs.get("default")
 
         vol.Required = Required
         vol.Optional = Required
@@ -94,7 +95,11 @@ def _user_flow():
     flow.async_set_unique_id = _set_unique_id
     flow._abort_if_unique_id_configured = lambda: None
     flow.async_show_form = lambda **kw: {"type": "form", **kw}
-    flow.async_create_entry = lambda *, title, data: {"type": "create_entry", "title": title}
+    flow.async_create_entry = lambda *, title, data: {
+        "type": "create_entry",
+        "title": title,
+        "data": data,
+    }
     return flow
 
 
@@ -119,9 +124,17 @@ def _patch_validate(test, fn) -> None:
     test.addCleanup(setattr, cf, "validate_input", original)
 
 
+def _schema_marker(result, key):
+    schema = getattr(result["data_schema"], "schema", result["data_schema"])
+    for marker in schema:
+        if getattr(marker, "schema", getattr(marker, "key", marker)) == key:
+            return marker
+    raise AssertionError(f"schema field not found: {key}")
+
+
 class UserStepErrorCodeTest(unittest.IsolatedAsyncioTestCase):
     async def _run_user(self, raiser):
-        async def _v(hass, data):
+        async def _v(hass, data, **kwargs):
             raise raiser
 
         _patch_validate(self, _v)
@@ -156,8 +169,67 @@ class UserStepErrorCodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["errors"], {})
         self.assertEqual(res["description_placeholders"]["error_code"], "")
 
+    async def test_clean_form_has_disabled_auth_diagnostics_checkbox(self) -> None:
+        flow = _user_flow()
+        res = await flow.async_step_user(None)
+        marker = _schema_marker(res, cf.CONF_AUTH_DIAGNOSTICS)
+        self.assertFalse(marker.default)
+
+    async def test_diagnostic_flag_is_separate_and_preserved_after_error(self) -> None:
+        seen = {}
+
+        async def _v(hass, data, *, auth_diagnostics=False):
+            seen["data"] = dict(data)
+            seen["auth_diagnostics"] = auth_diagnostics
+            raise cf.CannotConnect(ec.AUTH_GET_TOKEN)
+
+        _patch_validate(self, _v)
+        flow = _user_flow()
+        res = await flow.async_step_user(
+            {
+                "email": "p@example.com",
+                "password": "x",
+                "auth_diagnostics": True,
+            }
+        )
+
+        self.assertEqual(
+            seen["data"], {"email": "p@example.com", "password": "x"}
+        )
+        self.assertTrue(seen["auth_diagnostics"])
+        marker = _schema_marker(res, cf.CONF_AUTH_DIAGNOSTICS)
+        self.assertTrue(marker.default)
+
+    async def test_diagnostic_flag_is_not_persisted_on_success(self) -> None:
+        async def _v(hass, data, *, auth_diagnostics=False):
+            self.assertTrue(auth_diagnostics)
+            return {
+                "title": "Haier hOn",
+                "appliance_count": 1,
+                "refresh_token": "rt",
+            }
+
+        _patch_validate(self, _v)
+        flow = _user_flow()
+        res = await flow.async_step_user(
+            {
+                "email": "p@example.com",
+                "password": "x",
+                "auth_diagnostics": True,
+            }
+        )
+
+        self.assertEqual(
+            res["data"],
+            {
+                "email": "p@example.com",
+                "password": "x",
+                "refresh_token": "rt",
+            },
+        )
+
     async def test_unexpected_error_maps_to_unknown_code(self) -> None:
-        async def _v(hass, data):
+        async def _v(hass, data, **kwargs):
             raise RuntimeError("weird")
 
         _patch_validate(self, _v)
@@ -170,7 +242,7 @@ class UserStepErrorCodeTest(unittest.IsolatedAsyncioTestCase):
 
 class ReauthStepErrorCodeTest(unittest.IsolatedAsyncioTestCase):
     async def test_reauth_coded_error_surfaces(self) -> None:
-        async def _v(hass, data):
+        async def _v(hass, data, **kwargs):
             raise cf.CannotConnect(ec.LOOP_TIMEOUT)
 
         _patch_validate(self, _v)
@@ -179,6 +251,73 @@ class ReauthStepErrorCodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["errors"]["base"], "loop_timeout")
         self.assertEqual(res["description_placeholders"]["error_code"], "ADDHON-460")
         self.assertEqual(res["description_placeholders"]["email"], "person@example.com")
+
+    async def test_reauth_diagnostic_flag_is_separate_and_preserved(self) -> None:
+        seen = {}
+
+        async def _v(hass, data, *, auth_diagnostics=False):
+            seen["data"] = dict(data)
+            seen["auth_diagnostics"] = auth_diagnostics
+            raise cf.CannotConnect(ec.AUTH_GET_TOKEN)
+
+        _patch_validate(self, _v)
+        flow = _reauth_flow()
+        res = await flow.async_step_reauth_confirm(
+            {"password": "x", "auth_diagnostics": True}
+        )
+
+        self.assertEqual(
+            seen["data"],
+            {"email": "person@example.com", "password": "x"},
+        )
+        self.assertTrue(seen["auth_diagnostics"])
+        marker = _schema_marker(res, cf.CONF_AUTH_DIAGNOSTICS)
+        self.assertTrue(marker.default)
+
+
+class ValidateInputDiagnosticTest(unittest.IsolatedAsyncioTestCase):
+    async def test_enabled_trace_reaches_client_and_is_discarded_on_success(self) -> None:
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured["kwargs"] = kwargs
+                self.refresh_token = "rt"
+
+            def setup_sync(self):
+                pass
+
+            async def async_complete_setup(self):
+                pass
+
+            async def async_get_appliances(self):
+                return []
+
+            def discard_auth_diagnostics(self):
+                captured["discarded"] = True
+
+            async def async_close(self):
+                captured["closed"] = True
+
+        class FakeHass:
+            async def async_add_executor_job(self, func, *args):
+                return func(*args)
+
+        original = cf.HonClient
+        cf.HonClient = FakeClient
+        self.addCleanup(setattr, cf, "HonClient", original)
+
+        result = await cf.validate_input(
+            FakeHass(),
+            {"email": "p@example.com", "password": "x"},
+            auth_diagnostics=True,
+        )
+
+        self.assertTrue(captured["kwargs"]["auth_diagnostics"])
+        self.assertTrue(captured["kwargs"]["validation"])
+        self.assertTrue(captured["discarded"])
+        self.assertTrue(captured["closed"])
+        self.assertEqual(result["appliance_count"], 0)
 
 
 if __name__ == "__main__":

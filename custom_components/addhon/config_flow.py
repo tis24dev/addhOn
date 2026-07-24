@@ -15,8 +15,19 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 
 from .client.transport.auth import MFAChallengeRequired, MFACodeInvalid
-from .const import CONF_ENABLE_DEBUG, CONF_ENABLE_MQTT_DEBUG, DOMAIN
-from .error_codes import MFA_CODE_INVALID, UNKNOWN, HonErrorCode, classify
+from .const import (
+    CONF_AUTH_DIAGNOSTICS,
+    CONF_ENABLE_DEBUG,
+    CONF_ENABLE_MQTT_DEBUG,
+    DOMAIN,
+)
+from .error_codes import (
+    MFA_CODE_INVALID,
+    MFA_TOKEN_AFTER_VERIFY_FAILED,
+    UNKNOWN,
+    HonErrorCode,
+    classify,
+)
 from .hon_client import HonClient, _requires_reauth
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,21 +57,50 @@ def _redact_email(email: str | None) -> str | None:
     _, domain = email.split("@", 1)
     return f"***@{domain}"
 
-STEP_USER_DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required("email"): str,
-        vol.Required("password"): str,
-    }
-)
+
+def _step_user_data_schema(auth_diagnostics: bool = False) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required("email"): str,
+            vol.Required("password"): str,
+            vol.Optional(
+                CONF_AUTH_DIAGNOSTICS, default=auth_diagnostics
+            ): bool,
+        }
+    )
 
 
-async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
+def _step_reauth_data_schema(auth_diagnostics: bool = False) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required("password"): str,
+            vol.Optional(
+                CONF_AUTH_DIAGNOSTICS, default=auth_diagnostics
+            ): bool,
+        }
+    )
+
+
+STEP_USER_DATA_SCHEMA = _step_user_data_schema()
+
+
+async def validate_input(
+    hass: HomeAssistant,
+    data: dict[str, Any],
+    *,
+    auth_diagnostics: bool = False,
+) -> dict[str, Any]:
     """Validate the hOn credentials."""
     _LOGGER.debug("ConfigFlow debug: starting validation for account %s", _redact_email(data.get("email")))
     # validation=True: authenticate + count appliances only, NO MQTT and no
     # per-appliance loads, so a slow/blocked realtime or a single dead endpoint can
     # no longer make the whole validation hit the 60s loop cap (issue #30).
-    client = HonClient(email=data["email"], password=data["password"], validation=True)
+    client = HonClient(
+        email=data["email"],
+        password=data["password"],
+        validation=True,
+        auth_diagnostics=auth_diagnostics,
+    )
     mfa_pending = False
 
     try:
@@ -80,10 +120,12 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             raise
         except ImportError as err:
             code = classify(err)
+            client.emit_auth_diagnostics(code, "setup", "unexpected")
             _LOGGER.error("Validation failed [%s]: required dependency not installed: %s", code.label, err)
             raise CannotConnect(code) from err
         except Exception as err:
             code = classify(err)
+            client.emit_auth_diagnostics(code, "setup", "unexpected")
             _LOGGER.error("Validation failed [%s]: %s", code.label, err)
             if _requires_reauth(err):
                 raise InvalidAuth(code) from err
@@ -106,6 +148,9 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             )
         except Exception as err:
             code = classify(err)
+            client.emit_auth_diagnostics(
+                code, "appliance_list", "appliance_list_failed"
+            )
             _LOGGER.error("Validation failed [%s] fetching appliances: %s", code.label, err)
             if _requires_reauth(err):
                 raise InvalidAuth(code) from err
@@ -114,6 +159,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         # nulls the session, after which the property returns ""). Persisting it lets a
         # non-2FA account skip the full login on the next restart too.
         refresh_token = client.refresh_token
+        client.discard_auth_diagnostics()
     finally:
         # On a 2FA challenge the client must stay open for the 2FA step (the flow
         # handler closes it); otherwise close it here as before.
@@ -160,24 +206,36 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the first user step."""
         errors: dict[str, str] = {}
         error_code = ""
+        auth_diagnostics = False
 
         if user_input is not None:
+            auth_diagnostics = bool(
+                user_input.get(CONF_AUTH_DIAGNOSTICS, False)
+            )
+            credentials = {
+                "email": user_input["email"],
+                "password": user_input["password"],
+            }
             _LOGGER.debug(
                 "ConfigFlow debug: submit user step for account %s",
-                _redact_email(user_input.get("email")),
+                _redact_email(credentials.get("email")),
             )
             # Set the unique_id and abort BEFORE the network validation, so re-adding
             # an already-configured account is rejected without a costly hOn login +
             # appliance fetch (rate-limited). Must be OUTSIDE the try below: the
             # AbortFlow raised by _abort_if_unique_id_configured() would otherwise be
             # swallowed by the broad `except Exception`. (#18)
-            await self.async_set_unique_id(user_input["email"].lower())
+            await self.async_set_unique_id(credentials["email"].lower())
             self._abort_if_unique_id_configured()
             try:
-                info = await validate_input(self.hass, user_input)
+                info = await validate_input(
+                    self.hass,
+                    credentials,
+                    auth_diagnostics=auth_diagnostics,
+                )
             except MFAChallengeRequired as err:
                 # 2FA required: hold the live client and move to the OTP step.
-                await self._mfa_begin(err, dict(user_input), reauth_entry=None)
+                await self._mfa_begin(err, credentials, reauth_entry=None)
                 return await self.async_step_2fa()
             except CannotConnect as err:
                 errors["base"], error_code = _error_base_and_code(err, "cannot_connect")
@@ -192,17 +250,20 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 _LOGGER.debug(
                     "ConfigFlow debug: creating entry for account %s appliance_count=%s",
-                    _redact_email(user_input.get("email")),
+                    _redact_email(credentials.get("email")),
                     info.get("appliance_count"),
                 )
                 return self.async_create_entry(
                     title=info["title"],
-                    data={**user_input, "refresh_token": info.get("refresh_token", "")},
+                    data={
+                        **credentials,
+                        "refresh_token": info.get("refresh_token", ""),
+                    },
                 )
 
         return self.async_show_form(
             step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            data_schema=_step_user_data_schema(auth_diagnostics),
             errors=errors,
             description_placeholders={
                 "docs_url": "https://github.com/tis24dev/addhOn",
@@ -226,6 +287,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Ask for the password again (the email stays the entry's one)."""
         errors: dict[str, str] = {}
         error_code = ""
+        auth_diagnostics = False
         reauth_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
@@ -238,9 +300,16 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         email = reauth_entry.data["email"]
 
         if user_input is not None:
+            auth_diagnostics = bool(
+                user_input.get(CONF_AUTH_DIAGNOSTICS, False)
+            )
             data = {"email": email, "password": user_input["password"]}
             try:
-                info = await validate_input(self.hass, data)
+                info = await validate_input(
+                    self.hass,
+                    data,
+                    auth_diagnostics=auth_diagnostics,
+                )
             except MFAChallengeRequired as err:
                 # 2FA required during reauth: hold the client and move to the OTP step,
                 # which finishes by UPDATING this entry (not creating a new one).
@@ -274,7 +343,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required("password"): str}),
+            data_schema=_step_reauth_data_schema(auth_diagnostics),
             errors=errors,
             description_placeholders={"email": email, "error_code": error_code},
         )
@@ -308,6 +377,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._mfa_reauth_entry = None
         if client is not None:
             try:
+                discard = getattr(client, "discard_auth_diagnostics", None)
+                if callable(discard):
+                    discard()
                 await client.async_close()
             except Exception as err:  # noqa: BLE001 - cleanup must not mask the flow
                 _LOGGER.warning("Error closing HonClient after 2FA: %s", err)
@@ -359,6 +431,19 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"], error_code = _error_base_and_code(err, "invalid_auth")
                     _LOGGER.debug("ConfigFlow debug: 2FA code rejected [%s]", error_code)
                 except Exception as err:  # noqa: BLE001
+                    code = classify(err)
+                    if code == MFA_TOKEN_AFTER_VERIFY_FAILED:
+                        emit = getattr(
+                            self._mfa_client,
+                            "emit_auth_diagnostics",
+                            None,
+                        )
+                        if callable(emit):
+                            emit(
+                                code,
+                                "resume_token",
+                                "mfa_token_failed",
+                            )
                     errors["base"], error_code = self._mfa_error(err)
                     _LOGGER.debug("ConfigFlow debug: 2FA submit failed [%s]", error_code)
                 else:
