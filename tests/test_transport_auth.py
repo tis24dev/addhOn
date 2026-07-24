@@ -16,6 +16,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
 REPO = Path(__file__).resolve().parents[1]
@@ -175,6 +176,28 @@ class NativeAuthFlowTest(unittest.TestCase):
             auth_trace=trace,
         )
         self.assertIs(auth._auth_trace, trace)
+
+    def test_disabled_trace_skips_all_structural_summarizers(self) -> None:
+        summarizers = {
+            name: Mock(side_effect=AssertionError(f"{name} was called"))
+            for name in (
+                "summarize_response",
+                "summarize_html",
+                "summarize_links",
+                "summarize_json",
+                "summarize_tokens",
+            )
+        }
+        auth = self._auth(_happy_responses())
+
+        with patch.multiple(
+            "custom_components.addhon.client.transport.auth",
+            **summarizers,
+        ):
+            asyncio.run(auth.authenticate())
+
+        for summarizer in summarizers.values():
+            summarizer.assert_not_called()
 
     def test_happy_path_records_complete_structural_trace_without_logging(self) -> None:
         trace = AuthDiagnosticTrace(enabled=True)

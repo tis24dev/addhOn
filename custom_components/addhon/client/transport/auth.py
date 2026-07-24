@@ -208,13 +208,17 @@ class HonAuth:
 
     def _diagnostic_request(
         self, phase: str, method: str, endpoint: str
-    ) -> float:
+    ) -> float | None:
+        if not self._auth_trace.enabled:
+            return None
         self._auth_trace.request(phase, method, endpoint)
         return time.monotonic()
 
     def _diagnostic_response(
-        self, phase: str, resp: Any, body: str | bytes, started: float
+        self, phase: str, resp: Any, body: str | bytes, started: float | None
     ) -> None:
+        if not self._auth_trace.enabled or started is None:
+            return
         history = getattr(resp, "history", ()) or ()
         self._auth_trace.response(
             phase,
@@ -227,6 +231,27 @@ class HonAuth:
             ),
         )
 
+    def _diagnostic_html(self, phase: str, text: Any) -> None:
+        if self._auth_trace.enabled:
+            self._auth_trace.html(phase, summarize_html(text))
+
+    def _diagnostic_links(
+        self, phase: str, hrefs: list[str], selected_index: int = -1
+    ) -> None:
+        if self._auth_trace.enabled:
+            self._auth_trace.links(
+                phase,
+                summarize_links(hrefs, selected_index=selected_index),
+            )
+
+    def _diagnostic_json(self, phase: str, value: Any) -> None:
+        if self._auth_trace.enabled:
+            self._auth_trace.json_shape(phase, summarize_json(value))
+
+    def _diagnostic_tokens(self, phase: str, text: Any) -> None:
+        if self._auth_trace.enabled:
+            self._auth_trace.token_shape(phase, summarize_tokens(text))
+
     async def _introduce(self) -> str:
         self._phase("introduce")
         url = build_authorize_url(generate_nonce())
@@ -234,7 +259,7 @@ class HonAuth:
         async with self._session.get(url, headers=self._ua()) as resp:
             text = await resp.text()
             self._diagnostic_response("introduce", resp, text, started)
-            self._auth_trace.html("introduce", summarize_html(text))
+            self._diagnostic_html("introduce", text)
             self._expires = datetime.now(timezone.utc)
             login_url = extract_login_url(text)
             if login_url is None:
@@ -246,8 +271,8 @@ class HonAuth:
                     # trailing '&' (RFC 6749 sec4.2.2). Require .complete before
                     # committing, mirroring _resume_tokens_after_2fa.
                     t = parse_token_fragment(oauth_done_fragment(text) or text)
-                    self._auth_trace.token_shape(
-                        "introduce", summarize_tokens(oauth_done_fragment(text) or text)
+                    self._diagnostic_tokens(
+                        "introduce", oauth_done_fragment(text) or text
                     )
                     if not t.complete:
                         self._phase(
@@ -298,7 +323,7 @@ class HonAuth:
         ) as resp:
             text = await resp.text()
             self._diagnostic_response("login_page", resp, text, started)
-            self._auth_trace.html("login_page", summarize_html(text))
+            self._diagnostic_html("login_page", text)
             match = _FWUID_RE.findall(text)
             if not match:
                 self._phase("login_page", status=resp.status, fwuid=False)
@@ -326,9 +351,7 @@ class HonAuth:
             if resp.status == 200:
                 try:
                     result = await resp.json(content_type=None)
-                    self._auth_trace.json_shape(
-                        "login_submit", summarize_json(result)
-                    )
+                    self._diagnostic_json("login_submit", result)
                     redirect = str(result["events"][0]["attributes"]["values"]["url"])
                     self._diagnostic_response(
                         "login_submit", resp, b"", started
@@ -353,10 +376,10 @@ class HonAuth:
                 raise NativeAuthError(f"get_token: status {resp.status}")
             text = await resp.text()
             self._diagnostic_response("post_login", resp, text, started)
-            self._auth_trace.html("post_login", summarize_html(text))
+            self._diagnostic_html("post_login", text)
             href = _HREF_RE.findall(text)
-            self._auth_trace.links(
-                "post_login", summarize_links(href, selected_index=0 if href else -1)
+            self._diagnostic_links(
+                "post_login", href, selected_index=0 if href else -1
             )
         if not href:
             self._phase("get_token", status=resp.status, href=False)
@@ -376,9 +399,7 @@ class HonAuth:
                 self._diagnostic_response(
                     "progressive_page", resp, prog_text, started
                 )
-                self._auth_trace.html(
-                    "progressive_page", summarize_html(prog_text)
-                )
+                self._diagnostic_html("progressive_page", prog_text)
                 # resp.url is the final (post-redirect) URL; fall back to the requested
                 # href (absolutized, so the MfaContext host derivation is correct) if the
                 # response object does not expose it (e.g. test doubles).
@@ -395,9 +416,10 @@ class HonAuth:
             if challenge is not None:
                 raise MFAChallengeRequired(challenge)
             href = _HREF_RE_PROGRESSIVE.findall(prog_text)
-            self._auth_trace.links(
+            self._diagnostic_links(
                 "progressive_page",
-                summarize_links(href, selected_index=0 if href else -1),
+                href,
+                selected_index=0 if href else -1,
             )
             if not href:  # like the guard after the first findall: no IndexError
                 raise NativeAuthError("progressive: no href")
@@ -416,12 +438,8 @@ class HonAuth:
             self._diagnostic_response(
                 "token_response", resp, token_text, started
             )
-            self._auth_trace.html(
-                "token_response", summarize_html(token_text)
-            )
-            self._auth_trace.token_shape(
-                "token_response", summarize_tokens(token_text)
-            )
+            self._diagnostic_html("token_response", token_text)
+            self._diagnostic_tokens("token_response", token_text)
             tokens = parse_token_fragment(token_text)
         if not tokens.complete:
             raise NativeAuthError("token page: incomplete tokens")
@@ -457,7 +475,7 @@ class HonAuth:
                 raise NativeAuthError(f"api_auth: status {resp.status}")
             data = await resp.json(content_type=None)
             self._diagnostic_response("api_auth", resp, b"", started)
-            self._auth_trace.json_shape("api_auth", summarize_json(data))
+            self._diagnostic_json("api_auth", data)
         self.cognito_token = data.get("cognitoUser", {}).get("Token", "")
         if not self.cognito_token:
             self._phase("api_auth", status=resp.status, cognito_token=False)
@@ -514,7 +532,7 @@ class HonAuth:
             text = await resp.text()
             self._diagnostic_response(phase, resp, text, started)
         entry = parse_remoting_result(text)
-        self._auth_trace.json_shape(phase, summarize_json(entry))
+        self._diagnostic_json(phase, entry)
         # Leak-proof structural summary (result/statusCode/type/key-names only).
         if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
@@ -590,7 +608,7 @@ class HonAuth:
         async with self._session.get(url, headers=self._ua()) as resp:
             text = await resp.text()
             self._diagnostic_response("resume_token", resp, text, started)
-            self._auth_trace.html("resume_token", summarize_html(text))
+            self._diagnostic_html("resume_token", text)
         self._expires = datetime.now(timezone.utc)
         # Extract the done-URL FIRST and parse only it (mirrors the live-validated probe).
         # Parsing the whole page first would let a stray `*_token=...&` substring elsewhere
@@ -601,9 +619,7 @@ class HonAuth:
             token_source = done_url
         else:
             token_source = text
-        self._auth_trace.token_shape(
-            "resume_token", summarize_tokens(token_source)
-        )
+        self._diagnostic_tokens("resume_token", token_source)
         tokens = parse_token_fragment(token_source)
         if not tokens.complete:
             self._phase("resume_token", done_url=bool(done_url), tokens_complete=False)
@@ -638,7 +654,7 @@ class HonAuth:
                 return False
             data = await resp.json(content_type=None)
             self._diagnostic_response("refresh", resp, b"", started)
-            self._auth_trace.json_shape("refresh", summarize_json(data))
+            self._diagnostic_json("refresh", data)
         # A malformed 2xx (no id_token/access_token) must NOT raise KeyError: treat
         # it as a failed refresh so the caller falls back to authenticate(). Do not
         # touch _expires before validating, or a fake refresh would mask expiry.

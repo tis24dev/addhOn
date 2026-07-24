@@ -189,6 +189,22 @@ class AuthDiagnosticClassifierTest(unittest.TestCase):
         self.assertEqual(token_shape.missing, ("refresh_token",))
         self.assertTrue(token_shape.html_escaped)
 
+    def test_token_summary_counts_a_leading_field_once(self) -> None:
+        for delimiter in ("&", "&amp;"):
+            with self.subTest(delimiter=delimiter):
+                summary = summarize_tokens(
+                    delimiter.join(
+                        (
+                            "access_token=A",
+                            "refresh_token=R",
+                            "id_token=I",
+                        )
+                    )
+                )
+
+                self.assertTrue(summary.complete)
+                self.assertEqual(summary.duplicates, ())
+
 
 class AuthDiagnosticTraceTest(unittest.TestCase):
     def setUp(self) -> None:

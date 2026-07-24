@@ -43,16 +43,17 @@ Users retrieve the evidence from Settings > System > Logs by searching for
 
 ## Diagnostic Lifecycle
 
-The config flow creates one `AuthDiagnosticTrace` for an opted-in validation attempt.
-The trace receives a random, non-sensitive eight-hex-character identifier and a
-monotonic sequence number.
+The config flow reads the temporary `auth_diagnostics` checkbox and passes that
+boolean through `validate_input` to `HonClient`. `HonClient` creates and retains one
+`AuthDiagnosticTrace` for the opted-in validation attempt. The trace receives a
+random, non-sensitive eight-hex-character identifier and a monotonic sequence number.
 
-The same trace is passed explicitly through:
+`HonClient` owns the trace lifecycle and explicitly propagates the same instance
+through:
 
 ```text
-ConfigFlow
-  -> validate_input
-  -> HonClient
+ConfigFlow -> validate_input -> HonClient(auth_diagnostics=<bool>)
+  -> AuthDiagnosticTrace
   -> create_session
   -> NativeHon
   -> HonConnection
@@ -82,17 +83,20 @@ recording or cause duplicate output.
 A focused module at `client/auth_diagnostics.py` owns event buffering, validation,
 serialization, and emission.
 
-It does not expose a generic arbitrary-string logging API. Public record methods accept
-only fields defined for that event, using integers, booleans, `None`, or controlled
-enumerations. Examples include:
+It does not expose a generic arbitrary-string logging API. Public event methods accept
+only fields or structural summaries defined for that event, using integers, booleans,
+`None`, or controlled enumerations:
 
-- `record_request`
-- `record_response`
-- `record_redirects`
-- `record_html_shape`
-- `record_json_shape`
-- `record_token_shape`
-- `record_outcome`
+- `request(phase, method, endpoint)`
+- `response(phase, ResponseSummary)`
+- `html(phase, HtmlSummary)`
+- `links(phase, LinksSummary)`
+- `json_shape(phase, JsonSummary)`, which emits `event=json`
+- `token_shape(phase, TokenSummary)`, which emits `event=tokens`
+- `payload(phase, kind)`
+- `phase(phase, status, outcome)`
+
+The separate `flush` and `discard` methods control terminal emission and cleanup.
 
 Events are retained in order and serialized deterministically as single-line
 `key=value` records. Lists are emitted in stable order. Every line begins with:
@@ -158,16 +162,19 @@ For each relevant exchange, diagnostics may record:
 - a structural DOM fingerprint derived only from allowlisted tag and attribute-name
   categories, with unknown names normalized and all text and attribute values excluded.
 
-Example:
+Representative failure excerpt for a post-login page whose first link leads to a CSS
+asset instead of an OAuth token response:
 
 ```text
-[ADDHON-AUTH trace=7c19a2e4 seq=01] event=request phase=introduce method=GET endpoint=authorize
-[ADDHON-AUTH trace=7c19a2e4 seq=02] event=response phase=introduce status=302 elapsed_ms=184 media=text/html bytes=0 redirects=0 location_kind=login
-[ADDHON-AUTH trace=7c19a2e4 seq=03] event=response phase=login_page status=200 elapsed_ms=221 media=text/html bytes=4821 redirects=1
-[ADDHON-AUTH trace=7c19a2e4 seq=04] event=html phase=login_page forms=1 inputs=username,password hrefs=7 scripts=5 fwuid=true oauth_done=false
-[ADDHON-AUTH trace=7c19a2e4 seq=05] event=links phase=post_login order=static_asset,progressive_login,other selected_index=0 selected_kind=static_asset
-[ADDHON-AUTH trace=7c19a2e4 seq=06] event=token_response status=200 media=text/css bytes=184302 token_fields=none complete=false
-[ADDHON-AUTH trace=7c19a2e4 seq=07] event=failed code=ADDHON-130 phase=get_token reason=incomplete_tokens
+[ADDHON-AUTH trace=7c19a2e4 seq=15] event=request phase=post_login method=GET endpoint=post_login
+[ADDHON-AUTH trace=7c19a2e4 seq=16] event=response phase=post_login status=200 elapsed_ms=0 media=text/html charset=utf-8 bytes=69 redirects=0 location_kind=none cookie_kinds=none unknown_cookies=0 cookie_secure=false cookie_http_only=false cookie_same_site=false
+[ADDHON-AUTH trace=7c19a2e4 seq=17] event=html phase=post_login tags=2 forms=0 inputs=0 links=2 scripts=0 input_kinds=none login=true progressive_login=true otp=false privacy=false oauth_done=false page_kind=progressive_login dom=36fe5dda390e parse_error=false
+[ADDHON-AUTH trace=7c19a2e4 seq=18] event=links phase=post_login count=2 kinds=static_asset,progressive_login selected_index=0 selected_kind=static_asset
+[ADDHON-AUTH trace=7c19a2e4 seq=19] event=request phase=token_response method=GET endpoint=static_asset
+[ADDHON-AUTH trace=7c19a2e4 seq=20] event=response phase=token_response status=200 elapsed_ms=0 media=text/css charset=none bytes=11 redirects=0 location_kind=none cookie_kinds=none unknown_cookies=0 cookie_secure=false cookie_http_only=false cookie_same_site=false
+[ADDHON-AUTH trace=7c19a2e4 seq=21] event=html phase=token_response tags=0 forms=0 inputs=0 links=0 scripts=0 input_kinds=none login=false progressive_login=false otp=false privacy=false oauth_done=false page_kind=other dom=e3b0c44298fc parse_error=false
+[ADDHON-AUTH trace=7c19a2e4 seq=22] event=tokens phase=token_response present=none missing=access_token,refresh_token,id_token duplicates=none html_escaped=false complete=false
+[ADDHON-AUTH trace=7c19a2e4 seq=23] event=failed code=ADDHON-130 phase=get_token reason=incomplete_tokens
 ```
 
 ## Data That Must Never Be Recorded

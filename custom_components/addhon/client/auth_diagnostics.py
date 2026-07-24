@@ -152,9 +152,8 @@ _PAYLOAD_FIELDS = {
     "mfa_finish": ("view_state", "finish_marker"),
     "token_refresh": ("client_id", "refresh_token", "grant_type"),
 }
-_TOKEN_RE = re.compile(r"(?:^|[#?&])(?P<key>access_token|refresh_token|id_token)=")
-_TOKEN_HTML_RE = re.compile(
-    r"(?:^|&amp;)(?P<key>access_token|refresh_token|id_token)="
+_TOKEN_RE = re.compile(
+    r"(?:^|&amp;|[#?&])(?P<key>access_token|refresh_token|id_token)="
 )
 _CODE_RE = re.compile(r"^ADDHON-\d{3}$")
 
@@ -556,8 +555,6 @@ def summarize_tokens(text: Any) -> TokenSummary:
     source = str(text or "")
     counts = {field: 0 for field in _TOKEN_FIELDS}
     for match in _TOKEN_RE.finditer(source):
-        counts[match.group("key")] += 1
-    for match in _TOKEN_HTML_RE.finditer(source):
         counts[match.group("key")] += 1
     present = tuple(field for field in _TOKEN_FIELDS if counts[field])
     missing = tuple(field for field in _TOKEN_FIELDS if not counts[field])
