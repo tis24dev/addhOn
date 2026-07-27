@@ -731,6 +731,16 @@
       "program": {
         "name": "Program"
       },
+      "aroma": {
+        "name": "Aroma",
+        "state": {
+          "off": "Off",
+          "soft": "Soft",
+          "mid": "Medium",
+          "h_biotics": "H-Biotics",
+          "custom": "Custom"
+        }
+      },
       "ref_program": {
         "name": "Program",
         "state": {

@@ -280,10 +280,11 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
         Path("air_purifier.py"),
         Path("fan.py"),
         Path("light.py"),
-        # Mixed file: the AP switches dispatch, the AC/wine-cooler ones stay legacy.
+        # Mixed files: the AP entities dispatch, the legacy ones stay legacy.
         # test_mixed_platform_legacy_classes_keep_the_legacy_sender guards the split,
         # which this file-level allow-list can no longer express.
         Path("switch.py"),
+        Path("select.py"),
     }
     violations = {
         path.relative_to(component_root): _dispatcher_violations(
@@ -1615,9 +1616,13 @@ def test_mixed_platform_legacy_classes_keep_the_legacy_sender() -> None:
 
     from custom_components.addhon import switch
 
+    from custom_components.addhon import select
+
     expected = {
         switch.HonSettingsSwitch: "async_send_settings",
         switch.HonWashingMachinePauseSwitch: "run_command_sync",
+        select.HonAcDirectionSelect: "async_send_settings",
+        select.HonRefProgramSelect: "async_send_command",
     }
     for entity_class, legacy_callee in expected.items():
         source = inspect.getsource(entity_class)

@@ -1440,3 +1440,234 @@ class AirPurifierSwitchArchitectureTest(unittest.TestCase):
         source = inspect.getsource(switch.HonAirPurifierSwitch)
         self.assertIn("async_dispatch_patch", source)
         self.assertNotIn("async_send_settings", source)
+
+
+# --- Task 8: aroma selection --------------------------------------------------
+
+AROMA_SCHEMA_EXTRA = {
+    "aromaStatus": {
+        "typology": "enum", "category": "command", "mandatory": 0,
+        "defaultValue": "0", "enumValues": ["0", "1", "2", "3", "4"],
+    },
+    "aromaTimeOn": {
+        "typology": "range", "category": "command", "mandatory": 0,
+        "minimumValue": "1", "maximumValue": "3600", "incrementValue": "1",
+        "defaultValue": "60",
+    },
+    "aromaTimeOff": {
+        "typology": "range", "category": "command", "mandatory": 0,
+        "minimumValue": "1", "maximumValue": "3600", "incrementValue": "1",
+        "defaultValue": "60",
+    },
+}
+
+
+def _aroma_schema(**overrides):
+    schema = copy.deepcopy(AP_SCHEMA)
+    schema["settings"]["parameters"].update(copy.deepcopy(AROMA_SCHEMA_EXTRA))
+    for param, values in overrides.items():
+        if values is None:
+            del schema["settings"]["parameters"][param]
+        else:
+            schema["settings"]["parameters"][param]["enumValues"] = values
+            schema["settings"]["parameters"][param]["defaultValue"] = values[0]
+    return schema
+
+
+async def _build_selects(
+    attributes: dict | None = None,
+    schema: dict | None = None,
+    client: RecordingClient | None = None,
+):
+    from custom_components.addhon import select
+    from custom_components.addhon.const import DOMAIN
+
+    data = {
+        "ap-1": {
+            "type": APPLIANCE_AP,
+            "name": "Purifier",
+            "attributes": FULL_ATTRIBUTES if attributes is None else attributes,
+            "appliance": _appliance(schema if schema is not None else _aroma_schema()),
+            "settings": {},
+        }
+    }
+    coordinator = RefreshingCoordinator(data)
+    recording = client if client is not None else RecordingClient()
+    hass = RecordingHass(
+        {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": recording}}}
+    )
+    added: list = []
+    await select.async_setup_entry(hass, FakeEntry(), added.extend)
+    for entity in added:
+        entity.hass = hass
+    return added, recording, coordinator
+
+
+class AirPurifierAromaSetupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_capable_purifier_gets_one_aroma_select(self) -> None:
+        entities, _client, _coord = await _build_selects()
+        self.assertEqual(1, len(entities))
+        self.assertEqual("ap-1_aroma", entities[0].unique_id)
+
+    async def test_options_are_the_full_canonical_set(self) -> None:
+        entities, _client, _coord = await _build_selects()
+        self.assertEqual(
+            ["off", "soft", "mid", "h_biotics", "custom"], entities[0].options
+        )
+
+    async def test_options_follow_the_live_enum(self) -> None:
+        entities, _client, _coord = await _build_selects(
+            schema=_aroma_schema(aromaStatus=["0", "1"])
+        )
+        self.assertEqual(["off", "soft"], entities[0].options)
+
+    async def test_custom_is_withheld_without_both_timing_ranges(self) -> None:
+        """Status 4 alone cannot complete the Custom contract, so the option is not
+        offered rather than sent without its timing fields."""
+        for missing in ("aromaTimeOn", "aromaTimeOff"):
+            entities, _client, _coord = await _build_selects(
+                schema=_aroma_schema(**{missing: None})
+            )
+            self.assertEqual(
+                ["off", "soft", "mid", "h_biotics"], entities[0].options, missing
+            )
+
+    async def test_no_select_without_the_aroma_parameter(self) -> None:
+        entities, _client, _coord = await _build_selects(
+            schema=_aroma_schema(aromaStatus=None)
+        )
+        self.assertEqual([], entities)
+
+    async def test_no_select_without_the_aroma_state(self) -> None:
+        attributes = {k: v for k, v in FULL_ATTRIBUTES.items() if k != "aromaStatus"}
+        entities, _client, _coord = await _build_selects(attributes=attributes)
+        self.assertEqual([], entities)
+
+
+class AirPurifierAromaStateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_current_option_maps_the_raw_state(self) -> None:
+        for raw, option in (
+            ("0", "off"), ("1", "soft"), ("2", "mid"),
+            ("3", "h_biotics"), ("4", "custom"),
+        ):
+            entities, _client, _coord = await _build_selects(
+                {**FULL_ATTRIBUTES, "aromaStatus": raw}
+            )
+            self.assertEqual(option, entities[0].current_option, raw)
+
+    async def test_an_unoffered_raw_state_reads_as_unknown(self) -> None:
+        """A live value outside the offered set must read unknown, never be mapped
+        to an option the user could not have chosen."""
+        entities, _client, _coord = await _build_selects(
+            {**FULL_ATTRIBUTES, "aromaStatus": "4"},
+            schema=_aroma_schema(aromaTimeOff=None),
+        )
+        self.assertNotIn("custom", entities[0].options)
+        self.assertIsNone(entities[0].current_option)
+
+    async def test_an_undeclared_raw_state_reads_as_unknown(self) -> None:
+        entities, _client, _coord = await _build_selects(
+            {**FULL_ATTRIBUTES, "aromaStatus": "9"}
+        )
+        self.assertIsNone(entities[0].current_option)
+
+    async def test_the_select_is_unavailable_while_the_purifier_is_off(self) -> None:
+        """The observed application sends aroma patches only during an active
+        session, and selecting a mode must not implicitly start the appliance."""
+        entities, _client, _coord = await _build_selects(
+            {**FULL_ATTRIBUTES, "onOffStatus": "0"}
+        )
+        self.assertFalse(entities[0].available)
+
+    async def test_the_select_is_available_while_running(self) -> None:
+        entities, _client, _coord = await _build_selects()
+        self.assertTrue(entities[0].available)
+
+
+class AirPurifierAromaWriteTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_normal_mode_sends_only_the_status(self) -> None:
+        for option, raw in (
+            ("off", "0"), ("soft", "1"), ("mid", "2"), ("h_biotics", "3"),
+        ):
+            entities, client, coordinator = await _build_selects()
+            await entities[0].async_select_option(option)
+            self.assertEqual(
+                [("settings", {"aromaStatus": raw})], _sent(client), option
+            )
+            self.assertEqual(1, coordinator.refreshes, option)
+
+    async def test_custom_sends_the_status_and_both_current_times(self) -> None:
+        entities, client, _coord = await _build_selects(
+            {**FULL_ATTRIBUTES, "aromaTimeOn": "30", "aromaTimeOff": "90"}
+        )
+        await entities[0].async_select_option("custom")
+        self.assertEqual(
+            [(
+                "settings",
+                {"aromaStatus": "4", "aromaTimeOn": "30", "aromaTimeOff": "90"},
+            )],
+            _sent(client),
+        )
+
+    async def test_custom_falls_back_to_the_schema_defaults(self) -> None:
+        """A live timing value outside the declared range is not sent back; the
+        command's own value stands in, so Custom stays completable."""
+        entities, client, _coord = await _build_selects(
+            {**FULL_ATTRIBUTES, "aromaTimeOn": "99999", "aromaTimeOff": ""}
+        )
+        await entities[0].async_select_option("custom")
+        self.assertEqual(
+            [(
+                "settings",
+                {"aromaStatus": "4", "aromaTimeOn": "60", "aromaTimeOff": "60"},
+            )],
+            _sent(client),
+        )
+
+    async def test_no_selection_ever_starts_the_purifier(self) -> None:
+        entities, client, _coord = await _build_selects()
+        for option in ("off", "soft", "mid", "h_biotics", "custom"):
+            await entities[0].async_select_option(option)
+        for command, values in _sent(client):
+            self.assertEqual("settings", command)
+            self.assertNotIn("onOffStatus", values)
+            self.assertNotIn("machMode", values)
+
+    async def test_a_normal_mode_never_carries_a_timing_field(self) -> None:
+        entities, client, _coord = await _build_selects()
+        await entities[0].async_select_option("soft")
+        self.assertEqual({"aromaStatus"}, set(_sent(client)[0][1]))
+
+
+class AirPurifierAromaErrorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_an_unoffered_option_is_rejected_without_a_write(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, client, _coord = await _build_selects(
+            schema=_aroma_schema(aromaStatus=["0", "1"])
+        )
+        with self.assertRaises(HomeAssistantError):
+            await entities[0].async_select_option("h_biotics")
+        self.assertEqual([], _sent(client))
+
+    async def test_a_transport_failure_is_a_localized_error(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, _client, coordinator = await _build_selects(
+            client=RecordingClient(fail=RuntimeError("cloud down"))
+        )
+        with self.assertRaises(HomeAssistantError) as caught:
+            await entities[0].async_select_option("soft")
+        self.assertEqual("command_error", caught.exception.translation_key)
+        self.assertEqual(0, coordinator.refreshes)
+
+
+class AirPurifierAromaArchitectureTest(unittest.TestCase):
+    def test_the_aroma_select_uses_the_dispatcher(self) -> None:
+        import inspect
+
+        from custom_components.addhon import select
+
+        source = inspect.getsource(select.HonAirPurifierAromaSelect)
+        self.assertIn("async_dispatch_patch", source)
+        self.assertNotIn("async_send_settings", source)

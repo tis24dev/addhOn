@@ -13,13 +13,25 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .air_purifier import (
+    AP_AROMA_TO_OPTION,
+    AP_CUSTOM_AROMA,
+    AP_OPTION_TO_AROMA,
+    AirPurifierCapabilities,
+    ap_patch,
+    discover_capabilities,
+    environment_available,
+    reports_attribute,
+)
 from .base_entity import HonBaseEntity, coordinator_data_map
+from .command_dispatch import async_dispatch_patch
 from .const import (
     AC_ATTR_SWING_H,
     AC_ATTR_SWING_V,
     AC_SWING_H_PARAM,
     AC_SWING_V_PARAM,
     APPLIANCE_AC,
+    APPLIANCE_AP,
     APPLIANCE_FR,
     APPLIANCE_FRE,
     APPLIANCE_REF,
@@ -41,7 +53,7 @@ from .const import (
     TEMP_LEVEL_LABELS,
 )
 from .debug_utils import redact_id, redact_store
-from .hon_commands import async_send_command
+from .hon_commands import async_send_command, command_param, param_range
 from .ac_command import async_send_settings, param_allowed_values, settings_param
 from .program_options import (
     HonProgramOptionEntity,
@@ -49,6 +61,11 @@ from .program_options import (
     normalize_code,
     option_choices,
 )
+
+# Air purifier aroma: the state attribute and the two custom-timing parameters.
+_AROMA_ATTR = "aromaStatus"
+_AROMA_TIME_ON_ATTR = "aromaTimeOn"
+_AROMA_TIME_OFF_ATTR = "aromaTimeOff"
 
 # Fridge family (REF/FR/FRE): the writable program/mode select (discussion #40).
 _COOLING_TYPES = (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE)
@@ -261,6 +278,27 @@ async def async_setup_entry(
                     "needs startProgram(program enum) + stopProgram",
                     data.get("name"),
                     redact_id(appliance_id),
+                )
+            continue
+        if app_type == APPLIANCE_AP:
+            attributes = data.get("attributes")
+            attributes = attributes if isinstance(attributes, dict) else {}
+            capabilities = discover_capabilities(appliance, attributes)
+            if capabilities.aroma_options and reports_attribute(
+                attributes, _AROMA_ATTR
+            ):
+                entities.append(
+                    HonAirPurifierAromaSelect(
+                        coordinator, appliance_id, capabilities, client
+                    )
+                )
+                _LOGGER.info("Added AP aroma select: id=%s", redact_id(appliance_id))
+            else:
+                _LOGGER.debug(
+                    "Select debug: no aroma select for id=%s (options=%s state=%s)",
+                    redact_id(appliance_id),
+                    capabilities.aroma_options,
+                    reports_attribute(attributes, _AROMA_ATTR),
                 )
             continue
         if app_type == APPLIANCE_AC:
@@ -961,6 +999,132 @@ class HonAcDirectionSelect(HonBaseEntity, SelectEntity):
                 "Select: AC %s set error %s=%s: %s",
                 self._desc.key, self._desc.param, raw, err, exc_info=True,
             )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
+
+
+class HonAirPurifierAromaSelect(HonBaseEntity, SelectEntity):
+    """Air purifier aroma mode.
+
+    Options are the canonical names intersected with the device's LIVE
+    `aromaStatus` enum, with Custom withheld unless both timing parameters are
+    writable too (its contract cannot be completed without them).
+
+    Unavailable while the purifier is stopped: the observed application sends
+    aroma patches only during an active session, and selecting a mode must never
+    implicitly start the appliance. Every write is a sparse settings patch through
+    the transactional dispatcher.
+    """
+
+    _attr_translation_key = "aroma"
+    _attr_icon = "mdi:air-purifier"
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        capabilities: AirPurifierCapabilities,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._capabilities = capabilities
+        self._attr_unique_id = f"{appliance_id}_aroma"
+        self._attr_options = list(capabilities.aroma_options)
+        _LOGGER.debug(
+            "Select debug: init AP aroma select id=%s options=%s",
+            redact_id(appliance_id),
+            self._attr_options,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and environment_available(self._attributes)
+
+    @property
+    def current_option(self) -> str | None:
+        """The live mode, or None when it is not one of the OFFERED options.
+
+        A value the user could not have chosen (undeclared, or Custom on a device
+        whose timings are missing) reads as unknown rather than being mapped to an
+        option that is not in the list.
+        """
+        raw = self._get_attr(_AROMA_ATTR)
+        if raw is None:
+            return None
+        option = AP_AROMA_TO_OPTION.get(str(raw))
+        return option if option in self._attr_options else None
+
+    def _custom_time(self, param: str) -> str:
+        """The value to send for one custom timing field.
+
+        The live shadow reading wins; the command's own value stands in when the
+        shadow is missing or reports something outside the declared range, so a
+        stale or sentinel reading is never echoed back to the device. Both
+        candidates are validated against the LIVE range parameter.
+        """
+        settings_name = self._capabilities.settings_command
+        parameter = command_param(self._appliance, settings_name, param)
+        bounds = param_range(parameter)
+        if bounds is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": f"{param} is not writable"},
+            )
+        low, high, _step = bounds
+        for candidate in (self._get_attr(param), getattr(parameter, "value", None)):
+            if candidate is None or candidate == "":
+                continue
+            try:
+                number = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if low <= number <= high:
+                return str(int(number)) if number.is_integer() else str(number)
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="command_error",
+            translation_placeholders={"error": f"no valid {param} in [{low}, {high}]"},
+        )
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in self._attr_options:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_setpoint",
+                translation_placeholders={
+                    "value": option,
+                    "allowed": ", ".join(self._attr_options),
+                },
+            )
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        raw = AP_OPTION_TO_AROMA[option]
+        values: dict[str, object] = {"value": raw}
+        if raw == AP_CUSTOM_AROMA:
+            values["time_on"] = self._custom_time(_AROMA_TIME_ON_ATTR)
+            values["time_off"] = self._custom_time(_AROMA_TIME_OFF_ATTR)
+        try:
+            patch = ap_patch("set_aroma", self._capabilities, **values)
+            _LOGGER.info(
+                "Select: AP aroma -> %s id=%s",
+                option,
+                redact_id(self._appliance_id),
+            )
+            await async_dispatch_patch(self.hass, client, appliance, patch)
+            await self._async_request_command_refresh()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error("AP aroma select: %s failed: %s", option, err, exc_info=True)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="command_error",

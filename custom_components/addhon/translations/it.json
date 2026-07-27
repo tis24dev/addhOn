@@ -731,6 +731,16 @@
       "program": {
         "name": "Programma"
       },
+      "aroma": {
+        "name": "Aroma",
+        "state": {
+          "off": "Spento",
+          "soft": "Leggero",
+          "mid": "Medio",
+          "h_biotics": "H-Biotics",
+          "custom": "Personalizzato"
+        }
+      },
       "ref_program": {
         "name": "Programma",
         "state": {

@@ -224,7 +224,7 @@ def _collect_code_keys() -> dict[str, set[str]]:
     # Program select (fixed key) + the REF program/mode select (#40) + the
     # program-option selects (#35) + the AC fan-direction selects (#37).
     used["select"] = (
-        {"program", "ref_program"}
+        {"program", "ref_program", select.HonAirPurifierAromaSelect._attr_translation_key}
         | {d.translation_key for d in select._PROGRAM_OPTION_SELECTS}
         | {d.translation_key for d in select._AC_DIRECTION_SELECTS}
     )
@@ -458,6 +458,14 @@ def _collect_select_state_keys() -> dict[str, set[str]]:
         if not label_map:
             continue
         by_tk.setdefault(d.translation_key, set()).update(label_map.values())
+    # The AP aroma select is one fixed-key entity rather than a description table,
+    # so its option set is registered explicitly; without this its `state` block
+    # would never be parity-checked.
+    from custom_components.addhon.air_purifier import AP_AROMA_TO_OPTION
+
+    by_tk.setdefault(
+        select.HonAirPurifierAromaSelect._attr_translation_key, set()
+    ).update(AP_AROMA_TO_OPTION.values())
     return by_tk
 
 

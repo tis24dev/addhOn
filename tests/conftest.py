@@ -139,7 +139,7 @@ def _install_shared_entity_stubs() -> None:
 
 
 def _install_fan_stubs() -> None:
-    """Shared `fan`, `light` and `switch` platform stubs.
+    """Shared `fan`, `light`, `switch` and `select` platform stubs.
 
     Installed here rather than per test module: the fan platform is imported by
     the AP entity tests AND by the platform-forwarding tests, and a partial
@@ -234,6 +234,25 @@ def _install_fan_stubs() -> None:
     switch = _ensure_module("homeassistant.components.switch")
     components.switch = switch
     switch.SwitchEntity = getattr(switch, "SwitchEntity", type("SwitchEntity", (), {}))
+
+    select = _ensure_module("homeassistant.components.select")
+    components.select = select
+
+    class SelectEntity:
+        """Mirror of HA's SelectEntity: `options` is exposed over `_attr_options`."""
+
+        _attr_options = None
+        _attr_current_option = None
+
+        @property
+        def options(self):
+            return self._attr_options
+
+        @property
+        def current_option(self):
+            return self._attr_current_option
+
+    select.SelectEntity = getattr(select, "SelectEntity", SelectEntity)
 
     entity_platform = _ensure_module("homeassistant.helpers.entity_platform")
     sys.modules["homeassistant.helpers"].entity_platform = entity_platform
