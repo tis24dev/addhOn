@@ -101,6 +101,40 @@ class AuthDiagnosticClientTest(unittest.TestCase):
         )
         self.assertTrue(client._auth_trace.enabled)
 
+    def test_constructor_owns_dedicated_command_dispatcher(self) -> None:
+        first = HonClient(email="first@x", password="p")
+        second = HonClient(email="second@x", password="p")
+
+        self.assertIsNot(first._command_dispatcher, second._command_dispatcher)
+
+    def test_dispatch_patch_sync_delegates_once_to_dedicated_loop(self) -> None:
+        client = HonClient(email="e@x", password="p")
+        appliance = object()
+        patch = object()
+        dispatch_calls: list[tuple[object, object]] = []
+        loop_calls: list[object] = []
+
+        class Dispatcher:
+            async def dispatch(
+                self,
+                observed_appliance: object,
+                observed_patch: object,
+            ) -> bool:
+                dispatch_calls.append((observed_appliance, observed_patch))
+                return True
+
+        client._command_dispatcher = Dispatcher()  # type: ignore[assignment]
+
+        def run_on_hon_loop(coro: object) -> bool:
+            loop_calls.append(coro)
+            return asyncio.run(coro)  # type: ignore[arg-type]
+
+        client._run_on_hon_loop = run_on_hon_loop  # type: ignore[assignment]
+
+        self.assertTrue(client.dispatch_patch_sync(appliance, patch))
+        self.assertEqual([(appliance, patch)], dispatch_calls)
+        self.assertEqual(1, len(loop_calls))
+
 
 class _FallbackAppliance:
     """No update() attribute -> _do_update takes the load_* fallback path directly.

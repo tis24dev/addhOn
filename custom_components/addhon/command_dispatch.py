@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.exceptions import HomeAssistantError
+
+from .const import DOMAIN
 from .param_rollback import restore_params, snapshot_params
 
 if TYPE_CHECKING:
@@ -233,3 +236,22 @@ class CommandDispatcher:
             entry.users -= 1
             if entry.users == 0 and self._locks.get(key) is entry:
                 del self._locks[key]
+
+
+async def async_dispatch_patch(
+    hass: Any,
+    client: Any,
+    appliance: Appliance,
+    patch: CommandPatch,
+) -> None:
+    if not appliance or not client:
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="appliance_or_client_unavailable",
+        )
+
+    await hass.async_add_executor_job(
+        client.dispatch_patch_sync,
+        appliance,
+        patch,
+    )

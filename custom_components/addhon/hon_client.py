@@ -14,6 +14,7 @@ from .client.auth_diagnostics import (
     AuthDiagnosticTrace,
     classify_failure_reason,
 )
+from .command_dispatch import CommandDispatcher, CommandPatch
 from .debug_utils import debug_key_sample, redact_email, redact_id, redact_mac
 from .error_codes import (
     APPLIANCE_LOAD_FAILED,
@@ -340,6 +341,7 @@ class HonClient:
         self._api = None
         self._hon_loop: asyncio.AbstractEventLoop | None = None
         self._hon_thread: threading.Thread | None = None
+        self._command_dispatcher = CommandDispatcher()
         self._lifecycle_lock = threading.RLock()
         # Flipped True after the first poll that returns data. Until then the poll is
         # STRICT (any per-appliance error re-raises -> ConfigEntryNotReady -> HA retries
@@ -674,6 +676,11 @@ class HonClient:
         To be called in executor, not on HA's event loop.
         """
         return self._run_on_hon_loop(coro)
+
+    def dispatch_patch_sync(self, appliance, patch: CommandPatch) -> bool:
+        return self._run_on_hon_loop(
+            self._command_dispatcher.dispatch(appliance, patch)
+        )
 
     # -- Appliances -----------------------------------------------------------
 

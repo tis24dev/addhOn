@@ -957,3 +957,87 @@ def test_dispatch_cancelled_lock_holder_releases_waiter_and_cleans_lock() -> Non
         assert dispatcher.lock_count == 0
 
     asyncio.run(scenario())
+
+
+def test_adapter_delegates_patch_through_hass_executor_exactly_once() -> None:
+    from custom_components.addhon.command_dispatch import async_dispatch_patch
+
+    appliance = object()
+    patch = CommandPatch("settings", {"mode": "2"}, action="set_mode")
+    dispatch_calls: list[tuple[object, CommandPatch]] = []
+    executor_calls: list[tuple[Callable[..., Any], tuple[object, ...]]] = []
+
+    class Client:
+        def dispatch_patch_sync(
+            self,
+            observed_appliance: object,
+            observed_patch: CommandPatch,
+        ) -> bool:
+            dispatch_calls.append((observed_appliance, observed_patch))
+            return True
+
+    class Hass:
+        async def async_add_executor_job(
+            self,
+            func: Callable[..., Any],
+            *args: object,
+        ) -> Any:
+            executor_calls.append((func, args))
+            return func(*args)
+
+    client = Client()
+    result = asyncio.run(async_dispatch_patch(Hass(), client, appliance, patch))
+
+    assert result is None
+    assert executor_calls == [(client.dispatch_patch_sync, (appliance, patch))]
+    assert dispatch_calls == [(appliance, patch)]
+
+
+@pytest.mark.parametrize(
+    ("client", "appliance"),
+    [(None, object()), (object(), None)],
+)
+def test_adapter_translates_unavailable_client_or_appliance(
+    client: object | None,
+    appliance: object | None,
+) -> None:
+    from homeassistant.exceptions import HomeAssistantError
+
+    from custom_components.addhon.command_dispatch import async_dispatch_patch
+
+    class Hass:
+        async def async_add_executor_job(self, *_args: object) -> None:
+            pytest.fail("unavailable inputs must not reach the executor")
+
+    patch = CommandPatch("settings", {}, action="noop")
+
+    with pytest.raises(HomeAssistantError) as exc_info:
+        asyncio.run(async_dispatch_patch(Hass(), client, appliance, patch))
+
+    assert exc_info.value.translation_domain == "addhon"
+    assert exc_info.value.translation_key == "appliance_or_client_unavailable"
+
+
+def test_adapter_propagates_transaction_error_unchanged() -> None:
+    from custom_components.addhon.command_dispatch import async_dispatch_patch
+
+    transaction_error = RuntimeError("transaction failed")
+
+    class Client:
+        def dispatch_patch_sync(self, _appliance: object, _patch: CommandPatch) -> bool:
+            raise transaction_error
+
+    class Hass:
+        async def async_add_executor_job(
+            self,
+            func: Callable[..., Any],
+            *args: object,
+        ) -> Any:
+            return func(*args)
+
+    patch = CommandPatch("settings", {}, action="noop")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(async_dispatch_patch(Hass(), Client(), object(), patch))
+
+    assert exc_info.value is transaction_error
