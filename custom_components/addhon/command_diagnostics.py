@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import math
@@ -23,6 +24,13 @@ _RECORD_LIMIT = 4096
 _PENDING_LIMIT = 8
 _PENDING_TTL = 60.0
 _REDACTED = "***"
+# Depth cap for _bound's traversal: comfortably above any real command/shadow
+# payload's nesting (2-4 levels), but finite -- so a cyclic or pathologically
+# deep structure gets a placeholder instead of a RecursionError that would
+# silently drop the whole diagnostic event.
+_MAX_DEPTH = 12
+_DEPTH_PLACEHOLDER = "<max-depth>"
+_CYCLE_PLACEHOLDER = "<cycle>"
 _EVENTS = frozenset(
     {
         "command_intent",
@@ -68,46 +76,62 @@ def _sort_key(value: object) -> tuple[str, str]:
     return type(value).__name__, text[:_STRING_LIMIT]
 
 
-def _bound(value: object) -> object:
+def _bound(
+    value: object,
+    *,
+    depth: int = 0,
+    seen: frozenset[int] = frozenset(),
+) -> object:
+    """Single budgeted traversal: bounds depth, item count, and string length,
+    breaks cycles, and materializes sets into sorted lists -- all in one pass,
+    BEFORE any full-structure copy is made. Only a bounded SAMPLE of each
+    collection (at most _COLLECTION_LIMIT items, taken by iteration order via
+    islice) is ever touched, so a huge mapping/set costs O(_COLLECTION_LIMIT)
+    here instead of a full sort/copy of every item it holds; `seen` tracks
+    container ids on the CURRENT recursion path only (not every object ever
+    visited), so shared-but-acyclic references are not mistaken for a cycle.
+    """
     if isinstance(value, str):
         return value[:_STRING_LIMIT]
     if value is None or isinstance(value, (bool, int)):
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else str(value)
+    if not isinstance(value, (Mapping, list, tuple, set, frozenset)):
+        return {"type": type(value).__name__[:_STRING_LIMIT]}
+    marker = id(value)
+    if marker in seen:
+        return _CYCLE_PLACEHOLDER
+    if depth >= _MAX_DEPTH:
+        return _DEPTH_PLACEHOLDER
+    child_seen = seen | {marker}
     if isinstance(value, Mapping):
+        sample = sorted(
+            itertools.islice(value.items(), _COLLECTION_LIMIT),
+            key=lambda item: _sort_key(item[0]),
+        )
         result: dict[str, object] = {}
-        items = sorted(value.items(), key=lambda item: _sort_key(item[0]))
-        for key, item in items[:_COLLECTION_LIMIT]:
+        for key, item in sample:
             bounded_key = str(key)[:_STRING_LIMIT]
             result[bounded_key] = (
-                _REDACTED if _identity_key(bounded_key) else _bound(item)
+                _REDACTED
+                if _identity_key(bounded_key)
+                else _bound(item, depth=depth + 1, seen=child_seen)
             )
         return result
     if isinstance(value, (list, tuple)):
-        return [_bound(item) for item in value[:_COLLECTION_LIMIT]]
-    if isinstance(value, (set, frozenset)):
         return [
-            _bound(item)
-            for item in sorted(value, key=_sort_key)[:_COLLECTION_LIMIT]
+            _bound(item, depth=depth + 1, seen=child_seen)
+            for item in itertools.islice(value, _COLLECTION_LIMIT)
         ]
-    return {"type": type(value).__name__[:_STRING_LIMIT]}
-
-
-def _materialize_collections(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {
-            key: _materialize_collections(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [_materialize_collections(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        return [
-            _materialize_collections(item)
-            for item in sorted(value, key=_sort_key)
-        ]
-    return value
+    # set / frozenset: sort only the bounded sample for deterministic output,
+    # not the whole set.
+    return [
+        _bound(item, depth=depth + 1, seen=child_seen)
+        for item in sorted(
+            itertools.islice(value, _COLLECTION_LIMIT), key=_sort_key
+        )
+    ]
 
 
 def _encode_record(record: dict[str, object]) -> str:
@@ -164,12 +188,15 @@ def emit_command_event(event: str, fields: Mapping[str, object]) -> None:
         if valid_event != event:
             raw_record["invalid_event"] = True
         raw_record["event"] = valid_event
-        redacted = redact_identity(raw_record)
-        redacted = redact_identity(_materialize_collections(redacted))
-        bounded = _bound(redacted)
+        # Bound FIRST: the budgeted traversal caps depth/items/length and
+        # breaks cycles, producing a small, finite, already-materialized (no
+        # raw sets left) copy. redact_identity has no such bounds of its own,
+        # but is now only ever asked to walk that small, cycle-free result.
+        bounded = _bound(raw_record)
         if not isinstance(bounded, dict):
             raise TypeError("command diagnostic record must be a mapping")
-        _LOGGER.debug("%s", _encode_record(bounded))
+        redacted = redact_identity(bounded)
+        _LOGGER.debug("%s", _encode_record(redacted))
     except Exception:
         _log_failure()
 
@@ -216,6 +243,20 @@ def record_expected_update(
         _log_failure()
 
 
+def _match_coverage(pending: _PendingUpdate, observed: Mapping[str, str]) -> int:
+    """Count of the pending intent's expected key/value pairs the observed
+    MQTT push actually confirms. Used to pick the BEST-matching pending
+    command instead of the first one sharing any single field (a mandatory
+    field like onOff is common to every command on the appliance, so "any
+    match" alone would let an older, less-specific command consume a push
+    that really belongs to a newer, more fully-confirmed one)."""
+    return sum(
+        1
+        for key, expected in pending.expected.items()
+        if observed.get(key) == expected
+    )
+
+
 def observe_mqtt_update(
     appliance: object,
     values: Mapping[str, object],
@@ -235,14 +276,20 @@ def observe_mqtt_update(
                 return
             while queue and now - queue[0].timestamp >= _PENDING_TTL:
                 queue.popleft()
+            match_index: int | None = None
+            best_coverage = 0
+            # FIFO order (oldest first): a STRICT ">" means the first entry to
+            # reach a given coverage score keeps it, so a later entry only
+            # displaces it by covering MORE fields -- ties resolve to the
+            # older (FIFO) entry, exactly the tie-break rule required.
             for index, pending in enumerate(queue):
-                if any(
-                    observed.get(key) == expected
-                    for key, expected in pending.expected.items()
-                ):
+                coverage = _match_coverage(pending, observed)
+                if coverage > best_coverage:
+                    best_coverage = coverage
                     match = pending
-                    del queue[index]
-                    break
+                    match_index = index
+            if match is not None:
+                del queue[match_index]
             if not queue:
                 del _PENDING[appliance]
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import time
 import unittest
 from pathlib import Path
 from types import MappingProxyType
@@ -428,6 +429,77 @@ class CommandDiagnosticReviewTest(unittest.TestCase):
         self.assertNotIn(password, record)
         self.assertNotIn(serial, record)
         self.assertNotIn(mac, record)
+
+    def test_command_event_survives_a_self_referencing_cycle(self) -> None:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        cyclic: dict[str, object] = {"token": "PRIVATE-CYCLE-TOKEN"}
+        cyclic["self"] = cyclic
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            emit_command_event("command_payload", {"payload": cyclic})
+
+        self.assertEqual(len(captured.records), 1)
+        record = captured.records[0].getMessage()
+        decoded = json.loads(record)
+        self.assertEqual(decoded["event"], "command_payload")
+        self.assertLessEqual(len(record), 4096)
+        self.assertNotIn("PRIVATE-CYCLE-TOKEN", record)
+
+    def test_command_event_survives_a_deeply_nested_structure(self) -> None:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        deep: object = "PRIVATE-DEEP-LEAF"
+        for _ in range(2000):
+            deep = {"next": deep}
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            emit_command_event("command_payload", {"payload": deep})
+
+        self.assertEqual(len(captured.records), 1)
+        record = captured.records[0].getMessage()
+        decoded = json.loads(record)
+        self.assertEqual(decoded["event"], "command_payload")
+        self.assertLessEqual(len(record), 4096)
+        self.assertNotIn("PRIVATE-DEEP-LEAF", record)
+
+    def test_command_event_bounds_a_very_large_mapping_quickly(self) -> None:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        huge = {f"key-{index:07d}": index for index in range(200_000)}
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            started = time.monotonic()
+            emit_command_event("command_payload", {"payload": huge})
+            elapsed = time.monotonic() - started
+
+        # A full sort/copy of 200k items before trimming to 80 measures ~0.6s
+        # (unbounded pre-limit work); a bounded traversal that samples then
+        # trims stays under 1ms regardless of the collection's real size. 0.2s
+        # gives both a wide margin against timing noise.
+        self.assertLess(elapsed, 0.2)
+        record = captured.records[0].getMessage()
+        decoded = json.loads(record)
+        self.assertLessEqual(len(decoded["payload"]), 80)
+        self.assertLessEqual(len(record), 4096)
+
+    def test_command_event_bounds_a_large_list_and_set(self) -> None:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            emit_command_event(
+                "command_payload",
+                {
+                    "as_list": list(range(50_000)),
+                    "as_set": set(range(50_000)),
+                },
+            )
+
+        record = captured.records[0].getMessage()
+        decoded = json.loads(record)
+        self.assertLessEqual(len(decoded["as_list"]), 80)
+        self.assertLessEqual(len(decoded["as_set"]), 80)
+        self.assertLessEqual(len(record), 4096)
 
 
 if __name__ == "__main__":

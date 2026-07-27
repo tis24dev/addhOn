@@ -1112,6 +1112,43 @@ class CommandCorrelationReviewTest(unittest.TestCase):
         self.assertNotIn(serial, record)
         self.assertNotIn(mac, record)
 
+    def test_command_correlation_prefers_fuller_match_over_older_partial_match(
+        self,
+    ) -> None:
+        appliance = FakeAppliance("haier/things/MAC/event/appliancestatus/update")
+        # Older, but shares only the mandatory "onOff" field -- common to
+        # every command on this appliance, not distinguishing.
+        record_expected_update(appliance, "power_toggle", {"onOff": "1"})
+        # Newer, and matches BOTH of its expected fields.
+        record_expected_update(
+            appliance, "start_cool", {"onOff": "1", "mode": "cool"}
+        )
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            observe_mqtt_update(appliance, {"onOff": "1", "mode": "cool"})
+
+        shadow = next(
+            event
+            for event in _decoded_command_events(captured.records)
+            if event["event"] == "shadow_update"
+        )
+        self.assertEqual(shadow["action"], "start_cool")
+
+    def test_command_correlation_equal_coverage_ties_break_fifo(self) -> None:
+        appliance = FakeAppliance("haier/things/MAC/event/appliancestatus/update")
+        record_expected_update(appliance, "older", {"onOff": "1"})
+        record_expected_update(appliance, "newer", {"onOff": "1"})
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            observe_mqtt_update(appliance, {"onOff": "1"})
+
+        shadow = next(
+            event
+            for event in _decoded_command_events(captured.records)
+            if event["event"] == "shadow_update"
+        )
+        self.assertEqual(shadow["action"], "older")
+
 
 class PublishReceivedRedactionTest(unittest.TestCase):
     """#32/#35: the MQTT handler must not log raw device identity (payload echoing
