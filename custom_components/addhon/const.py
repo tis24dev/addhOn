@@ -6,7 +6,7 @@
 DOMAIN = "addhon"
 
 # Supported platforms
-PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button", "number"]
+PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button", "number", "fan"]
 
 # Update interval in seconds
 # NOTE: the initial setup + first fetch takes ~22s on a slow cloud.
@@ -53,6 +53,14 @@ PROGRAM_PARAM_NAMES = ("program", "prCode")
 # chosen by the select but not yet started; the "Start program" button applies it
 # to startProgram. The single shared source of truth between select.py and button.py.
 PROGRAM_PENDING_STORE = "pending_programs"
+
+# Key of the volatile store (kept on the coordinator) holding the last ACTIVE
+# air-purifier mode observed or selected per appliance. Shape: {appliance_id: raw}.
+# Only the modes writable from both purifier states are ever stored, so the
+# off-state sentinel (machMode=0) and the undeclared allergen mode (3) can never
+# become the value a later "turn on" replays. Volatile on purpose: after a reload
+# the fan falls back to the deterministic Auto default.
+AP_LAST_MODE_STORE = "ap_last_modes"
 
 # Key of the volatile store (kept on the coordinator) that holds the writable
 # program OPTIONS (spin/temp/dry level/extra rinses/delayed start/...) chosen on the

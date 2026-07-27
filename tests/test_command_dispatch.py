@@ -267,17 +267,18 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
     """No LEGACY appliance path may reach the transactional dispatcher.
 
     This guard originally kept the dispatcher wholly dormant. The air purifier
-    is the first sanctioned caller: `air_purifier.py` builds every AP write as a
-    CommandPatch by design, so it is allow-listed here while every legacy
-    entity module stays pinned to its existing sender. Widening this set is a
-    deliberate act -- adding a module means declaring that its writes are
-    transactional.
+    is the sanctioned caller: `air_purifier.py` builds every AP write as a
+    CommandPatch and each AP platform module dispatches it, so those are
+    allow-listed here while every legacy entity module stays pinned to its
+    existing sender. Widening this set is a deliberate act -- adding a module
+    means declaring that its writes are transactional.
     """
     component_root = _REPO_ROOT / "custom_components" / "addhon"
     allowed = {
         Path("command_dispatch.py"),
         Path("hon_client.py"),
         Path("air_purifier.py"),
+        Path("fan.py"),
     }
     violations = {
         path.relative_to(component_root): _dispatcher_violations(

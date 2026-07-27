@@ -11,7 +11,7 @@ Task 1: complete — AP contract matrix, self-validating against its own schema
 Task 2: complete — AP mappings, capabilities, intents (fan/light deferred out of PLATFORMS to Tasks 5/6)
 Task 3: complete — 13 AP read-only sensors, requires_power availability flag
 Task 4: complete — eco_active + problem (has_problem-derived); backlog: no2ValueIndoor unmapped, errors unconfirmed on AP
-Task 5: pending — AP fan platform
+Task 5: complete — fan platform (dispatcher now LIVE from an entity); fan added to PLATFORMS
 Task 6: pending — AP inverse panel light
 Task 7: pending — AP lock/tone switches
 Task 8: pending — AP aroma select

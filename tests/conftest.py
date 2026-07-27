@@ -93,8 +93,15 @@ def _install_shared_entity_stubs() -> None:
         def available(self) -> bool:
             return getattr(self.coordinator, "last_update_success", True)
 
+        @property
+        def unique_id(self):
+            return getattr(self, "_attr_unique_id", None)
+
         def async_write_ha_state(self) -> None:
             self.state_writes = getattr(self, "state_writes", 0) + 1
+
+        def _handle_coordinator_update(self) -> None:
+            self.async_write_ha_state()
 
     uc.CoordinatorEntity = getattr(uc, "CoordinatorEntity", CoordinatorEntity)
     uc.DataUpdateCoordinator = getattr(
@@ -131,6 +138,68 @@ def _install_shared_entity_stubs() -> None:
     )
 
 
+def _install_fan_stubs() -> None:
+    """Shared `fan` platform stubs.
+
+    Installed here rather than per test module: the fan platform is imported by
+    the AP entity tests AND by the platform-forwarding tests, and a partial
+    per-file stub winning the first-wins `getattr` race is exactly the
+    order-dependence this conftest exists to remove. `AddEntitiesCallback` lands
+    here for the same reason."""
+    components = _ensure_module("homeassistant.components")
+    sys.modules["homeassistant"].components = components
+
+    fan = _ensure_module("homeassistant.components.fan")
+    components.fan = fan
+
+    class FanEntity:
+        """Mirror of HA's FanEntity surface the AP fan overrides.
+
+        The `_attr_*`-reading properties are what real HA's Entity/FanEntity
+        provide; without them a test would read the private attribute and pass
+        even if the entity never exposed the value to Home Assistant."""
+
+        _attr_preset_mode = None
+        _attr_preset_modes = None
+        _attr_supported_features = 0
+        _attr_is_on = None
+
+        @property
+        def preset_mode(self):
+            return self._attr_preset_mode
+
+        @property
+        def preset_modes(self):
+            return self._attr_preset_modes
+
+        @property
+        def supported_features(self):
+            return self._attr_supported_features
+
+        @property
+        def is_on(self):
+            return self._attr_is_on
+
+    class FanEntityFeature:
+        # Real Home Assistant values, so a stub-vs-real mismatch cannot hide a
+        # wrong feature declaration.
+        SET_SPEED = 1
+        OSCILLATE = 2
+        DIRECTION = 4
+        PRESET_MODE = 8
+        TURN_OFF = 16
+        TURN_ON = 32
+
+    fan.FanEntity = getattr(fan, "FanEntity", FanEntity)
+    fan.FanEntityFeature = getattr(fan, "FanEntityFeature", FanEntityFeature)
+
+    entity_platform = _ensure_module("homeassistant.helpers.entity_platform")
+    sys.modules["homeassistant.helpers"].entity_platform = entity_platform
+    entity_platform.AddEntitiesCallback = getattr(
+        entity_platform, "AddEntitiesCallback", object
+    )
+
+
 def _ensure_yarl() -> None:
     """The CI test env installs only pytest (no yarl). config_flow now imports the
     transport auth (which does `from yarl import URL`), so importing config_flow -- and
@@ -155,4 +224,5 @@ def _ensure_yarl() -> None:
 
 _install_homeassistant_error()
 _install_shared_entity_stubs()
+_install_fan_stubs()
 _ensure_yarl()

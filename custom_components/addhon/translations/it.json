@@ -828,6 +828,11 @@
       "reset_debug": {
         "name": "Reset debug"
       }
+    },
+    "fan": {
+      "purifier": {
+        "name": "Purificatore"
+      }
     }
   },
   "exceptions": {

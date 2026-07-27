@@ -14,6 +14,7 @@ entity-stack stubs (CoordinatorEntity, const units, DeviceInfo).
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import sys
 import types
@@ -586,3 +587,396 @@ class AirPurifierBinaryAvailabilityTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(entities["eco_active"].available)
         self.assertTrue(entities["problem"].available)
+
+
+# --- Task 5: the fan platform -------------------------------------------------
+
+AP_SCHEMA = {
+    "startProgram": {
+        "parameters": {
+            "machMode": {
+                "typology": "enum", "category": "command", "mandatory": 0,
+                "defaultValue": "2", "enumValues": ["1", "2", "4"],
+            },
+            "onOffStatus": {
+                "typology": "fixed", "category": "command", "mandatory": 1,
+                "fixedValue": "1",
+            },
+        }
+    },
+    "stopProgram": {
+        "parameters": {
+            "onOffStatus": {
+                "typology": "fixed", "category": "command", "mandatory": 1,
+                "fixedValue": "0",
+            },
+        }
+    },
+    "settings": {
+        "parameters": {
+            "machMode": {
+                "typology": "enum", "category": "command", "mandatory": 0,
+                "defaultValue": "2", "enumValues": ["1", "2", "4"],
+            },
+            "lightStatus": {
+                "typology": "enum", "category": "command", "mandatory": 0,
+                "defaultValue": "0", "enumValues": ["0", "1", "2"],
+            },
+        }
+    },
+}
+
+
+class _ApAppliance:
+    def __init__(self) -> None:
+        self.zone = 0
+        self.options: dict[str, str] = {}
+        self.commands: dict[str, object] = {}
+        self.unique_id = "ap-1"
+
+
+def _appliance(schema: dict | None = None):
+    from custom_components.addhon.client.engine.commands import HonCommand
+
+    appliance = _ApAppliance()
+    for name, body in copy.deepcopy(schema or AP_SCHEMA).items():
+        appliance.commands[name] = HonCommand(name, body, appliance)
+    return appliance
+
+
+class RecordingClient:
+    """Captures the patches the entity dispatches, without touching a device."""
+
+    def __init__(self, fail: Exception | None = None) -> None:
+        self.patches: list = []
+        self.fail = fail
+
+    def dispatch_patch_sync(self, appliance, patch) -> None:
+        if self.fail is not None:
+            raise self.fail
+        self.patches.append(patch)
+
+
+class RecordingHass:
+    def __init__(self, data: dict) -> None:
+        self.data = data
+
+    async def async_add_executor_job(self, func, *args):
+        return func(*args)
+
+
+class RefreshingCoordinator(FakeCoordinator):
+    def __init__(self, data: dict) -> None:
+        super().__init__(data)
+        self.refreshes = 0
+
+    async def async_refresh(self) -> None:
+        self.refreshes += 1
+
+
+async def _build_fan(
+    attributes: dict | None = None,
+    schema: dict | None = None,
+    client: RecordingClient | None = None,
+):
+    from custom_components.addhon import fan
+    from custom_components.addhon.const import DOMAIN
+
+    data = {
+        "ap-1": {
+            "type": APPLIANCE_AP,
+            "name": "Purifier",
+            "attributes": FULL_ATTRIBUTES if attributes is None else attributes,
+            "appliance": _appliance(schema),
+            "settings": {},
+        }
+    }
+    coordinator = RefreshingCoordinator(data)
+    recording = client if client is not None else RecordingClient()
+    hass = RecordingHass(
+        {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": recording}}}
+    )
+    added: list = []
+    await fan.async_setup_entry(hass, FakeEntry(), added.extend)
+    for entity in added:
+        entity.hass = hass
+    return added, recording, coordinator
+
+
+def _sent(client: RecordingClient) -> list[tuple[str, dict]]:
+    return [(p.command_name, dict(p.values)) for p in client.patches]
+
+
+class AirPurifierFanSetupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_capable_purifier_gets_one_fan(self) -> None:
+        entities, _client, _coord = await _build_fan()
+        self.assertEqual(1, len(entities))
+        self.assertEqual("ap-1_purifier", entities[0].unique_id)
+
+    async def test_presets_come_from_the_live_enum_intersection(self) -> None:
+        entities, _client, _coord = await _build_fan()
+        self.assertEqual(["sleep", "auto", "max"], entities[0].preset_modes)
+
+    async def test_presets_shrink_with_the_live_schema(self) -> None:
+        schema = copy.deepcopy(AP_SCHEMA)
+        for command in ("startProgram", "settings"):
+            schema[command]["parameters"]["machMode"]["enumValues"] = ["2", "4"]
+            schema[command]["parameters"]["machMode"]["defaultValue"] = "2"
+        entities, _client, _coord = await _build_fan(schema=schema)
+        self.assertEqual(["auto", "max"], entities[0].preset_modes)
+
+    async def test_no_fan_without_the_stop_command(self) -> None:
+        schema = copy.deepcopy(AP_SCHEMA)
+        del schema["stopProgram"]
+        entities, _client, _coord = await _build_fan(schema=schema)
+        self.assertEqual([], entities)
+
+    async def test_no_fan_without_the_mode_state(self) -> None:
+        attributes = {k: v for k, v in FULL_ATTRIBUTES.items() if k != "machMode"}
+        entities, _client, _coord = await _build_fan(attributes=attributes)
+        self.assertEqual([], entities)
+
+    async def test_a_non_purifier_gets_no_fan(self) -> None:
+        from custom_components.addhon import fan
+        from custom_components.addhon.const import DOMAIN
+
+        data = {
+            "ac-1": {
+                "type": "AC",
+                "name": "Split",
+                "attributes": FULL_ATTRIBUTES,
+                "appliance": _appliance(),
+                "settings": {},
+            }
+        }
+        coordinator = RefreshingCoordinator(data)
+        hass = RecordingHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}}
+        )
+        added: list = []
+        await fan.async_setup_entry(hass, FakeEntry(), added.extend)
+        self.assertEqual([], added)
+
+    async def test_the_feature_flags_declare_preset_and_both_switches(self) -> None:
+        from homeassistant.components.fan import FanEntityFeature
+
+        entities, _client, _coord = await _build_fan()
+        features = entities[0].supported_features
+        for flag in (
+            FanEntityFeature.PRESET_MODE,
+            FanEntityFeature.TURN_ON,
+            FanEntityFeature.TURN_OFF,
+        ):
+            self.assertTrue(features & flag, flag)
+
+
+class AirPurifierFanStateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_running_state_and_preset(self) -> None:
+        entities, _client, _coord = await _build_fan()
+        self.assertIs(True, entities[0].is_on)
+        self.assertEqual("auto", entities[0].preset_mode)
+
+    async def test_a_stopped_purifier_has_no_active_preset(self) -> None:
+        entities, _client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "0", "machMode": "0"}
+        )
+        self.assertIs(False, entities[0].is_on)
+        self.assertIsNone(entities[0].preset_mode)
+
+    async def test_the_off_sentinel_never_becomes_a_preset(self) -> None:
+        """machMode=0 is a read-only off marker; even reported alongside a powered
+        state it must not be presented as a selectable mode."""
+        entities, _client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "1", "machMode": "0"}
+        )
+        self.assertIsNone(entities[0].preset_mode)
+
+    async def test_a_stopped_purifier_reports_no_preset_even_with_a_live_mode(
+        self,
+    ) -> None:
+        """The device may keep the last active machMode in its shadow after
+        stopping. The fan must still report no preset: a preset shown on a
+        stopped fan claims the purifier is running that mode."""
+        entities, _client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "0", "machMode": "2"}
+        )
+        self.assertIs(False, entities[0].is_on)
+        self.assertIsNone(entities[0].preset_mode)
+
+    async def test_an_undeclared_mode_reads_as_no_preset(self) -> None:
+        entities, _client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "machMode": "3"}
+        )
+        self.assertIsNone(entities[0].preset_mode)
+
+    async def test_an_unreported_power_state_creates_no_fan(self) -> None:
+        """Without a power reading the fan cannot render its own state, so it is
+        not created at all rather than shipped permanently unknown."""
+        entities, _client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": ""}
+        )
+        self.assertEqual([], entities)
+
+
+class AirPurifierFanWriteTest(unittest.IsolatedAsyncioTestCase):
+    async def test_turn_off_stops_the_program_with_no_values(self) -> None:
+        entities, client, coordinator = await _build_fan()
+        await entities[0].async_turn_off()
+        self.assertEqual([("stopProgram", {})], _sent(client))
+        self.assertEqual(1, coordinator.refreshes)
+
+    async def test_turn_on_defaults_to_auto_after_a_reload(self) -> None:
+        """The last-mode store is volatile, so a fresh reload has nothing to
+        replay and must pick a deterministic mode rather than an arbitrary one."""
+        entities, client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "0", "machMode": "0"}
+        )
+        await entities[0].async_turn_on()
+        self.assertEqual([("startProgram", {"machMode": "2"})], _sent(client))
+
+    async def test_turn_on_replays_the_last_active_mode(self) -> None:
+        entities, client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "1", "machMode": "4"}
+        )
+        entities[0]._handle_coordinator_update()
+        await entities[0].async_turn_on()
+        self.assertEqual([("startProgram", {"machMode": "4"})], _sent(client))
+
+    async def test_the_off_sentinel_never_replaces_the_last_mode(self) -> None:
+        entities, client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "1", "machMode": "1"}
+        )
+        entity = entities[0]
+        entity._handle_coordinator_update()
+        # the purifier stops: machMode falls back to the sentinel
+        _coord.data["ap-1"]["attributes"] = {
+            **FULL_ATTRIBUTES, "onOffStatus": "0", "machMode": "0",
+        }
+        entity._handle_coordinator_update()
+        await entity.async_turn_on()
+        self.assertEqual([("startProgram", {"machMode": "1"})], _sent(client))
+
+    async def test_an_undeclared_mode_never_replaces_the_last_mode(self) -> None:
+        entities, client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "1", "machMode": "3"}
+        )
+        entities[0]._handle_coordinator_update()
+        await entities[0].async_turn_on()
+        self.assertEqual([("startProgram", {"machMode": "2"})], _sent(client))
+
+    async def test_setting_a_preset_while_running_uses_settings(self) -> None:
+        entities, client, coordinator = await _build_fan()
+        await entities[0].async_set_preset_mode("sleep")
+        self.assertEqual([("settings", {"machMode": "1"})], _sent(client))
+        self.assertEqual(1, coordinator.refreshes)
+
+    async def test_setting_a_preset_while_stopped_starts_the_purifier(self) -> None:
+        entities, client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "0", "machMode": "0"}
+        )
+        await entities[0].async_set_preset_mode("max")
+        self.assertEqual([("startProgram", {"machMode": "4"})], _sent(client))
+
+    async def test_turn_on_with_an_explicit_preset(self) -> None:
+        entities, client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "0", "machMode": "0"}
+        )
+        await entities[0].async_turn_on(preset_mode="sleep")
+        self.assertEqual([("startProgram", {"machMode": "1"})], _sent(client))
+
+    async def test_a_selected_preset_becomes_the_replayed_mode(self) -> None:
+        entities, client, _coord = await _build_fan()
+        await entities[0].async_set_preset_mode("max")
+        await entities[0].async_turn_off()
+        await entities[0].async_turn_on()
+        self.assertEqual(
+            [
+                ("settings", {"machMode": "4"}),
+                ("stopProgram", {}),
+                ("startProgram", {"machMode": "4"}),
+            ],
+            _sent(client),
+        )
+
+    async def test_no_write_ever_carries_an_unrelated_field(self) -> None:
+        """Sparse by construction: a mode change must not restate the light or any
+        other setting the user did not touch."""
+        entities, client, _coord = await _build_fan()
+        await entities[0].async_set_preset_mode("sleep")
+        await entities[0].async_turn_off()
+        await entities[0].async_turn_on()
+        for _command, values in _sent(client):
+            self.assertLessEqual(set(values), {"machMode"})
+
+
+class AirPurifierFanErrorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_an_unknown_preset_is_a_localized_error(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, client, _coord = await _build_fan()
+        with self.assertRaises(HomeAssistantError) as caught:
+            await entities[0].async_set_preset_mode("turbo")
+        self.assertEqual("command_error", caught.exception.translation_key)
+        self.assertEqual([], _sent(client))
+
+    async def test_a_transport_failure_is_a_localized_error(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, _client, coordinator = await _build_fan(
+            client=RecordingClient(fail=RuntimeError("cloud down"))
+        )
+        with self.assertRaises(HomeAssistantError) as caught:
+            await entities[0].async_turn_off()
+        self.assertEqual("command_error", caught.exception.translation_key)
+        self.assertEqual(
+            {"error": "cloud down"}, caught.exception.translation_placeholders
+        )
+        self.assertEqual(0, coordinator.refreshes)
+
+    async def test_a_missing_client_is_reported_before_any_write(self) -> None:
+        from custom_components.addhon import fan
+        from custom_components.addhon.const import DOMAIN
+        from homeassistant.exceptions import HomeAssistantError
+
+        data = {
+            "ap-1": {
+                "type": APPLIANCE_AP,
+                "name": "Purifier",
+                "attributes": FULL_ATTRIBUTES,
+                "appliance": _appliance(),
+                "settings": {},
+            }
+        }
+        coordinator = RefreshingCoordinator(data)
+        hass = RecordingHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}}
+        )
+        added: list = []
+        await fan.async_setup_entry(hass, FakeEntry(), added.extend)
+        added[0].hass = hass
+
+        with self.assertRaises(HomeAssistantError) as caught:
+            await added[0].async_turn_off()
+        self.assertEqual(
+            "appliance_or_client_unavailable", caught.exception.translation_key
+        )
+
+
+class AirPurifierFanArchitectureTest(unittest.TestCase):
+    def test_the_fan_never_uses_the_legacy_sender(self) -> None:
+        """Every AP write is transactional: `async_send_command` applies values to
+        a whole command and sends it, which is what the dispatcher replaces."""
+        source = (
+            Path(__file__).parents[1]
+            / "custom_components" / "addhon" / "fan.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("async_send_command", source)
+        self.assertNotIn("async_send_settings", source)
+        self.assertNotIn("run_command_sync", source)
+        self.assertIn("async_dispatch_patch", source)
+
+    def test_fan_is_a_declared_platform(self) -> None:
+        from custom_components.addhon.const import PLATFORMS
+
+        self.assertIn("fan", PLATFORMS)
