@@ -1634,3 +1634,132 @@ def test_mixed_platform_legacy_classes_keep_the_legacy_sender() -> None:
         assert legacy_callee in source, entity_class.__name__
         for forbidden in _FORBIDDEN_DISPATCH_SYMBOLS:
             assert forbidden not in source, f"{entity_class.__name__}: {forbidden}"
+
+
+def _ap_dispatch_appliance() -> tuple[_DispatchAppliance, _DispatchCommand]:
+    """An AP appliance whose settings command carries real purifier parameters,
+    plus identity material a diagnostic event must never echo."""
+    appliance = _DispatchAppliance()
+    appliance.appliance_type = "AP"
+    appliance.model_name = "SYNTHETIC-AP-MODEL"
+    appliance.info = {
+        "macAddress": "AA:BB:CC:DD:EE:FF",
+        "serialNumber": "AP-PLAINTEXT-SERIAL",
+    }
+    appliance.attributes["parameters"]["lightStatus"] = HonAttribute("2")
+    appliance.attributes["parameters"]["onOffStatus"] = HonAttribute("1")
+    categories: dict[str, HonCommand] = {}
+    command = _DispatchCommand(
+        "settings",
+        {
+            "parameters": {
+                "lightStatus": _enum("2", ["0", "1", "2"]),
+                "onOffStatus": {
+                    "typology": "fixed",
+                    "category": "command",
+                    "mandatory": 1,
+                    "fixedValue": "1",
+                },
+            }
+        },
+        appliance,
+        categories,
+        "ap",
+    )
+    categories["ap"] = command
+    appliance.commands["settings"] = command
+    return appliance, command
+
+
+def _ap_light_patch(appliance: _DispatchAppliance) -> CommandPatch:
+    from custom_components.addhon.air_purifier import ap_patch, discover_capabilities
+
+    capabilities = discover_capabilities(
+        appliance, {"onOffStatus": "1", "machMode": "2", "lightStatus": "2"}
+    )
+    return ap_patch("set_light", capabilities, value="0")
+
+
+def test_ap_diagnostic_events_correlate_action_keys_and_latency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The AP action name, the requested/mandatory/rule-added split, the latency
+    and the shadow outcome must all be present, so a beta report says WHICH intent
+    produced WHICH payload without any live device on hand."""
+    import custom_components.addhon.command_dispatch as dispatch_module
+
+    appliance, _command = _ap_dispatch_appliance()
+    events: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        dispatch_module,
+        "emit_command_event",
+        lambda event, fields: events.append((event, dict(fields))),
+    )
+
+    result = asyncio.run(
+        CommandDispatcher().dispatch(appliance, _ap_light_patch(appliance))
+    )
+
+    assert result is True
+    assert [event for event, _ in events] == [
+        "command_intent",
+        "command_payload",
+        "command_result",
+        "shadow_update",
+        "contract_check",
+    ]
+    intent = events[0][1]
+    assert intent["action"] == "ap_set_light"
+    assert intent["appliance_type"] == "AP"
+    assert intent["command"] == "settings"
+    assert intent["requested_values"] == {"lightStatus": "0"}
+    payload = events[1][1]
+    assert payload["requested_keys"] == ["lightStatus"]
+    assert payload["mandatory_keys"] == ["onOffStatus"]
+    assert payload["rule_added_keys"] == []
+    assert payload["payload"] == {"lightStatus": "0", "onOffStatus": "1"}
+    outcome = events[2][1]
+    assert outcome["result"] is True
+    assert isinstance(outcome["latency_ms"], float)
+    shadow = events[3][1]
+    # Both payload keys land in the shadow: the sparse intent plus the mandatory
+    # key the dispatcher added. What matters is that NOTHING else moved.
+    assert shadow["expected_keys"] == ["lightStatus", "onOffStatus"]
+    assert shadow["unexpected_keys"] == []
+    assert shadow["missing_keys"] == []
+
+
+def test_ap_diagnostic_records_carry_no_appliance_identity() -> None:
+    """Through the REAL emitter, not a capture: the encoded records must not carry
+    the appliance id, model, serial or MAC."""
+    import logging
+
+    logger = logging.getLogger("custom_components.addhon.command_diagnostics")
+    records: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record.getMessage())
+
+    handler = _Capture()
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        appliance, _command = _ap_dispatch_appliance()
+        asyncio.run(
+            CommandDispatcher().dispatch(appliance, _ap_light_patch(appliance))
+        )
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    assert records, "no diagnostic record was emitted"
+    joined = "\n".join(records)
+    assert "ap_set_light" in joined
+    for identity in (
+        "AA:BB:CC:DD:EE:FF",
+        "AP-PLAINTEXT-SERIAL",
+        "SYNTHETIC-AP-MODEL",
+    ):
+        assert identity not in joined, identity

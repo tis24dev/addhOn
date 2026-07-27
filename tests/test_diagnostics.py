@@ -150,9 +150,23 @@ def _install_stubs() -> None:
     number_mod.NumberDeviceClass = getattr(number_mod, "NumberDeviceClass", type("NumberDeviceClass", (), {"TEMPERATURE": "temperature"}))
     number_mod.NumberMode = getattr(number_mod, "NumberMode", type("NumberMode", (), {"AUTO": "auto", "BOX": "box", "SLIDER": "slider"}))
 
-    _mod("homeassistant.components.switch").SwitchEntity = type("SwitchEntity", (), {})
-    _mod("homeassistant.components.select").SelectEntity = type("SelectEntity", (), {})
-    _mod("homeassistant.components.button").ButtonEntity = type("ButtonEntity", (), {})
+    # getattr-guarded like every other stub here: an unconditional assignment
+    # CLOBBERS conftest's complete platform stubs, and an entity class binds
+    # whatever base is installed the first time its module is imported. A bare
+    # SelectEntity winning that race leaves the AP aroma select without the
+    # `options` property real HA provides.
+    switch_mod = _mod("homeassistant.components.switch")
+    switch_mod.SwitchEntity = getattr(
+        switch_mod, "SwitchEntity", type("SwitchEntity", (), {})
+    )
+    select_mod = _mod("homeassistant.components.select")
+    select_mod.SelectEntity = getattr(
+        select_mod, "SelectEntity", type("SelectEntity", (), {})
+    )
+    button_mod = _mod("homeassistant.components.button")
+    button_mod.ButtonEntity = getattr(
+        button_mod, "ButtonEntity", type("ButtonEntity", (), {})
+    )
 
     ha.config_entries = ce
     ha.core = core
@@ -197,13 +211,20 @@ class Opaque:
 class FakeParam:
     def __init__(self, value=None, values=None, typology=None, category=None, mandatory=None, rng=None):
         self.value = value
-        if values is not None:
-            self.values = values
         self.typology = typology
         self.category = category
         self.mandatory = mandatory
         if rng is not None:
             self.min, self.max, self.step = rng
+        if values is not None:
+            self.values = values
+        elif rng is not None:
+            # A range parameter DOES expose `.values` in the engine: the property
+            # enumerates the whole grid. Mirrored here so any code that forgets to
+            # check for a range pays the same price it would in production instead
+            # of quietly reading an empty list off the fake.
+            low, high, step = (int(float(v)) for v in rng)
+            self.values = [str(v) for v in range(low, high + 1, max(step, 1))]
 
 
 class FakeCommand:
@@ -741,6 +762,230 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
         self.assertTrue(le["requires_reauth"])
         self.assertTrue(le["had_refresh_token"])
         self.assertEqual({"challenge_kind": "email", "can_resend": True}, le["mfa"])
+
+
+# --- Task 10: air purifier coverage and passive future-capability capture -----
+
+AP_ID = "ap-unique"
+
+
+def _build_ap_coordinator() -> FakeCoordinator:
+    """An AP whose schema and shadow deliberately run AHEAD of the integration.
+
+    machMode declares 3 (undeclared by the observed devices and never writable),
+    aromaStatus declares a 5 nobody has mapped, and the shadow currently REPORTS
+    machMode=3. humidificationStatus is a writable parameter with no entity at all.
+    """
+    ap = FakeAppliance(
+        commands={
+            "startProgram": FakeCommand({
+                "machMode": FakeParam(
+                    value="2", typology="enum", values=["1", "2", "3", "4"]
+                ),
+                "onOffStatus": FakeParam(value="1", typology="fixed", mandatory=1),
+            }),
+            "stopProgram": FakeCommand({
+                "onOffStatus": FakeParam(value="0", typology="fixed", mandatory=1),
+            }),
+            "settings": FakeCommand({
+                "machMode": FakeParam(
+                    value="2", typology="enum", values=["1", "2", "3", "4"]
+                ),
+                "lightStatus": FakeParam(
+                    value="0", typology="enum", values=["0", "1", "2"]
+                ),
+                "lockStatus": FakeParam(value="0", typology="enum", values=["0", "1"]),
+                "touchToneStatus": FakeParam(
+                    value="1", typology="enum", values=["0", "1"]
+                ),
+                "aromaStatus": FakeParam(
+                    value="0", typology="enum",
+                    values=["0", "1", "2", "3", "4", "5"],
+                ),
+                "aromaTimeOn": FakeParam(
+                    value="60", typology="range", rng=(1, 3600, 1)
+                ),
+                "aromaTimeOff": FakeParam(
+                    value="60", typology="range", rng=(1, 3600, 1)
+                ),
+                # Declared by the application, deliberately unmapped (ledger B2).
+                "humidificationStatus": FakeParam(
+                    value="0", typology="enum", values=["0", "1"]
+                ),
+            }),
+        }
+    )
+    return FakeCoordinator({
+        AP_ID: {
+            "appliance": ap,
+            "type": "AP",
+            "name": "Purificatore",
+            "model": "SYNTHETIC-AP",
+            "serial": "AP-PLAINTEXT-SERIAL",
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "attributes": {
+                "onOffStatus": "1",
+                # A mode the integration will not offer, currently ACTIVE.
+                "machMode": "3",
+                "lightStatus": "0",
+                "lockStatus": "0",
+                "touchToneStatus": "1",
+                "aromaStatus": "0",
+                "aromaTimeOn": "60",
+                "aromaTimeOff": "60",
+                "airQuality": "0",
+                "pollenLevel": "4",
+                "errors": "00",
+                "coLevel": "1",
+                "mainFilterStatus": "34",
+                # Declared by the application, no entity (ledger B1).
+                "no2ValueIndoor": "7",
+                "macAddress": "AA:BB:CC:DD:EE:FF",
+            },
+            "statistics": {},
+        },
+    })
+
+
+def _ap_block():
+    coord = _build_ap_coordinator()
+    hass = FakeHass(coord)
+    result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+    return result["appliances"][0]
+
+
+class AirPurifierCoverageTest(unittest.TestCase):
+    def test_air_purifier_controlled_params_are_not_reported_unmapped(self) -> None:
+        """Every parameter an AP entity reads or writes must disappear from the
+        coverage signal, or the dump would send a maintainer chasing controls that
+        already exist."""
+        coverage = _ap_block()["coverage"]
+        for param in (
+            "machMode", "onOffStatus", "lightStatus", "lockStatus",
+            "touchToneStatus", "aromaStatus", "aromaTimeOn", "aromaTimeOff",
+        ):
+            self.assertNotIn(param, coverage["command_params_unmapped"], param)
+            self.assertNotIn(param, coverage["attributes_unmapped"], param)
+
+    def test_air_purifier_unknown_param_stays_in_the_signal(self) -> None:
+        coverage = _ap_block()["coverage"]
+        self.assertIn("humidificationStatus", coverage["command_params_unmapped"])
+
+    def test_air_purifier_unmapped_telemetry_stays_in_the_signal(self) -> None:
+        coverage = _ap_block()["coverage"]
+        self.assertIn("no2ValueIndoor", coverage["attributes_unmapped"])
+
+    def test_air_purifier_mapped_telemetry_is_not_in_the_signal(self) -> None:
+        coverage = _ap_block()["coverage"]
+        for attr in ("airQuality", "pollenLevel", "errors", "coLevel"):
+            self.assertNotIn(attr, coverage["attributes_unmapped"], attr)
+
+    def test_air_purifier_entity_params_cover_every_table(self) -> None:
+        """Drift guard: the diagnostics registration is one list, so a new AP
+        control whose parameter is missing from it would resurface as unmapped."""
+        from custom_components.addhon.air_purifier import AP_ENTITY_PARAMS
+        from custom_components.addhon import number, switch
+
+        declared = {d.param for d in switch._AIR_PURIFIER_SWITCHES}
+        declared |= {d.param for d in number._AP_TIMING_NUMBERS}
+        self.assertTrue(declared)
+        self.assertTrue(declared <= AP_ENTITY_PARAMS, declared - AP_ENTITY_PARAMS)
+
+
+class FutureCapabilityCaptureTest(unittest.TestCase):
+    def test_future_capability_reports_enum_values_the_code_ignores(self) -> None:
+        """Passive capture: the device declares machMode 3 and aromaStatus 5, and
+        the integration handles neither. That delta is the whole point of the
+        section - it is how a new firmware capability becomes visible without any
+        entity being guessed into existence."""
+        future = _ap_block()["future_capabilities"]
+        self.assertEqual(["3"], future["enum_deltas"]["settings.machMode"])
+        self.assertEqual(["3"], future["enum_deltas"]["startProgram.machMode"])
+        self.assertEqual(["5"], future["enum_deltas"]["settings.aromaStatus"])
+
+    def test_future_capability_omits_fully_handled_params(self) -> None:
+        future = _ap_block()["future_capabilities"]
+        for key in ("settings.lightStatus", "settings.lockStatus",
+                    "settings.touchToneStatus"):
+            self.assertNotIn(key, future["enum_deltas"])
+
+    def test_future_capability_reports_an_unhandled_live_state(self) -> None:
+        future = _ap_block()["future_capabilities"]
+        self.assertEqual({"machMode": "3"}, future["state_values_unhandled"])
+
+    def test_future_capability_carries_no_identity(self) -> None:
+        import json
+
+        future = _ap_block()["future_capabilities"]
+        encoded = json.dumps(future)
+        for identity in ("AA:BB:CC:DD:EE:FF", "AP-PLAINTEXT-SERIAL", "SYNTHETIC-AP",
+                         "ap-unique"):
+            self.assertNotIn(identity, encoded, identity)
+
+    def test_future_capability_is_absent_for_a_type_with_no_registry(self) -> None:
+        _, blocks = _entry_diag()
+        self.assertEqual({}, blocks["AC"]["future_capabilities"])
+
+    def test_future_capability_output_is_bounded(self) -> None:
+        """A firmware declaring hundreds of values must not blow up the dump."""
+        coord = _build_ap_coordinator()
+        params = coord.data[AP_ID]["appliance"].commands["settings"].parameters
+        params["aromaStatus"].values = [str(n) for n in range(500)]
+        hass = FakeHass(coord)
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+        )
+        future = result["appliances"][0]["future_capabilities"]
+        delta = future["enum_deltas"]["settings.aromaStatus"]
+        self.assertEqual(diagnostics._FUTURE_MAX_VALUES, len(delta))
+        self.assertTrue(future["truncated"])
+
+    def test_future_capability_does_not_enumerate_a_range_parameter(self) -> None:
+        """Whatever the registry says, a range parameter is never enumerated:
+        `.values` on a HonParameterRange walks the whole grid (up to 100000 strings)
+        synchronously, which is why _param_schema refuses it too. The registry
+        currently lists no range param, so this pins the guard rather than the
+        registry."""
+        from custom_components.addhon import air_purifier
+
+        coord = _build_ap_coordinator()
+        hass = FakeHass(coord)
+        patched = {**air_purifier.AP_HANDLED_VALUES, "aromaTimeOn": frozenset({"60"})}
+        original = air_purifier.AP_HANDLED_VALUES
+        air_purifier.AP_HANDLED_VALUES = patched
+        try:
+            result = _run(
+                diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+            )
+        finally:
+            air_purifier.AP_HANDLED_VALUES = original
+        future = result["appliances"][0]["future_capabilities"]
+        self.assertNotIn("settings.aromaTimeOn", future["enum_deltas"])
+
+    def test_future_capability_normalizes_a_numeric_state(self) -> None:
+        """A client that hands back 2.0 instead of "2" must not turn a handled value
+        into a phantom future capability."""
+        coord = _build_ap_coordinator()
+        attributes = coord.data[AP_ID]["attributes"]
+        attributes["lightStatus"] = 2.0
+        attributes["machMode"] = 3.0
+        hass = FakeHass(coord)
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+        )
+        future = result["appliances"][0]["future_capabilities"]
+        self.assertEqual({"machMode": "3"}, future["state_values_unhandled"])
+
+    def test_future_capability_keeps_the_schema_signal_readable(self) -> None:
+        """The raw schema and the raw values stay in the dump: capture must not
+        make the evidence harder to read."""
+        block = _ap_block()
+        self.assertEqual(
+            ["1", "2", "3", "4"],
+            block["commands"]["settings"]["machMode"]["enum"],
+        )
+        self.assertEqual("3", block["attributes"]["machMode"])
+        self.assertEqual("4", block["attributes"]["pollenLevel"])
 
 
 if __name__ == "__main__":

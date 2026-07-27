@@ -89,7 +89,10 @@ def _install_stubs() -> None:
     )
 
     components = _mod("homeassistant.components")
-    _mod("homeassistant.components.switch").SwitchEntity = type("SwitchEntity", (), {})
+    switch_mod = _mod("homeassistant.components.switch")
+    switch_mod.SwitchEntity = getattr(
+        switch_mod, "SwitchEntity", type("SwitchEntity", (), {})
+    )
 
     ha.config_entries = ce
     ha.core = core

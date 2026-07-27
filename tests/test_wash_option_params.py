@@ -88,11 +88,10 @@ def _install_stubs() -> None:
         def available(self) -> bool:
             return self.coordinator.last_update_success
 
-    # FORCE-ASSIGN (not getattr): this module imports the addhon entities below, binding
-    # HonBaseEntity to whatever CoordinatorEntity is installed now. If collected first it
-    # must bind a COMPLETE base (hass + async_write_ha_state + available, mirroring
-    # test_ac_write_path) so it never poisons the entity tests that DO instantiate.
-    uc.CoordinatorEntity = CoordinatorEntity
+    # getattr-guarded: conftest is imported before any test module and installs the
+    # COMPLETE base, so binding HonBaseEntity here is already safe. Force-assigning
+    # would poison the entity tests with this narrower class instead.
+    uc.CoordinatorEntity = getattr(uc, "CoordinatorEntity", CoordinatorEntity)
     uc.DataUpdateCoordinator = getattr(uc, "DataUpdateCoordinator", type("DataUpdateCoordinator", (), {}))
     uc.UpdateFailed = getattr(uc, "UpdateFailed", type("UpdateFailed", (Exception,), {}))
 
@@ -108,8 +107,14 @@ def _install_stubs() -> None:
     )
 
     components = _mod("homeassistant.components")
-    _mod("homeassistant.components.switch").SwitchEntity = type("SwitchEntity", (), {})
-    _mod("homeassistant.components.select").SelectEntity = type("SelectEntity", (), {})
+    switch_mod = _mod("homeassistant.components.switch")
+    switch_mod.SwitchEntity = getattr(
+        switch_mod, "SwitchEntity", type("SwitchEntity", (), {})
+    )
+    select_mod = _mod("homeassistant.components.select")
+    select_mod.SelectEntity = getattr(
+        select_mod, "SelectEntity", type("SelectEntity", (), {})
+    )
 
     number_mod = _mod("homeassistant.components.number")
     import dataclasses

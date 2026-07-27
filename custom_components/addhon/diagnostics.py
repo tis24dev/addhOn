@@ -15,6 +15,11 @@ Per appliance the dump carries, beyond the bare key list it used to emit:
   * `coverage`    - the signal: which bare attribute keys and which writable command
                     params the device exposes with NO addhon entity. That is what
                     tells the maintainer what to add.
+  * `future_capabilities` - for the types that declare which raw values they handle
+                    (air purifier today), the values the device declares or is
+                    currently reporting that this code does NOT handle. Passive: it
+                    surfaces a firmware ahead of the integration without any entity
+                    being guessed into existence.
 
 Identity (id/serial/mac and credential-ish keys) is redacted. The device nickname
 (`name`) is kept readable on purpose, to correlate the dump with the physical
@@ -31,6 +36,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     APPLIANCE_AC,
+    APPLIANCE_AP,
     APPLIANCE_WASH_GROUP,
     DOMAIN,
     PROGRAM_PARAM_NAMES,
@@ -144,6 +150,13 @@ _COVERAGE_META_PARAMS = frozenset(
         "winddirectionverticalpositionsequence",
     }
 )
+
+
+# Bounds for the future-capability section. It is passive evidence, not a report:
+# a firmware declaring hundreds of values must add a hint to the dump, never bloat
+# it. Truncation is announced with a `truncated` flag rather than silently applied.
+_FUTURE_MAX_ENTRIES = 40
+_FUTURE_MAX_VALUES = 20
 
 
 def _is_meta_attr(name: str) -> bool:
@@ -270,6 +283,7 @@ def _mapped_sets(app_type) -> tuple[set[str], set[str]]:
     mapped_attrs: set[str] = set(_CUSTOM_MAPPED_ATTRS.get(app_type, ()))
     mapped_params: set[str] = set()
     try:
+        from .air_purifier import AP_ENTITY_PARAMS
         from .binary_sensor import BINARY_SENSORS, _CONNECTIVITY, _UNIVERSAL_GATED
         from .number import NUMBERS
         from .sensor import SENSORS
@@ -298,6 +312,13 @@ def _mapped_sets(app_type) -> tuple[set[str], set[str]]:
         mapped_params |= _AC_CLIMATE_PARAMS
     if app_type in APPLIANCE_WASH_GROUP:
         mapped_params.update(PROGRAM_PARAM_NAMES)
+    if app_type == APPLIANCE_AP:
+        # The AP fan, light, aroma select, toggles and timing numbers are fixed-key
+        # entities or live outside the NUMBERS/_SETTINGS_SWITCHES tables, so the
+        # registry walk above cannot see them. Each name is BOTH read as state and
+        # written as a command field, hence both axes.
+        mapped_attrs |= AP_ENTITY_PARAMS
+        mapped_params |= AP_ENTITY_PARAMS
     return mapped_attrs, mapped_params
 
 
@@ -380,6 +401,105 @@ def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> 
     }
 
 
+def _handled_values(app_type) -> dict[str, frozenset[str]]:
+    """Per-parameter raw values the integration HANDLES, for the types that say.
+
+    Lazily imported like `_mapped_sets`, and empty for every type with no registry,
+    so the future-capability section simply does not appear there instead of being
+    filled with guesses.
+    """
+    if app_type != APPLIANCE_AP:
+        return {}
+    try:
+        from .air_purifier import AP_HANDLED_VALUES
+    except Exception:  # pragma: no cover - diagnostics must never crash
+        _LOGGER.debug("Diagnostics debug: AP value registry unavailable", exc_info=True)
+        return {}
+    return dict(AP_HANDLED_VALUES)
+
+
+def _scalar_text(value) -> str | None:
+    """Canonical text of a shadow scalar, or None when it is not one.
+
+    An integral float drops its decimal tail and a bool renders as the device's own
+    1/0 spelling, so a value the client handed back as 3.0 or True still compares
+    equal to the schema's "3" / "1". Containers return None: a delta only makes
+    sense against a scalar.
+    """
+    plain = _jsonable(value)
+    if plain is None or isinstance(plain, (Mapping, list)):
+        return None
+    if isinstance(plain, bool):
+        return "1" if plain else "0"
+    if isinstance(plain, float) and plain.is_integer():
+        return str(int(plain))
+    text = str(plain)
+    return text or None
+
+
+def _enum_deltas(appliance, handled: Mapping[str, frozenset[str]]) -> tuple[dict, bool]:
+    """Declared enum values the integration does not handle, per command param.
+
+    Range parameters are skipped: a numeric range has no enumerable unhandled value,
+    and `.values` on one would enumerate the whole grid (see `_param_schema`).
+    """
+    commands = getattr(appliance, "commands", None)
+    if not isinstance(commands, Mapping):
+        return {}, False
+    deltas: dict[str, list[str]] = {}
+    truncated = False
+    for cmd_name in sorted(commands, key=str):
+        params = getattr(commands[cmd_name], "parameters", None)
+        if not isinstance(params, Mapping):
+            continue
+        for p_name in sorted(params, key=str):
+            known = handled.get(str(p_name))
+            param = params[p_name]
+            if known is None or param_range(param) is not None:
+                continue
+            extra = sorted(set(param_values(param)) - known)
+            if not extra:
+                continue
+            if len(deltas) >= _FUTURE_MAX_ENTRIES:
+                return deltas, True
+            if len(extra) > _FUTURE_MAX_VALUES:
+                extra = extra[:_FUTURE_MAX_VALUES]
+                truncated = True
+            deltas[f"{cmd_name}.{p_name}"] = extra
+    return deltas, truncated
+
+
+def _future_capabilities(app_type, attributes: Mapping, appliance) -> dict:
+    """Passive capture of what the device can do and this code cannot.
+
+    Two signals the coverage block cannot express, because they are about
+    parameters the integration DOES map:
+      * `enum_deltas`            - values the schema declares and no entity handles;
+      * `state_values_unhandled` - a value the device is reporting RIGHT NOW that no
+                                   mapping covers (an active mode 3, say).
+    Parameter names and raw non-identity values only. A writable parameter with no
+    entity at all is already `coverage.command_params_unmapped`; it is not repeated
+    here. Nothing in this section creates an entity or a control: it exists so a beta
+    report shows the gap instead of the code guessing at it.
+    """
+    handled = _handled_values(app_type)
+    if not handled:
+        return {}
+    deltas, truncated = _enum_deltas(appliance, handled)
+    unhandled_state: dict[str, str] = {}
+    for name in sorted(handled):
+        text = _scalar_text(attributes.get(name))
+        if text is not None and text not in handled[name]:
+            unhandled_state[name] = text[:_FUTURE_MAX_VALUES * 4]
+    section: dict = {
+        "enum_deltas": deltas,
+        "state_values_unhandled": unhandled_state,
+    }
+    if truncated:
+        section["truncated"] = True
+    return section
+
+
 def _appliance_block(appliance_id: str, data: Mapping) -> dict:
     """Build the (redacted) diagnostics block for a single appliance."""
     appliance = data.get("appliance")
@@ -391,6 +511,7 @@ def _appliance_block(appliance_id: str, data: Mapping) -> dict:
 
     commands = _command_schema(appliance)
     coverage = _coverage(app_type, attributes, statistics, appliance)
+    future = _future_capabilities(app_type, attributes, appliance)
 
     _LOGGER.debug(
         "Diagnostics debug: appliance id=%s name=%s type=%s attrs=%d commands=%d "
@@ -414,6 +535,7 @@ def _appliance_block(appliance_id: str, data: Mapping) -> dict:
         "attributes": dict(attributes),
         "commands": commands,
         "coverage": coverage,
+        "future_capabilities": future,
     }
     return _redact(block)
 

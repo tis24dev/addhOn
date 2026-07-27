@@ -2150,3 +2150,104 @@ class AirPurifierTimeNumberArchitectureTest(unittest.TestCase):
         self.assertNotIn(
             "async_dispatch_patch", inspect.getsource(number.HonNumber)
         )
+
+
+# --- Task 10: a schema ahead of the integration creates nothing ---------------
+
+
+AHEAD_SCHEMA_EXTRA = {
+    "machMode": {
+        "typology": "enum", "category": "command", "mandatory": 0,
+        "defaultValue": "2", "enumValues": ["1", "2", "3", "4"],
+    },
+    "aromaStatus": {
+        "typology": "enum", "category": "command", "mandatory": 0,
+        "defaultValue": "0", "enumValues": ["0", "1", "2", "3", "4", "5"],
+    },
+    "aromaTimeOn": {
+        "typology": "range", "category": "command", "mandatory": 0,
+        "minimumValue": "1", "maximumValue": "3600", "incrementValue": "1",
+        "defaultValue": "60",
+    },
+    "aromaTimeOff": {
+        "typology": "range", "category": "command", "mandatory": 0,
+        "minimumValue": "1", "maximumValue": "3600", "incrementValue": "1",
+        "defaultValue": "60",
+    },
+    # Declared by the application, deliberately unmapped.
+    "humidificationStatus": {
+        "typology": "enum", "category": "command", "mandatory": 0,
+        "defaultValue": "0", "enumValues": ["0", "1"],
+    },
+}
+
+
+def _ahead_schema():
+    """A device whose schema and shadow run AHEAD of this code: an extra machMode,
+    an extra aromaStatus and a whole unmapped parameter."""
+    schema = copy.deepcopy(AP_SCHEMA)
+    schema["settings"]["parameters"].update(copy.deepcopy(TOGGLE_SCHEMA_EXTRA))
+    schema["settings"]["parameters"].update(copy.deepcopy(AHEAD_SCHEMA_EXTRA))
+    schema["startProgram"]["parameters"]["machMode"]["enumValues"] = [
+        "1", "2", "3", "4"
+    ]
+    return schema
+
+
+AHEAD_ATTRIBUTES = {
+    **FULL_ATTRIBUTES,
+    "machMode": "3",
+    "no2ValueIndoor": "7",
+    "humidificationStatus": "0",
+}
+
+
+class FutureCapabilityCreatesNothingTest(unittest.IsolatedAsyncioTestCase):
+    """Passive capture only: an undeclared value or an unknown parameter must show
+    up in diagnostics and change no entity, option or write."""
+
+    async def test_an_unknown_parameter_creates_no_entity(self) -> None:
+        sensors = set(_by_key(await _build_sensors(AHEAD_ATTRIBUTES)))
+        binaries = set(_by_key(await _build_binary(AHEAD_ATTRIBUTES)))
+        self.assertEqual(set(AirPurifierSensorTableTest.STANDARD), sensors)
+        self.assertEqual({"eco_active", "problem", "connectivity"}, binaries)
+
+    async def test_an_extra_mode_is_not_offered_as_a_preset(self) -> None:
+        entities, _client, _coord = await _build_fan(
+            attributes=AHEAD_ATTRIBUTES, schema=_ahead_schema()
+        )
+        self.assertEqual(["sleep", "auto", "max"], entities[0].preset_modes)
+
+    async def test_an_active_unhandled_mode_reads_as_no_preset(self) -> None:
+        """The purifier is RUNNING in mode 3. The fan must report no preset rather
+        than inventing a name for it, and must stay on."""
+        entities, _client, _coord = await _build_fan(
+            attributes=AHEAD_ATTRIBUTES, schema=_ahead_schema()
+        )
+        self.assertTrue(entities[0].is_on)
+        self.assertIsNone(entities[0].preset_mode)
+
+    async def test_an_extra_aroma_value_is_not_offered(self) -> None:
+        entities, _client, _coord = await _build_selects(
+            AHEAD_ATTRIBUTES, schema=_ahead_schema()
+        )
+        self.assertEqual(
+            ["off", "soft", "mid", "h_biotics", "custom"], entities[0].options
+        )
+
+    async def test_an_unknown_parameter_creates_no_number(self) -> None:
+        entities, _client, _coord = await _build_numbers(
+            attributes=AHEAD_ATTRIBUTES, schema=_ahead_schema()
+        )
+        self.assertEqual(
+            {"aroma_time_on", "aroma_time_off"},
+            {e.entity_description.key for e in entities},
+        )
+
+    async def test_an_unknown_parameter_is_never_written(self) -> None:
+        entities, client, _coord = await _build_switches(
+            attributes=AHEAD_ATTRIBUTES, schema=_ahead_schema()
+        )
+        by_key = _switch_by_key(entities)
+        await by_key["child_lock"].async_turn_on()
+        self.assertEqual([("settings", {"lockStatus": "1"})], _sent(client))

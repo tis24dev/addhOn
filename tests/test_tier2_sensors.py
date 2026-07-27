@@ -75,13 +75,12 @@ def _install_homeassistant_stubs() -> None:
         def async_write_ha_state(self) -> None:
             self.state_writes = getattr(self, "state_writes", 0) + 1
 
-    # Force-assign (not getattr-default): another test module may have already
-    # registered a CoordinatorEntity WITHOUT `available`, and ConnectivityBinaryTest
-    # relies on super().available resolving regardless of suite order. This stub is a
-    # superset of the minimal ones in test_program_select / test_number_setpoints /
-    # test_entity_translation_keys, so taking over the shared class is safe (mirrors
-    # test_entity_availability.py).
-    update_coordinator.CoordinatorEntity = CoordinatorEntity
+    # getattr-guarded: conftest installs a COMPLETE CoordinatorEntity before any
+    # test module, so ConnectivityBinaryTest gets `available` in every order without
+    # this module replacing the shared base with a narrower one.
+    update_coordinator.CoordinatorEntity = getattr(
+        update_coordinator, "CoordinatorEntity", CoordinatorEntity
+    )
     update_coordinator.DataUpdateCoordinator = getattr(update_coordinator, "DataUpdateCoordinator", type("DataUpdateCoordinator", (), {}))
     update_coordinator.UpdateFailed = getattr(update_coordinator, "UpdateFailed", type("UpdateFailed", (Exception,), {}))
 

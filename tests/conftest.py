@@ -279,6 +279,38 @@ def _install_fan_stubs() -> None:
         sensor, "SensorEntityDescription", SensorEntityDescription
     )
 
+    # The device/state class enums, with REAL Home Assistant values. Every test
+    # module used to declare its own subset, so which MEMBERS existed depended on
+    # collection order: a module whose stub lacked SAFETY made an unrelated
+    # "never a safety device" assertion fail with AttributeError. Values differed
+    # too (`co2` vs the real `carbon_dioxide`), which would let a wrong device class
+    # pass unnoticed.
+    class SensorDeviceClass:
+        AQI = "aqi"
+        BATTERY = "battery"
+        CO = "carbon_monoxide"
+        CO2 = "carbon_dioxide"
+        DURATION = "duration"
+        ENERGY = "energy"
+        ENUM = "enum"
+        HUMIDITY = "humidity"
+        PM10 = "pm10"
+        PM25 = "pm25"
+        POWER = "power"
+        TEMPERATURE = "temperature"
+        TIMESTAMP = "timestamp"
+        VOLATILE_ORGANIC_COMPOUNDS_PARTS = "volatile_organic_compounds_parts"
+        WATER = "water"
+        WEIGHT = "weight"
+
+    class SensorStateClass:
+        MEASUREMENT = "measurement"
+        TOTAL = "total"
+        TOTAL_INCREASING = "total_increasing"
+
+    sensor.SensorDeviceClass = getattr(sensor, "SensorDeviceClass", SensorDeviceClass)
+    sensor.SensorStateClass = getattr(sensor, "SensorStateClass", SensorStateClass)
+
     binary_sensor = _ensure_module("homeassistant.components.binary_sensor")
     components.binary_sensor = binary_sensor
 
@@ -291,8 +323,23 @@ def _install_fan_stubs() -> None:
         device_class: object | None = None
         entity_category: object | None = None
 
+    class BinarySensorDeviceClass:
+        CONNECTIVITY = "connectivity"
+        DOOR = "door"
+        HEAT = "heat"
+        LIGHT = "light"
+        LOCK = "lock"
+        OCCUPANCY = "occupancy"
+        POWER = "power"
+        PROBLEM = "problem"
+        RUNNING = "running"
+        SAFETY = "safety"
+
     binary_sensor.BinarySensorEntityDescription = getattr(
         binary_sensor, "BinarySensorEntityDescription", BinarySensorEntityDescription
+    )
+    binary_sensor.BinarySensorDeviceClass = getattr(
+        binary_sensor, "BinarySensorDeviceClass", BinarySensorDeviceClass
     )
 
     number = _ensure_module("homeassistant.components.number")

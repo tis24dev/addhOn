@@ -92,6 +92,39 @@ _TOGGLE_VALUES = frozenset({"0", "1"})
 
 _Range = tuple[float, float, float]
 
+# Every parameter an AP entity reads as state and/or writes as a command field.
+# Declared here, next to the constants the platforms actually use, so the
+# diagnostics coverage calculation cannot drift from the entities: a name missing
+# from this set would be reported to the user as an unmapped control that in fact
+# already exists. A test derives the switch and number tables and asserts they are
+# covered.
+AP_ENTITY_PARAMS = frozenset(
+    {
+        _POWER_ATTR,
+        _MODE_PARAM,
+        _LIGHT_PARAM,
+        _LOCK_PARAM,
+        _TONE_PARAM,
+        _AROMA_PARAM,
+        _AROMA_TIME_ON_PARAM,
+        _AROMA_TIME_OFF_PARAM,
+    }
+)
+
+# Raw values the integration actually HANDLES per parameter. A device declaring or
+# reporting anything outside these is running ahead of this code; diagnostics
+# reports the delta so a new firmware capability becomes visible without any entity
+# being guessed into existence. Range parameters are absent on purpose: a numeric
+# range has no enumerable "unhandled value".
+AP_HANDLED_VALUES: dict[str, frozenset[str]] = {
+    _POWER_ATTR: _TOGGLE_VALUES,
+    _MODE_PARAM: AP_WRITABLE_MODES,
+    _LIGHT_PARAM: frozenset(AP_LIGHT_TO_BRIGHTNESS),
+    _LOCK_PARAM: _TOGGLE_VALUES,
+    _TONE_PARAM: _TOGGLE_VALUES,
+    _AROMA_PARAM: frozenset(AP_AROMA_TO_OPTION),
+}
+
 
 def _attr_value(attributes: Any, key: str) -> Any:
     """Read one live attribute, tolerating both shapes the client returns.
@@ -511,6 +544,8 @@ __all__ = [
     "AP_PRESET_TO_MODE",
     "AP_WRITABLE_MODES",
     "AP_CO_ALARM_RAW",
+    "AP_ENTITY_PARAMS",
+    "AP_HANDLED_VALUES",
     "AirPurifierCapabilities",
     "air_quality_label",
     "ap_patch",

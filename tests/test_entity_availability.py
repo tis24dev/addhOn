@@ -75,12 +75,13 @@ def _install_homeassistant_stubs() -> None:
         def async_write_ha_state(self) -> None:
             self.state_writes = getattr(self, "state_writes", 0) + 1
 
-    # Force-assign (not getattr-default): another test module may have already
-    # registered a CoordinatorEntity WITHOUT `available`, and super().available
-    # must resolve no matter the suite order. This stub is a superset of the one
-    # in test_program_select (it also provides async_write_ha_state) so taking
-    # over the shared class does not break other modules' tests.
-    update_coordinator.CoordinatorEntity = CoordinatorEntity
+    # getattr-guarded: conftest installs a COMPLETE CoordinatorEntity before any
+    # test module, which is what now guarantees `available` resolves regardless of
+    # suite order. Force-assigning would REPLACE it with this narrower class (no
+    # unique_id, no _handle_coordinator_update) for every entity in the run.
+    update_coordinator.CoordinatorEntity = getattr(
+        update_coordinator, "CoordinatorEntity", CoordinatorEntity
+    )
     update_coordinator.DataUpdateCoordinator = getattr(
         update_coordinator, "DataUpdateCoordinator", type("DataUpdateCoordinator", (), {})
     )

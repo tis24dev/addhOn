@@ -68,7 +68,10 @@ class _CoordinatorEntity:
         return self.coordinator.last_update_success
 
 
-_uc.CoordinatorEntity = _CoordinatorEntity
+# getattr-guarded: conftest installs a COMPLETE CoordinatorEntity (this one lacks
+# unique_id and _handle_coordinator_update), and whichever class is installed first
+# becomes the permanent base for every entity in the run.
+_uc.CoordinatorEntity = getattr(_uc, "CoordinatorEntity", _CoordinatorEntity)
 
 from custom_components.addhon import ac_command, climate, switch  # noqa: E402
 from custom_components.addhon.const import (  # noqa: E402

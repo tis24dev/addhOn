@@ -89,9 +89,18 @@ def _install_stubs() -> None:
     )
 
     components = _mod("homeassistant.components")
-    _mod("homeassistant.components.switch").SwitchEntity = type("SwitchEntity", (), {})
-    _mod("homeassistant.components.select").SelectEntity = type("SelectEntity", (), {})
-    _mod("homeassistant.components.button").ButtonEntity = type("ButtonEntity", (), {})
+    switch_mod = _mod("homeassistant.components.switch")
+    switch_mod.SwitchEntity = getattr(
+        switch_mod, "SwitchEntity", type("SwitchEntity", (), {})
+    )
+    select_mod = _mod("homeassistant.components.select")
+    select_mod.SelectEntity = getattr(
+        select_mod, "SelectEntity", type("SelectEntity", (), {})
+    )
+    button_mod = _mod("homeassistant.components.button")
+    button_mod.ButtonEntity = getattr(
+        button_mod, "ButtonEntity", type("ButtonEntity", (), {})
+    )
     number_mod = _mod("homeassistant.components.number")
     import dataclasses
 
