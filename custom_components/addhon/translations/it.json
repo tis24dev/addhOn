@@ -438,6 +438,18 @@
           "holding": "Mantenimento"
         }
       },
+      "filter_life": {
+        "name": "Durata Filtro"
+      },
+      "filter_cleaning": {
+        "name": "Pulizia Prefiltro"
+      },
+      "total_work_time": {
+        "name": "Tempo di Funzionamento Totale"
+      },
+      "pollen_level": {
+        "name": "Livello Polline"
+      },
       "debug_status": {
         "name": "Stato debug",
         "state": {

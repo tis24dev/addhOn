@@ -438,6 +438,18 @@
           "holding": "Holding"
         }
       },
+      "filter_life": {
+        "name": "Filter life"
+      },
+      "filter_cleaning": {
+        "name": "Pre-filter cleaning"
+      },
+      "total_work_time": {
+        "name": "Total work time"
+      },
+      "pollen_level": {
+        "name": "Pollen level"
+      },
       "debug_status": {
         "name": "Debug status",
         "state": {
