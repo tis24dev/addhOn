@@ -44,10 +44,13 @@ class _LockEntry:
     users: int = 0
 
 
+_LockKey = tuple[str, str | int]
+
+
 @dataclass(frozen=True, slots=True)
 class CommandDispatcher:
     _SELECTOR_KEYS = frozenset({"category", "program"})
-    _locks: dict[str | int, _LockEntry] = field(
+    _locks: dict[_LockKey, _LockEntry] = field(
         default_factory=dict,
         init=False,
         repr=False,
@@ -59,9 +62,13 @@ class CommandDispatcher:
         return len(self._locks)
 
     @staticmethod
-    def _appliance_key(appliance: Appliance) -> str | int:
+    def _appliance_key(appliance: Appliance) -> _LockKey:
         unique_id = getattr(appliance, "unique_id", _MISSING)
-        return id(appliance) if unique_id is _MISSING else str(unique_id)
+        if unique_id is not _MISSING and unique_id is not None:
+            stable_id = str(unique_id)
+            if stable_id.strip():
+                return ("stable", stable_id)
+        return ("object", id(appliance))
 
     @staticmethod
     def _command_tree(commands: Mapping[str, HonCommand]) -> list[HonCommand]:

@@ -680,10 +680,9 @@ def test_dispatch_cancellation_rolls_back_and_propagates() -> None:
     assert appliance.synced_payloads == []
 
 
-def test_dispatch_serializes_same_appliance_in_order_and_cleans_lock() -> None:
+def test_dispatch_serializes_same_appliance_without_unique_id_in_order() -> None:
     async def scenario() -> None:
         appliance, _, command = _dispatch_appliance()
-        appliance.unique_id = 17
         dispatcher = CommandDispatcher()
         started: asyncio.Queue[str] = asyncio.Queue()
         releases = [asyncio.Event(), asyncio.Event()]
@@ -727,69 +726,114 @@ def test_dispatch_serializes_same_appliance_in_order_and_cleans_lock() -> None:
     asyncio.run(scenario())
 
 
+async def _assert_appliance_dispatches_overlap(
+    first_appliance: _DispatchAppliance,
+    first_command: _DispatchCommand,
+    second_appliance: _DispatchAppliance,
+    second_command: _DispatchCommand,
+) -> None:
+    dispatcher = CommandDispatcher()
+    started: asyncio.Queue[str] = asyncio.Queue()
+    releases = [asyncio.Event(), asyncio.Event()]
+    state = _ConcurrencyState()
+    _block_command_sends(
+        first_command,
+        label="first",
+        started=started,
+        releases=[releases[0]],
+        state=state,
+    )
+    _block_command_sends(
+        second_command,
+        label="second",
+        started=started,
+        releases=[releases[1]],
+        state=state,
+    )
+
+    tasks = [
+        asyncio.create_task(
+            dispatcher.dispatch(first_appliance, _category_patch())
+        ),
+        asyncio.create_task(
+            dispatcher.dispatch(second_appliance, _category_patch())
+        ),
+    ]
+    labels = {
+        await asyncio.wait_for(started.get(), timeout=1),
+        await asyncio.wait_for(started.get(), timeout=1),
+    }
+
+    assert labels == {"first", "second"}
+    assert state.max_active == 2
+    assert dispatcher.lock_count == 2
+
+    for release in releases:
+        release.set()
+
+    assert await asyncio.gather(*tasks) == [True, True]
+    assert dispatcher.lock_count == 0
+
+
 def test_concurrent_dispatches_for_different_appliances_overlap() -> None:
-    async def scenario() -> None:
-        first_appliance, _, first_command = _dispatch_appliance()
-        second_appliance, _, second_command = _dispatch_appliance()
-        dispatcher = CommandDispatcher()
-        started: asyncio.Queue[str] = asyncio.Queue()
-        releases = [asyncio.Event(), asyncio.Event()]
-        state = _ConcurrencyState()
-        _block_command_sends(
+    first_appliance, _, first_command = _dispatch_appliance()
+    second_appliance, _, second_command = _dispatch_appliance()
+
+    asyncio.run(
+        _assert_appliance_dispatches_overlap(
+            first_appliance,
             first_command,
-            label="first",
-            started=started,
-            releases=[releases[0]],
-            state=state,
-        )
-        _block_command_sends(
+            second_appliance,
             second_command,
-            label="second",
-            started=started,
-            releases=[releases[1]],
-            state=state,
         )
-
-        tasks = [
-            asyncio.create_task(
-                dispatcher.dispatch(first_appliance, _category_patch())
-            ),
-            asyncio.create_task(
-                dispatcher.dispatch(second_appliance, _category_patch())
-            ),
-        ]
-        labels = {
-            await asyncio.wait_for(started.get(), timeout=1),
-            await asyncio.wait_for(started.get(), timeout=1),
-        }
-
-        assert labels == {"first", "second"}
-        assert state.max_active == 2
-        assert dispatcher.lock_count == 2
-
-        for release in releases:
-            release.set()
-
-        assert await asyncio.gather(*tasks) == [True, True]
-        assert dispatcher.lock_count == 0
-
-    asyncio.run(scenario())
+    )
 
 
 @pytest.mark.parametrize(
     ("first_unique_id", "second_unique_id"),
-    [(17, "17"), (None, None)],
-    ids=["stringified", "present-falsy"],
+    [(None, None), ("", ""), (" \t ", " \t ")],
+    ids=["none", "empty", "whitespace"],
 )
-def test_dispatch_serializes_matching_stringified_unique_ids(
+def test_concurrent_dispatches_with_unstable_unique_ids_overlap(
     first_unique_id: object,
     second_unique_id: object,
 ) -> None:
+    first_appliance, _, first_command = _dispatch_appliance()
+    second_appliance, _, second_command = _dispatch_appliance()
+    first_appliance.unique_id = first_unique_id
+    second_appliance.unique_id = second_unique_id
+
+    asyncio.run(
+        _assert_appliance_dispatches_overlap(
+            first_appliance,
+            first_command,
+            second_appliance,
+            second_command,
+        )
+    )
+
+
+def test_concurrent_dispatches_use_distinct_key_namespaces() -> None:
+    first_appliance, _, first_command = _dispatch_appliance()
+    second_appliance, _, second_command = _dispatch_appliance()
+    second_appliance.unique_id = str(id(first_appliance))
+
+    asyncio.run(
+        _assert_appliance_dispatches_overlap(
+            first_appliance,
+            first_command,
+            second_appliance,
+            second_command,
+        )
+    )
+
+
+def test_dispatch_serializes_matching_nonempty_stringified_unique_ids() -> None:
     async def scenario() -> None:
         first_appliance, _, first_command = _dispatch_appliance()
         second_appliance, _, second_command = _dispatch_appliance()
-        first_appliance.unique_id = first_unique_id
-        second_appliance.unique_id = second_unique_id
+        first_appliance.unique_id = 17
+        second_appliance.unique_id = "17"
         dispatcher = CommandDispatcher()
         started: asyncio.Queue[str] = asyncio.Queue()
         releases = [asyncio.Event(), asyncio.Event()]
