@@ -21,3 +21,10 @@ Task 11: complete — options-screen parity (was UNCHECKED), AP key list pinned 
 Task 12: complete — 17 cases end-to-end through the REAL dispatcher plus 10 negative scenarios; A1 closed (no model code in tracked tests); M5/M7 prove what unit tests could not
 Task 13: complete — 1548 passed twice, per-file + 9 adversarial-order sweeps green, 5 invariants held (zero files changed under client/), evidence sweep clean (4 pre-existing decomp.txt citations reported)
 Task 14/15: BLOCKED — no live HHP50/HHP55 device this session; deferred to beta
+
+CAMPAIGN CLOSED (executable scope). Tasks 1-13 complete on dev, 19 commits from BASE
+0546291 to HEAD, nothing pushed. Suite 1236 -> 1548 passed, 1 skipped, 7 xfailed,
+302 subtests. Tasks 14/15 stay BLOCKED: no live HHP50/HHP55 this session, resolution
+is a beta release plus user-collected diagnostics by explicit user decision.
+Open items live in OPEN-ITEMS.md: 9 LIVE, 6 BACKLOG, 1 DECIDE, 13 DEVIATION, 25 LIMIT.
+NOT done (needs an explicit request): push, PR, merge, release, version bump.
