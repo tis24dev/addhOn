@@ -590,6 +590,12 @@
       "indicator_light": {
         "name": "Spia"
       },
+      "eco_active": {
+        "name": "Eco Attivo"
+      },
+      "problem": {
+        "name": "Guasto"
+      },
       "update_ok": {
         "name": "Aggiornamento OK"
       }

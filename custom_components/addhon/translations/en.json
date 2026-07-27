@@ -590,6 +590,12 @@
       "indicator_light": {
         "name": "Indicator light"
       },
+      "eco_active": {
+        "name": "Eco active"
+      },
+      "problem": {
+        "name": "Problem"
+      },
       "update_ok": {
         "name": "Update OK"
       }

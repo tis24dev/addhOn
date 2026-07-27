@@ -11,6 +11,7 @@ here are direct 0/1 attributes, confirmed live on HW80 (washer) / HD100 (dryer).
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import logging
 
@@ -27,6 +28,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .base_entity import HonAccountCoordinatorEntity, HonBaseEntity, coordinator_data_map
 from .const import (
     APPLIANCE_AC,
+    APPLIANCE_AP,
     APPLIANCE_DW,
     APPLIANCE_FR,
     APPLIANCE_FRE,
@@ -48,6 +50,7 @@ from .const import (
     WM_ATTR_DRY_CLEAN_NEEDED,
     WM_ATTR_FILTER_CLEAN,
 )
+from .air_purifier import has_problem
 from .debug_utils import redact_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,10 +63,16 @@ class HonBinarySensorEntityDescription(BinarySensorEntityDescription):
     - `key` = unique_id suffix (new, no historic entity uses these suffixes).
     - `attr_key` = key read via HonBaseEntity._get_attr.
     - `on_value` = raw value that corresponds to the "on" state (default "1").
+    - `value_fn` optional: derives the state from the raw value instead of
+      comparing it to `on_value`. For signals whose "off" is a SET of raw values
+      rather than a single one (an error code has several no-error spellings), so
+      the rule stays one shared function instead of a literal per description.
+      Never called with None: a missing reading stays unknown.
     """
 
     attr_key: str
     on_value: str = "1"
+    value_fn: Callable[[object], bool | None] | None = None
 
 
 _DOOR_OPEN = HonBinarySensorEntityDescription(
@@ -298,7 +307,27 @@ _WATER_HEATER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     ),
 )
 
+# Air purifier (AP). Both signals are reported and meaningful with the purifier
+# stopped, so neither is gated on power (unlike the AP environmental sensors).
+_AIR_PURIFIER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    HonBinarySensorEntityDescription(
+        key="eco_active",
+        attr_key="ecoModeStatus",       # AP_PARAMS_ENUM; 1 = eco engaged
+        icon="mdi:leaf",
+    ),
+    # Derived through has_problem() rather than compared to one literal: the
+    # device spells "no error" as zero, "00" and "100" interchangeably, so a
+    # single on_value would report a healthy purifier as faulty.
+    HonBinarySensorEntityDescription(
+        key="problem",
+        attr_key="errors",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        value_fn=has_problem,
+    ),
+)
+
 BINARY_SENSORS: dict[str, tuple[HonBinarySensorEntityDescription, ...]] = {
+    APPLIANCE_AP: _AIR_PURIFIER_BINARY,
     APPLIANCE_WM: _WASH_BINARY,
     APPLIANCE_WD: _WASH_BINARY,
     APPLIANCE_TD: _DRY_BINARY,
@@ -380,6 +409,9 @@ class HonBinarySensor(HonBaseEntity, BinarySensorEntity):
         raw = self._get_attr(self.entity_description.attr_key)
         if raw is None:
             return None
+        value_fn = self.entity_description.value_fn
+        if value_fn is not None:
+            return value_fn(raw)
         return str(raw) == self.entity_description.on_value
 
 

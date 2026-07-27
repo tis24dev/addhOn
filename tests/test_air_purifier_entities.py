@@ -115,6 +115,42 @@ def _install_platform_stubs() -> None:
         sensor_mod, "SensorStateClass", SensorStateClass
     )
 
+    binary_mod = _mod("homeassistant.components.binary_sensor")
+    components.binary_sensor = binary_mod
+
+    @dataclasses.dataclass(frozen=True, kw_only=True)
+    class BinarySensorEntityDescription:
+        key: str
+        name: str | None = None
+        translation_key: str | None = None
+        icon: str | None = None
+        device_class: object | None = None
+
+    class BinarySensorEntity:
+        pass
+
+    class BinarySensorDeviceClass:
+        DOOR = "door"
+        PROBLEM = "problem"
+        RUNNING = "running"
+        OCCUPANCY = "occupancy"
+        LIGHT = "light"
+        CONNECTIVITY = "connectivity"
+        HEAT = "heat"
+        SAFETY = "safety"
+        LOCK = "lock"
+        POWER = "power"
+
+    binary_mod.BinarySensorEntityDescription = getattr(
+        binary_mod, "BinarySensorEntityDescription", BinarySensorEntityDescription
+    )
+    binary_mod.BinarySensorEntity = getattr(
+        binary_mod, "BinarySensorEntity", BinarySensorEntity
+    )
+    binary_mod.BinarySensorDeviceClass = getattr(
+        binary_mod, "BinarySensorDeviceClass", BinarySensorDeviceClass
+    )
+
     entity_platform = _mod("homeassistant.helpers.entity_platform")
     sys.modules["homeassistant.helpers"].entity_platform = entity_platform
     entity_platform.AddEntitiesCallback = getattr(
@@ -144,6 +180,7 @@ FULL_ATTRIBUTES = {
     "errors": "00",
     "coLevel": "1",
     "pollenLevel": "2",
+    "ecoModeStatus": "1",
 }
 
 
@@ -420,3 +457,132 @@ class AirPurifierDescriptionFlagTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- Task 4: standard binary sensors -----------------------------------------
+
+
+async def _build_binary(attributes: dict) -> list:
+    from custom_components.addhon import binary_sensor
+    from custom_components.addhon.const import DOMAIN
+
+    data = {
+        "ap-1": {
+            "type": APPLIANCE_AP,
+            "name": "Purifier",
+            "attributes": attributes,
+            "settings": {},
+        }
+    }
+    coordinator = FakeCoordinator(data)
+    hass = FakeHass(
+        {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}}
+    )
+    added: list = []
+    await binary_sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+    return [e for e in added if not getattr(e, "_addhon_account", False)]
+
+
+class AirPurifierBinaryTableTest(unittest.TestCase):
+    def test_table_is_the_two_standard_signals(self) -> None:
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+
+        self.assertEqual(
+            [d.key for d in BINARY_SENSORS[APPLIANCE_AP]],
+            ["eco_active", "problem"],
+        )
+
+    def test_problem_is_a_problem_class_derived_from_the_error_code(self) -> None:
+        """The problem state comes from has_problem(), so every "no error"
+        spelling the device uses is handled, not one literal code."""
+        from custom_components.addhon.air_purifier import has_problem
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+
+        table = {d.key: d for d in BINARY_SENSORS[APPLIANCE_AP]}
+        problem = table["problem"]
+        self.assertEqual("problem", problem.device_class)
+        self.assertEqual("errors", problem.attr_key)
+        self.assertIs(has_problem, problem.value_fn)
+
+    def test_eco_reads_its_own_attribute_as_a_plain_toggle(self) -> None:
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+
+        table = {d.key: d for d in BINARY_SENSORS[APPLIANCE_AP]}
+        eco = table["eco_active"]
+        self.assertEqual("ecoModeStatus", eco.attr_key)
+        self.assertEqual("1", eco.on_value)
+        self.assertIsNone(eco.value_fn)
+
+    def test_the_value_fn_field_defaults_off_everywhere_else(self) -> None:
+        """New optional field: no existing binary sensor changes behavior."""
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+
+        for app_type, descriptions in BINARY_SENSORS.items():
+            if app_type == APPLIANCE_AP:
+                continue
+            for description in descriptions:
+                self.assertIsNone(description.value_fn, description.key)
+
+
+class AirPurifierBinaryGatingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_full_device_creates_both_plus_connectivity(self) -> None:
+        entities = _by_key(await _build_binary(FULL_ATTRIBUTES))
+        self.assertEqual({"eco_active", "problem", "connectivity"}, set(entities))
+
+    async def test_each_signal_is_gated_on_its_own_attribute(self) -> None:
+        only_eco = _by_key(await _build_binary({"ecoModeStatus": "0"}))
+        self.assertIn("eco_active", only_eco)
+        self.assertNotIn("problem", only_eco)
+
+        only_problem = _by_key(await _build_binary({"errors": "0"}))
+        self.assertIn("problem", only_problem)
+        self.assertNotIn("eco_active", only_problem)
+
+    async def test_a_bare_device_gets_connectivity_only(self) -> None:
+        entities = _by_key(await _build_binary({}))
+        self.assertEqual({"connectivity"}, set(entities))
+
+
+class AirPurifierBinaryStateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_eco_is_on_only_for_raw_one(self) -> None:
+        for raw, expected in (("1", True), ("0", False), ("2", False), (1, True)):
+            entities = _by_key(
+                await _build_binary({**FULL_ATTRIBUTES, "ecoModeStatus": raw})
+            )
+            self.assertIs(expected, entities["eco_active"].is_on, raw)
+
+    async def test_problem_is_off_for_every_normal_error_spelling(self) -> None:
+        for raw in (0, "0", "00", "100", 100):
+            entities = _by_key(
+                await _build_binary({**FULL_ATTRIBUTES, "errors": raw})
+            )
+            self.assertIs(False, entities["problem"].is_on, raw)
+
+    async def test_problem_is_on_for_a_real_error(self) -> None:
+        for raw in ("E12", "1000", 7):
+            entities = _by_key(
+                await _build_binary({**FULL_ATTRIBUTES, "errors": raw})
+            )
+            self.assertIs(True, entities["problem"].is_on, raw)
+
+    async def test_an_unreported_reading_stays_unknown(self) -> None:
+        """An empty attribute is missing data, not evidence of a healthy device,
+        so the entity reports unknown rather than "no problem"."""
+        entities = _by_key(
+            await _build_binary(
+                {**FULL_ATTRIBUTES, "errors": "", "ecoModeStatus": ""}
+            )
+        )
+        self.assertIsNone(entities["problem"].is_on)
+        self.assertIsNone(entities["eco_active"].is_on)
+
+
+class AirPurifierBinaryAvailabilityTest(unittest.IsolatedAsyncioTestCase):
+    async def test_both_signals_stay_available_while_off(self) -> None:
+        """Neither is live telemetry: the eco setting and the error code are
+        reported and meaningful with the purifier stopped."""
+        entities = _by_key(
+            await _build_binary({**FULL_ATTRIBUTES, "onOffStatus": "0"})
+        )
+        self.assertTrue(entities["eco_active"].available)
+        self.assertTrue(entities["problem"].available)
