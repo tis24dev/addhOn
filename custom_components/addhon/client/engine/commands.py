@@ -188,12 +188,21 @@ class HonCommand:
                 params[key] = parameter.value
         return await self.send_parameters(params)
 
-    async def send_parameters(self, params: dict[str, str | float]) -> bool:
-        ancillary_params = self.parameter_groups.get("ancillaryParameters", {})
+    async def _send_parameters(
+        self,
+        params: dict[str, str | float],
+        *,
+        sync_shadow: bool,
+    ) -> bool:
+        params = dict(params)
+        ancillary_params = dict(
+            self.parameter_groups.get("ancillaryParameters", {})
+        )
         ancillary_params.pop("programRules", None)
         if "prStr" in params:
             params["prStr"] = self._category_name.upper()
-        self.appliance.sync_command_to_params(self.name)
+        if sync_shadow:
+            self.appliance.sync_command_to_params(self.name)
         result = await self.api.send_command(
             self._appliance,
             self._name,
@@ -205,6 +214,12 @@ class HonCommand:
             _LOGGER.error("Command rejected by cloud: %s", self._name)
             raise ApiError("Can't send command")
         return result
+
+    async def send_parameters(self, params: dict[str, str | float]) -> bool:
+        return await self._send_parameters(params, sync_shadow=True)
+
+    async def send_exact(self, params: dict[str, str | float]) -> bool:
+        return await self._send_parameters(params, sync_shadow=False)
 
     @property
     def categories(self) -> dict[str, "HonCommand"]:

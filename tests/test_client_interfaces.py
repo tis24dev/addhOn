@@ -72,6 +72,9 @@ class ClientInterfacesTest(unittest.TestCase):
             def send(self):  # noqa: D401 - shape only
                 return None
 
+            def send_exact(self, params):
+                return None
+
         self.assertIsInstance(Cmd(), self.I.Command)
 
         class CmdNoCategories:  # parameters+send but without categories/category
@@ -81,7 +84,20 @@ class ClientInterfacesTest(unittest.TestCase):
             def send(self):
                 return None
 
+            def send_exact(self, params):
+                return None
+
         self.assertNotIsInstance(CmdNoCategories(), self.I.Command)
+
+        class CmdWithoutExact:
+            parameters: dict = {}
+            categories: dict = {}
+            category = ""
+
+            def send(self):
+                return None
+
+        self.assertNotIsInstance(CmdWithoutExact(), self.I.Command)
 
         class App:
             commands: dict = {}
@@ -94,7 +110,23 @@ class ClientInterfacesTest(unittest.TestCase):
             def update(self):
                 return None
 
+            def sync_payload_to_params(self, params):
+                return None
+
         self.assertIsInstance(App(), self.I.Appliance)
+
+        class AppWithoutTargetedSync:
+            commands: dict = {}
+            attributes: dict = {}
+            statistics: dict = {}
+            appliance_type = "REF"
+            model_id = 10136
+            nick_name = "Frigo"
+
+            def update(self):
+                return None
+
+        self.assertNotIsInstance(AppWithoutTargetedSync(), self.I.Appliance)
 
     def test_session_conformance(self) -> None:
         # The shape that the real pyhon.Hon exposes (appliances + context manager).

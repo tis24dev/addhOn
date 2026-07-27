@@ -61,6 +61,10 @@ class Command(Protocol):
 
     def send(self) -> Awaitable[bool]: ...
 
+    def send_exact(
+        self, params: dict[str, str | float]
+    ) -> Awaitable[bool]: ...
+
 
 @runtime_checkable
 class Appliance(Protocol):
@@ -80,6 +84,10 @@ class Appliance(Protocol):
     nick_name: str
 
     def update(self) -> Awaitable[Any]: ...
+
+    def sync_payload_to_params(
+        self, params: Mapping[str, str | float]
+    ) -> None: ...
 
 
 @runtime_checkable

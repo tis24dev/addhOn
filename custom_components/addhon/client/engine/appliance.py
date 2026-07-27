@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any, Optional
@@ -357,6 +358,17 @@ class HonAppliance:
                 self.attributes["parameters"][key].update(
                     str(new.intern_value), shield=True
                 )
+
+    def sync_payload_to_params(
+        self, params: Mapping[str, str | float]
+    ) -> None:
+        shadow = self.attributes.get("parameters", {})
+        if not isinstance(shadow, dict):
+            return
+        for key, value in params.items():
+            current = shadow.get(key)
+            if current is not None and hasattr(current, "update"):
+                current.update(str(value), shield=True)
 
     def sync_params_to_command(self, command_name: str) -> None:
         if not (command := self.commands.get(command_name)):

@@ -345,6 +345,52 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(params["prStr"], "PROGRAMS.REF.SUPER_COOL")
         self.assertNotIn("programRules", ancillary)
 
+    def test_send_exact_does_not_broadly_sync_shadow(self) -> None:
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        api = FakeApi()
+        app = NaAppliance(api, dict(_INFO), zone=0)
+        command = NaCommand(
+            "settings",
+            {
+                "parameters": {
+                    "mode": _range(default="1", lo="0", hi="3", inc="1"),
+                    "light": _enum("on", ["off", "on"]),
+                }
+            },
+            app,
+        )
+        app._commands = {"settings": command}
+        app._attributes = {
+            "parameters": {
+                "mode": HonAttribute({"parNewVal": "old"}),
+                "light": HonAttribute({"parNewVal": "old-light"}),
+            }
+        }
+
+        result = _run(command.send_exact({"mode": "2"}))
+
+        self.assertIs(result, True)
+        self.assertEqual(api.sent[0][1], {"mode": "2"})
+        self.assertEqual(app.attributes["parameters"]["mode"].value, "old")
+        self.assertEqual(app.attributes["parameters"]["light"].value, "old-light")
+
+    def test_targeted_shadow_sync_updates_payload_keys_only(self) -> None:
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        app = NaAppliance(FakeApi(), dict(_INFO), zone=0)
+        app._attributes = {
+            "parameters": {
+                "mode": HonAttribute({"parNewVal": "old"}),
+                "light": HonAttribute({"parNewVal": "old-light"}),
+            }
+        }
+
+        app.sync_payload_to_params({"mode": "2"})
+
+        self.assertEqual(app.attributes["parameters"]["mode"].value, 2)
+        self.assertEqual(app.attributes["parameters"]["light"].value, "old-light")
+
     def test_ids_excludes_iot_and_sorted(self) -> None:
         snap = _native_snapshot()
         self.assertEqual(snap["rich_ids"], {1: "super_cool", 5: "super_freeze"})
