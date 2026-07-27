@@ -385,18 +385,17 @@ class CommandDispatcher:
                 _emit_intent_safely(common_fields, patch)
                 try:
                     prepared = self._prepare(command_before, patch)
+                    prepared = PreparedCommand(
+                        command=prepared.command,
+                        payload=prepared.command.canonical_exact_payload(
+                            prepared.payload
+                        ),
+                        requested_keys=prepared.requested_keys,
+                        mandatory_keys=prepared.mandatory_keys,
+                        changed_keys=prepared.changed_keys,
+                    )
                     _emit_payload_safely(common_fields, prepared)
                     result = await prepared.command.send_exact(prepared.payload)
-                    if result is not True:
-                        rollback()
-                        _emit_result_safely(
-                            common_fields,
-                            started,
-                            result=False,
-                            outcome="cloud_rejected",
-                        )
-                        return False
-                    appliance.sync_payload_to_params(prepared.payload)
                 except BaseException as error:
                     rollback()
                     _emit_result_safely(
@@ -407,6 +406,23 @@ class CommandDispatcher:
                         error=error,
                     )
                     raise
+                if result is not True:
+                    rollback()
+                    _emit_result_safely(
+                        common_fields,
+                        started,
+                        result=False,
+                        outcome="cloud_rejected",
+                    )
+                    return False
+
+                # A literal True is the remote commit point. Local reconciliation
+                # is best-effort and must not make an accepted command retryable.
+                sync_error: Exception | None = None
+                try:
+                    appliance.sync_payload_to_params(prepared.payload)
+                except Exception as error:
+                    sync_error = error
                 _record_expected_safely(
                     appliance,
                     patch.action,
@@ -416,7 +432,12 @@ class CommandDispatcher:
                     common_fields,
                     started,
                     result=True,
-                    outcome="success",
+                    outcome=(
+                        "committed_sync_error"
+                        if sync_error is not None
+                        else "success"
+                    ),
+                    error=sync_error,
                 )
                 _emit_shadow_safely(
                     common_fields,

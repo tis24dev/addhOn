@@ -18,6 +18,7 @@ import sys
 import unittest
 from copy import copy
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _golden import REPO, frozen, install_stubs, normalize  # noqa: E402
@@ -29,6 +30,10 @@ from custom_components.addhon.client import factory  # noqa: E402
 from custom_components.addhon.client.engine.commands import HonCommand as NaCommand  # noqa: E402
 from custom_components.addhon.client.engine.rules import HonRuleSet  # noqa: E402
 from custom_components.addhon.client import interfaces  # noqa: E402
+from custom_components.addhon.command_dispatch import (  # noqa: E402
+    CommandDispatcher,
+    CommandPatch,
+)
 
 NaAppliance = factory._native_engine_appliance_cls()
 
@@ -427,6 +432,88 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(
             {"prCode": "1", "prStr": "PROGRAMS.REF.SUPER_COOL"},
             api.sent[0][1],
+        )
+
+    def test_dispatch_reuses_canonical_start_program_payload(self) -> None:
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        class IdentityApi(DictApi):
+            def __init__(self) -> None:
+                super().__init__(_RICH_COMMANDS)
+                self.wire_payload = None
+
+            async def send_command(
+                self, appliance, name, params, ancillary, category
+            ):
+                self.wire_payload = params
+                return await super().send_command(
+                    appliance, name, params, ancillary, category
+                )
+
+        api = IdentityApi()
+        appliance = _build(NaAppliance, api)
+        appliance._attributes = {
+            "parameters": {
+                "tempSel": HonAttribute("old-temp"),
+                "prCode": HonAttribute("old-code"),
+                "prStr": HonAttribute("old-program"),
+            }
+        }
+        synced_payloads = []
+        original_sync = appliance.sync_payload_to_params
+
+        def capture_sync(payload) -> None:
+            synced_payloads.append(payload)
+            original_sync(payload)
+
+        appliance.sync_payload_to_params = capture_sync
+        expected_payloads = []
+        payload_events = []
+
+        def capture_expected(_appliance, _action, payload) -> None:
+            expected_payloads.append(payload)
+
+        def capture_event(event, fields) -> None:
+            if event == "command_payload":
+                payload_events.append(fields["payload"])
+
+        with (
+            patch(
+                "custom_components.addhon.command_dispatch.record_expected_update",
+                side_effect=capture_expected,
+            ),
+            patch(
+                "custom_components.addhon.command_dispatch.emit_command_event",
+                side_effect=capture_event,
+            ),
+        ):
+            result = _run(
+                CommandDispatcher().dispatch(
+                    appliance,
+                    CommandPatch(
+                        "startProgram",
+                        {"tempSel": 6},
+                        action="start_program",
+                    ),
+                )
+            )
+
+        expected = {
+            "tempSel": "6",
+            "prCode": "1",
+            "prStr": "PROGRAMS.REF.SUPER_COOL",
+        }
+        self.assertIs(result, True)
+        self.assertEqual(expected, api.wire_payload)
+        self.assertEqual(expected, synced_payloads[0])
+        self.assertEqual(expected, expected_payloads[0])
+        self.assertEqual(expected, payload_events[0])
+        self.assertIs(api.wire_payload, synced_payloads[0])
+        self.assertIs(api.wire_payload, expected_payloads[0])
+        self.assertIs(api.wire_payload, payload_events[0])
+        self.assertEqual(
+            "PROGRAMS.REF.SUPER_COOL",
+            appliance.attributes["parameters"]["prStr"].value,
         )
 
     def test_send_exact_does_not_broadly_sync_shadow(self) -> None:

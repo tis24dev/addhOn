@@ -874,6 +874,51 @@ def test_dispatch_transaction_success_syncs_exact_payload_once() -> None:
     )
 
 
+def test_dispatch_post_commit_sync_error_keeps_committed_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import custom_components.addhon.command_dispatch as dispatch_module
+
+    appliance, first, second = _dispatch_appliance()
+    recorded_payloads: list[dict[str, str | float]] = []
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def partial_sync(payload: dict[str, str | float]) -> None:
+        appliance.synced_payloads.append(dict(payload))
+        appliance.attributes["parameters"]["category"].update(
+            str(payload["category"]), shield=True
+        )
+        raise RuntimeError("sync boom")
+
+    appliance.sync_payload_to_params = partial_sync  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        dispatch_module,
+        "record_expected_update",
+        lambda _appliance, _action, payload: recorded_payloads.append(payload),
+    )
+    monkeypatch.setattr(
+        dispatch_module,
+        "emit_command_event",
+        lambda event, fields: events.append((event, dict(fields))),
+    )
+
+    result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    expected = {"category": "second", "mode": "target", "coupled": "4"}
+    assert result is True
+    assert appliance.commands["settings"] is second
+    assert appliance.commands["settings"] is not first
+    assert second.sent_payloads == [expected]
+    assert appliance.synced_payloads == [expected]
+    assert appliance.attributes["parameters"]["category"].value == "second"
+    assert second.parameters["mode"].intern_value == "target"
+    assert recorded_payloads == [expected]
+    result_fields = next(fields for event, fields in events if event == "command_result")
+    assert result_fields["result"] is True
+    assert result_fields["outcome"] == "committed_sync_error"
+    assert result_fields["error_type"] == "RuntimeError"
+
+
 def test_dispatch_diagnostic_events_describe_successful_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
