@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from __future__ import annotations
 
+import asyncio
 from dataclasses import FrozenInstanceError
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -11,7 +12,9 @@ from tests._golden import install_stubs
 
 install_stubs()
 
+from custom_components.addhon.client.engine.attributes import HonAttribute
 from custom_components.addhon.client.engine.commands import HonCommand
+from custom_components.addhon.client.engine.exceptions import ApiError
 from custom_components.addhon.command_dispatch import CommandDispatcher, CommandPatch
 from tests.contract_fixtures import load_contract_cases
 
@@ -358,3 +361,285 @@ def test_prepare_rejects_all_off_schema_keys_before_any_mutation(
     assert prepared_called is False
     assert command.parameters["mode"].intern_value == "1"
     assert command.parameters["light"].intern_value == "0"
+
+
+class _DispatchAppliance(_Appliance):
+    def __init__(self) -> None:
+        super().__init__()
+        self.info: dict[str, Any] = {}
+        self.attributes = {
+            "parameters": {
+                "category": HonAttribute("first"),
+                "mode": HonAttribute("old"),
+                "coupled": HonAttribute("0"),
+                "untouched": HonAttribute("keep"),
+            }
+        }
+        self.synced_payloads: list[dict[str, str | float]] = []
+
+    def sync_payload_to_params(
+        self,
+        payload: dict[str, str | float],
+    ) -> None:
+        self.synced_payloads.append(dict(payload))
+        for key, value in payload.items():
+            if attribute := self.attributes["parameters"].get(key):
+                attribute.update(str(value), shield=True)
+
+
+class _DispatchCommand(HonCommand):
+    def __init__(
+        self,
+        name: str,
+        attributes: dict[str, Any],
+        appliance: _DispatchAppliance,
+        categories: dict[str, HonCommand],
+        category_name: str,
+    ) -> None:
+        self.send_result: bool = True
+        self.send_error: BaseException | None = None
+        self.before_send: Callable[[], None] | None = None
+        self.sent_payloads: list[dict[str, str | float]] = []
+        super().__init__(
+            name,
+            attributes,
+            appliance,
+            categories=categories,
+            category_name=category_name,
+        )
+
+    async def send_exact(self, payload: dict[str, str | float]) -> bool:
+        self.sent_payloads.append(dict(payload))
+        if self.before_send is not None:
+            self.before_send()
+        if self.send_error is not None:
+            raise self.send_error
+        return self.send_result
+
+
+def _dispatch_appliance() -> tuple[
+    _DispatchAppliance,
+    _DispatchCommand,
+    _DispatchCommand,
+]:
+    appliance = _DispatchAppliance()
+    categories: dict[str, HonCommand] = {}
+    first = _DispatchCommand(
+        "settings",
+        {
+            "parameters": {
+                "mode": _enum("old", ["old", "target"]),
+                "coupled": _enum("0", ["0", "4"]),
+            }
+        },
+        appliance,
+        categories,
+        "first",
+    )
+    second = _DispatchCommand(
+        "settings",
+        {
+            "parameters": {
+                "mode": _enum("new", ["new", "target"]),
+                "coupled": _enum("0", ["0", "4"]),
+            },
+            "ancillaryParameters": {
+                "programRules": {
+                    "category": "rule",
+                    "typology": "fixed",
+                    "fixedValue": {
+                        "coupled": {
+                            "mode": {
+                                "target": {
+                                    "typology": "enum",
+                                    "enumValues": "4",
+                                    "defaultValue": "4",
+                                }
+                            }
+                        }
+                    },
+                }
+            },
+        },
+        appliance,
+        categories,
+        "second",
+    )
+    categories.update({"first": first, "second": second})
+    appliance.commands["settings"] = first
+    return appliance, first, second
+
+
+def _all_commands(appliance: _DispatchAppliance) -> list[HonCommand]:
+    pending = list(appliance.commands.values())
+    commands: list[HonCommand] = []
+    visited: set[int] = set()
+    while pending:
+        command = pending.pop()
+        if id(command) in visited:
+            continue
+        visited.add(id(command))
+        commands.append(command)
+        pending.extend(command.categories.values())
+    return commands
+
+
+def _snapshot_transaction(appliance: _DispatchAppliance) -> dict[str, Any]:
+    commands = _all_commands(appliance)
+    return {
+        "pointers": {
+            name: (id(command), command.category)
+            for name, command in appliance.commands.items()
+        },
+        "commands": {
+            id(command): {
+                name: dict(parameter.__dict__)
+                for name, parameter in command.parameters.items()
+            }
+            for command in commands
+        },
+        "shadow": {
+            name: dict(parameter.__dict__)
+            for name, parameter in appliance.attributes["parameters"].items()
+        },
+    }
+
+
+def _category_patch() -> CommandPatch:
+    return CommandPatch(
+        "settings",
+        {"category": "second", "mode": "target"},
+        action="select_category_mode",
+    )
+
+
+def _mutate_selected_category_and_shadow(
+    appliance: _DispatchAppliance,
+    command: _DispatchCommand,
+) -> None:
+    command.parameters["coupled"].values = ["corrupt"]
+    command.parameters["coupled"].value = "corrupt"
+    appliance.attributes["parameters"]["mode"].update("corrupt", shield=True)
+
+
+def test_dispatch_transaction_success_syncs_exact_payload_once() -> None:
+    appliance, first, second = _dispatch_appliance()
+    untouched_before = dict(
+        appliance.attributes["parameters"]["untouched"].__dict__
+    )
+
+    result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    expected = {"category": "second", "mode": "target", "coupled": "4"}
+    assert result is True
+    assert appliance.commands["settings"] is second
+    assert appliance.commands["settings"] is not first
+    assert second.sent_payloads == [expected]
+    assert appliance.synced_payloads == [expected]
+    assert second.parameters["coupled"].values == ["4"]
+    assert (
+        dict(appliance.attributes["parameters"]["untouched"].__dict__)
+        == untouched_before
+    )
+
+
+def test_dispatch_transaction_rolls_back_assignment_failure() -> None:
+    appliance, first, second = _dispatch_appliance()
+    before = _snapshot_transaction(appliance)
+    patch = CommandPatch(
+        "settings",
+        {"category": "second", "mode": "missing"},
+        action="invalid_assignment",
+    )
+
+    with pytest.raises(ValueError, match="Allowed values"):
+        asyncio.run(CommandDispatcher().dispatch(appliance, patch))
+
+    assert _snapshot_transaction(appliance) == before
+    assert appliance.commands["settings"] is first
+    assert second.sent_payloads == []
+    assert appliance.synced_payloads == []
+
+
+def test_dispatch_transaction_rolls_back_prepare_failure() -> None:
+    appliance, _, second = _dispatch_appliance()
+    before = _snapshot_transaction(appliance)
+
+    def fail_prepare(parameters: dict[str, Any]) -> None:
+        parameters["coupled"].values = ["corrupt"]
+        parameters["coupled"].value = "corrupt"
+        raise RuntimeError("prepare boom")
+
+    patch = CommandPatch(
+        "settings",
+        {"category": "second", "mode": "target"},
+        action="prepare_failure",
+        prepare=fail_prepare,
+    )
+
+    with pytest.raises(RuntimeError, match="prepare boom"):
+        asyncio.run(CommandDispatcher().dispatch(appliance, patch))
+
+    assert _snapshot_transaction(appliance) == before
+    assert second.sent_payloads == []
+    assert appliance.synced_payloads == []
+
+
+def test_dispatch_transaction_rolls_back_cloud_false() -> None:
+    appliance, _, second = _dispatch_appliance()
+    before = _snapshot_transaction(appliance)
+    second.send_result = False
+    second.before_send = lambda: _mutate_selected_category_and_shadow(
+        appliance, second
+    )
+
+    result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert result is False
+    assert _snapshot_transaction(appliance) == before
+    assert appliance.synced_payloads == []
+
+
+def test_dispatch_transaction_rolls_back_cloud_api_error() -> None:
+    appliance, _, second = _dispatch_appliance()
+    before = _snapshot_transaction(appliance)
+    second.send_error = ApiError("cloud rejected")
+    second.before_send = lambda: _mutate_selected_category_and_shadow(
+        appliance, second
+    )
+
+    with pytest.raises(ApiError, match="cloud rejected"):
+        asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert _snapshot_transaction(appliance) == before
+    assert appliance.synced_payloads == []
+
+
+def test_dispatch_transaction_rolls_back_transport_exception() -> None:
+    appliance, _, second = _dispatch_appliance()
+    before = _snapshot_transaction(appliance)
+    second.send_error = RuntimeError("send boom")
+    second.before_send = lambda: _mutate_selected_category_and_shadow(
+        appliance, second
+    )
+
+    with pytest.raises(RuntimeError, match="send boom"):
+        asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert _snapshot_transaction(appliance) == before
+    assert appliance.synced_payloads == []
+
+
+def test_dispatch_cancellation_rolls_back_and_propagates() -> None:
+    appliance, _, second = _dispatch_appliance()
+    before = _snapshot_transaction(appliance)
+    second.send_error = asyncio.CancelledError()
+    second.before_send = lambda: _mutate_selected_category_and_shadow(
+        appliance, second
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert _snapshot_transaction(appliance) == before
+    assert appliance.synced_payloads == []

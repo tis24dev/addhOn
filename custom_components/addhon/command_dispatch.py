@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from .param_rollback import snapshot_params
+from .param_rollback import restore_params, snapshot_params
 
 if TYPE_CHECKING:
     from .client.engine.commands import HonCommand
+    from .client.interfaces import Appliance
 
 PrepareCallback = Callable[[dict[str, Any]], None]
 
@@ -38,6 +39,22 @@ class PreparedCommand:
 @dataclass(frozen=True, slots=True)
 class CommandDispatcher:
     _SELECTOR_KEYS = frozenset({"category", "program"})
+
+    @staticmethod
+    def _command_tree(commands: Mapping[str, HonCommand]) -> list[HonCommand]:
+        pending = list(commands.values())
+        result: list[HonCommand] = []
+        visited: set[int] = set()
+        while pending:
+            command = pending.pop()
+            if id(command) in visited:
+                continue
+            visited.add(id(command))
+            result.append(command)
+            categories = getattr(command, "categories", {})
+            if isinstance(categories, Mapping):
+                pending.extend(categories.values())
+        return result
 
     @staticmethod
     def _active_command(command: HonCommand, command_name: str) -> HonCommand:
@@ -133,3 +150,43 @@ class CommandDispatcher:
             mandatory_keys=mandatory,
             changed_keys=changed,
         )
+
+    async def dispatch(
+        self,
+        appliance: Appliance,
+        patch: CommandPatch,
+    ) -> bool:
+        commands = appliance.commands
+        command_before = commands.get(patch.command_name)
+        if command_before is None:
+            raise KeyError(patch.command_name)
+
+        parameter_snapshots = [
+            (command, snapshot_params(command.parameters))
+            for command in self._command_tree(commands)
+        ]
+        attributes = getattr(appliance, "attributes", {})
+        shadow = (
+            attributes.get("parameters", {})
+            if isinstance(attributes, Mapping)
+            else {}
+        )
+        shadow_before = snapshot_params(shadow)
+
+        def rollback() -> None:
+            for command, snapshot in parameter_snapshots:
+                restore_params(command.parameters, snapshot)
+            restore_params(shadow, shadow_before)
+            commands[patch.command_name] = command_before  # type: ignore[index]
+
+        try:
+            prepared = self._prepare(command_before, patch)
+            result = await prepared.command.send_exact(prepared.payload)
+            if result is not True:
+                rollback()
+                return False
+            appliance.sync_payload_to_params(prepared.payload)
+            return True
+        except BaseException:
+            rollback()
+            raise
