@@ -17,7 +17,7 @@ Task 7: complete — sparse child_lock + touch_tone switches; per-class legacy g
 Task 8: complete — aroma select (power-gated), custom timings validated against the live range
 Task 9: complete — experimental option (targeted reload), AQ label + CO alarm, custom timing numbers in seconds; number.py is the third mixed file; control mutation exposed an unguarded stub clobber (V11)
 Task 10: complete — AP coverage registration + bounded future_capabilities; Step 5 was already satisfied by the dispatcher; control mutation found the device-class enum stub divergence (V12), new test_stub_hygiene.py
-Task 11: pending — EN/IT translations
+Task 11: complete — options-screen parity (was UNCHECKED), AP key list pinned per platform, semantic label assertions; IT casing + filter-pair wording fixed; D1 resolved (presets stay lowercase)
 Task 12: pending — contract matrix through real dispatcher
 Task 13: pending — full regression and static validation
 Task 14/15: BLOCKED — no live HHP50/HHP55 device this session; deferred to beta
