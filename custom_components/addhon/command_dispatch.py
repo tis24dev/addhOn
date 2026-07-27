@@ -13,7 +13,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .command_diagnostics import emit_command_event, record_expected_update
 from .const import DOMAIN
-from .param_rollback import restore_params, snapshot_params
+from .param_rollback import restore_owned_params, snapshot_params
 
 if TYPE_CHECKING:
     from .client.engine.commands import HonCommand
@@ -372,19 +372,41 @@ class CommandDispatcher:
                     if isinstance(attributes, Mapping)
                     else {}
                 )
+                # Diagnostics-only baseline: the exact-send path never mutates the
+                # shadow before the commit point (HonCommand._send_parameters uses
+                # sync_shadow=False for send_exact), so dispatch() does not own it
+                # and rollback must never restore it. The MQTT push callback runs
+                # on its own thread outside this lock and can update the shadow
+                # while send_exact is awaited below; restoring shadow_before here
+                # would silently discard that authoritative concurrent update.
                 shadow_before = snapshot_params(shadow)
 
-                def rollback() -> None:
-                    for command, snapshot in parameter_snapshots:
-                        restore_params(command.parameters, snapshot)
-                    restore_params(shadow, shadow_before)
+                def rollback(
+                    own_write_snapshots: list[tuple[HonCommand, dict]],
+                ) -> None:
+                    own_write_by_command = dict(own_write_snapshots)
+                    for command, baseline in parameter_snapshots:
+                        own_write = own_write_by_command.get(command, {})
+                        restore_owned_params(command.parameters, baseline, own_write)
                     commands[patch.command_name] = command_before  # type: ignore[index]
 
                 started = _diagnostic_started()
                 common_fields = _diagnostic_common_fields(appliance, patch)
                 _emit_intent_safely(common_fields, patch)
+                own_write_snapshots = parameter_snapshots
                 try:
-                    prepared = self._prepare(command_before, patch)
+                    try:
+                        prepared = self._prepare(command_before, patch)
+                    finally:
+                        # Taken right after _prepare()'s own mutations (success or
+                        # partial failure), before send_exact is awaited: the
+                        # baseline rollback compares against to tell "the
+                        # transaction's own write" apart from a concurrent MQTT
+                        # mutation landing during the await.
+                        own_write_snapshots = [
+                            (command, snapshot_params(command.parameters))
+                            for command, _ in parameter_snapshots
+                        ]
                     prepared = PreparedCommand(
                         command=prepared.command,
                         payload=prepared.command.canonical_exact_payload(
@@ -397,7 +419,7 @@ class CommandDispatcher:
                     _emit_payload_safely(common_fields, prepared)
                     result = await prepared.command.send_exact(prepared.payload)
                 except BaseException as error:
-                    rollback()
+                    rollback(own_write_snapshots)
                     _emit_result_safely(
                         common_fields,
                         started,
@@ -407,7 +429,7 @@ class CommandDispatcher:
                     )
                     raise
                 if result is not True:
-                    rollback()
+                    rollback(own_write_snapshots)
                     _emit_result_safely(
                         common_fields,
                         started,

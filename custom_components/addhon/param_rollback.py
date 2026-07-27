@@ -44,3 +44,35 @@ def restore_params(params, snapshot) -> None:
         if param is not None and hasattr(param, "__dict__"):
             param.__dict__.clear()
             param.__dict__.update(saved)
+
+
+def restore_owned_params(params, baseline, own_write) -> None:
+    """Compare-and-restore: undo only the caller's OWN pre-await mutations.
+
+    Used where the snapshot/restore window spans an ``await`` (a network send),
+    during which another thread (the MQTT push callback) can mutate the SAME
+    parameter objects outside this module's caller's lock. A blind
+    ``restore_params`` there would clobber that concurrent, authoritative
+    update with the stale pre-send snapshot.
+
+    ``own_write`` is a second snapshot taken right after the caller's own
+    mutation and before the awaited call. A parameter is restored to
+    ``baseline`` only if its CURRENT ``__dict__`` still equals ``own_write`` --
+    proof nothing else touched it since. If it differs, something else wrote to
+    it during the await, and that write is left in place. A key absent from
+    ``own_write`` was never touched by the caller (``own_write`` falls back to
+    ``baseline`` for it), so restoring is then only ever a no-op unless a
+    concurrent write landed on an otherwise-untouched key -- in which case it is
+    likewise preserved.
+    """
+    if not isinstance(params, dict):
+        return
+    for key, saved in baseline.items():
+        param = params.get(key)
+        if param is None or not hasattr(param, "__dict__"):
+            continue
+        expected = own_write.get(key, saved)
+        if param.__dict__ != expected:
+            continue
+        param.__dict__.clear()
+        param.__dict__.update(saved)

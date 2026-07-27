@@ -844,13 +844,20 @@ def _category_patch() -> CommandPatch:
     )
 
 
-def _mutate_selected_category_and_shadow(
+def _race_concurrent_update_during_send(
     appliance: _DispatchAppliance,
     command: _DispatchCommand,
 ) -> None:
-    command.parameters["coupled"].values = ["corrupt"]
-    command.parameters["coupled"].value = "corrupt"
-    appliance.attributes["parameters"]["mode"].update("corrupt", shield=True)
+    """Simulate an MQTT push landing on the SAME live objects while send_exact
+    is in flight, AFTER the transaction's own prepare()-time writes. "coupled"
+    is rule-cascaded to "4" by our own patch, but this write lands after that
+    (same as a real MQTT thread racing the awaited send); "mode" on the shadow
+    was never transaction-owned at all. Rollback must leave both exactly as
+    this race left them, and still undo only its own untouched-since writes
+    (the category swap and `mode` on the command)."""
+    command.parameters["coupled"].values = ["raced"]
+    command.parameters["coupled"].value = "raced"
+    appliance.attributes["parameters"]["mode"].update("raced", shield=True)
 
 
 def test_dispatch_transaction_success_syncs_exact_payload_once() -> None:
@@ -1091,64 +1098,121 @@ def test_dispatch_transaction_rolls_back_prepare_failure() -> None:
     assert appliance.synced_payloads == []
 
 
+def _assert_rollback_undid_own_write_but_kept_the_race(
+    appliance: _DispatchAppliance,
+    first: _DispatchCommand,
+    second: _DispatchCommand,
+) -> None:
+    # The transaction's own prepare()-time write, untouched by the race,
+    # is still correctly undone.
+    assert appliance.commands["settings"] is first
+    assert second.parameters["mode"].intern_value == "new"
+    # The race that landed after our own write (like an MQTT push during the
+    # awaited send) is left exactly as it left things -- not clobbered by the
+    # stale pre-send snapshot.
+    assert second.parameters["coupled"].intern_value == "raced"
+    assert appliance.attributes["parameters"]["mode"].value == "raced"
+    assert appliance.synced_payloads == []
+
+
 def test_dispatch_transaction_rolls_back_cloud_false() -> None:
-    appliance, _, second = _dispatch_appliance()
-    before = _snapshot_transaction(appliance)
+    appliance, first, second = _dispatch_appliance()
     second.send_result = False
-    second.before_send = lambda: _mutate_selected_category_and_shadow(
+    second.before_send = lambda: _race_concurrent_update_during_send(
         appliance, second
     )
 
     result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
 
     assert result is False
-    assert _snapshot_transaction(appliance) == before
-    assert appliance.synced_payloads == []
+    _assert_rollback_undid_own_write_but_kept_the_race(appliance, first, second)
 
 
 def test_dispatch_transaction_rolls_back_cloud_api_error() -> None:
-    appliance, _, second = _dispatch_appliance()
-    before = _snapshot_transaction(appliance)
+    appliance, first, second = _dispatch_appliance()
     second.send_error = ApiError("cloud rejected")
-    second.before_send = lambda: _mutate_selected_category_and_shadow(
+    second.before_send = lambda: _race_concurrent_update_during_send(
         appliance, second
     )
 
     with pytest.raises(ApiError, match="cloud rejected"):
         asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
 
-    assert _snapshot_transaction(appliance) == before
-    assert appliance.synced_payloads == []
+    _assert_rollback_undid_own_write_but_kept_the_race(appliance, first, second)
 
 
 def test_dispatch_transaction_rolls_back_transport_exception() -> None:
-    appliance, _, second = _dispatch_appliance()
-    before = _snapshot_transaction(appliance)
+    appliance, first, second = _dispatch_appliance()
     second.send_error = RuntimeError("send boom")
-    second.before_send = lambda: _mutate_selected_category_and_shadow(
+    second.before_send = lambda: _race_concurrent_update_during_send(
         appliance, second
     )
 
     with pytest.raises(RuntimeError, match="send boom"):
         asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
 
-    assert _snapshot_transaction(appliance) == before
-    assert appliance.synced_payloads == []
+    _assert_rollback_undid_own_write_but_kept_the_race(appliance, first, second)
 
 
 def test_dispatch_cancellation_rolls_back_and_propagates() -> None:
-    appliance, _, second = _dispatch_appliance()
-    before = _snapshot_transaction(appliance)
+    appliance, first, second = _dispatch_appliance()
     second.send_error = asyncio.CancelledError()
-    second.before_send = lambda: _mutate_selected_category_and_shadow(
+    second.before_send = lambda: _race_concurrent_update_during_send(
         appliance, second
     )
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
 
-    assert _snapshot_transaction(appliance) == before
-    assert appliance.synced_payloads == []
+    _assert_rollback_undid_own_write_but_kept_the_race(appliance, first, second)
+
+
+def test_dispatch_rollback_preserves_update_landing_while_send_is_suspended() -> None:
+    """The same scenario as the rollback tests above, but the concurrent update
+    is applied by a SEPARATE task while `dispatch` is genuinely suspended at an
+    `await` inside `send_exact` -- true event-loop interleaving, matching how a
+    real MQTT push (scheduled onto the loop from the awscrt thread) would land
+    relative to an in-flight send -- rather than a synchronous pre-return hook."""
+
+    async def scenario() -> None:
+        appliance, first, second = _dispatch_appliance()
+        dispatcher = CommandDispatcher()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def send_exact(payload: dict[str, str | float]) -> bool:
+            second.sent_payloads.append(dict(payload))
+            started.set()
+            await release.wait()
+            raise RuntimeError("cloud send failed")
+
+        second.send_exact = send_exact  # type: ignore[method-assign]
+
+        dispatch_task = asyncio.create_task(
+            dispatcher.dispatch(appliance, _category_patch())
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        async def mqtt_push() -> None:
+            second.parameters["coupled"].values = ["mqtt_live", "0", "4"]
+            second.parameters["coupled"].value = "mqtt_live"
+            appliance.attributes["parameters"]["mode"].update(
+                "mqtt_live", shield=True
+            )
+
+        await asyncio.create_task(mqtt_push())
+        release.set()
+
+        with pytest.raises(RuntimeError, match="cloud send failed"):
+            await dispatch_task
+
+        assert appliance.commands["settings"] is first
+        assert second.parameters["mode"].intern_value == "new"
+        assert second.parameters["coupled"].intern_value == "mqtt_live"
+        assert appliance.attributes["parameters"]["mode"].value == "mqtt_live"
+        assert appliance.synced_payloads == []
+
+    asyncio.run(scenario())
 
 
 def test_dispatch_serializes_same_appliance_without_unique_id_in_order() -> None:

@@ -546,6 +546,69 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(app.attributes["parameters"]["mode"].value, "old")
         self.assertEqual(app.attributes["parameters"]["light"].value, "old-light")
 
+    def test_dispatch_rollback_preserves_concurrent_mqtt_update(self) -> None:
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingFailApi(FakeApi):
+            async def send_command(self, appliance, name, params, ancillary, category):
+                started.set()
+                await release.wait()
+                raise RuntimeError("cloud send failed")
+
+        api = BlockingFailApi()
+        app = NaAppliance(api, dict(_INFO), zone=0)
+        command = NaCommand(
+            "settings",
+            {
+                "parameters": {
+                    "mode": _range(default="1", lo="0", hi="3", inc="1"),
+                    "light": _enum("off", ["off", "on"]),
+                }
+            },
+            app,
+        )
+        app._commands = {"settings": command}
+        app._attributes = {
+            "parameters": {
+                "mode": HonAttribute({"parNewVal": "old"}),
+                "light": HonAttribute({"parNewVal": "off"}),
+            }
+        }
+
+        async def scenario() -> None:
+            task = asyncio.create_task(
+                CommandDispatcher().dispatch(
+                    app,
+                    CommandPatch("settings", {"mode": "2"}, action="set_mode"),
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=1)
+
+            # What the awscrt MQTT thread does while send_exact is suspended
+            # awaiting the cloud: write the shadow directly, then re-apply it
+            # onto whichever command is currently live via the SAME production
+            # method mqtt.py calls (sync_params_to_command). "light" is a real
+            # device-reported value, not something this transaction touched.
+            app.attributes["parameters"]["light"].update("on", shield=True)
+            app.sync_params_to_command("settings")
+
+            release.set()
+            with self.assertRaises(RuntimeError):
+                await task
+
+        _run(scenario())
+
+        # The concurrent MQTT-driven update survives the failed send's rollback,
+        # on both the shadow and the live command parameter it pushed into.
+        self.assertEqual(app.attributes["parameters"]["light"].value, "on")
+        self.assertEqual(command.parameters["light"].value, "on")
+        # Our own untouched-since prepare()-time write is still correctly undone.
+        self.assertEqual(command.parameters["mode"].value, 1)
+        self.assertEqual(app.attributes["parameters"]["mode"].value, "old")
+
     def test_targeted_shadow_sync_updates_payload_keys_only(self) -> None:
         from custom_components.addhon.client.engine.attributes import HonAttribute
 
