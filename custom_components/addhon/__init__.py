@@ -27,6 +27,7 @@ from .const import (
     APPLIANCE_TD,
     ATTR_LEVEL,
     CONF_ENABLE_DEBUG,
+    CONF_ENABLE_EXPERIMENTAL,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
     PLATFORMS,
@@ -189,48 +190,71 @@ def _apply_debug_options(entry: ConfigEntry, *, reset_when_off: bool = True) -> 
         silence_mqtt_noise()
 
 
-_DEBUG_OPTS_KEY = "debug_options"
+_ENTRY_OPTS_KEY = "entry_options"
 
 
-def _debug_opts(entry: ConfigEntry) -> tuple[bool, bool]:
-    """Current (integration-debug, mqtt-debug) toggles for the entry."""
+def _entry_opts(entry: ConfigEntry) -> tuple[bool, bool, bool]:
+    """The options the update listener has to react to.
+
+    (integration-debug, mqtt-debug, experimental). The first two are applied on the
+    fly; the third decides which entities EXIST, so only it can require a reload.
+    """
     return (
         entry.options.get(CONF_ENABLE_DEBUG, False),
         entry.options.get(CONF_ENABLE_MQTT_DEBUG, False),
+        entry.options.get(CONF_ENABLE_EXPERIMENTAL, False),
     )
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Re-apply the log levels on the fly when the toggles change (no reload).
+    """React to an options change: log levels live, entity set by reload.
 
     A reload would tear down auth and the MQTT channel just to change a log level;
-    here we re-apply the levels on the fly, as the existing services do.
+    the debug levels are therefore re-applied on the fly, as the existing services
+    do. enable_experimental is different in kind: it adds or removes entities, which
+    only a reload can do, so it is the one option that reloads the entry.
 
     HA fires update listeners on ANY entry change (data, options, title), not only
     on an options change. A data-only write -- e.g. _persist_refresh_token rotating
     the OAuth refresh token during a routine poll -- must NOT re-apply/reset the
     debug levels: that would silently kill a debug level raised at runtime via the
     set_log_level / set_mqtt_log_level service (reset_when_off=True), exactly when the
-    logs are needed. So re-apply only when the debug toggles actually changed.
+    logs are needed, and must certainly not reload. So each half acts only on the
+    values it owns, and an experimental-only change leaves the loggers untouched.
     """
-    current = _debug_opts(entry)
+    current = _entry_opts(entry)
     hass_data = getattr(hass, "data", None)
     entry_data = (
         hass_data.get(DOMAIN, {}).get(entry.entry_id)
         if isinstance(hass_data, dict)
         else None
     )
+    previous: tuple[bool, bool, bool] | None = None
     if entry_data is not None:
-        if entry_data.get(_DEBUG_OPTS_KEY) == current:
-            return  # entry changed but the debug toggles didn't
-        entry_data[_DEBUG_OPTS_KEY] = current
+        previous = entry_data.get(_ENTRY_OPTS_KEY)
+        if previous == current:
+            return  # entry changed but none of these options did
+        # Recorded before the reload below: a reload detaches this dict from
+        # hass.data, so a write afterwards would land nowhere.
+        entry_data[_ENTRY_OPTS_KEY] = current
     _LOGGER.debug(
-        "Options debug: options updated entry=%s enable_debug=%s enable_mqtt_debug=%s",
+        "Options debug: options updated entry=%s enable_debug=%s enable_mqtt_debug=%s "
+        "enable_experimental=%s",
         entry.entry_id,
         current[0],
         current[1],
+        current[2],
     )
-    _apply_debug_options(entry)
+    # No baseline (a first call, or an entry absent from hass.data) is not evidence
+    # of a change: apply the levels as before, but never reload on a guess.
+    if previous is None or previous[:2] != current[:2]:
+        _apply_debug_options(entry)
+    if previous is not None and previous[2] != current[2]:
+        _LOGGER.info(
+            "Options: experimental features %s, reloading the entry",
+            "enabled" if current[2] else "disabled",
+        )
+        await hass.config_entries.async_reload(entry.entry_id)
 
 
 def _redact_email(email: str | None) -> str | None:
@@ -569,10 +593,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "coordinator": coordinator,
             "client": hon_client,
             "integration_version": integration_version,
-            # Baseline for _async_options_updated: the toggles already applied at the
-            # start of setup, so a later data-only entry write (token rotation) is a
-            # no-op and only a real options change re-applies the levels.
-            _DEBUG_OPTS_KEY: _debug_opts(entry),
+            # Baseline for _async_options_updated: the options already in effect at
+            # the start of setup, so a later data-only entry write (token rotation) is
+            # a no-op and only a real options change re-applies the levels or reloads.
+            _ENTRY_OPTS_KEY: _entry_opts(entry),
         }
         stored = True
         _LOGGER.debug("Setup debug: coordinator and client stored in hass.data for entry=%s", entry.entry_id)

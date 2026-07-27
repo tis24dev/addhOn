@@ -42,6 +42,7 @@ from .const import (
     APPLIANCE_WD,
     APPLIANCE_WH,
     APPLIANCE_WM,
+    CONF_ENABLE_EXPERIMENTAL,
     DOMAIN,
     WM_ATTR_CHILD_LOCK,
     WM_ATTR_DOOR,
@@ -50,7 +51,7 @@ from .const import (
     WM_ATTR_DRY_CLEAN_NEEDED,
     WM_ATTR_FILTER_CLEAN,
 )
-from .air_purifier import has_problem
+from .air_purifier import co_alarm, has_problem
 from .debug_utils import redact_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -73,6 +74,13 @@ class HonBinarySensorEntityDescription(BinarySensorEntityDescription):
     attr_key: str
     on_value: str = "1"
     value_fn: Callable[[object], bool | None] | None = None
+    # When True the binary exists only while the experimental option is on: its
+    # meaning is inferred from incomplete evidence.
+    experimental: bool = False
+    # When True the entity hides instead of reporting a state it cannot interpret
+    # (value_fn returned None). For an alarm whose all-clear value is unknown,
+    # reporting "off" would assert an absence that no evidence supports.
+    unavailable_when_unmapped: bool = False
 
 
 _DOOR_OPEN = HonBinarySensorEntityDescription(
@@ -324,6 +332,20 @@ _AIR_PURIFIER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         value_fn=has_problem,
     ),
+    # EXPERIMENTAL interpretation of the raw `coLevel` the AP sensor table already
+    # reports. Only the alarming value is known, so this is on for that value and
+    # UNAVAILABLE for everything else: it never reports an all-clear. Diagnostic
+    # category and deliberately NO device class -- BinarySensorDeviceClass.SAFETY
+    # would present it as a certified detector, which it is not.
+    HonBinarySensorEntityDescription(
+        key="co_alarm",
+        attr_key="coLevel",
+        icon="mdi:molecule-co",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=co_alarm,
+        experimental=True,
+        unavailable_when_unmapped=True,
+    ),
 )
 
 BINARY_SENSORS: dict[str, tuple[HonBinarySensorEntityDescription, ...]] = {
@@ -354,12 +376,16 @@ async def async_setup_entry(
     coordinator = entry_data["coordinator"]
     entities: list[BinarySensorEntity] = []
     data_map = coordinator_data_map(coordinator)
+    experimental = bool(entry.options.get(CONF_ENABLE_EXPERIMENTAL, False))
     for appliance_id, data in data_map.items():
         app_type = data.get("type", "")
         attributes = data.get("attributes", {})
         attributes = attributes if isinstance(attributes, dict) else {}
         created: list[str] = []
         for description in BINARY_SENSORS.get(app_type, ()):
+            # Inferred from incomplete evidence: absent unless explicitly enabled.
+            if description.experimental and not experimental:
+                continue
             if description.attr_key not in attributes:
                 _LOGGER.debug(
                     "Binary debug: skip '%s' on '%s' id=%s (key '%s' absent)",
@@ -403,6 +429,19 @@ class HonBinarySensor(HonBaseEntity, BinarySensorEntity):
         self.entity_description = description
         self._attr_translation_key = description.translation_key or description.key
         self._attr_unique_id = f"{appliance_id}_{description.key}"
+
+    @property
+    def available(self) -> bool:
+        """Base rules first; an uninterpretable reading then hides the entity.
+
+        Only descriptions that opt in are affected (the flag defaults off), so no
+        existing binary changes behavior.
+        """
+        if not super().available:
+            return False
+        if self.entity_description.unavailable_when_unmapped and self.is_on is None:
+            return False
+        return True
 
     @property
     def is_on(self) -> bool | None:

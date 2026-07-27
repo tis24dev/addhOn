@@ -132,6 +132,14 @@ SERVICE_REFRESH = "refresh"
 # logger to DEBUG (silenced to WARNING when off). The two toggles are independent.
 CONF_ENABLE_DEBUG = "enable_debug"
 CONF_ENABLE_MQTT_DEBUG = "enable_mqtt_debug"
+# Third toggle of the same screen and NOT a debug one: it creates the entities
+# whose meaning is inferred from incomplete evidence (a single observed raw value,
+# a mapping never reproduced on hardware), so they stay absent on a default
+# installation. Unlike the debug toggles it changes WHICH entities exist rather
+# than a log level, so it is the only option that reloads the entry (see
+# _async_options_updated in __init__). Entity unique IDs never encode the support
+# level, so an experimental entity can be promoted without changing identity.
+CONF_ENABLE_EXPERIMENTAL = "enable_experimental"
 # Temporary config-flow field. It enables one bounded sign-in trace and is stripped
 # before credentials are validated or persisted.
 CONF_AUTH_DIAGNOSTICS = "auth_diagnostics"

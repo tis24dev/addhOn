@@ -69,14 +69,16 @@
   "options": {
     "step": {
       "init": {
-        "title": "Debug options",
+        "title": "Options",
         "data": {
           "enable_debug": "Enable debug logging",
-          "enable_mqtt_debug": "Enable MQTT realtime debug"
+          "enable_mqtt_debug": "Enable MQTT realtime debug",
+          "enable_experimental": "Enable experimental entities"
         },
         "data_description": {
           "enable_debug": "Raise this integration's log level to DEBUG (sign in, device discovery, polling, commands). Turn off to return to Home Assistant's configured level. MQTT realtime noise stays suppressed unless its own toggle is on.",
-          "enable_mqtt_debug": "Make the MQTT realtime channel very verbose. Normally keep this off; it only covers this integration's MQTT logger, not the underlying AWS IoT libraries (use Home Assistant's logger config for those)."
+          "enable_mqtt_debug": "Make the MQTT realtime channel very verbose. Normally keep this off; it only covers this integration's MQTT logger, not the underlying AWS IoT libraries (use Home Assistant's logger config for those).",
+          "enable_experimental": "Add entities whose meaning is based on incomplete evidence: they may be wrong, may be renamed, and may disappear again. They stay unavailable for any reading that has not been confirmed. Changing this reloads the integration."
         }
       }
     }
@@ -450,6 +452,12 @@
       "pollen_level": {
         "name": "Pollen level"
       },
+      "air_quality_label": {
+        "name": "Air quality rating (experimental)",
+        "state": {
+          "good": "Good"
+        }
+      },
       "debug_status": {
         "name": "Debug status",
         "state": {
@@ -596,6 +604,9 @@
       "problem": {
         "name": "Problem"
       },
+      "co_alarm": {
+        "name": "Carbon monoxide indication (experimental, not a certified detector)"
+      },
       "update_ok": {
         "name": "Update OK"
       }
@@ -725,6 +736,12 @@
       },
       "delay_time": {
         "name": "Delayed start"
+      },
+      "aroma_time_on": {
+        "name": "Aroma on time (experimental)"
+      },
+      "aroma_time_off": {
+        "name": "Aroma off time (experimental)"
       }
     },
     "select": {
@@ -856,6 +873,9 @@
   "exceptions": {
     "appliance_or_client_unavailable": {
       "message": "The appliance or client is not available."
+    },
+    "aroma_custom_not_active": {
+      "message": "The aroma timings can only be changed while the custom aroma mode is running."
     },
     "command_error": {
       "message": "Command failed: {error}"

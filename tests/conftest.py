@@ -15,6 +15,7 @@ exactly as real HA supports. A plain `Exception` subclass would raise TypeError 
 those keyword arguments, so the stub below mirrors HA's signature and exposes the
 attributes for assertions.
 """
+import dataclasses
 import sys
 import types
 
@@ -139,7 +140,7 @@ def _install_shared_entity_stubs() -> None:
 
 
 def _install_fan_stubs() -> None:
-    """Shared `fan`, `light`, `switch` and `select` platform stubs.
+    """Shared `fan`, `light`, `switch`, `select` and `number` platform stubs.
 
     Installed here rather than per test module: the fan platform is imported by
     the AP entity tests AND by the platform-forwarding tests, and a partial
@@ -253,6 +254,79 @@ def _install_fan_stubs() -> None:
             return self._attr_current_option
 
     select.SelectEntity = getattr(select, "SelectEntity", SelectEntity)
+
+    # The two description dataclasses only (NOT the DeviceClass/StateClass enums,
+    # whose member sets legitimately differ per test module). Six modules declare an
+    # identical copy of each; installing them here means a description field added
+    # later -- `entity_category` was the first -- cannot depend on which module wins
+    # the first-wins race.
+    sensor = _ensure_module("homeassistant.components.sensor")
+    components.sensor = sensor
+
+    @dataclasses.dataclass(frozen=True, kw_only=True)
+    class SensorEntityDescription:
+        key: str
+        name: str | None = None
+        translation_key: str | None = None
+        icon: str | None = None
+        native_unit_of_measurement: str | None = None
+        device_class: object | None = None
+        state_class: object | None = None
+        options: object | None = None
+        entity_category: object | None = None
+
+    sensor.SensorEntityDescription = getattr(
+        sensor, "SensorEntityDescription", SensorEntityDescription
+    )
+
+    binary_sensor = _ensure_module("homeassistant.components.binary_sensor")
+    components.binary_sensor = binary_sensor
+
+    @dataclasses.dataclass(frozen=True, kw_only=True)
+    class BinarySensorEntityDescription:
+        key: str
+        name: str | None = None
+        translation_key: str | None = None
+        icon: str | None = None
+        device_class: object | None = None
+        entity_category: object | None = None
+
+    binary_sensor.BinarySensorEntityDescription = getattr(
+        binary_sensor, "BinarySensorEntityDescription", BinarySensorEntityDescription
+    )
+
+    number = _ensure_module("homeassistant.components.number")
+    components.number = number
+
+    @dataclasses.dataclass(frozen=True, kw_only=True)
+    class NumberEntityDescription:
+        key: str
+        name: str | None = None
+        translation_key: str | None = None
+        icon: str | None = None
+        device_class: object | None = None
+        entity_category: object | None = None
+        native_unit_of_measurement: str | None = None
+        native_min_value: float | None = None
+        native_max_value: float | None = None
+        native_step: float | None = None
+        mode: object | None = None
+
+    class NumberDeviceClass:
+        TEMPERATURE = "temperature"
+        DURATION = "duration"
+
+    class NumberMode:
+        AUTO = "auto"
+        BOX = "box"
+        SLIDER = "slider"
+
+    number.NumberEntityDescription = getattr(
+        number, "NumberEntityDescription", NumberEntityDescription
+    )
+    number.NumberEntity = getattr(number, "NumberEntity", type("NumberEntity", (), {}))
+    number.NumberDeviceClass = getattr(number, "NumberDeviceClass", NumberDeviceClass)
+    number.NumberMode = getattr(number, "NumberMode", NumberMode)
 
     entity_platform = _ensure_module("homeassistant.helpers.entity_platform")
     sys.modules["homeassistant.helpers"].entity_platform = entity_platform

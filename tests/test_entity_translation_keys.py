@@ -155,10 +155,24 @@ def _install_stubs() -> None:
     number_mod.NumberDeviceClass = getattr(number_mod, "NumberDeviceClass", type("NumberDeviceClass", (), {"TEMPERATURE": "temperature"}))
     number_mod.NumberMode = getattr(number_mod, "NumberMode", type("NumberMode", (), {"AUTO": "auto", "BOX": "box", "SLIDER": "slider"}))
 
-    # switch / select / button
-    _mod("homeassistant.components.switch").SwitchEntity = type("SwitchEntity", (), {})
-    _mod("homeassistant.components.select").SelectEntity = type("SelectEntity", (), {})
-    _mod("homeassistant.components.button").ButtonEntity = type("ButtonEntity", (), {})
+    # switch / select / button. getattr-guarded like every other stub here: an
+    # unconditional assignment CLOBBERS conftest's complete platform stubs, and the
+    # entity classes bind whatever base is installed when their module is first
+    # imported. A bare SelectEntity that wins that race leaves the AP select without
+    # the `options` property real HA provides, so any partial collection order in
+    # which this module is imported first breaks the select tests.
+    switch_mod = _mod("homeassistant.components.switch")
+    switch_mod.SwitchEntity = getattr(
+        switch_mod, "SwitchEntity", type("SwitchEntity", (), {})
+    )
+    select_mod = _mod("homeassistant.components.select")
+    select_mod.SelectEntity = getattr(
+        select_mod, "SelectEntity", type("SelectEntity", (), {})
+    )
+    button_mod = _mod("homeassistant.components.button")
+    button_mod.ButtonEntity = getattr(
+        button_mod, "ButtonEntity", type("ButtonEntity", (), {})
+    )
 
     ha.config_entries = ce
     ha.core = core
@@ -209,9 +223,13 @@ def _collect_code_keys() -> dict[str, set[str]]:
         used["binary_sensor"].add(_tk(d))
     # Account-level diagnostic binary (fixed key).
     used["binary_sensor"].add("update_ok")
-    used["number"] = {
-        _tk(d) for descs in number.NUMBERS.values() for d in descs
-    } | {d.translation_key for d in number._PROGRAM_OPTION_NUMBERS}
+    used["number"] = (
+        {_tk(d) for descs in number.NUMBERS.values() for d in descs}
+        | {d.translation_key for d in number._PROGRAM_OPTION_NUMBERS}
+        # The AP timing numbers are built outside the NUMBERS table (they dispatch
+        # rather than send), so they have to register themselves here.
+        | {_tk(d) for d in number._AP_TIMING_NUMBERS}
+    )
     # HonSettingsSwitch names from description.key (AC toggles + wine-cooler light); the
     # pause + debug switches use fixed keys; the program-option switches (#35) come from
     # their description key.

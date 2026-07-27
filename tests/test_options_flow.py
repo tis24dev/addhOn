@@ -1,15 +1,19 @@
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Tests for the Options flow debug toggles (enable_debug, enable_mqtt_debug).
+"""Tests for the Options flow toggles (debug, MQTT debug, experimental).
 
-Two independent, persisted toggles on the integration's Configure screen:
-- enable_debug      -> integration loggers to DEBUG (NOTSET when off).
-- enable_mqtt_debug -> MQTT realtime logger to DEBUG (WARNING/silence when off).
+Three independent, persisted toggles on the integration's Configure screen:
+- enable_debug        -> integration loggers to DEBUG (NOTSET when off).
+- enable_mqtt_debug   -> MQTT realtime logger to DEBUG (WARNING/silence when off).
+- enable_experimental -> creates the entities whose meaning is inferred from
+  incomplete evidence.
 
-Both reuse logging_utils helpers and are applied live (an options update listener,
-no reload). MQTT level is applied AFTER the integration level so the MQTT child's
-explicit level wins (enabling integration DEBUG does not flood MQTT).
+The two debug toggles reuse logging_utils helpers and are applied live (an options
+update listener, no reload). MQTT level is applied AFTER the integration level so
+the MQTT child's explicit level wins (enabling integration DEBUG does not flood
+MQTT). The experimental toggle is different in kind: it changes WHICH entities
+exist, so it is the only one that reloads the entry.
 
 stdlib unittest with HA + voluptuous stubs (mirrors test_config_flow_reauth), and
 logging_utils loaded by file path (mirrors test_mqtt_log_level), so no real HA.
@@ -110,6 +114,7 @@ _install_stubs()
 
 from custom_components.addhon.const import (  # noqa: E402
     CONF_ENABLE_DEBUG,
+    CONF_ENABLE_EXPERIMENTAL,
     CONF_ENABLE_MQTT_DEBUG,
 )
 
@@ -189,15 +194,23 @@ class OptionsFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(defaults[CONF_ENABLE_DEBUG], True)
         self.assertEqual(defaults[CONF_ENABLE_MQTT_DEBUG], False)
 
-    async def test_submit_stores_both_booleans(self) -> None:
+    async def test_submit_stores_all_three_booleans(self) -> None:
         flow = _make_options_flow(_FakeEntry())
         result = await flow.async_step_init(
-            {CONF_ENABLE_DEBUG: True, CONF_ENABLE_MQTT_DEBUG: False}
+            {
+                CONF_ENABLE_DEBUG: True,
+                CONF_ENABLE_MQTT_DEBUG: False,
+                CONF_ENABLE_EXPERIMENTAL: True,
+            }
         )
         self.assertEqual("create_entry", result["type"])
         self.assertEqual("", result["title"])
         self.assertEqual(
-            {CONF_ENABLE_DEBUG: True, CONF_ENABLE_MQTT_DEBUG: False},
+            {
+                CONF_ENABLE_DEBUG: True,
+                CONF_ENABLE_MQTT_DEBUG: False,
+                CONF_ENABLE_EXPERIMENTAL: True,
+            },
             flow.calls["create"]["data"],
         )
 
@@ -205,9 +218,45 @@ class OptionsFlowTest(unittest.IsolatedAsyncioTestCase):
         flow = _make_options_flow(_FakeEntry())
         await flow.async_step_init({})
         self.assertEqual(
-            {CONF_ENABLE_DEBUG: False, CONF_ENABLE_MQTT_DEBUG: False},
+            {
+                CONF_ENABLE_DEBUG: False,
+                CONF_ENABLE_MQTT_DEBUG: False,
+                CONF_ENABLE_EXPERIMENTAL: False,
+            },
             flow.calls["create"]["data"],
         )
+
+    async def test_experimental_defaults_to_false_on_the_form(self) -> None:
+        vol = sys.modules["voluptuous"]
+        if not getattr(vol, "_addhon_capturing", False):
+            self.skipTest("real voluptuous: schema default not introspected")
+        flow = _make_options_flow(_FakeEntry())
+        result = await flow.async_step_init(None)
+        defaults = {req.key: req.default for req in result["data_schema"]}
+        self.assertEqual(defaults[CONF_ENABLE_EXPERIMENTAL], False)
+
+    async def test_experimental_default_reflects_a_saved_true(self) -> None:
+        vol = sys.modules["voluptuous"]
+        if not getattr(vol, "_addhon_capturing", False):
+            self.skipTest("real voluptuous: schema default not introspected")
+        flow = _make_options_flow(_FakeEntry({CONF_ENABLE_EXPERIMENTAL: True}))
+        result = await flow.async_step_init(None)
+        defaults = {req.key: req.default for req in result["data_schema"]}
+        self.assertEqual(defaults[CONF_ENABLE_EXPERIMENTAL], True)
+
+    async def test_unknown_pre_existing_option_keys_survive_a_submit(self) -> None:
+        """The screen writes the WHOLE options mapping, so anything it does not
+        render (an option added by a later version, or one this build no longer
+        shows) would be silently dropped by a literal three-key payload."""
+        flow = _make_options_flow(
+            _FakeEntry({"legacy_option": 7, CONF_ENABLE_DEBUG: True})
+        )
+        await flow.async_step_init({CONF_ENABLE_MQTT_DEBUG: True})
+        data = flow.calls["create"]["data"]
+        self.assertEqual(7, data["legacy_option"])
+        # An unticked box is a real False, not a reason to keep the old value.
+        self.assertEqual(False, data[CONF_ENABLE_DEBUG])
+        self.assertEqual(True, data[CONF_ENABLE_MQTT_DEBUG])
 
     def test_config_flow_exposes_options_flow(self) -> None:
         from custom_components.addhon.config_flow import (
@@ -291,16 +340,16 @@ class ApplyDebugOptionsTest(unittest.TestCase):
         import asyncio
 
         from custom_components.addhon import (
-            _DEBUG_OPTS_KEY,
+            _ENTRY_OPTS_KEY,
             _async_options_updated,
-            _debug_opts,
+            _entry_opts,
         )
         from custom_components.addhon.const import DOMAIN
 
         entry = _FakeEntry({CONF_ENABLE_DEBUG: False})
 
         class _Hass:
-            data = {DOMAIN: {entry.entry_id: {_DEBUG_OPTS_KEY: _debug_opts(entry)}}}
+            data = {DOMAIN: {entry.entry_id: {_ENTRY_OPTS_KEY: _entry_opts(entry)}}}
 
         logging.getLogger("custom_components.addhon").setLevel(logging.DEBUG)
         asyncio.run(_async_options_updated(_Hass(), entry))
@@ -313,19 +362,135 @@ class ApplyDebugOptionsTest(unittest.TestCase):
         # A genuine options change (baseline debug ON, now OFF) still re-applies live.
         import asyncio
 
-        from custom_components.addhon import _DEBUG_OPTS_KEY, _async_options_updated
+        from custom_components.addhon import _ENTRY_OPTS_KEY, _async_options_updated
         from custom_components.addhon.const import DOMAIN
 
         entry = _FakeEntry({CONF_ENABLE_DEBUG: False})
 
         class _Hass:
-            data = {DOMAIN: {entry.entry_id: {_DEBUG_OPTS_KEY: (True, False)}}}
+            data = {DOMAIN: {entry.entry_id: {_ENTRY_OPTS_KEY: (True, False, False)}}}
 
         logging.getLogger("custom_components.addhon").setLevel(logging.DEBUG)
         asyncio.run(_async_options_updated(_Hass(), entry))
         self.assertEqual(
             logging.getLogger("custom_components.addhon").level, logging.NOTSET
         )
+
+
+class _FakeConfigEntries:
+    def __init__(self) -> None:
+        self.reloads: list[str] = []
+
+    async def async_reload(self, entry_id: str) -> None:
+        self.reloads.append(entry_id)
+
+
+class _ListenerHass:
+    """hass with a recorded previous options snapshot and a recording reloader."""
+
+    def __init__(self, entry, previous) -> None:
+        from custom_components.addhon import _ENTRY_OPTS_KEY
+        from custom_components.addhon.const import DOMAIN
+
+        self.entry_data = {_ENTRY_OPTS_KEY: previous}
+        self.data = {DOMAIN: {entry.entry_id: self.entry_data}}
+        self.config_entries = _FakeConfigEntries()
+
+
+class ExperimentalReloadTest(unittest.TestCase):
+    """The experimental toggle changes WHICH entities exist, so it is the only
+    option that needs a reload; the debug toggles must keep being applied live."""
+
+    def setUp(self) -> None:
+        self._saved = logging.getLogger("custom_components.addhon").level
+
+    def tearDown(self) -> None:
+        logging.getLogger("custom_components.addhon").setLevel(self._saved)
+
+    def _run(self, entry, previous):
+        import asyncio
+
+        from custom_components.addhon import _async_options_updated
+
+        hass = _ListenerHass(entry, previous)
+        asyncio.run(_async_options_updated(hass, entry))
+        return hass
+
+    def test_a_debug_only_change_does_not_reload(self) -> None:
+        entry = _FakeEntry({CONF_ENABLE_DEBUG: True})
+        hass = self._run(entry, (False, False, False))
+        self.assertEqual([], hass.config_entries.reloads)
+        self.assertEqual(
+            logging.getLogger("custom_components.addhon").level, logging.DEBUG
+        )
+
+    def test_an_experimental_change_reloads_exactly_once(self) -> None:
+        entry = _FakeEntry({CONF_ENABLE_EXPERIMENTAL: True})
+        hass = self._run(entry, (False, False, False))
+        self.assertEqual([entry.entry_id], hass.config_entries.reloads)
+
+    def test_turning_experimental_off_reloads_too(self) -> None:
+        entry = _FakeEntry({CONF_ENABLE_EXPERIMENTAL: False})
+        hass = self._run(entry, (False, False, True))
+        self.assertEqual([entry.entry_id], hass.config_entries.reloads)
+
+    def test_an_experimental_change_leaves_a_runtime_debug_level_alone(self) -> None:
+        # Only the third value moved, so the loggers must not be re-applied: a
+        # DEBUG level raised at runtime via set_log_level has to survive.
+        entry = _FakeEntry({CONF_ENABLE_EXPERIMENTAL: True})
+        logging.getLogger("custom_components.addhon").setLevel(logging.DEBUG)
+        self._run(entry, (False, False, False))
+        self.assertEqual(
+            logging.getLogger("custom_components.addhon").level, logging.DEBUG
+        )
+
+    def test_an_unchanged_entry_write_neither_reloads_nor_reapplies(self) -> None:
+        # HA fires the listener on ANY entry write (a token rotation, a title
+        # change). Nothing may happen.
+        entry = _FakeEntry({CONF_ENABLE_EXPERIMENTAL: True})
+        logging.getLogger("custom_components.addhon").setLevel(logging.DEBUG)
+        hass = self._run(entry, (False, False, True))
+        self.assertEqual([], hass.config_entries.reloads)
+        self.assertEqual(
+            logging.getLogger("custom_components.addhon").level, logging.DEBUG
+        )
+
+    def test_a_combined_change_reloads_and_applies(self) -> None:
+        entry = _FakeEntry(
+            {CONF_ENABLE_DEBUG: True, CONF_ENABLE_EXPERIMENTAL: True}
+        )
+        logging.getLogger("custom_components.addhon").setLevel(logging.NOTSET)
+        hass = self._run(entry, (False, False, False))
+        self.assertEqual([entry.entry_id], hass.config_entries.reloads)
+        self.assertEqual(
+            logging.getLogger("custom_components.addhon").level, logging.DEBUG
+        )
+
+    def test_a_repeated_listener_call_does_not_reload_again(self) -> None:
+        # The snapshot must be updated, or every subsequent entry write for the
+        # same options would reload the integration again.
+        import asyncio
+
+        from custom_components.addhon import _ENTRY_OPTS_KEY, _async_options_updated
+
+        entry = _FakeEntry({CONF_ENABLE_EXPERIMENTAL: True})
+        hass = self._run(entry, (False, False, False))
+        self.assertEqual((False, False, True), hass.entry_data[_ENTRY_OPTS_KEY])
+        asyncio.run(_async_options_updated(hass, entry))
+        self.assertEqual([entry.entry_id], hass.config_entries.reloads)
+
+    def test_a_first_listener_call_without_a_snapshot_does_not_reload(self) -> None:
+        # No baseline means nothing is known to have CHANGED; reloading on that
+        # would risk a reload loop at setup time.
+        entry = _FakeEntry({CONF_ENABLE_EXPERIMENTAL: True})
+        hass = _ListenerHass(entry, None)
+        hass.entry_data.clear()
+        import asyncio
+
+        from custom_components.addhon import _async_options_updated
+
+        asyncio.run(_async_options_updated(hass, entry))
+        self.assertEqual([], hass.config_entries.reloads)
 
 
 class ResetHelperTest(unittest.TestCase):

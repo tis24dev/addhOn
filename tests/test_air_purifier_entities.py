@@ -204,11 +204,19 @@ class FakeHass:
 
 
 class FakeEntry:
-    def __init__(self, entry_id: str = "entry-1") -> None:
+    def __init__(self, entry_id: str = "entry-1", options: dict | None = None) -> None:
         self.entry_id = entry_id
+        # A real ConfigEntry always exposes options; the experimental gate reads it.
+        self.options = dict(options or {})
 
 
-async def _build_sensors(attributes: dict) -> list:
+def _experimental(enabled: bool) -> dict:
+    from custom_components.addhon.const import CONF_ENABLE_EXPERIMENTAL
+
+    return {CONF_ENABLE_EXPERIMENTAL: enabled}
+
+
+async def _build_sensors(attributes: dict, options: dict | None = None) -> list:
     from custom_components.addhon import sensor
     from custom_components.addhon.const import DOMAIN
 
@@ -225,7 +233,7 @@ async def _build_sensors(attributes: dict) -> list:
         {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}}
     )
     added: list = []
-    await sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+    await sensor.async_setup_entry(hass, FakeEntry(options=options), added.extend)
     return [e for e in added if not getattr(e, "_addhon_account", False)]
 
 
@@ -234,26 +242,39 @@ def _by_key(entities: list) -> dict:
 
 
 class AirPurifierSensorTableTest(unittest.TestCase):
+    # The standard readings, in table order. The experimental rows are listed
+    # separately so a new one cannot be slipped into the standard set unnoticed.
+    STANDARD = [
+        "temp_indoor",
+        "humidity_indoor",
+        "pm25",
+        "pm10",
+        "voc",
+        "air_quality",
+        "fan_speed",
+        "filter_life",
+        "filter_cleaning",
+        "total_work_time",
+        "errors",
+        "co",
+        "pollen_level",
+    ]
+    EXPERIMENTAL = ["air_quality_label"]
+
     def test_table_covers_every_documented_measurement(self) -> None:
         from custom_components.addhon.sensor import SENSORS
 
         self.assertEqual(
             [d.key for d in SENSORS[APPLIANCE_AP]],
-            [
-                "temp_indoor",
-                "humidity_indoor",
-                "pm25",
-                "pm10",
-                "voc",
-                "air_quality",
-                "fan_speed",
-                "filter_life",
-                "filter_cleaning",
-                "total_work_time",
-                "errors",
-                "co",
-                "pollen_level",
-            ],
+            self.STANDARD + self.EXPERIMENTAL,
+        )
+
+    def test_the_standard_rows_are_exactly_the_non_experimental_ones(self) -> None:
+        from custom_components.addhon.sensor import SENSORS
+
+        self.assertEqual(
+            self.STANDARD,
+            [d.key for d in SENSORS[APPLIANCE_AP] if not d.experimental],
         )
 
     def test_every_description_is_capability_gated(self) -> None:
@@ -448,6 +469,9 @@ class AirPurifierDescriptionFlagTest(unittest.TestCase):
             {
                 "temp_indoor", "humidity_indoor", "pm25", "pm10",
                 "voc", "air_quality", "fan_speed",
+                # The interpreted label reads the same live telemetry as the raw
+                # air-quality sensor, so it hides at power-off for the same reason.
+                "air_quality_label",
             },
             requires_power,
         )
@@ -470,7 +494,7 @@ if __name__ == "__main__":
 # --- Task 4: standard binary sensors -----------------------------------------
 
 
-async def _build_binary(attributes: dict) -> list:
+async def _build_binary(attributes: dict, options: dict | None = None) -> list:
     from custom_components.addhon import binary_sensor
     from custom_components.addhon.const import DOMAIN
 
@@ -487,17 +511,27 @@ async def _build_binary(attributes: dict) -> list:
         {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}}
     )
     added: list = []
-    await binary_sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+    await binary_sensor.async_setup_entry(
+        hass, FakeEntry(options=options), added.extend
+    )
     return [e for e in added if not getattr(e, "_addhon_account", False)]
 
 
 class AirPurifierBinaryTableTest(unittest.TestCase):
-    def test_table_is_the_two_standard_signals(self) -> None:
+    def test_table_is_the_two_standard_signals_plus_one_experimental(self) -> None:
         from custom_components.addhon.binary_sensor import BINARY_SENSORS
 
         self.assertEqual(
             [d.key for d in BINARY_SENSORS[APPLIANCE_AP]],
+            ["eco_active", "problem", "co_alarm"],
+        )
+
+    def test_the_standard_signals_are_exactly_the_non_experimental_ones(self) -> None:
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+
+        self.assertEqual(
             ["eco_active", "problem"],
+            [d.key for d in BINARY_SENSORS[APPLIANCE_AP] if not d.experimental],
         )
 
     def test_problem_is_a_problem_class_derived_from_the_error_code(self) -> None:
@@ -1671,3 +1705,448 @@ class AirPurifierAromaArchitectureTest(unittest.TestCase):
         source = inspect.getsource(select.HonAirPurifierAromaSelect)
         self.assertIn("async_dispatch_patch", source)
         self.assertNotIn("async_send_settings", source)
+
+
+# --- Task 9: the experimental option and the custom timing numbers -----------
+
+
+class ExperimentalGateTest(unittest.IsolatedAsyncioTestCase):
+    """Nothing whose meaning is inferred from incomplete evidence may exist on a
+    default installation."""
+
+    async def test_no_experimental_sensor_by_default(self) -> None:
+        keys = set(_by_key(await _build_sensors(FULL_ATTRIBUTES)))
+        self.assertNotIn("air_quality_label", keys)
+        self.assertEqual(13, len(keys))
+
+    async def test_no_experimental_binary_by_default(self) -> None:
+        keys = set(_by_key(await _build_binary(FULL_ATTRIBUTES)))
+        self.assertEqual({"eco_active", "problem", "connectivity"}, keys)
+
+    async def test_an_explicit_false_is_the_same_as_absent(self) -> None:
+        keys = set(_by_key(await _build_sensors(FULL_ATTRIBUTES, _experimental(False))))
+        self.assertNotIn("air_quality_label", keys)
+
+    def test_the_flag_defaults_off_for_every_other_sensor(self) -> None:
+        from custom_components.addhon.sensor import SENSORS
+
+        experimental = {
+            (app_type, d.key)
+            for app_type, descs in SENSORS.items()
+            for d in descs
+            if d.experimental
+        }
+        self.assertEqual({(APPLIANCE_AP, "air_quality_label")}, experimental)
+
+    def test_the_flag_defaults_off_for_every_other_binary(self) -> None:
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+
+        experimental = {
+            (app_type, d.key)
+            for app_type, descs in BINARY_SENSORS.items()
+            for d in descs
+            if d.experimental
+        }
+        self.assertEqual({(APPLIANCE_AP, "co_alarm")}, experimental)
+
+    async def test_the_raw_co_sensor_stays_standard(self) -> None:
+        """The interpreted alarm is experimental; the raw level it reads is not,
+        so enabling the option must not move or duplicate the raw sensor."""
+        default = _by_key(await _build_sensors(FULL_ATTRIBUTES))
+        enabled = _by_key(await _build_sensors(FULL_ATTRIBUTES, _experimental(True)))
+        self.assertIn("co", default)
+        self.assertIn("co", enabled)
+        self.assertFalse(default["co"].entity_description.experimental)
+
+
+class ExperimentalAirQualityLabelTest(unittest.IsolatedAsyncioTestCase):
+    ON = None  # set in setUp-free helpers below
+
+    async def _label(self, raw: str | None):
+        attributes = dict(FULL_ATTRIBUTES)
+        if raw is None:
+            attributes.pop("airQuality")
+        else:
+            attributes["airQuality"] = raw
+        return _by_key(await _build_sensors(attributes, _experimental(True)))
+
+    async def test_the_option_creates_the_label(self) -> None:
+        entities = await self._label("0")
+        self.assertIn("air_quality_label", entities)
+        self.assertEqual(
+            "ap-1_air_quality_label", entities["air_quality_label"].unique_id
+        )
+
+    async def test_it_is_gated_on_the_source_attribute(self) -> None:
+        self.assertNotIn("air_quality_label", await self._label(None))
+
+    async def test_the_only_confirmed_value_reads_good(self) -> None:
+        entity = (await self._label("0"))["air_quality_label"]
+        self.assertEqual("good", entity.native_value)
+        self.assertTrue(entity.available)
+
+    async def test_an_unconfirmed_value_hides_instead_of_guessing(self) -> None:
+        for raw in ("1", "2", "3", "9"):
+            entity = (await self._label(raw))["air_quality_label"]
+            self.assertIsNone(entity.native_value, raw)
+            self.assertFalse(entity.available, raw)
+
+    async def test_it_hides_with_the_purifier_stopped(self) -> None:
+        entities = _by_key(
+            await _build_sensors(
+                {**FULL_ATTRIBUTES, "onOffStatus": "0"}, _experimental(True)
+            )
+        )
+        self.assertFalse(entities["air_quality_label"].available)
+
+    def test_it_is_an_enum_limited_to_the_confirmed_labels(self) -> None:
+        from custom_components.addhon.air_purifier import AP_AIR_QUALITY_LABELS
+        from custom_components.addhon.sensor import SENSORS
+
+        table = {d.key: d for d in SENSORS[APPLIANCE_AP]}
+        description = table["air_quality_label"]
+        self.assertEqual("enum", description.device_class)
+        self.assertEqual(
+            sorted(set(AP_AIR_QUALITY_LABELS.values())), list(description.options)
+        )
+        self.assertIsNone(description.native_unit_of_measurement)
+        self.assertIsNone(description.state_class)
+
+
+class ExperimentalCoAlarmTest(unittest.IsolatedAsyncioTestCase):
+    async def _co(self, raw: str | None):
+        attributes = dict(FULL_ATTRIBUTES)
+        if raw is None:
+            attributes.pop("coLevel")
+        else:
+            attributes["coLevel"] = raw
+        return _by_key(await _build_binary(attributes, _experimental(True)))
+
+    async def test_the_option_creates_the_alarm(self) -> None:
+        entities = await self._co("1")
+        self.assertIn("co_alarm", entities)
+        self.assertEqual("ap-1_co_alarm", entities["co_alarm"].unique_id)
+
+    async def test_it_is_gated_on_the_source_attribute(self) -> None:
+        self.assertNotIn("co_alarm", await self._co(None))
+
+    async def test_it_is_on_only_for_the_observed_alarm_value(self) -> None:
+        entity = (await self._co("2"))["co_alarm"]
+        self.assertTrue(entity.is_on)
+        self.assertTrue(entity.available)
+
+    async def test_every_other_value_hides_rather_than_reporting_safe(self) -> None:
+        """Only the alarming value has been observed. Reporting "off" for the rest
+        would assert an all-clear that no evidence supports."""
+        for raw in ("0", "1", "3"):
+            entity = (await self._co(raw))["co_alarm"]
+            self.assertIsNone(entity.is_on, raw)
+            self.assertFalse(entity.available, raw)
+
+    async def test_it_stays_readable_with_the_purifier_stopped(self) -> None:
+        entities = _by_key(
+            await _build_binary(
+                {**FULL_ATTRIBUTES, "coLevel": "2", "onOffStatus": "0"},
+                _experimental(True),
+            )
+        )
+        self.assertTrue(entities["co_alarm"].available)
+
+    def test_it_is_diagnostic_and_never_a_safety_device_class(self) -> None:
+        from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+
+        table = {d.key: d for d in BINARY_SENSORS[APPLIANCE_AP]}
+        description = table["co_alarm"]
+        self.assertEqual("diagnostic", description.entity_category)
+        self.assertNotEqual(BinarySensorDeviceClass.SAFETY, description.device_class)
+        self.assertIsNone(description.device_class)
+
+    def test_no_air_purifier_binary_claims_to_be_a_safety_device(self) -> None:
+        from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+
+        for description in BINARY_SENSORS[APPLIANCE_AP]:
+            self.assertNotEqual(
+                BinarySensorDeviceClass.SAFETY, description.device_class, description.key
+            )
+
+
+async def _build_numbers(
+    attributes: dict | None = None,
+    schema: dict | None = None,
+    client: RecordingClient | None = None,
+    options: dict | None = None,
+):
+    from custom_components.addhon import number
+    from custom_components.addhon.const import DOMAIN
+
+    data = {
+        "ap-1": {
+            "type": APPLIANCE_AP,
+            "name": "Purifier",
+            "attributes": FULL_ATTRIBUTES if attributes is None else attributes,
+            "appliance": _appliance(schema if schema is not None else _aroma_schema()),
+            "settings": {},
+        }
+    }
+    coordinator = RefreshingCoordinator(data)
+    recording = client if client is not None else RecordingClient()
+    hass = RecordingHass(
+        {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": recording}}}
+    )
+    added: list = []
+    await number.async_setup_entry(
+        hass,
+        FakeEntry(options=_experimental(True) if options is None else options),
+        added.extend,
+    )
+    for entity in added:
+        entity.hass = hass
+    return added, recording, coordinator
+
+
+CUSTOM_ACTIVE = {**FULL_ATTRIBUTES, "aromaStatus": "4"}
+
+
+class AirPurifierTimeNumberSetupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_no_numbers_without_the_option(self) -> None:
+        entities, _client, _coord = await _build_numbers(options={})
+        self.assertEqual([], entities)
+
+    async def test_both_timings_are_created_with_the_option(self) -> None:
+        entities, _client, _coord = await _build_numbers()
+        self.assertEqual(
+            {"aroma_time_on", "aroma_time_off"},
+            {e.entity_description.key for e in entities},
+        )
+
+    async def test_unique_ids_do_not_encode_the_support_level(self) -> None:
+        entities, _client, _coord = await _build_numbers()
+        ids = {e.unique_id for e in entities}
+        self.assertEqual({"ap-1_aroma_time_on", "ap-1_aroma_time_off"}, ids)
+        for unique_id in ids:
+            self.assertNotIn("experimental", unique_id)
+
+    async def test_a_device_without_the_custom_mode_gets_no_numbers(self) -> None:
+        entities, _client, _coord = await _build_numbers(
+            schema=_aroma_schema(aromaStatus=["0", "1", "2"])
+        )
+        self.assertEqual([], entities)
+
+    async def test_a_missing_timing_parameter_removes_both_numbers(self) -> None:
+        """Custom cannot be completed without both fields, so the mode is not
+        offered at all and neither timing is writable."""
+        entities, _client, _coord = await _build_numbers(
+            schema=_aroma_schema(aromaTimeOn=None)
+        )
+        self.assertEqual([], entities)
+
+    async def test_an_unreported_timing_creates_no_number_for_it(self) -> None:
+        attributes = {k: v for k, v in CUSTOM_ACTIVE.items() if k != "aromaTimeOff"}
+        entities, _client, _coord = await _build_numbers(attributes=attributes)
+        self.assertEqual(
+            {"aroma_time_on"}, {e.entity_description.key for e in entities}
+        )
+
+    async def test_bounds_and_step_come_from_the_live_schema(self) -> None:
+        entities, _client, _coord = await _build_numbers()
+        for entity in entities:
+            self.assertEqual(1.0, entity.native_min_value)
+            self.assertEqual(3600.0, entity.native_max_value)
+            self.assertEqual(1.0, entity.native_step)
+
+    async def test_a_narrower_schema_narrows_the_entity(self) -> None:
+        schema = _aroma_schema()
+        schema["settings"]["parameters"]["aromaTimeOn"].update(
+            {"minimumValue": "10", "maximumValue": "600", "incrementValue": "5"}
+        )
+        entities, _client, _coord = await _build_numbers(schema=schema)
+        by_key = {e.entity_description.key: e for e in entities}
+        self.assertEqual(10.0, by_key["aroma_time_on"].native_min_value)
+        self.assertEqual(600.0, by_key["aroma_time_on"].native_max_value)
+        self.assertEqual(5.0, by_key["aroma_time_on"].native_step)
+        self.assertEqual(1.0, by_key["aroma_time_off"].native_min_value)
+
+    async def test_the_bounds_follow_the_parameter_after_setup(self) -> None:
+        """Read live on every access, not snapshotted at construction: the engine
+        rules can move min/max/step while the entry stays loaded, and offering a
+        stale range would let the UI submit a value the device now rejects."""
+        entities, _client, coordinator = await _build_numbers()
+        by_key = {e.entity_description.key: e for e in entities}
+        appliance = coordinator.data["ap-1"]["appliance"]
+        parameter = appliance.commands["settings"].parameters["aromaTimeOn"]
+        parameter.min = 5
+        parameter.max = 600
+        parameter.step = 5
+        self.assertEqual(5.0, by_key["aroma_time_on"].native_min_value)
+        self.assertEqual(600.0, by_key["aroma_time_on"].native_max_value)
+        self.assertEqual(5.0, by_key["aroma_time_on"].native_step)
+        self.assertEqual(3600.0, by_key["aroma_time_off"].native_max_value)
+
+    async def test_the_timings_are_seconds(self) -> None:
+        entities, _client, _coord = await _build_numbers()
+        for entity in entities:
+            self.assertEqual("s", entity.entity_description.native_unit_of_measurement)
+
+    async def test_no_other_appliance_gains_a_number(self) -> None:
+        """The AP branch is additive: the fridge/oven tables are untouched."""
+        from custom_components.addhon.number import NUMBERS
+
+        self.assertNotIn(APPLIANCE_AP, NUMBERS)
+
+
+class AirPurifierTimeNumberStateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_the_live_readings_are_reported(self) -> None:
+        entities, _client, _coord = await _build_numbers(
+            attributes={**CUSTOM_ACTIVE, "aromaTimeOn": "30", "aromaTimeOff": "90"}
+        )
+        by_key = {e.entity_description.key: e for e in entities}
+        self.assertEqual(30.0, by_key["aroma_time_on"].native_value)
+        self.assertEqual(90.0, by_key["aroma_time_off"].native_value)
+
+    async def test_a_non_numeric_reading_is_unknown(self) -> None:
+        entities, _client, _coord = await _build_numbers(
+            attributes={**CUSTOM_ACTIVE, "aromaTimeOn": "n/a"}
+        )
+        by_key = {e.entity_description.key: e for e in entities}
+        self.assertIsNone(by_key["aroma_time_on"].native_value)
+
+    async def test_they_are_available_while_custom_runs(self) -> None:
+        entities, _client, _coord = await _build_numbers(attributes=CUSTOM_ACTIVE)
+        for entity in entities:
+            self.assertTrue(entity.available, entity.entity_description.key)
+
+    async def test_they_hide_when_custom_is_not_the_live_mode(self) -> None:
+        """The write repeats aromaStatus=4, so allowing it in another mode would
+        switch the mode as a side effect."""
+        for raw in ("0", "1", "2", "3"):
+            entities, _client, _coord = await _build_numbers(
+                attributes={**FULL_ATTRIBUTES, "aromaStatus": raw}
+            )
+            for entity in entities:
+                self.assertFalse(entity.available, raw)
+
+    async def test_they_hide_while_the_purifier_is_stopped(self) -> None:
+        entities, _client, _coord = await _build_numbers(
+            attributes={**CUSTOM_ACTIVE, "onOffStatus": "0"}
+        )
+        for entity in entities:
+            self.assertFalse(entity.available, entity.entity_description.key)
+
+
+class AirPurifierTimeNumberWriteTest(unittest.IsolatedAsyncioTestCase):
+    async def _set(self, key: str, value: float, attributes: dict | None = None):
+        entities, client, coordinator = await _build_numbers(
+            attributes=CUSTOM_ACTIVE if attributes is None else attributes
+        )
+        by_key = {e.entity_description.key: e for e in entities}
+        await by_key[key].async_set_native_value(value)
+        return client, coordinator
+
+    async def test_changing_the_on_time_sends_the_status_and_that_field_only(
+        self,
+    ) -> None:
+        client, _coord = await self._set("aroma_time_on", 30)
+        self.assertEqual(
+            [("settings", {"aromaStatus": "4", "aromaTimeOn": "30"})], _sent(client)
+        )
+
+    async def test_changing_the_off_time_sends_the_status_and_that_field_only(
+        self,
+    ) -> None:
+        client, _coord = await self._set("aroma_time_off", 120)
+        self.assertEqual(
+            [("settings", {"aromaStatus": "4", "aromaTimeOff": "120"})], _sent(client)
+        )
+
+    async def test_a_write_never_carries_the_sibling_timing(self) -> None:
+        """Repeating the sibling would push a stale local value over a concurrent
+        change to the other field."""
+        client, _coord = await self._set("aroma_time_on", 30)
+        self.assertNotIn("aromaTimeOff", client.patches[0].values)
+
+    async def test_a_write_never_carries_power_or_mode(self) -> None:
+        client, _coord = await self._set("aroma_time_on", 30)
+        for forbidden in ("onOffStatus", "machMode"):
+            self.assertNotIn(forbidden, client.patches[0].values)
+
+    async def test_an_integral_value_is_sent_without_a_decimal_tail(self) -> None:
+        client, _coord = await self._set("aroma_time_on", 30.0)
+        self.assertEqual("30", client.patches[0].values["aromaTimeOn"])
+
+    async def test_the_action_names_the_intent(self) -> None:
+        client, _coord = await self._set("aroma_time_on", 30)
+        self.assertEqual("ap_set_aroma_time", client.patches[0].action)
+
+    async def test_a_successful_write_refreshes(self) -> None:
+        _client, coordinator = await self._set("aroma_time_on", 30)
+        self.assertEqual(1, coordinator.refreshes)
+
+
+class AirPurifierTimeNumberErrorTest(unittest.IsolatedAsyncioTestCase):
+    async def _refuse(self, key: str, value: float, attributes: dict | None = None):
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, client, coordinator = await _build_numbers(
+            attributes=CUSTOM_ACTIVE if attributes is None else attributes
+        )
+        by_key = {e.entity_description.key: e for e in entities}
+        with self.assertRaises(HomeAssistantError) as caught:
+            await by_key[key].async_set_native_value(value)
+        self.assertEqual([], _sent(client))
+        self.assertEqual(0, coordinator.refreshes)
+        return caught.exception
+
+    async def test_a_write_outside_the_live_range_is_refused(self) -> None:
+        error = await self._refuse("aroma_time_on", 7200)
+        self.assertEqual("command_error", error.translation_key)
+
+    async def test_a_write_below_the_live_range_is_refused(self) -> None:
+        await self._refuse("aroma_time_on", 0)
+
+    async def test_a_write_with_custom_inactive_changes_nothing(self) -> None:
+        """It must refuse rather than trust the UI to have hidden it, and it must
+        never switch the aroma mode as a side effect of a timing change."""
+        error = await self._refuse(
+            "aroma_time_on", 30, {**FULL_ATTRIBUTES, "aromaStatus": "1"}
+        )
+        self.assertEqual("aroma_custom_not_active", error.translation_key)
+
+    async def test_a_transport_failure_is_a_localized_error(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, _client, coordinator = await _build_numbers(
+            attributes=CUSTOM_ACTIVE,
+            client=RecordingClient(fail=RuntimeError("cloud down")),
+        )
+        by_key = {e.entity_description.key: e for e in entities}
+        with self.assertRaises(HomeAssistantError) as caught:
+            await by_key["aroma_time_on"].async_set_native_value(30)
+        self.assertEqual("command_error", caught.exception.translation_key)
+        self.assertEqual(0, coordinator.refreshes)
+
+
+class AirPurifierTimeNumberArchitectureTest(unittest.TestCase):
+    def test_the_ap_number_dispatches(self) -> None:
+        import inspect
+
+        from custom_components.addhon import number
+
+        source = inspect.getsource(number.HonAirPurifierTimeNumber)
+        self.assertIn("async_dispatch_patch", source)
+        self.assertNotIn("async_send_command", source)
+
+    def test_the_legacy_numbers_keep_the_legacy_sender(self) -> None:
+        import inspect
+
+        from custom_components.addhon import number
+
+        self.assertIn(
+            "async_send_command", inspect.getsource(number.HonNumber)
+        )
+        self.assertNotIn(
+            "async_dispatch_patch", inspect.getsource(number.HonNumber)
+        )

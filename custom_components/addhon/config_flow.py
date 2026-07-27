@@ -19,6 +19,7 @@ from .client.transport.auth import MFAChallengeRequired, MFACodeInvalid
 from .const import (
     CONF_AUTH_DIAGNOSTICS,
     CONF_ENABLE_DEBUG,
+    CONF_ENABLE_EXPERIMENTAL,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
 )
@@ -589,31 +590,40 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Integration options: two independent debug toggles.
+    """Integration options: two independent debug toggles plus experimental features.
 
     HA 2024.12.0+: do NOT set self.config_entry in __init__ (deprecated and
     injected automatically). The defaults are read from self.config_entry.options
-    (False on installations that never saved options). The values are applied on
-    the fly by _apply_debug_options via the options update listener: NB the loggers
-    are global to the process, so with more than one account the last one that
-    changes wins (typical case = single account).
+    (False on installations that never saved options). The debug values are applied
+    on the fly by _apply_debug_options via the options update listener: NB the
+    loggers are global to the process, so with more than one account the last one
+    that changes wins (typical case = single account). enable_experimental instead
+    decides which entities EXIST, so the listener reloads the entry for it.
+
+    The submitted payload REPLACES entry.options wholesale, so it is built on top of
+    the current mapping: an option key this screen does not render (added by a newer
+    build, or no longer shown) must survive a save instead of being dropped.
     """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
+        options = dict(self.config_entry.options)
         if user_input is not None:
             return self.async_create_entry(
                 title="",
                 data={
+                    **options,
                     CONF_ENABLE_DEBUG: bool(user_input.get(CONF_ENABLE_DEBUG, False)),
                     CONF_ENABLE_MQTT_DEBUG: bool(
                         user_input.get(CONF_ENABLE_MQTT_DEBUG, False)
                     ),
+                    CONF_ENABLE_EXPERIMENTAL: bool(
+                        user_input.get(CONF_ENABLE_EXPERIMENTAL, False)
+                    ),
                 },
             )
 
-        options = self.config_entry.options
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -625,6 +635,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_ENABLE_MQTT_DEBUG,
                         default=options.get(CONF_ENABLE_MQTT_DEBUG, False),
+                    ): bool,
+                    vol.Required(
+                        CONF_ENABLE_EXPERIMENTAL,
+                        default=options.get(CONF_ENABLE_EXPERIMENTAL, False),
                     ): bool,
                 }
             ),

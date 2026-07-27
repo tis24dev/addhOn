@@ -64,6 +64,7 @@ from .const import (
     APPLIANCE_WM,
     AC_ATTR_CH2O,
     CONF_ENABLE_DEBUG,
+    CONF_ENABLE_EXPERIMENTAL,
     CONF_ENABLE_MQTT_DEBUG,
     AC_ATTR_CO2,
     AC_ATTR_COMPRESSOR_FREQ,
@@ -100,7 +101,13 @@ from .const import (
     WM_ATTR_TOTAL_WATER,
     WM_STATE_MAP,
 )
-from .air_purifier import environment_available, filter_remaining, normalize_error
+from .air_purifier import (
+    AP_AIR_QUALITY_LABELS,
+    air_quality_label,
+    environment_available,
+    filter_remaining,
+    normalize_error,
+)
 from .debug_utils import redact_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -144,6 +151,13 @@ class HonSensorEntityDescription(SensorEntityDescription):
     # `available`, so which readings are live telemetry stays visible in the table
     # itself. Defaults off: no existing entity changes behavior.
     requires_power: bool = False
+    # When True the sensor exists only while the experimental option is on: its
+    # meaning is inferred from incomplete evidence.
+    experimental: bool = False
+    # When True the entity hides instead of reporting a value it cannot interpret
+    # (value_fn returned None). For an experimental mapping that covers a single
+    # confirmed raw value, an unconfirmed reading is not knowledge.
+    unavailable_when_unmapped: bool = False
 
 
 # State + remaining time: identical for washer/washer-dryer/tumble dryer.
@@ -929,6 +943,22 @@ _AIR_PURIFIER: tuple[HonSensorEntityDescription, ...] = (
     HonSensorEntityDescription(
         key="pollen_level", attr_key="pollenLevel", icon="mdi:flower", gated=True,
     ),
+    # EXPERIMENTAL. The named label for the same ordinal the `air_quality` sensor
+    # reports raw. Only one value of the scale has been observed together with its
+    # label, so every other reading leaves the entity unavailable instead of
+    # publishing a guess next to the raw number that is already correct.
+    HonSensorEntityDescription(
+        key="air_quality_label",
+        attr_key="airQuality",
+        icon="mdi:air-filter",
+        device_class=SensorDeviceClass.ENUM,
+        options=sorted(set(AP_AIR_QUALITY_LABELS.values())),
+        value_fn=air_quality_label,
+        gated=True,
+        requires_power=True,
+        experimental=True,
+        unavailable_when_unmapped=True,
+    ),
 )
 
 SENSORS: dict[str, tuple[HonSensorEntityDescription, ...]] = {
@@ -962,6 +992,7 @@ async def async_setup_entry(
     coordinator = entry_data["coordinator"]
     entities: list[SensorEntity] = []
     data_map = coordinator_data_map(coordinator)
+    experimental = bool(entry.options.get(CONF_ENABLE_EXPERIMENTAL, False))
     for appliance_id, data in data_map.items():
         app_type = data.get("type", "")
         attributes = data.get("attributes", {})
@@ -969,6 +1000,9 @@ async def async_setup_entry(
         descriptions = SENSORS.get(app_type, ())
         created: list[str] = []
         for description in descriptions:
+            # Inferred from incomplete evidence: absent unless explicitly enabled.
+            if description.experimental and not experimental:
+                continue
             # Capability-gating (Tier 2 only): skip the sensors whose attribute
             # is not exposed by the device. The historic types (gated=False) stay
             # always created, as before.
@@ -1073,20 +1107,28 @@ class HonSensor(HonBaseEntity, SensorEntity):
 
 
 class HonAirPurifierSensor(HonSensor):
-    """AP sensor whose availability can depend on the purifier being powered.
+    """AP sensor whose availability can depend on the purifier being powered and
+    on whether the reading could be interpreted at all.
 
-    Only descriptions flagged `requires_power` are gated; the others behave
-    exactly like a plain HonSensor. The base availability rules always apply
-    first, so this narrows availability and never widens it.
+    Only descriptions flagged `requires_power` / `unavailable_when_unmapped` are
+    gated; the others behave exactly like a plain HonSensor. The base availability
+    rules always apply first, so this narrows availability and never widens it.
     """
 
     @property
     def available(self) -> bool:
         if not super().available:
             return False
-        if not self.entity_description.requires_power:
-            return True
-        return environment_available(self._attributes)
+        if self.entity_description.requires_power and not environment_available(
+            self._attributes
+        ):
+            return False
+        if (
+            self.entity_description.unavailable_when_unmapped
+            and self.native_value is None
+        ):
+            return False
+        return True
 
 
 class HonMeanWaterConsumption(HonBaseEntity, SensorEntity):

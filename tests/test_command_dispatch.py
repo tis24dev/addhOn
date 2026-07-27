@@ -285,6 +285,7 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
         # which this file-level allow-list can no longer express.
         Path("switch.py"),
         Path("select.py"),
+        Path("number.py"),
     }
     violations = {
         path.relative_to(component_root): _dispatcher_violations(
@@ -1601,8 +1602,8 @@ def test_adapter_propagates_transaction_error_unchanged() -> None:
 def test_mixed_platform_legacy_classes_keep_the_legacy_sender() -> None:
     """Per-CLASS guard for the platform files that contain both senders.
 
-    `switch.py` (and later `select.py` / `number.py`) hold an air purifier entity
-    that dispatches AND legacy entities that intentionally send a whole command.
+    `switch.py`, `select.py` and `number.py` each hold an air purifier entity that
+    dispatches AND legacy entities that intentionally send a whole command.
     Allow-listing such a file above silences the module-level dispatcher check for
     everything in it, and `_EXPECTED_LEGACY_CALL_EDGES` does not help either:
     `async_send_settings` is not one of its tracked callees. Without this test a
@@ -1616,13 +1617,17 @@ def test_mixed_platform_legacy_classes_keep_the_legacy_sender() -> None:
 
     from custom_components.addhon import switch
 
-    from custom_components.addhon import select
+    from custom_components.addhon import number, select
 
     expected = {
         switch.HonSettingsSwitch: "async_send_settings",
         switch.HonWashingMachinePauseSwitch: "run_command_sync",
         select.HonAcDirectionSelect: "async_send_settings",
         select.HonRefProgramSelect: "async_send_command",
+        number.HonNumber: "async_send_command",
+        # Buffers onto startProgram instead of sending; the buffering IS its write
+        # path, so losing it would be the same regression as losing a sender.
+        number.HonProgramOptionNumber: "self._buffer(",
     }
     for entity_class, legacy_callee in expected.items():
         source = inspect.getsource(entity_class)

@@ -54,6 +54,20 @@ AP_OPTION_TO_AROMA = {option: raw for raw, option in AP_AROMA_TO_OPTION.items()}
 
 AP_CUSTOM_AROMA = "4"
 
+# EXPERIMENTAL interpretations. Both are behind the experimental option because a
+# single raw value has been observed together with its meaning; the rest of each
+# scale is unknown. They map ONLY what is confirmed and return None for everything
+# else, so an unconfirmed reading hides instead of being presented as understood.
+#
+# Air quality: the device reports a small ordinal and only raw 0 has been seen
+# paired with its label in the official application.
+AP_AIR_QUALITY_LABELS = {"0": "good"}
+
+# Carbon monoxide: raw 2 is the observed candidate for an alarming device. The
+# all-clear value is NOT known, which is why nothing here ever reports "no
+# alarm" and why the entity must never carry a safety device class.
+AP_CO_ALARM_RAW = "2"
+
 # Raw error payloads that all mean "no error". The device uses several spellings
 # interchangeably, including 100.
 _NORMAL_ERROR_CODES = frozenset({0, 100})
@@ -167,6 +181,30 @@ def normalize_error(raw: Any) -> str:
 def has_problem(raw: Any) -> bool:
     """True when the normalized error code is anything but "no error"."""
     return normalize_error(raw) != "0"
+
+
+def air_quality_label(raw: Any) -> str | None:
+    """The confirmed label for an air-quality ordinal, else None.
+
+    EXPERIMENTAL. Only one ordinal has been observed together with its label, so
+    every other value returns None and the entity hides rather than inventing a
+    scale the device may not use.
+    """
+    if raw is None:
+        return None
+    return AP_AIR_QUALITY_LABELS.get(_raw(raw))
+
+
+def co_alarm(raw: Any) -> bool | None:
+    """True for the observed alarming CO value, None for anything unconfirmed.
+
+    EXPERIMENTAL. Deliberately never returns False: the values that mean "no
+    carbon monoxide" have not been observed, so reporting an all-clear would
+    assert safety on no evidence. None keeps the entity unavailable instead.
+    """
+    if raw is None:
+        return None
+    return True if _raw(raw) == AP_CO_ALARM_RAW else None
 
 
 def environment_available(attributes: Any) -> bool:
@@ -464,6 +502,7 @@ def ap_patch(
 
 
 __all__ = [
+    "AP_AIR_QUALITY_LABELS",
     "AP_AROMA_TO_OPTION",
     "AP_BRIGHTNESS_TO_LIGHT",
     "AP_LIGHT_TO_BRIGHTNESS",
@@ -471,8 +510,11 @@ __all__ = [
     "AP_OPTION_TO_AROMA",
     "AP_PRESET_TO_MODE",
     "AP_WRITABLE_MODES",
+    "AP_CO_ALARM_RAW",
     "AirPurifierCapabilities",
+    "air_quality_label",
     "ap_patch",
+    "co_alarm",
     "discover_capabilities",
     "environment_available",
     "filter_remaining",

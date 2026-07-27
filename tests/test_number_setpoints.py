@@ -243,8 +243,11 @@ class FakeHass:
 
 
 class FakeEntry:
-    def __init__(self, entry_id: str = "entry-1") -> None:
+    def __init__(self, entry_id: str = "entry-1", options: dict | None = None) -> None:
         self.entry_id = entry_id
+        # A real ConfigEntry always exposes options; the platforms read the
+        # experimental gate off it.
+        self.options = dict(options or {})
 
 
 def _fridge_commands() -> dict:

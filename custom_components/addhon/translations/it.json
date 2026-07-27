@@ -69,14 +69,16 @@
   "options": {
     "step": {
       "init": {
-        "title": "Opzioni di debug",
+        "title": "Opzioni",
         "data": {
           "enable_debug": "Abilita log di debug",
-          "enable_mqtt_debug": "Abilita debug MQTT realtime"
+          "enable_mqtt_debug": "Abilita debug MQTT realtime",
+          "enable_experimental": "Abilita entità sperimentali"
         },
         "data_description": {
           "enable_debug": "Porta il livello di log dell'integrazione a DEBUG (accesso, rilevamento dispositivi, polling, comandi). Disattiva per tornare al livello configurato in Home Assistant. Il rumore MQTT realtime resta silenziato a meno che non attivi il suo toggle.",
-          "enable_mqtt_debug": "Rende molto verboso il canale MQTT realtime. Di norma tienilo disattivato; copre solo il logger MQTT di questa integrazione, non le librerie AWS IoT sottostanti (per quelle usa la configurazione logger di Home Assistant)."
+          "enable_mqtt_debug": "Rende molto verboso il canale MQTT realtime. Di norma tienilo disattivato; copre solo il logger MQTT di questa integrazione, non le librerie AWS IoT sottostanti (per quelle usa la configurazione logger di Home Assistant).",
+          "enable_experimental": "Aggiunge entità il cui significato si basa su indizi incompleti: possono essere sbagliate, cambiare nome o sparire. Restano non disponibili per ogni lettura non confermata. Cambiare questa opzione ricarica l'integrazione."
         }
       }
     }
@@ -450,6 +452,12 @@
       "pollen_level": {
         "name": "Livello Polline"
       },
+      "air_quality_label": {
+        "name": "Giudizio qualità aria (sperimentale)",
+        "state": {
+          "good": "Buona"
+        }
+      },
       "debug_status": {
         "name": "Stato debug",
         "state": {
@@ -596,6 +604,9 @@
       "problem": {
         "name": "Guasto"
       },
+      "co_alarm": {
+        "name": "Indicazione monossido (sperimentale, non è un rilevatore certificato)"
+      },
       "update_ok": {
         "name": "Aggiornamento OK"
       }
@@ -725,6 +736,12 @@
       },
       "delay_time": {
         "name": "Partenza ritardata"
+      },
+      "aroma_time_on": {
+        "name": "Durata aroma attivo (sperimentale)"
+      },
+      "aroma_time_off": {
+        "name": "Durata aroma spento (sperimentale)"
       }
     },
     "select": {
@@ -854,6 +871,9 @@
     }
   },
   "exceptions": {
+    "aroma_custom_not_active": {
+      "message": "Le durate dell'aroma si possono cambiare solo mentre la modalità aroma personalizzata è in corso."
+    },
     "appliance_or_client_unavailable": {
       "message": "L'apparecchio o il client non è disponibile."
     },

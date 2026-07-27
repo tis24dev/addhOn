@@ -22,6 +22,11 @@ distinct from the Tier 2 sensors (e.g. number `target_temp_zone1` vs sensor
 CAVEAT: the mapped types are not live-validated on a powered-on device (the test
 fridge is offline). The SCHEMA is validated from the dump; the live write is
 queued on the cloud until the device comes online.
+
+MIXED FILE: the air purifier's custom aroma timings also live here, and they do
+NOT use the generic sender. They are sparse patches through the transactional
+dispatcher, are built outside the NUMBERS table, and exist only while the
+experimental option is on.
 """
 from __future__ import annotations
 
@@ -41,8 +46,18 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .air_purifier import (
+    AP_CUSTOM_AROMA,
+    AirPurifierCapabilities,
+    ap_patch,
+    discover_capabilities,
+    environment_available,
+    reports_attribute,
+)
 from .base_entity import HonBaseEntity
+from .command_dispatch import async_dispatch_patch
 from .const import (
+    APPLIANCE_AP,
     APPLIANCE_FR,
     APPLIANCE_FRE,
     APPLIANCE_OV,
@@ -52,11 +67,13 @@ from .const import (
     APPLIANCE_WC,
     APPLIANCE_WD,
     APPLIANCE_WM,
+    CONF_ENABLE_EXPERIMENTAL,
     DOMAIN,
 )
 from .debug_utils import redact_id
 from .hon_commands import (
     async_send_command,
+    command_param,
     find_settings_param,
     param_range,
     param_values,
@@ -175,6 +192,47 @@ _PROGRAM_OPTION_NUMBERS: tuple[HonProgramOptionNumberDescription, ...] = (
 )
 
 
+@dataclass(frozen=True, kw_only=True)
+class HonAirPurifierTimeDescription(NumberEntityDescription):
+    """One field of the air purifier's custom aroma cycle.
+
+    `param` is both the settings parameter written and the attribute read;
+    `intent_field` is the keyword `ap_patch` expects, so the entity never assembles
+    a payload itself.
+    """
+
+    param: str
+    intent_field: str
+
+
+_AROMA_ATTR = "aromaStatus"
+
+# EXPERIMENTAL (gated by CONF_ENABLE_EXPERIMENTAL): the pump-on / pump-off seconds
+# of the custom aroma cycle. Seconds, not minutes: the observed range is 1..3600
+# with the value 60 meaning one minute. The bounds and the step are read from the
+# live parameter, never from a literal here.
+_AP_TIMING_NUMBERS: tuple[HonAirPurifierTimeDescription, ...] = (
+    HonAirPurifierTimeDescription(
+        key="aroma_time_on",
+        param="aromaTimeOn",
+        intent_field="time_on",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=NumberDeviceClass.DURATION,
+        mode=NumberMode.BOX,
+        icon="mdi:spray",
+    ),
+    HonAirPurifierTimeDescription(
+        key="aroma_time_off",
+        param="aromaTimeOff",
+        intent_field="time_off",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=NumberDeviceClass.DURATION,
+        mode=NumberMode.BOX,
+        icon="mdi:spray-bottle",
+    ),
+)
+
+
 def _is_enum_param(param) -> bool:
     """True if the parameter is an enum (no numeric range), not a range parameter.
 
@@ -258,6 +316,46 @@ def _value_in_set(value: float, enum_set: list[float]) -> bool:
     return _snap_to_set(value, enum_set) is not None
 
 
+def _air_purifier_numbers(
+    coordinator, appliance_id: str, data: dict, client, experimental: bool
+) -> list[NumberEntity]:
+    """The AP custom-aroma timing numbers, or nothing.
+
+    Built here rather than through the NUMBERS table: those rows write a whole
+    settings command through the legacy sender, while every AP write is a sparse
+    patch through the transactional dispatcher.
+    """
+    if not experimental:
+        return []
+    attributes = data.get("attributes")
+    attributes = attributes if isinstance(attributes, dict) else {}
+    capabilities = discover_capabilities(data.get("appliance"), attributes)
+    if not capabilities.supports_custom_aroma:
+        _LOGGER.debug(
+            "Number debug: no AP timing numbers for id=%s (custom aroma unsupported)",
+            redact_id(appliance_id),
+        )
+        return []
+    entities: list[NumberEntity] = []
+    for description in _AP_TIMING_NUMBERS:
+        # Write half already granted by supports_custom_aroma (it requires BOTH
+        # ranges); this is the read half.
+        if not reports_attribute(attributes, description.param):
+            continue
+        entities.append(
+            HonAirPurifierTimeNumber(
+                coordinator, appliance_id, description, capabilities, client
+            )
+        )
+    _LOGGER.debug(
+        "Number debug: AP id=%s -> %d timing numbers %s",
+        redact_id(appliance_id),
+        len(entities),
+        [e.entity_description.key for e in entities],
+    )
+    return entities
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -266,9 +364,17 @@ async def async_setup_entry(
     coordinator = entry_data["coordinator"]
     client = entry_data["client"]
     entities: list[NumberEntity] = []
+    experimental = bool(entry.options.get(CONF_ENABLE_EXPERIMENTAL, False))
     for appliance_id, data in coordinator.data.items():
         app_type = data.get("type", "")
         appliance = data.get("appliance")
+        if app_type == APPLIANCE_AP:
+            entities.extend(
+                _air_purifier_numbers(
+                    coordinator, appliance_id, data, client, experimental
+                )
+            )
+            continue
         created: list[str] = []
         for description in NUMBERS.get(app_type, ()):
             found = find_settings_param(appliance, description.param)
@@ -447,6 +553,139 @@ class HonNumber(HonBaseEntity, NumberEntity):
             raise
         except Exception as err:
             _LOGGER.error("Number: set error %s=%s: %s", param, send_value, err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
+
+
+class HonAirPurifierTimeNumber(HonBaseEntity, NumberEntity):
+    """One second-granularity field of the air purifier's custom aroma cycle.
+
+    EXPERIMENTAL: created only while CONF_ENABLE_EXPERIMENTAL is on. The unique_id
+    does not encode that, so promoting the entity later keeps its identity.
+
+    Only meaningful while the Custom aroma mode is actually running. The write has
+    to repeat `aromaStatus=4` for the device to accept a timing change, so allowing
+    it in any other mode would switch the aroma mode as a side effect; the entity
+    is unavailable outside Custom AND refuses the write rather than trusting the UI
+    to have hidden it. The sibling timing is never included: repeating it would
+    push a stale local value over a concurrent change to the other field.
+    """
+
+    entity_description: HonAirPurifierTimeDescription
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        description: HonAirPurifierTimeDescription,
+        capabilities: AirPurifierCapabilities,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self.entity_description = description
+        self._capabilities = capabilities
+        self._attr_translation_key = description.translation_key or description.key
+        self._attr_unique_id = f"{appliance_id}_{description.key}"
+        # Snapshot of the bounds discovered at setup; the live parameter is re-read
+        # on every access because the engine rules can move min/max/step.
+        self._fallback_range = (
+            capabilities.aroma_time_on
+            if description.intent_field == "time_on"
+            else capabilities.aroma_time_off
+        ) or (1.0, 3600.0, 1.0)
+        _LOGGER.debug(
+            "Number debug: init AP '%s' id=%s param=%s range=%s",
+            description.key,
+            redact_id(appliance_id),
+            description.param,
+            self._fallback_range,
+        )
+
+    @property
+    def _live_range(self) -> tuple[float, float, float]:
+        parameter = command_param(
+            self._appliance,
+            self._capabilities.settings_command,
+            self.entity_description.param,
+        )
+        return param_range(parameter) or self._fallback_range
+
+    @property
+    def native_min_value(self) -> float:
+        return self._live_range[0]
+
+    @property
+    def native_max_value(self) -> float:
+        return self._live_range[1]
+
+    @property
+    def native_step(self) -> float:
+        return self._live_range[2]
+
+    @property
+    def _custom_active(self) -> bool:
+        """Whether Custom is the aroma mode the device currently reports."""
+        raw = self._get_attr(_AROMA_ATTR)
+        return raw is not None and str(raw) == AP_CUSTOM_AROMA
+
+    @property
+    def available(self) -> bool:
+        return (
+            super().available
+            and environment_available(self._attributes)
+            and self._custom_active
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        raw = self._get_attr(self.entity_description.param)
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            return None
+
+    async def async_set_native_value(self, value: float) -> None:
+        if not self._custom_active:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="aroma_custom_not_active",
+            )
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        try:
+            # Built inside the try so a value the live schema rejects surfaces as
+            # the same localized error as a transport failure.
+            patch = ap_patch(
+                "set_aroma_time",
+                self._capabilities,
+                **{self.entity_description.intent_field: value},
+            )
+            _LOGGER.info(
+                "Number: AP %s -> %s id=%s",
+                self.entity_description.key,
+                value,
+                redact_id(self._appliance_id),
+            )
+            await async_dispatch_patch(self.hass, client, appliance, patch)
+            await self._async_request_command_refresh()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error(
+                "AP number: %s=%s failed: %s",
+                self.entity_description.param, value, err, exc_info=True,
+            )
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="command_error",
