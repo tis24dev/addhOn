@@ -1041,6 +1041,78 @@ class CommandCorrelationTest(unittest.TestCase):
         self.assertEqual(client._hon.notified, 1)
 
 
+class CommandCorrelationReviewTest(unittest.TestCase):
+    _LOGGER_NAME = "custom_components.addhon.command_diagnostics"
+
+    def test_command_correlation_fifo_is_capped_at_eight(self) -> None:
+        appliance = FakeAppliance("haier/things/MAC/event/appliancestatus/update")
+        for index in range(9):
+            record_expected_update(
+                appliance,
+                f"action-{index}",
+                {"temp": str(index)},
+            )
+
+        with self.assertNoLogs(self._LOGGER_NAME, level="DEBUG"):
+            observe_mqtt_update(appliance, {"temp": "0"})
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            observe_mqtt_update(appliance, {"temp": "1"})
+
+        shadow = next(
+            event
+            for event in _decoded_command_events(captured.records)
+            if event["event"] == "shadow_update"
+        )
+        self.assertEqual(shadow["action"], "action-1")
+
+    def test_command_correlation_non_match_preserves_pending_entry(self) -> None:
+        appliance = FakeAppliance("haier/things/MAC/event/appliancestatus/update")
+        record_expected_update(appliance, "set_temp", {"temp": "5"})
+
+        with self.assertNoLogs(self._LOGGER_NAME, level="DEBUG"):
+            observe_mqtt_update(appliance, {"temp": "6"})
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            observe_mqtt_update(appliance, {"temp": "5"})
+
+        shadow = next(
+            event
+            for event in _decoded_command_events(captured.records)
+            if event["event"] == "shadow_update"
+        )
+        self.assertEqual(shadow["action"], "set_temp")
+
+    def test_command_correlation_does_not_retain_identity_values(self) -> None:
+        appliance = FakeAppliance("haier/things/MAC/event/appliancestatus/update")
+        serial = "PRIVATE-CORRELATION-SERIAL"
+        mac = "AA:BB:CC:DD:EE:FF"
+        record_expected_update(
+            appliance,
+            "set_temp",
+            types.MappingProxyType(
+                {
+                    "serial": serial,
+                    "neutral": mac,
+                    "temp": "5",
+                }
+            ),
+        )
+
+        with self.assertNoLogs(self._LOGGER_NAME, level="DEBUG"):
+            observe_mqtt_update(appliance, {"serial": serial, "neutral": mac})
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            observe_mqtt_update(
+                appliance,
+                {"serial": serial, "neutral": mac, "temp": "5"},
+            )
+
+        record = "\n".join(item.getMessage() for item in captured.records)
+        self.assertNotIn(serial, record)
+        self.assertNotIn(mac, record)
+
+
 class PublishReceivedRedactionTest(unittest.TestCase):
     """#32/#35: the MQTT handler must not log raw device identity (payload echoing
     macAddress/serial, nick_name) even when the MQTT logger is raised to INFO/DEBUG

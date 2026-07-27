@@ -670,6 +670,44 @@ def test_dispatch_diagnostic_failure_cannot_change_command_result(
     ]
 
 
+def test_dispatch_diagnostic_appliance_type_failure_cannot_block_send() -> None:
+    appliance, _, second = _dispatch_appliance()
+
+    class RaisingString:
+        def __str__(self) -> str:
+            raise RuntimeError("identity string failure")
+
+    appliance.appliance_type = RaisingString()
+
+    result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert result is True
+    assert second.sent_payloads == [
+        {"category": "second", "mode": "target", "coupled": "4"}
+    ]
+
+
+def test_dispatch_diagnostic_mixed_shadow_keys_do_not_rollback_sent_command() -> None:
+    appliance, first, second = _dispatch_appliance()
+    mixed_key = 1
+    mixed_attribute = HonAttribute("before")
+    appliance.attributes["parameters"][mixed_key] = mixed_attribute
+    second.before_send = lambda: mixed_attribute.update("after", shield=True)
+
+    result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert result is True
+    assert appliance.commands["settings"] is second
+    assert appliance.commands["settings"] is not first
+    assert str(mixed_attribute) == "after"
+    assert second.sent_payloads == [
+        {"category": "second", "mode": "target", "coupled": "4"}
+    ]
+    assert appliance.synced_payloads == [
+        {"category": "second", "mode": "target", "coupled": "4"}
+    ]
+
+
 def test_dispatch_transaction_rolls_back_assignment_failure() -> None:
     appliance, first, second = _dispatch_appliance()
     before = _snapshot_transaction(appliance)

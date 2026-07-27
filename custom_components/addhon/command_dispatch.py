@@ -42,8 +42,142 @@ def _record_expected_safely(
 
 
 def _appliance_type(appliance: Appliance) -> str:
-    value = getattr(appliance, "appliance_type", "")
-    return str(value) if value else type(appliance).__name__
+    try:
+        value = getattr(appliance, "appliance_type", "")
+        return str(value) if value else type(appliance).__name__
+    except Exception:
+        return type(appliance).__name__
+
+
+def _diagnostic_started() -> float | None:
+    try:
+        return time.monotonic()
+    except Exception:
+        return None
+
+
+def _diagnostic_common_fields(
+    appliance: Appliance,
+    patch: CommandPatch,
+) -> dict[str, object]:
+    try:
+        return {
+            "action": patch.action,
+            "appliance_type": _appliance_type(appliance),
+            "command": patch.command_name,
+        }
+    except Exception:
+        return {"appliance_type": type(appliance).__name__}
+
+
+def _emit_intent_safely(
+    common_fields: Mapping[str, object],
+    patch: CommandPatch,
+) -> None:
+    try:
+        _emit_safely(
+            "command_intent",
+            {
+                **common_fields,
+                "requested_values": dict(patch.values),
+            },
+        )
+    except Exception:
+        pass
+
+
+def _emit_payload_safely(
+    common_fields: Mapping[str, object],
+    prepared: PreparedCommand,
+) -> None:
+    try:
+        _emit_safely(
+            "command_payload",
+            {
+                **common_fields,
+                "mandatory_keys": [
+                    key
+                    for key in prepared.payload
+                    if key in prepared.mandatory_keys
+                ],
+                "payload": prepared.payload,
+                "requested_keys": [
+                    key
+                    for key in prepared.payload
+                    if key in prepared.requested_keys
+                ],
+                "rule_added_keys": [
+                    key
+                    for key in prepared.payload
+                    if key in prepared.changed_keys
+                ],
+            },
+        )
+    except Exception:
+        pass
+
+
+def _emit_result_safely(
+    common_fields: Mapping[str, object],
+    started: float | None,
+    *,
+    result: bool,
+    outcome: str,
+    error: BaseException | None = None,
+) -> None:
+    try:
+        latency_ms = (
+            (time.monotonic() - started) * 1000
+            if started is not None
+            else 0.0
+        )
+        fields: dict[str, object] = {
+            **common_fields,
+            "latency_ms": latency_ms,
+            "outcome": outcome,
+            "result": result,
+        }
+        if error is not None:
+            fields["error_type"] = type(error).__name__
+        _emit_safely("command_result", fields)
+    except Exception:
+        pass
+
+
+def _emit_shadow_safely(
+    common_fields: Mapping[str, object],
+    shadow_before: Mapping[object, object],
+    shadow: Mapping[object, object],
+    payload: Mapping[str, object],
+) -> None:
+    try:
+        changed_shadow_keys = sorted(
+            key
+            for key, before in shadow_before.items()
+            if isinstance(key, str)
+            and key in shadow
+            and hasattr(shadow[key], "__dict__")
+            and dict(shadow[key].__dict__) != before
+        )
+        expected_keys = sorted(
+            key for key in changed_shadow_keys if key in payload
+        )
+        unexpected_keys = sorted(
+            key for key in changed_shadow_keys if key not in payload
+        )
+        missing_keys = sorted(
+            key for key in payload if key not in expected_keys
+        )
+        fields: dict[str, object] = {
+            **common_fields,
+            "expected_keys": expected_keys,
+            "missing_keys": missing_keys,
+            "unexpected_keys": unexpected_keys,
+        }
+        _emit_safely("shadow_update", fields)
+        _emit_safely("contract_check", fields)
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,112 +380,51 @@ class CommandDispatcher:
                     restore_params(shadow, shadow_before)
                     commands[patch.command_name] = command_before  # type: ignore[index]
 
-                started = time.monotonic()
-                common_fields: dict[str, object] = {
-                    "action": patch.action,
-                    "appliance_type": _appliance_type(appliance),
-                    "command": patch.command_name,
-                }
-                _emit_safely(
-                    "command_intent",
-                    {
-                        **common_fields,
-                        "requested_values": dict(patch.values),
-                    },
-                )
+                started = _diagnostic_started()
+                common_fields = _diagnostic_common_fields(appliance, patch)
+                _emit_intent_safely(common_fields, patch)
                 try:
                     prepared = self._prepare(command_before, patch)
-                    requested_keys = [
-                        key
-                        for key in prepared.payload
-                        if key in prepared.requested_keys
-                    ]
-                    mandatory_keys = [
-                        key
-                        for key in prepared.payload
-                        if key in prepared.mandatory_keys
-                    ]
-                    rule_added_keys = [
-                        key
-                        for key in prepared.payload
-                        if key in prepared.changed_keys
-                    ]
-                    _emit_safely(
-                        "command_payload",
-                        {
-                            **common_fields,
-                            "mandatory_keys": mandatory_keys,
-                            "payload": prepared.payload,
-                            "requested_keys": requested_keys,
-                            "rule_added_keys": rule_added_keys,
-                        },
-                    )
+                    _emit_payload_safely(common_fields, prepared)
                     result = await prepared.command.send_exact(prepared.payload)
                     if result is not True:
                         rollback()
-                        _emit_safely(
-                            "command_result",
-                            {
-                                **common_fields,
-                                "latency_ms": (time.monotonic() - started) * 1000,
-                                "outcome": "cloud_rejected",
-                                "result": False,
-                            },
+                        _emit_result_safely(
+                            common_fields,
+                            started,
+                            result=False,
+                            outcome="cloud_rejected",
                         )
                         return False
                     appliance.sync_payload_to_params(prepared.payload)
-                    _record_expected_safely(
-                        appliance,
-                        patch.action,
-                        prepared.payload,
-                    )
-                    changed_shadow_keys = sorted(
-                        key
-                        for key, before in shadow_before.items()
-                        if key in shadow
-                        and hasattr(shadow[key], "__dict__")
-                        and dict(shadow[key].__dict__) != before
-                    )
-                    expected_keys = sorted(
-                        key for key in changed_shadow_keys if key in prepared.payload
-                    )
-                    unexpected_keys = sorted(
-                        key for key in changed_shadow_keys if key not in prepared.payload
-                    )
-                    missing_keys = sorted(
-                        key for key in prepared.payload if key not in expected_keys
-                    )
-                    _emit_safely(
-                        "command_result",
-                        {
-                            **common_fields,
-                            "latency_ms": (time.monotonic() - started) * 1000,
-                            "outcome": "success",
-                            "result": True,
-                        },
-                    )
-                    shadow_fields: dict[str, object] = {
-                        **common_fields,
-                        "expected_keys": expected_keys,
-                        "missing_keys": missing_keys,
-                        "unexpected_keys": unexpected_keys,
-                    }
-                    _emit_safely("shadow_update", shadow_fields)
-                    _emit_safely("contract_check", shadow_fields)
-                    return True
                 except BaseException as error:
                     rollback()
-                    _emit_safely(
-                        "command_result",
-                        {
-                            **common_fields,
-                            "error_type": type(error).__name__,
-                            "latency_ms": (time.monotonic() - started) * 1000,
-                            "outcome": "error",
-                            "result": False,
-                        },
+                    _emit_result_safely(
+                        common_fields,
+                        started,
+                        result=False,
+                        outcome="error",
+                        error=error,
                     )
                     raise
+                _record_expected_safely(
+                    appliance,
+                    patch.action,
+                    prepared.payload,
+                )
+                _emit_result_safely(
+                    common_fields,
+                    started,
+                    result=True,
+                    outcome="success",
+                )
+                _emit_shadow_safely(
+                    common_fields,
+                    shadow_before,
+                    shadow,
+                    prepared.payload,
+                )
+                return True
         finally:
             entry.users -= 1
             if entry.users == 0 and self._locks.get(key) is entry:

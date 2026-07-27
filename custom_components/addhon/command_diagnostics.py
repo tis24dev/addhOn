@@ -23,6 +23,15 @@ _RECORD_LIMIT = 4096
 _PENDING_LIMIT = 8
 _PENDING_TTL = 60.0
 _REDACTED = "***"
+_EVENTS = frozenset(
+    {
+        "command_intent",
+        "command_payload",
+        "command_result",
+        "contract_check",
+        "shadow_update",
+    }
+)
 _EXTRA_IDENTITY_KEYS = frozenset(
     {
         "accountid",
@@ -85,13 +94,35 @@ def _bound(value: object) -> object:
     return {"type": type(value).__name__[:_STRING_LIMIT]}
 
 
+def _materialize_collections(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            key: _materialize_collections(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_materialize_collections(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return [
+            _materialize_collections(item)
+            for item in sorted(value, key=_sort_key)
+        ]
+    return value
+
+
 def _encode_record(record: dict[str, object]) -> str:
-    encoded = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        record,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     if len(encoded) <= _RECORD_LIMIT:
         return encoded
 
+    event = record.get("event")
     reduced: dict[str, object] = {
-        "event": record.get("event"),
+        "event": event if event in _EVENTS else "contract_check",
         "truncated": True,
     }
     for key in sorted(record):
@@ -100,12 +131,21 @@ def _encode_record(record: dict[str, object]) -> str:
         candidate = {**reduced, key: record[key]}
         candidate_encoded = json.dumps(
             candidate,
+            ensure_ascii=True,
             sort_keys=True,
             separators=(",", ":"),
         )
         if len(candidate_encoded) <= _RECORD_LIMIT:
             reduced = candidate
-    return json.dumps(reduced, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        reduced,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if len(encoded) <= _RECORD_LIMIT:
+        return encoded
+    return '{"event":"contract_check","truncated":true}'
 
 
 def _log_failure() -> None:
@@ -120,8 +160,12 @@ def emit_command_event(event: str, fields: Mapping[str, object]) -> None:
         if not _LOGGER.isEnabledFor(logging.DEBUG):
             return
         raw_record = dict(fields)
-        raw_record["event"] = event
+        valid_event = event if event in _EVENTS else "contract_check"
+        if valid_event != event:
+            raw_record["invalid_event"] = True
+        raw_record["event"] = valid_event
         redacted = redact_identity(raw_record)
+        redacted = redact_identity(_materialize_collections(redacted))
         bounded = _bound(redacted)
         if not isinstance(bounded, dict):
             raise TypeError("command diagnostic record must be a mapping")

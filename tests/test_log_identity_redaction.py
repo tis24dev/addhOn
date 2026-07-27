@@ -31,6 +31,7 @@ import json
 import logging
 import unittest
 from pathlib import Path
+from types import MappingProxyType
 from unittest.mock import patch
 
 from tests._golden import install_stubs
@@ -372,6 +373,61 @@ class LogIdentityRedactionTest(unittest.TestCase):
             call = ast.parse(f'_LOGGER.{method}("x %s", data.get("name"))').body[0].value
             flagged = (not gated) and _identity_call_offender(call.args[1]) is not None
             self.assertEqual(flagged, not gated, f"method={method}")
+
+
+class CommandDiagnosticReviewTest(unittest.TestCase):
+    _LOGGER_NAME = "custom_components.addhon.command_diagnostics"
+
+    def test_command_event_astral_name_is_valid_bounded_json(self) -> None:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            emit_command_event("\U0001f600" * 512, {"action": "set_mode"})
+
+        record = captured.records[0].getMessage()
+        decoded = json.loads(record)
+        self.assertIn(
+            decoded["event"],
+            {
+                "command_intent",
+                "command_payload",
+                "command_result",
+                "shadow_update",
+                "contract_check",
+            },
+        )
+        self.assertLessEqual(len(record), 4096)
+        self.assertLessEqual(len(record.encode("utf-8")), 4096)
+
+    def test_command_event_redacts_non_dict_mapping_recursively(self) -> None:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        password = "PRIVATE-PROXY-PASSWORD"
+        serial = "PRIVATE-PROXY-SERIAL"
+        mac = "AA:BB:CC:DD:EE:FF"
+        fields = MappingProxyType(
+            {
+                "nested": MappingProxyType(
+                    {
+                        "password": password,
+                        "serial": serial,
+                        "neutral": mac,
+                    }
+                )
+            }
+        )
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            emit_command_event("command_payload", fields)
+
+        record = captured.records[0].getMessage()
+        decoded = json.loads(record)
+        self.assertEqual(decoded["nested"]["password"], "***")
+        self.assertEqual(decoded["nested"]["serial"], "***")
+        self.assertEqual(decoded["nested"]["neutral"], "***")
+        self.assertNotIn(password, record)
+        self.assertNotIn(serial, record)
+        self.assertNotIn(mac, record)
 
 
 if __name__ == "__main__":
