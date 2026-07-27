@@ -246,6 +246,93 @@ def test_prepare_returns_command_activated_by_program_parameter(
     assert prepared.changed_keys == frozenset()
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"category": "second", "mode": "target"},
+        {"mode": "target", "category": "second"},
+    ],
+    ids=["selector-first", "selector-last"],
+)
+def test_prepare_applies_values_to_activated_command_in_requested_order(
+    dispatcher: CommandDispatcher,
+    values: dict[str, str],
+) -> None:
+    appliance = _Appliance()
+    categories: dict[str, HonCommand] = {}
+    first = HonCommand(
+        "settings",
+        {"parameters": {"mode": _enum("old", ["old", "target"])}},
+        appliance,
+        categories=categories,
+        category_name="first",
+    )
+    second = HonCommand(
+        "settings",
+        {"parameters": {"mode": _enum("new", ["new", "target"])}},
+        appliance,
+        categories=categories,
+        category_name="second",
+    )
+    categories.update({"first": first, "second": second})
+    appliance.commands["settings"] = first
+
+    prepared = dispatcher._prepare(
+        first,
+        CommandPatch("settings", values, action="set_category_mode"),
+    )
+
+    assert prepared.command is second
+    assert first.parameters["mode"].intern_value == "old"
+    assert second.parameters["mode"].intern_value == "target"
+    assert list(prepared.payload) == list(values)
+    assert prepared.payload == values
+    assert prepared.requested_keys == frozenset({"category", "mode"})
+    assert prepared.mandatory_keys == frozenset()
+    assert prepared.changed_keys == frozenset()
+
+
+def test_prepare_validates_target_schema_before_activating_category(
+    dispatcher: CommandDispatcher,
+) -> None:
+    appliance = _Appliance()
+    categories: dict[str, HonCommand] = {}
+    first = HonCommand(
+        "settings",
+        {
+            "parameters": {
+                "mode": _enum("old", ["old", "target"]),
+                "legacy": _enum("0", ["0", "1"]),
+            }
+        },
+        appliance,
+        categories=categories,
+        category_name="first",
+    )
+    second = HonCommand(
+        "settings",
+        {"parameters": {"mode": _enum("new", ["new", "target"])}},
+        appliance,
+        categories=categories,
+        category_name="second",
+    )
+    categories.update({"first": first, "second": second})
+    appliance.commands["settings"] = first
+
+    with pytest.raises(ValueError, match="legacy"):
+        dispatcher._prepare(
+            first,
+            CommandPatch(
+                "settings",
+                {"category": "second", "legacy": "1"},
+                action="invalid_target_field",
+            ),
+        )
+
+    assert appliance.commands["settings"] is first
+    assert first.parameters["legacy"].intern_value == "0"
+
+
 def test_prepare_rejects_all_off_schema_keys_before_any_mutation(
     dispatcher: CommandDispatcher,
 ) -> None:

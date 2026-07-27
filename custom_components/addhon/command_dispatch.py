@@ -37,6 +37,8 @@ class PreparedCommand:
 
 @dataclass(frozen=True, slots=True)
 class CommandDispatcher:
+    _SELECTOR_KEYS = frozenset({"category", "program"})
+
     @staticmethod
     def _active_command(command: HonCommand, command_name: str) -> HonCommand:
         commands = getattr(command.appliance, "commands", {})
@@ -44,13 +46,36 @@ class CommandDispatcher:
             return commands.get(command_name, command)
         return command
 
+    @classmethod
+    def _selector_key(
+        cls,
+        command: HonCommand,
+        patch: CommandPatch,
+    ) -> str | None:
+        return next(
+            (
+                key
+                for key in patch.values
+                if key in cls._SELECTOR_KEYS and key in command.parameters
+            ),
+            None,
+        )
+
     def _prepare(
         self,
         command: HonCommand,
         patch: CommandPatch,
     ) -> PreparedCommand:
         parameters = command.parameters
-        unknown_keys = [key for key in patch.values if key not in parameters]
+        selector_key = self._selector_key(command, patch)
+        target_command = command
+        if selector_key is not None:
+            selector_value = str(patch.values[selector_key])
+            categories = getattr(command, "categories", {})
+            if isinstance(categories, Mapping):
+                target_command = categories.get(selector_value, command)
+        target_parameters = target_command.parameters
+        unknown_keys = [key for key in patch.values if key not in target_parameters]
         if unknown_keys:
             unknown = ", ".join(repr(key) for key in unknown_keys)
             raise ValueError(
@@ -59,18 +84,22 @@ class CommandDispatcher:
 
         # Retain the complete pre-mutation state boundary needed by the transaction
         # layer; transmitted-value comparison deliberately uses intern_value.
-        parameter_snapshot = snapshot_params(parameters)
+        parameter_snapshot = snapshot_params(target_parameters)
         before_values = {
-            key: parameters[key].intern_value for key in parameter_snapshot
+            key: target_parameters[key].intern_value for key in parameter_snapshot
         }
 
         if patch.prepare is not None:
             patch.prepare(parameters)
 
         active_command = self._active_command(command, patch.command_name)
-        active_parameters = active_command.parameters
+        if selector_key is not None:
+            active_command.parameters[selector_key].value = patch.values[selector_key]
+            active_command = self._active_command(active_command, patch.command_name)
+
         for key, value in patch.values.items():
-            active_parameters[key].value = value
+            if key != selector_key:
+                active_command.parameters[key].value = value
 
         active_command = self._active_command(active_command, patch.command_name)
         active_parameters = active_command.parameters
