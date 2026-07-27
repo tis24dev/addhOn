@@ -27,8 +27,15 @@ form `redact_id(_get_name(a))` is a `redact_*` Call at the top level and is not 
 from __future__ import annotations
 
 import ast
+import json
+import logging
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from tests._golden import install_stubs
+
+install_stubs()
 
 COMPONENT = Path(__file__).resolve().parents[1] / "custom_components" / "addhon"
 
@@ -177,6 +184,86 @@ def _identity_call_offender(arg: ast.AST) -> str | None:
 
 
 class LogIdentityRedactionTest(unittest.TestCase):
+    def test_command_event_redacts_identity_and_bounds_record(self) -> None:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        secrets = {
+            "email": "private@example.invalid",
+            "password": "private-password",
+            "token": "private-token",
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "serial": "PRIVATE-SERIAL",
+            "cloud_id": "PRIVATE-CLOUD-ID",
+        }
+        fields = {
+            **secrets,
+            "nested": {
+                "identity": {
+                    "serialNumber": "PRIVATE-NESTED-SERIAL",
+                    "access_token": "PRIVATE-NESTED-TOKEN",
+                }
+            },
+            "many_keys": {f"key-{index:03d}": index for index in range(200)},
+            "oversized": "x" * (10 * 1024),
+        }
+
+        with self.assertLogs(
+            "custom_components.addhon.command_diagnostics",
+            level="DEBUG",
+        ) as captured:
+            emit_command_event("command_payload", fields)
+
+        self.assertEqual(len(captured.records), 1)
+        record = captured.records[0].getMessage()
+        decoded = json.loads(record)
+        self.assertEqual(decoded["event"], "command_payload")
+        self.assertLessEqual(len(record), 4096)
+        self.assertLessEqual(len(decoded["many_keys"]), 80)
+        self.assertLessEqual(len(decoded["oversized"]), 512)
+        for secret in (
+            *secrets.values(),
+            "PRIVATE-NESTED-SERIAL",
+            "PRIVATE-NESTED-TOKEN",
+        ):
+            self.assertNotIn(secret, record)
+
+    def test_command_event_is_silent_when_debug_is_disabled(self) -> None:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        logger = logging.getLogger("custom_components.addhon.command_diagnostics")
+        previous_level = logger.level
+        logger.setLevel(logging.INFO)
+        try:
+            with patch.object(logger, "debug") as debug:
+                emit_command_event("command_intent", {"action": "set_mode"})
+        finally:
+            logger.setLevel(previous_level)
+
+        debug.assert_not_called()
+
+    def test_command_event_failure_uses_only_fixed_message(self) -> None:
+        import custom_components.addhon.command_diagnostics as diagnostics
+
+        secret = "PRIVATE-RAW-SECRET"
+        with (
+            patch.object(
+                diagnostics,
+                "redact_identity",
+                side_effect=RuntimeError(secret),
+            ),
+            self.assertLogs(
+                "custom_components.addhon.command_diagnostics",
+                level="DEBUG",
+            ) as captured,
+        ):
+            diagnostics.emit_command_event("command_payload", {"token": secret})
+
+        self.assertEqual(
+            [record.getMessage() for record in captured.records],
+            ["command diagnostic event failed"],
+        )
+        self.assertNotIn(secret, "\n".join(captured.output))
+
     def test_no_raw_identity_in_logger_calls(self) -> None:
         offenders: list[str] = []
         for rel, (names, attrs) in _FILES.items():

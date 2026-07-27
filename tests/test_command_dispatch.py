@@ -578,6 +578,98 @@ def test_dispatch_transaction_success_syncs_exact_payload_once() -> None:
     )
 
 
+def test_dispatch_diagnostic_events_describe_successful_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import custom_components.addhon.command_dispatch as dispatch_module
+
+    appliance, _, _ = _dispatch_appliance()
+    appliance.appliance_type = "test"
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def capture(event: str, fields: dict[str, object]) -> None:
+        events.append((event, dict(fields)))
+
+    monkeypatch.setattr(dispatch_module, "emit_command_event", capture)
+
+    result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert result is True
+    assert [event for event, _ in events] == [
+        "command_intent",
+        "command_payload",
+        "command_result",
+        "shadow_update",
+        "contract_check",
+    ]
+    intent = events[0][1]
+    assert intent["action"] == "select_category_mode"
+    assert intent["command"] == "settings"
+    assert intent["appliance_type"] == "test"
+    payload = events[1][1]
+    assert payload["requested_keys"] == ["category", "mode"]
+    assert payload["mandatory_keys"] == []
+    assert payload["rule_added_keys"] == ["coupled"]
+    result_event = events[2][1]
+    assert result_event["result"] is True
+    assert isinstance(result_event["latency_ms"], float)
+    assert result_event["latency_ms"] >= 0
+    shadow = events[3][1]
+    assert shadow["expected_keys"] == ["category", "coupled", "mode"]
+    assert shadow["unexpected_keys"] == []
+    assert shadow["missing_keys"] == []
+    assert events[4][1]["unexpected_keys"] == []
+
+
+def test_dispatch_diagnostic_reports_cloud_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import custom_components.addhon.command_dispatch as dispatch_module
+
+    appliance, _, command = _dispatch_appliance()
+    command.send_result = False
+    events: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        dispatch_module,
+        "emit_command_event",
+        lambda event, fields: events.append((event, dict(fields))),
+    )
+
+    result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert result is False
+    result_fields = next(fields for event, fields in events if event == "command_result")
+    assert result_fields["result"] is False
+    assert result_fields["outcome"] == "cloud_rejected"
+    assert isinstance(result_fields["latency_ms"], float)
+    assert not any(event == "shadow_update" for event, _ in events)
+
+
+def test_dispatch_diagnostic_failure_cannot_change_command_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import custom_components.addhon.command_dispatch as dispatch_module
+
+    appliance, _, second = _dispatch_appliance()
+
+    def fail_diagnostic(_event: str, _fields: dict[str, object]) -> None:
+        raise RuntimeError("diagnostic failure")
+
+    monkeypatch.setattr(dispatch_module, "emit_command_event", fail_diagnostic)
+    monkeypatch.setattr(
+        dispatch_module,
+        "record_expected_update",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("correlation failure")),
+    )
+
+    result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert result is True
+    assert second.sent_payloads == [
+        {"category": "second", "mode": "target", "coupled": "4"}
+    ]
+
+
 def test_dispatch_transaction_rolls_back_assignment_failure() -> None:
     appliance, first, second = _dispatch_appliance()
     before = _snapshot_transaction(appliance)

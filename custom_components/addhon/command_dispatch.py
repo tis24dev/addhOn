@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.exceptions import HomeAssistantError
 
+from .command_diagnostics import emit_command_event, record_expected_update
 from .const import DOMAIN
 from .param_rollback import restore_params, snapshot_params
 
@@ -19,6 +21,29 @@ if TYPE_CHECKING:
 
 PrepareCallback = Callable[[dict[str, Any]], None]
 _MISSING = object()
+
+
+def _emit_safely(event: str, fields: Mapping[str, object]) -> None:
+    try:
+        emit_command_event(event, fields)
+    except Exception:
+        pass
+
+
+def _record_expected_safely(
+    appliance: Appliance,
+    action: str,
+    payload: Mapping[str, object],
+) -> None:
+    try:
+        record_expected_update(appliance, action, payload)
+    except Exception:
+        pass
+
+
+def _appliance_type(appliance: Appliance) -> str:
+    value = getattr(appliance, "appliance_type", "")
+    return str(value) if value else type(appliance).__name__
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,16 +246,111 @@ class CommandDispatcher:
                     restore_params(shadow, shadow_before)
                     commands[patch.command_name] = command_before  # type: ignore[index]
 
+                started = time.monotonic()
+                common_fields: dict[str, object] = {
+                    "action": patch.action,
+                    "appliance_type": _appliance_type(appliance),
+                    "command": patch.command_name,
+                }
+                _emit_safely(
+                    "command_intent",
+                    {
+                        **common_fields,
+                        "requested_values": dict(patch.values),
+                    },
+                )
                 try:
                     prepared = self._prepare(command_before, patch)
+                    requested_keys = [
+                        key
+                        for key in prepared.payload
+                        if key in prepared.requested_keys
+                    ]
+                    mandatory_keys = [
+                        key
+                        for key in prepared.payload
+                        if key in prepared.mandatory_keys
+                    ]
+                    rule_added_keys = [
+                        key
+                        for key in prepared.payload
+                        if key in prepared.changed_keys
+                    ]
+                    _emit_safely(
+                        "command_payload",
+                        {
+                            **common_fields,
+                            "mandatory_keys": mandatory_keys,
+                            "payload": prepared.payload,
+                            "requested_keys": requested_keys,
+                            "rule_added_keys": rule_added_keys,
+                        },
+                    )
                     result = await prepared.command.send_exact(prepared.payload)
                     if result is not True:
                         rollback()
+                        _emit_safely(
+                            "command_result",
+                            {
+                                **common_fields,
+                                "latency_ms": (time.monotonic() - started) * 1000,
+                                "outcome": "cloud_rejected",
+                                "result": False,
+                            },
+                        )
                         return False
                     appliance.sync_payload_to_params(prepared.payload)
+                    _record_expected_safely(
+                        appliance,
+                        patch.action,
+                        prepared.payload,
+                    )
+                    changed_shadow_keys = sorted(
+                        key
+                        for key, before in shadow_before.items()
+                        if key in shadow
+                        and hasattr(shadow[key], "__dict__")
+                        and dict(shadow[key].__dict__) != before
+                    )
+                    expected_keys = sorted(
+                        key for key in changed_shadow_keys if key in prepared.payload
+                    )
+                    unexpected_keys = sorted(
+                        key for key in changed_shadow_keys if key not in prepared.payload
+                    )
+                    missing_keys = sorted(
+                        key for key in prepared.payload if key not in expected_keys
+                    )
+                    _emit_safely(
+                        "command_result",
+                        {
+                            **common_fields,
+                            "latency_ms": (time.monotonic() - started) * 1000,
+                            "outcome": "success",
+                            "result": True,
+                        },
+                    )
+                    shadow_fields: dict[str, object] = {
+                        **common_fields,
+                        "expected_keys": expected_keys,
+                        "missing_keys": missing_keys,
+                        "unexpected_keys": unexpected_keys,
+                    }
+                    _emit_safely("shadow_update", shadow_fields)
+                    _emit_safely("contract_check", shadow_fields)
                     return True
-                except BaseException:
+                except BaseException as error:
                     rollback()
+                    _emit_safely(
+                        "command_result",
+                        {
+                            **common_fields,
+                            "error_type": type(error).__name__,
+                            "latency_ms": (time.monotonic() - started) * 1000,
+                            "outcome": "error",
+                            "result": False,
+                        },
+                    )
                     raise
         finally:
             entry.users -= 1

@@ -18,6 +18,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
@@ -60,6 +61,10 @@ def _install_stubs() -> None:
 _install_stubs()
 
 from custom_components.addhon.client.transport.mqtt import NativeMqttClient  # noqa: E402
+from custom_components.addhon.command_diagnostics import (  # noqa: E402
+    observe_mqtt_update,
+    record_expected_update,
+)
 
 
 def _run(coro):
@@ -117,6 +122,10 @@ def _packet(topic: str, payload: dict):
             topic=topic, payload=json.dumps(payload).encode()
         )
     )
+
+
+def _decoded_command_events(records) -> list[dict]:
+    return [json.loads(record.getMessage()) for record in records]
 
 
 class StopTest(unittest.TestCase):
@@ -873,6 +882,163 @@ class PublishReceivedTest(unittest.TestCase):
         )
         m._on_message(pkt)  # must not raise
         self.assertEqual(hon.notified, 0)
+
+
+class CommandCorrelationTest(unittest.TestCase):
+    _LOGGER_NAME = "custom_components.addhon.command_diagnostics"
+
+    def _client(self, appliance):
+        return NativeMqttClient(FakeHon([appliance]), "MID")
+
+    def test_command_correlation_matches_expected_update(self) -> None:
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        appliance = FakeAppliance(topic)
+        record_expected_update(appliance, "set_temp", {"temp": "5"})
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            self._client(appliance)._on_message(
+                _packet(
+                    topic,
+                    {"parameters": [{"parName": "temp", "parValue": "5"}]},
+                )
+            )
+
+        events = _decoded_command_events(captured.records)
+        shadow = next(event for event in events if event["event"] == "shadow_update")
+        self.assertEqual(shadow["action"], "set_temp")
+        self.assertEqual(shadow["method"], "time_window_key_value")
+        self.assertEqual(shadow["expected_keys"], ["temp"])
+        self.assertEqual(shadow["unexpected_keys"], [])
+        self.assertEqual(shadow["missing_keys"], [])
+
+    def test_command_correlation_reports_unexpected_sibling(self) -> None:
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        appliance = FakeAppliance(topic)
+        record_expected_update(appliance, "set_temp", {"temp": "5"})
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            self._client(appliance)._on_message(
+                _packet(
+                    topic,
+                    {
+                        "parameters": [
+                            {"parName": "temp", "parValue": "5"},
+                            {"parName": "fan", "parValue": "high"},
+                        ]
+                    },
+                )
+            )
+
+        events = _decoded_command_events(captured.records)
+        contract = next(
+            event for event in events if event["event"] == "contract_check"
+        )
+        self.assertEqual(contract["method"], "time_window_key_value")
+        self.assertEqual(contract["unexpected_keys"], ["fan"])
+
+    def test_command_correlation_uses_fifo_key_value_matches(self) -> None:
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        appliance = FakeAppliance(topic)
+        client = self._client(appliance)
+        record_expected_update(appliance, "first", {"temp": "5"})
+        record_expected_update(appliance, "second", {"temp": "6"})
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            client._on_message(
+                _packet(
+                    topic,
+                    {"parameters": [{"parName": "temp", "parValue": "5"}]},
+                )
+            )
+            client._on_message(
+                _packet(
+                    topic,
+                    {"parameters": [{"parName": "temp", "parValue": "6"}]},
+                )
+            )
+
+        shadow_events = [
+            event
+            for event in _decoded_command_events(captured.records)
+            if event["event"] == "shadow_update"
+        ]
+        self.assertEqual(
+            [event["action"] for event in shadow_events],
+            ["first", "second"],
+        )
+        self.assertTrue(
+            all(
+                event["method"] == "time_window_key_value"
+                for event in shadow_events
+            )
+        )
+
+    def test_command_correlation_expires_after_sixty_seconds(self) -> None:
+        appliance = FakeAppliance("haier/things/MAC/event/appliancestatus/update")
+        with patch(
+            "custom_components.addhon.command_diagnostics.time.monotonic",
+            return_value=10.0,
+        ):
+            record_expected_update(appliance, "set_temp", {"temp": "5"})
+
+        with self.assertNoLogs(self._LOGGER_NAME, level="DEBUG"):
+            observe_mqtt_update(appliance, {"temp": "5"}, timestamp=70.0)
+
+    def test_command_correlation_does_not_cross_appliances(self) -> None:
+        expected = FakeAppliance("haier/things/A/event/appliancestatus/update")
+        unrelated = FakeAppliance("haier/things/B/event/appliancestatus/update")
+        record_expected_update(expected, "set_temp", {"temp": "5"})
+
+        with self.assertNoLogs(self._LOGGER_NAME, level="DEBUG"):
+            NativeMqttClient(FakeHon([expected, unrelated]), "MID")._on_message(
+                _packet(
+                    "haier/things/B/event/appliancestatus/update",
+                    {"parameters": [{"parName": "temp", "parValue": "5"}]},
+                )
+            )
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            self._client(expected)._on_message(
+                _packet(
+                    "haier/things/A/event/appliancestatus/update",
+                    {"parameters": [{"parName": "temp", "parValue": "5"}]},
+                )
+            )
+        shadow = next(
+            event
+            for event in _decoded_command_events(captured.records)
+            if event["event"] == "shadow_update"
+        )
+        self.assertEqual(shadow["action"], "set_temp")
+
+    def test_command_correlation_diagnostic_failure_is_isolated(self) -> None:
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        appliance = FakeAppliance(topic)
+        client = self._client(appliance)
+
+        with (
+            patch(
+                "custom_components.addhon.client.transport.mqtt.observe_mqtt_update",
+                side_effect=RuntimeError("diagnostic failure"),
+            ),
+            self.assertNoLogs(
+                "custom_components.addhon.client.transport.mqtt",
+                level="WARNING",
+            ),
+        ):
+            client._on_message(
+                _packet(
+                    topic,
+                    {"parameters": [{"parName": "temp", "parValue": "5"}]},
+                )
+            )
+
+        self.assertEqual(
+            appliance.attributes["parameters"]["temp"].updated,
+            {"parName": "temp", "parValue": "5"},
+        )
+        self.assertEqual(appliance.synced, ["settings"])
+        self.assertEqual(client._hon.notified, 1)
 
 
 class PublishReceivedRedactionTest(unittest.TestCase):
