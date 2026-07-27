@@ -444,7 +444,7 @@
         "name": "Filter life"
       },
       "filter_cleaning": {
-        "name": "Pre-filter cleaning"
+        "name": "Pre-filter life"
       },
       "total_work_time": {
         "name": "Total work time"

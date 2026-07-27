@@ -255,10 +255,10 @@
         "name": "COV"
       },
       "co": {
-        "name": "Monossido di carbonio"
+        "name": "Monossido di Carbonio"
       },
       "air_quality": {
-        "name": "Qualità dell'aria"
+        "name": "Qualità dell'Aria"
       },
       "water_hardness": {
         "name": "Durezza dell'acqua"
@@ -444,7 +444,7 @@
         "name": "Durata Filtro"
       },
       "filter_cleaning": {
-        "name": "Pulizia Prefiltro"
+        "name": "Durata Prefiltro"
       },
       "total_work_time": {
         "name": "Tempo di Funzionamento Totale"
@@ -453,7 +453,7 @@
         "name": "Livello Polline"
       },
       "air_quality_label": {
-        "name": "Giudizio qualità aria (sperimentale)",
+        "name": "Giudizio Qualità Aria (sperimentale)",
         "state": {
           "good": "Buona"
         }
@@ -605,7 +605,7 @@
         "name": "Guasto"
       },
       "co_alarm": {
-        "name": "Indicazione monossido (sperimentale, non è un rilevatore certificato)"
+        "name": "Indicazione Monossido (sperimentale, non è un rilevatore certificato)"
       },
       "update_ok": {
         "name": "Aggiornamento OK"
@@ -738,10 +738,10 @@
         "name": "Partenza ritardata"
       },
       "aroma_time_on": {
-        "name": "Durata aroma attivo (sperimentale)"
+        "name": "Durata Aroma Attivo (sperimentale)"
       },
       "aroma_time_off": {
-        "name": "Durata aroma spento (sperimentale)"
+        "name": "Durata Aroma Spento (sperimentale)"
       }
     },
     "select": {
