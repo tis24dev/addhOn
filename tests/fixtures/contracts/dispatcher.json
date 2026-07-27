@@ -1,0 +1,62 @@
+[
+  {
+    "id": "requested_only",
+    "appliance_type": "test",
+    "schema": {
+      "settings": {
+        "parameters": {
+          "mode": {"typology": "enum", "mandatory": 0, "defaultValue": "1", "enumValues": ["1", "2"]},
+          "onOff": {"typology": "fixed", "mandatory": 0, "fixedValue": "1"},
+          "light": {"typology": "enum", "mandatory": 0, "defaultValue": "0", "enumValues": ["0", "1"]}
+        }
+      }
+    },
+    "initial_shadow": {"mode": "1", "onOff": "1", "light": "0"},
+    "action": {"command_name": "settings", "values": {"mode": "2"}},
+    "expected_payload": {"mode": "2"},
+    "expected_shadow_delta": {"mode": "2"},
+    "must_not_change": ["onOff", "light"],
+    "evidence": "derived_contract",
+    "support": "confirmed"
+  },
+  {
+    "id": "mandatory_included",
+    "appliance_type": "test",
+    "schema": {
+      "settings": {
+        "parameters": {
+          "mode": {"typology": "enum", "mandatory": 0, "defaultValue": "1", "enumValues": ["1", "2"]},
+          "onOff": {"typology": "fixed", "mandatory": 1, "fixedValue": "1"},
+          "light": {"typology": "enum", "mandatory": 0, "defaultValue": "0", "enumValues": ["0", "1"]}
+        }
+      }
+    },
+    "initial_shadow": {"mode": "1", "onOff": "1", "light": "0"},
+    "action": {"command_name": "settings", "values": {"mode": "2"}},
+    "expected_payload": {"mode": "2", "onOff": "1"},
+    "expected_shadow_delta": {"mode": "2", "onOff": "1"},
+    "must_not_change": ["light"],
+    "evidence": "derived_contract",
+    "support": "confirmed"
+  },
+  {
+    "id": "unrelated_preserved",
+    "appliance_type": "test",
+    "schema": {
+      "settings": {
+        "parameters": {
+          "mode": {"typology": "enum", "mandatory": 0, "defaultValue": "1", "enumValues": ["1", "2"]},
+          "onOff": {"typology": "fixed", "mandatory": 0, "fixedValue": "1"},
+          "light": {"typology": "enum", "mandatory": 0, "defaultValue": "0", "enumValues": ["0", "1"]}
+        }
+      }
+    },
+    "initial_shadow": {"mode": "1", "onOff": "1", "light": "0"},
+    "action": {"command_name": "settings", "values": {"light": "1"}},
+    "expected_payload": {"light": "1"},
+    "expected_shadow_delta": {"light": "1"},
+    "must_not_change": ["mode", "onOff"],
+    "evidence": "derived_contract",
+    "support": "confirmed"
+  }
+]
