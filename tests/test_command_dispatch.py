@@ -28,8 +28,10 @@ _EXPECTED_LEGACY_CALL_EDGES = {
         "async_send_settings": ("async_send_command",),
     },
     "button.py": {
-        "HonProgramCommandButton.async_press._do": ("run_command_sync->_inner",),
-        "HonProgramCommandButton.async_press._do._inner": ("send",),
+        "HonProgramCommandButton.async_press._do": (
+            "client.run_command_sync->_inner",
+        ),
+        "HonProgramCommandButton.async_press._do._inner": ("command.send",),
     },
     "climate.py": {
         "HaierClimateEntity.async_set_hvac_mode": ("async_send_command",),
@@ -38,17 +40,19 @@ _EXPECTED_LEGACY_CALL_EDGES = {
         "HonNumber.async_set_native_value": ("async_send_command",),
     },
     "program_options.py": {
-        "async_send_program._do": ("run_command_sync->_inner",),
-        "async_send_program._do._inner": ("send",),
+        "async_send_program._do": ("client.run_command_sync->_inner",),
+        "async_send_program._do._inner": ("command.send",),
     },
     "select.py": {
         "HonRefProgramSelect.async_select_option": ("async_send_command",),
     },
     "switch.py": {
         "HonWashingMachinePauseSwitch._send_pause_command._do": (
-            "run_command_sync->_inner",
+            "client.run_command_sync->_inner",
         ),
-        "HonWashingMachinePauseSwitch._send_pause_command._do._inner": ("send",),
+        "HonWashingMachinePauseSwitch._send_pause_command._do._inner": (
+            "command.send",
+        ),
     },
 }
 
@@ -65,11 +69,9 @@ _FORBIDDEN_DISPATCH_SYMBOLS = frozenset(
 _LEGACY_CALLEES = frozenset({"async_send_command", "run_command_sync", "send"})
 
 
-def _call_name(node: ast.expr) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
+def _call_path(node: ast.expr) -> str | None:
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        return ast.unparse(node)
     return None
 
 
@@ -99,17 +101,18 @@ def _legacy_call_edges(source: str) -> dict[str, tuple[str, ...]]:
             return
 
         def visit_Call(self, node: ast.Call) -> None:
-            name = _call_name(node.func)
-            if self.scope and name in _LEGACY_CALLEES:
-                edge = name
+            path = _call_path(node.func)
+            name = path.rsplit(".", 1)[-1] if path is not None else None
+            if self.scope and path is not None and name in _LEGACY_CALLEES:
+                edge = path
                 if name == "run_command_sync":
                     target = (
-                        _call_name(node.args[0].func)
+                        _call_path(node.args[0].func)
                         if node.args
                         and isinstance(node.args[0], ast.Call)
                         else None
                     )
-                    edge = f"run_command_sync->{target or '<invalid>'}"
+                    edge = f"{path}->{target or '<invalid>'}"
                 edges.setdefault(".".join(self.scope), []).append(edge)
             self.generic_visit(node)
 
@@ -119,55 +122,10 @@ def _legacy_call_edges(source: str) -> dict[str, tuple[str, ...]]:
 
 def _dispatcher_violations(source: str) -> set[str]:
     violations: set[str] = set()
-    constructor_aliases = {"CommandDispatcher"}
     imported_symbol_aliases: set[str] = set()
-    module_aliases: set[str] = set()
-    dispatcher_bindings: set[str] = set()
     tree = ast.parse(source)
 
     class DispatcherVisitor(ast.NodeVisitor):
-        @staticmethod
-        def _binding_names(target: ast.expr) -> set[str]:
-            if isinstance(target, (ast.Name, ast.Attribute)):
-                return {ast.unparse(target)}
-            if isinstance(target, (ast.Tuple, ast.List)):
-                return {
-                    name
-                    for item in target.elts
-                    for name in DispatcherVisitor._binding_names(item)
-                }
-            return set()
-
-        @staticmethod
-        def _is_dispatcher_constructor(node: ast.expr) -> bool:
-            if isinstance(node, ast.Name):
-                return node.id in constructor_aliases
-            return (
-                isinstance(node, ast.Attribute)
-                and node.attr == "CommandDispatcher"
-                and ast.unparse(node.value) in module_aliases
-            )
-
-        @staticmethod
-        def _is_dispatcher_value(node: ast.expr) -> bool:
-            if isinstance(node, ast.Call):
-                return DispatcherVisitor._is_dispatcher_constructor(node.func)
-            if isinstance(node, (ast.Name, ast.Attribute)):
-                rendered = ast.unparse(node)
-                return (
-                    rendered in dispatcher_bindings
-                    or "dispatcher" in rendered.rsplit(".", 1)[-1].lower()
-                )
-            return False
-
-        @staticmethod
-        def _dispatch_receiver_is_dispatcher(node: ast.expr) -> bool:
-            if DispatcherVisitor._is_dispatcher_value(node):
-                return True
-            if isinstance(node, ast.Call):
-                return DispatcherVisitor._is_dispatcher_constructor(node.func)
-            return "dispatcher" in ast.unparse(node).lower()
-
         def visit_Import(self, node: ast.Import) -> None:
             for alias in node.names:
                 if alias.name.endswith(".command_dispatch"):
@@ -175,7 +133,6 @@ def _dispatcher_violations(source: str) -> set[str]:
                     if alias.asname:
                         rendered += f" as {alias.asname}"
                     violations.add(f"forbidden-import:{rendered}")
-                    module_aliases.add(alias.asname or alias.name.split(".")[0])
 
         def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
             module = node.module or ""
@@ -191,8 +148,6 @@ def _dispatcher_violations(source: str) -> set[str]:
                     violations.add(f"forbidden-import:{rendered}")
                     local_name = alias.asname or alias.name
                     imported_symbol_aliases.add(local_name)
-                    if alias.name == "CommandDispatcher":
-                        constructor_aliases.add(local_name)
                 elif (
                     module.endswith("custom_components.addhon")
                     or node.level > 0
@@ -201,36 +156,6 @@ def _dispatcher_violations(source: str) -> set[str]:
                     if alias.asname:
                         rendered += f" as {alias.asname}"
                     violations.add(f"forbidden-import:{rendered}")
-                    module_aliases.add(alias.asname or alias.name)
-
-        def visit_Assign(self, node: ast.Assign) -> None:
-            if self._is_dispatcher_value(node.value):
-                for target in node.targets:
-                    dispatcher_bindings.update(self._binding_names(target))
-            self.generic_visit(node)
-
-        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-            if node.value is not None and self._is_dispatcher_value(node.value):
-                dispatcher_bindings.update(self._binding_names(node.target))
-            self.generic_visit(node)
-
-        def _visit_function(
-            self, node: ast.FunctionDef | ast.AsyncFunctionDef
-        ) -> None:
-            for argument in (
-                *node.args.posonlyargs,
-                *node.args.args,
-                *node.args.kwonlyargs,
-            ):
-                if (
-                    argument.annotation is not None
-                    and _call_name(argument.annotation) in constructor_aliases
-                ):
-                    dispatcher_bindings.add(argument.arg)
-            self.generic_visit(node)
-
-        visit_FunctionDef = _visit_function
-        visit_AsyncFunctionDef = _visit_function
 
         def visit_Name(self, node: ast.Name) -> None:
             if (
@@ -239,15 +164,15 @@ def _dispatcher_violations(source: str) -> set[str]:
             ):
                 violations.add(f"forbidden-reference:{node.id}")
 
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "dispatch":
+                violations.add(f"dispatcher-call:{ast.unparse(node.func)}")
+            self.generic_visit(node)
+
         def visit_Attribute(self, node: ast.Attribute) -> None:
             rendered = ast.unparse(node)
             if node.attr in _FORBIDDEN_DISPATCH_SYMBOLS:
                 violations.add(f"forbidden-reference:{rendered}")
-            elif (
-                node.attr == "dispatch"
-                and self._dispatch_receiver_is_dispatcher(node.value)
-            ):
-                violations.add(f"dispatcher-call:{rendered}")
             self.generic_visit(node)
 
     DispatcherVisitor().visit(tree)
@@ -384,10 +309,10 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
         ),
         (
             """
-            async def wrapper(dispatcher, appliance, patch):
-                return await dispatcher.dispatch(appliance, patch)
+            async def wrapper(runner, appliance, patch):
+                return await runner.dispatch(appliance, patch)
             """,
-            {"dispatcher-call:dispatcher.dispatch"},
+            {"dispatcher-call:runner.dispatch"},
         ),
         (
             """
@@ -430,14 +355,35 @@ def test_dispatcher_guard_accepts_linked_legacy_nested_send() -> None:
                 async def _inner():
                     await command.send()
                 client.run_command_sync(_inner())
+                event_router.publish("sent")
         """
     )
 
     assert _dispatcher_violations(source) == set()
     assert _legacy_call_edges(source) == {
-        "write._do": ("run_command_sync->_inner",),
-        "write._do._inner": ("send",),
+        "write._do": ("client.run_command_sync->_inner",),
+        "write._do._inner": ("command.send",),
     }
+
+
+def test_legacy_edge_guard_rejects_wrong_send_receiver() -> None:
+    source = textwrap.dedent(
+        """
+        def write(client):
+            def _do():
+                async def _inner():
+                    await telemetry.send()
+                client.run_command_sync(_inner())
+        """
+    )
+
+    observed = _legacy_call_edges(source)
+
+    assert observed == {
+        "write._do": ("client.run_command_sync->_inner",),
+        "write._do._inner": ("telemetry.send",),
+    }
+    assert observed["write._do._inner"] != ("command.send",)
 
 
 def test_patch_copies_values_immutably() -> None:
