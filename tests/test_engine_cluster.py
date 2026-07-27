@@ -345,6 +345,90 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(params["prStr"], "PROGRAMS.REF.SUPER_COOL")
         self.assertNotIn("programRules", ancillary)
 
+    def test_legacy_send_payloads_match_exact_goldens(self) -> None:
+        snap = _native_snapshot()
+
+        self.assertEqual(
+            [
+                (
+                    "settings",
+                    {"tempSelZ1": "5", "tempSelZ2": "-18", "tempSelZ3": "1"},
+                    {},
+                    "setParameters",
+                )
+            ],
+            snap["send_settings"],
+        )
+        self.assertEqual(
+            [
+                (
+                    "startProgram",
+                    {
+                        "prCode": "1",
+                        "prStr": "PROGRAMS.REF.SUPER_COOL",
+                        "tempSel": "5",
+                        "speed": "3",
+                    },
+                    {"remoteActionable": "1"},
+                    "PROGRAMS.REF.SUPER_COOL",
+                )
+            ],
+            snap["send_start"],
+        )
+        self.assertEqual(
+            [
+                (
+                    "startProgram",
+                    {
+                        "prCode": "1",
+                        "prStr": "PROGRAMS.REF.SUPER_COOL",
+                        "tempSel": 5,
+                    },
+                    {"remoteActionable": "1"},
+                    "PROGRAMS.REF.SUPER_COOL",
+                )
+            ],
+            snap["send_specific"],
+        )
+
+    def test_legacy_category_program_send_payload_matches_exact_golden(self) -> None:
+        api = DictApi(_RICH_COMMANDS)
+        appliance = _build(NaAppliance, api)
+        appliance.commands["startProgram"].parameters["program"].value = "super_freeze"
+
+        _run(appliance.commands["startProgram"].send())
+
+        self.assertEqual(
+            [
+                (
+                    "startProgram",
+                    {
+                        "prCode": "5",
+                        "prStr": "PROGRAMS.REF.SUPER_FREEZE",
+                        "tempSel": "5",
+                        "speed": "3",
+                    },
+                    {},
+                    "PROGRAMS.REF.SUPER_FREEZE",
+                )
+            ],
+            api.sent,
+        )
+
+    def test_prstr_normalization_does_not_mutate_caller_payload(self) -> None:
+        api = DictApi(_RICH_COMMANDS)
+        appliance = _build(NaAppliance, api)
+        command = appliance.commands["startProgram"]
+        payload = {"prCode": "1", "prStr": "caller-value"}
+
+        _run(command.send_exact(payload))
+
+        self.assertEqual({"prCode": "1", "prStr": "caller-value"}, payload)
+        self.assertEqual(
+            {"prCode": "1", "prStr": "PROGRAMS.REF.SUPER_COOL"},
+            api.sent[0][1],
+        )
+
     def test_send_exact_does_not_broadly_sync_shadow(self) -> None:
         from custom_components.addhon.client.engine.attributes import HonAttribute
 
@@ -390,6 +474,28 @@ class ClusterBehaviorTest(unittest.TestCase):
 
         self.assertEqual(app.attributes["parameters"]["mode"].value, 2)
         self.assertEqual(app.attributes["parameters"]["light"].value, "old-light")
+
+    def test_targeted_shadow_sync_ignores_missing_key(self) -> None:
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        app = NaAppliance(FakeApi(), dict(_INFO), zone=0)
+        app._attributes = {
+            "parameters": {"mode": HonAttribute({"parNewVal": "old"})}
+        }
+
+        app.sync_payload_to_params({"missing": "2"})
+
+        self.assertEqual({"mode"}, set(app.attributes["parameters"]))
+        self.assertEqual("old", app.attributes["parameters"]["mode"].value)
+
+    def test_targeted_shadow_sync_ignores_non_updateable_value(self) -> None:
+        marker = object()
+        app = NaAppliance(FakeApi(), dict(_INFO), zone=0)
+        app._attributes = {"parameters": {"mode": marker}}
+
+        app.sync_payload_to_params({"mode": "2"})
+
+        self.assertIs(marker, app.attributes["parameters"]["mode"])
 
     def test_ids_excludes_iot_and_sorted(self) -> None:
         snap = _native_snapshot()

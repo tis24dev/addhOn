@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from __future__ import annotations
 
+import ast
 import asyncio
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 from typing import Any, Callable
 
 import pytest
@@ -17,6 +19,18 @@ from custom_components.addhon.client.engine.commands import HonCommand
 from custom_components.addhon.client.engine.exceptions import ApiError
 from custom_components.addhon.command_dispatch import CommandDispatcher, CommandPatch
 from tests.contract_fixtures import load_contract_cases
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_LEGACY_ENTITY_CALLS = {
+    "ac_command.py": {"async_send_command"},
+    "button.py": {"run_command_sync", "send"},
+    "climate.py": {"async_send_command"},
+    "number.py": {"async_send_command"},
+    "program_options.py": {"run_command_sync", "send"},
+    "select.py": {"async_send_command"},
+    "switch.py": {"run_command_sync", "send"},
+}
 
 
 class _Appliance:
@@ -88,6 +102,45 @@ def test_dispatcher_contract_fixture_is_valid() -> None:
         "unrelated_preserved",
     }
     assert all(case["support"] == "confirmed" for case in cases)
+
+
+def test_existing_entities_keep_legacy_command_entry_points() -> None:
+    component_root = _REPO_ROOT / "custom_components" / "addhon"
+    forbidden = {"async_dispatch_patch", "dispatch_patch_sync"}
+
+    for filename, expected_calls in _LEGACY_ENTITY_CALLS.items():
+        tree = ast.parse((component_root / filename).read_text(encoding="utf-8"))
+        calls = {
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, (ast.Name, ast.Attribute))
+        }
+        assert expected_calls <= calls, filename
+        assert forbidden.isdisjoint(calls), filename
+
+
+def test_dispatcher_has_no_production_entity_caller() -> None:
+    component_root = _REPO_ROOT / "custom_components" / "addhon"
+    allowed = {"command_dispatch.py", "hon_client.py"}
+    references: list[str] = []
+
+    for path in component_root.rglob("*.py"):
+        if path.name in allowed:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if any(
+            isinstance(node, ast.Name)
+            and node.id == "async_dispatch_patch"
+            or isinstance(node, ast.Attribute)
+            and node.attr == "dispatch_patch_sync"
+            for node in ast.walk(tree)
+        ):
+            references.append(str(path.relative_to(component_root)))
+
+    assert references == []
 
 
 def test_patch_copies_values_immutably() -> None:
