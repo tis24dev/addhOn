@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
     from .client.interfaces import Appliance
 
 PrepareCallback = Callable[[dict[str, Any]], None]
+_MISSING = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,9 +38,30 @@ class PreparedCommand:
     changed_keys: frozenset[str]
 
 
+@dataclass(slots=True)
+class _LockEntry:
+    lock: asyncio.Lock
+    users: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class CommandDispatcher:
     _SELECTOR_KEYS = frozenset({"category", "program"})
+    _locks: dict[str | int, _LockEntry] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    @property
+    def lock_count(self) -> int:
+        return len(self._locks)
+
+    @staticmethod
+    def _appliance_key(appliance: Appliance) -> str | int:
+        unique_id = getattr(appliance, "unique_id", _MISSING)
+        return id(appliance) if unique_id is _MISSING else str(unique_id)
 
     @staticmethod
     def _command_tree(commands: Mapping[str, HonCommand]) -> list[HonCommand]:
@@ -156,37 +179,50 @@ class CommandDispatcher:
         appliance: Appliance,
         patch: CommandPatch,
     ) -> bool:
-        commands = appliance.commands
-        command_before = commands.get(patch.command_name)
-        if command_before is None:
-            raise KeyError(patch.command_name)
-
-        parameter_snapshots = [
-            (command, snapshot_params(command.parameters))
-            for command in self._command_tree(commands)
-        ]
-        attributes = getattr(appliance, "attributes", {})
-        shadow = (
-            attributes.get("parameters", {})
-            if isinstance(attributes, Mapping)
-            else {}
-        )
-        shadow_before = snapshot_params(shadow)
-
-        def rollback() -> None:
-            for command, snapshot in parameter_snapshots:
-                restore_params(command.parameters, snapshot)
-            restore_params(shadow, shadow_before)
-            commands[patch.command_name] = command_before  # type: ignore[index]
+        key = self._appliance_key(appliance)
+        entry = self._locks.get(key)
+        if entry is None:
+            entry = _LockEntry(asyncio.Lock())
+            self._locks[key] = entry
+        entry.users += 1
 
         try:
-            prepared = self._prepare(command_before, patch)
-            result = await prepared.command.send_exact(prepared.payload)
-            if result is not True:
-                rollback()
-                return False
-            appliance.sync_payload_to_params(prepared.payload)
-            return True
-        except BaseException:
-            rollback()
-            raise
+            async with entry.lock:
+                commands = appliance.commands
+                command_before = commands.get(patch.command_name)
+                if command_before is None:
+                    raise KeyError(patch.command_name)
+
+                parameter_snapshots = [
+                    (command, snapshot_params(command.parameters))
+                    for command in self._command_tree(commands)
+                ]
+                attributes = getattr(appliance, "attributes", {})
+                shadow = (
+                    attributes.get("parameters", {})
+                    if isinstance(attributes, Mapping)
+                    else {}
+                )
+                shadow_before = snapshot_params(shadow)
+
+                def rollback() -> None:
+                    for command, snapshot in parameter_snapshots:
+                        restore_params(command.parameters, snapshot)
+                    restore_params(shadow, shadow_before)
+                    commands[patch.command_name] = command_before  # type: ignore[index]
+
+                try:
+                    prepared = self._prepare(command_before, patch)
+                    result = await prepared.command.send_exact(prepared.payload)
+                    if result is not True:
+                        rollback()
+                        return False
+                    appliance.sync_payload_to_params(prepared.payload)
+                    return True
+                except BaseException:
+                    rollback()
+                    raise
+        finally:
+            entry.users -= 1
+            if entry.users == 0 and self._locks.get(key) is entry:
+                del self._locks[key]

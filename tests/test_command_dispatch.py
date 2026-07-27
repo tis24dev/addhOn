@@ -470,6 +470,41 @@ def _dispatch_appliance() -> tuple[
     return appliance, first, second
 
 
+class _ConcurrencyState:
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.order: list[str] = []
+
+
+def _block_command_sends(
+    command: _DispatchCommand,
+    *,
+    label: str,
+    started: asyncio.Queue[str],
+    releases: list[asyncio.Event],
+    state: _ConcurrencyState,
+) -> None:
+    call_index = 0
+
+    async def send_exact(payload: dict[str, str | float]) -> bool:
+        nonlocal call_index
+        release = releases[call_index]
+        call_index += 1
+        command.sent_payloads.append(dict(payload))
+        state.active += 1
+        state.max_active = max(state.max_active, state.active)
+        state.order.append(str(payload.get("mode", label)))
+        started.put_nowait(label)
+        try:
+            await release.wait()
+        finally:
+            state.active -= 1
+        return True
+
+    command.send_exact = send_exact  # type: ignore[method-assign]
+
+
 def _all_commands(appliance: _DispatchAppliance) -> list[HonCommand]:
     pending = list(appliance.commands.values())
     commands: list[HonCommand] = []
@@ -643,3 +678,238 @@ def test_dispatch_cancellation_rolls_back_and_propagates() -> None:
 
     assert _snapshot_transaction(appliance) == before
     assert appliance.synced_payloads == []
+
+
+def test_dispatch_serializes_same_appliance_in_order_and_cleans_lock() -> None:
+    async def scenario() -> None:
+        appliance, _, command = _dispatch_appliance()
+        appliance.unique_id = 17
+        dispatcher = CommandDispatcher()
+        started: asyncio.Queue[str] = asyncio.Queue()
+        releases = [asyncio.Event(), asyncio.Event()]
+        state = _ConcurrencyState()
+        _block_command_sends(
+            command,
+            label="same",
+            started=started,
+            releases=releases,
+            state=state,
+        )
+
+        first = asyncio.create_task(
+            dispatcher.dispatch(appliance, _category_patch())
+        )
+        assert await asyncio.wait_for(started.get(), timeout=1) == "same"
+        second = asyncio.create_task(
+            dispatcher.dispatch(
+                appliance,
+                CommandPatch(
+                    "settings",
+                    {"category": "second", "mode": "new"},
+                    action="select_category_new",
+                ),
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert state.active == 1
+        assert dispatcher.lock_count == 1
+
+        releases[0].set()
+        assert await asyncio.wait_for(started.get(), timeout=1) == "same"
+        releases[1].set()
+
+        assert await asyncio.gather(first, second) == [True, True]
+        assert state.order == ["target", "new"]
+        assert state.max_active == 1
+        assert dispatcher.lock_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_dispatches_for_different_appliances_overlap() -> None:
+    async def scenario() -> None:
+        first_appliance, _, first_command = _dispatch_appliance()
+        second_appliance, _, second_command = _dispatch_appliance()
+        dispatcher = CommandDispatcher()
+        started: asyncio.Queue[str] = asyncio.Queue()
+        releases = [asyncio.Event(), asyncio.Event()]
+        state = _ConcurrencyState()
+        _block_command_sends(
+            first_command,
+            label="first",
+            started=started,
+            releases=[releases[0]],
+            state=state,
+        )
+        _block_command_sends(
+            second_command,
+            label="second",
+            started=started,
+            releases=[releases[1]],
+            state=state,
+        )
+
+        tasks = [
+            asyncio.create_task(
+                dispatcher.dispatch(first_appliance, _category_patch())
+            ),
+            asyncio.create_task(
+                dispatcher.dispatch(second_appliance, _category_patch())
+            ),
+        ]
+        labels = {
+            await asyncio.wait_for(started.get(), timeout=1),
+            await asyncio.wait_for(started.get(), timeout=1),
+        }
+
+        assert labels == {"first", "second"}
+        assert state.max_active == 2
+        assert dispatcher.lock_count == 2
+
+        for release in releases:
+            release.set()
+
+        assert await asyncio.gather(*tasks) == [True, True]
+        assert dispatcher.lock_count == 0
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("first_unique_id", "second_unique_id"),
+    [(17, "17"), (None, None)],
+    ids=["stringified", "present-falsy"],
+)
+def test_dispatch_serializes_matching_stringified_unique_ids(
+    first_unique_id: object,
+    second_unique_id: object,
+) -> None:
+    async def scenario() -> None:
+        first_appliance, _, first_command = _dispatch_appliance()
+        second_appliance, _, second_command = _dispatch_appliance()
+        first_appliance.unique_id = first_unique_id
+        second_appliance.unique_id = second_unique_id
+        dispatcher = CommandDispatcher()
+        started: asyncio.Queue[str] = asyncio.Queue()
+        releases = [asyncio.Event(), asyncio.Event()]
+        state = _ConcurrencyState()
+        _block_command_sends(
+            first_command,
+            label="first",
+            started=started,
+            releases=[releases[0]],
+            state=state,
+        )
+        _block_command_sends(
+            second_command,
+            label="second",
+            started=started,
+            releases=[releases[1]],
+            state=state,
+        )
+
+        first = asyncio.create_task(
+            dispatcher.dispatch(first_appliance, _category_patch())
+        )
+        assert await asyncio.wait_for(started.get(), timeout=1) == "first"
+        second = asyncio.create_task(
+            dispatcher.dispatch(second_appliance, _category_patch())
+        )
+        await asyncio.sleep(0)
+
+        assert state.active == 1
+        assert dispatcher.lock_count == 1
+
+        releases[0].set()
+        assert await asyncio.wait_for(started.get(), timeout=1) == "second"
+        releases[1].set()
+
+        assert await asyncio.gather(first, second) == [True, True]
+        assert state.max_active == 1
+        assert dispatcher.lock_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_dispatch_cancelled_waiter_releases_lock_reference() -> None:
+    async def scenario() -> None:
+        appliance, _, command = _dispatch_appliance()
+        appliance.unique_id = "cancel-waiter"
+        dispatcher = CommandDispatcher()
+        started: asyncio.Queue[str] = asyncio.Queue()
+        releases = [asyncio.Event(), asyncio.Event()]
+        state = _ConcurrencyState()
+        _block_command_sends(
+            command,
+            label="waiter",
+            started=started,
+            releases=releases,
+            state=state,
+        )
+
+        holder = asyncio.create_task(
+            dispatcher.dispatch(appliance, _category_patch())
+        )
+        assert await asyncio.wait_for(started.get(), timeout=1) == "waiter"
+        waiter = asyncio.create_task(
+            dispatcher.dispatch(appliance, _category_patch())
+        )
+        await asyncio.sleep(0)
+        waiter.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert dispatcher.lock_count == 1
+
+        releases[0].set()
+        assert await holder is True
+        assert dispatcher.lock_count == 0
+
+        later = asyncio.create_task(
+            dispatcher.dispatch(appliance, _category_patch())
+        )
+        assert await asyncio.wait_for(started.get(), timeout=1) == "waiter"
+        releases[1].set()
+
+        assert await later is True
+        assert dispatcher.lock_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_dispatch_cancelled_lock_holder_releases_waiter_and_cleans_lock() -> None:
+    async def scenario() -> None:
+        appliance, _, command = _dispatch_appliance()
+        appliance.unique_id = "cancel-holder"
+        dispatcher = CommandDispatcher()
+        started: asyncio.Queue[str] = asyncio.Queue()
+        releases = [asyncio.Event(), asyncio.Event()]
+        state = _ConcurrencyState()
+        _block_command_sends(
+            command,
+            label="holder",
+            started=started,
+            releases=releases,
+            state=state,
+        )
+
+        holder = asyncio.create_task(
+            dispatcher.dispatch(appliance, _category_patch())
+        )
+        assert await asyncio.wait_for(started.get(), timeout=1) == "holder"
+        waiter = asyncio.create_task(
+            dispatcher.dispatch(appliance, _category_patch())
+        )
+        await asyncio.sleep(0)
+        holder.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await holder
+        assert await asyncio.wait_for(started.get(), timeout=1) == "holder"
+        releases[1].set()
+
+        assert await waiter is True
+        assert dispatcher.lock_count == 0
+
+    asyncio.run(scenario())
