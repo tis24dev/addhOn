@@ -15,7 +15,7 @@ Task 5: complete — fan platform (dispatcher now LIVE from an entity); fan adde
 Task 6: complete — inverse 3-level panel light; light added to PLATFORMS (V2 closed)
 Task 7: complete — sparse child_lock + touch_tone switches; per-class legacy guard for mixed files
 Task 8: complete — aroma select (power-gated), custom timings validated against the live range
-Task 9: pending — experimental option + timing numbers
+Task 9: complete — experimental option (targeted reload), AQ label + CO alarm, custom timing numbers in seconds; number.py is the third mixed file; control mutation exposed an unguarded stub clobber (V11)
 Task 10: pending — diagnostics + passive future-capability capture
 Task 11: pending — EN/IT translations
 Task 12: pending — contract matrix through real dispatcher

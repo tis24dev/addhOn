@@ -24,6 +24,8 @@ release plus user-collected diagnostics, not Tasks 14/15 as written.
 | L5 | Light encoding assumed inverse (raw 2/1/0 = off/50/100) | Every light test still passes if raw `0` is actually OFF; the panel would simply behave backwards. Second highest-value live check after L1. | Task 6 |
 | L6 | `touchToneStatus` polarity assumed (1 = tone audible). The decompiled enum lists the parameter but not its sense. | The switch reads and writes backwards; every test still passes. | Task 7 |
 | L7 | Aroma ordinals assumed (1=soft, 2=mid, 3=h_biotics, 4=custom). From the design, not a live dump. | A permutation gives the wrong scent intensity for every selection; every test still passes. | Task 8 |
+| L8 | The experimental CO alarm's raw `2` and the AQ label's raw `0` are each a SINGLE observation. | If the value is merely unobserved, the entity is always unavailable (the chosen failure mode). If the value is WRONG (raw 2 actually benign), the CO entity raises a false alarm. Highest-value check on the experimental pair. | Task 9 |
+| L9 | Custom-aroma timing granularity assumed to be SECONDS (design: observed range 1..3600, 60 = one minute). | If they are deciseconds or minutes the numbers offer a wrong unit and scale; every test passes. | Task 9 |
 
 ## BACKLOG: evidence says more than the design covers
 
@@ -38,6 +40,12 @@ outside the frozen entity lists of Tasks 3-9.
 | B3 | `aromaPreferredSetting` declared, unmapped and undocumented. | Task 4 |
 | B4 | `transMode` / `highTransRate` / `stdTransRate` declared, meaning unknown. | Task 4 |
 | B5 | `test_all_tier2_descriptions_are_gated` (in `test_tier2_sensors.py`) iterates a hardcoded type list that does not include AP. AP gating is covered by `test_air_purifier_entities.py` instead, so the list was left alone. | Task 3 |
+
+## ACTION: queued for a specific later task
+
+| # | Item | Owner |
+|---|---|---|
+| A1 | `tests/test_air_purifier_contracts.py:210` hardcodes `HHP50CA011` on the trap fixture that proves no code reads a model name. Deliberate, but Task 13's evidence sweep forbids the literal in tracked test code; the trap works with any synthetic string. | Task 12 (owns the file) |
 
 ## DECIDE: needs a human call
 
@@ -54,7 +62,10 @@ outside the frozen entity lists of Tasks 3-9.
 | V2 | RESOLVED. `fan` and `light` were NOT added to `PLATFORMS` in Task 2 as Step 4 dictates; each landed in the commit that creates its module (`fan` Task 5, `light` Task 6), so every commit stays runnable on a real instance. Enforced by `test_every_declared_platform_has_a_module`, which exists because the stubbed suite stays green with a platform listed and no module present. | Tasks 2, 5, 6 |
 | V3 | `ap_patch` gained an EIGHTH action, `set_aroma_time`, not in Task 2's Step 5 list. Task 9 needs `aromaStatus=4` plus only the changed timing key, and its file list excludes `air_purifier.py`; without this it would have had to assemble a CommandPatch inside `number.py`, bypassing the intent builder. Shape fully specified by Task 9's Step 6, so nothing was guessed. | Task 2 |
 | V4 | `tests/test_command_dispatch.py` modified although listed in no task before Task 10. Its dormancy guard allow-lists dispatcher callers; this plan is what wakes the dispatcher. Now contains `air_purifier.py` (Task 2), `fan.py` (Task 5), `light.py` (Task 6) and `switch.py` (Task 7); each further AP platform adds itself. | Tasks 2, 5, 6, 7 |
+| V9 | The experimental value mappings (`AP_AIR_QUALITY_LABELS`, `AP_CO_ALARM_RAW`, `air_quality_label`, `co_alarm`) went into `air_purifier.py`, which Task 9's file list excludes. That module's docstring claims ownership of every AP decision, and Tasks 3/4 already set the split: attribute NAMES inline in the platform table, value SEMANTICS imported from `air_purifier.py`. Duplicating a raw-value map into a platform file is exactly the drift the module exists to prevent. | Task 9 |
+| V10 | The options step title changed from "Debug options" to "Options" (both languages). Not a new key, so no parity test covers it; leaving it would have mislabelled a screen that now carries a non-debug toggle. | Task 9 |
 | V8 | **MIXED-FILE allow-listing weakens the guard.** A platform file holding both an AP entity that dispatches and legacy entities that intentionally send whole commands cannot be protected by the file-level allow-list, and `_EXPECTED_LEGACY_CALL_EDGES` does not help because `async_send_settings` is not one of its tracked callees. Replaced by `test_mixed_platform_legacy_classes_keep_the_legacy_sender`, a per-CLASS check: `switch.py` (2 classes, Task 7) and `select.py` (2 classes, Task 8) are covered. **`number.py` (Task 9) becomes the third mixed file and MUST be added to that test.** | Tasks 7, 8 |
+| V11 | `tests/test_entity_translation_keys.py` assigned `SwitchEntity` / `SelectEntity` / `ButtonEntity` with NO getattr guard, clobbering conftest's complete stubs. Entity classes bind whatever base exists when their module is first imported, so in a collection order where that module is imported first the AP aroma select lost the `options` property real HA provides: a pre-existing failure in any four-file subset, invisible in the full suite. Now guarded. Found because the Task 9 CONTROL mutation was also reported as caught. | Task 9 |
 | V5 | `tests/test_entity_translation_keys.py` collectors hardcode BOTH the platform list and each platform's key sources, so a new platform, table or fixed-key entity goes unchecked (the `extra` half of the parity assertion only runs for known sources). `fan` Task 5, `light` Task 6, `_AIR_PURIFIER_SWITCHES` Task 7, `aroma` name + its `state` block Task 8. The state-block collector iterates DESCRIPTION TABLES, so the table-less aroma select had to register its option set explicitly or its five state labels would never have been parity-checked. Task 11 owns the file; every further AP key source must add itself. | Tasks 5, 6, 7, 8 |
 | V6 | Translations are added by the task that introduces a key, not by Task 11. `test_code_keys_match_translations_exactly` asserts EXACT set equality per language, so a new key without JSON fails immediately. Task 11 becomes a completeness and wording pass, not the first appearance. | Task 3 |
 | V7 | Task 3 wrote inline test stubs rather than centralizing in `conftest.py`, deferring to Task 5 which the plan says modifies conftest. Resolved in Task 5; `switch` added in Task 7. Each addition makes conftest win the first-wins race for modules that stubbed the platform themselves, so the full suite is re-run after every one. | Tasks 3, 5, 7 |
@@ -75,6 +86,10 @@ outside the frozen entity lists of Tasks 3-9.
 | P10 | The AP branch in `switch.async_setup_entry` reads `coordinator.data.items()` directly, matching that module's existing style, while the newer `fan.py`/`light.py` use `coordinator_data_map`. Left consistent with the file it lives in. | Task 7 |
 | P11 | `child_lock` shares a translation key across the AC and the AP. Same parameter, same meaning, so intentional consistency rather than the accidental overlap of `fan_speed` (P5). | Task 7 |
 | P12 | The aroma select is the FIRST AP control that is power-gated (unavailable while stopped), per the design's rule that aroma patches only go out during an active session. Lock and tone deliberately are not. If a live device turns out to accept aroma changes while stopped, this gate is the thing to relax. | Task 8 |
+| P14 | `ap_patch` validates a requested timing against the CAPABILITY snapshot taken at setup, while the number reports bounds read LIVE. A rules change that widens the range after setup is offered by the UI and refused by the intent builder as a localized `command_error`. Fails closed; not fixed because duplicating range resolution into `ap_patch` is the larger risk. | Task 9 |
+| P15 | The experimental CO alarm can never report "off": with only the alarming value known, an all-clear would assert safety on no evidence. It is therefore unavailable on a healthy device, which is honest but of little use until L8 is settled. | Task 9 |
+| P16 | `unavailable_when_unmapped` reaches `native_value` / `is_on` from `available`, so the value function runs twice per state write. Both are pure dictionary lookups. | Task 9 |
+| P17 | The AP timing numbers are power-gated as well as Custom-gated, extending P12's rule from the aroma select to every write that carries `aromaStatus`. The plan only required the Custom gate. | Task 9 |
 | P13 | Custom aroma always sends BOTH timing fields. The single-timing variant (`set_aroma_time`, V3) is Task 9's shape and is deliberately unused here. | Task 8 |
 
 ## Process notes
@@ -102,7 +117,9 @@ outside the frozen entity lists of Tasks 3-9.
   re-mutated to confirm they are now load-bearing. A mutation that survives is a
   question, not automatically a missing test.
 - **Deliberate control mutations are run alongside the real ones** (Task 5's F8b,
-  Task 6's L10): a no-op edit that must NOT fail, proving the harness does not
-  manufacture failures.
+  Task 6's L10, Task 9's E23): a no-op edit that must NOT fail, proving the harness
+  does not manufacture failures. **In Task 9 the control FIRED**, which is what
+  exposed V11: 22 real mutations had been reported as caught when the whole subset
+  was failing for an unrelated reason. A control mutation is not ceremony.
 - Task 1's RED was not observed at the time (fixture and test written together,
   straight to green). Verified retroactively. Not repeated since.
