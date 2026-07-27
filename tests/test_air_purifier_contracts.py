@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -15,7 +16,11 @@ from tests._golden import install_stubs
 install_stubs()
 
 from custom_components.addhon import air_purifier
+from custom_components.addhon.client.engine.appliance import HonAppliance
+from custom_components.addhon.client.engine.attributes import HonAttribute
 from custom_components.addhon.client.engine.commands import HonCommand
+from custom_components.addhon.client.engine.exceptions import ApiError
+from custom_components.addhon.command_dispatch import CommandDispatcher, CommandPatch
 from tests.contract_fixtures import load_contract_cases
 
 _AP_SCHEMA_FIXTURE = (
@@ -207,7 +212,11 @@ class _FakeAppliance:
         self.options: dict[str, str] = {}
         self.commands: dict[str, Any] = {}
         self.appliance_type = "AP"
-        self.model_name = "HHP50CA011"
+        # Synthetic on purpose: the trap only needs the ATTRIBUTES to exist so a
+        # capability read that peeks at either is provable. A real model code in
+        # tracked test code would also be evidence leaking out of the gitignored
+        # analysis material.
+        self.model_name = "SYNTHETIC-MODEL-NEVER-READ"
         self.nick_name = "Purifier"
 
 
@@ -677,3 +686,284 @@ def test_set_aroma_time_only_writes_declared_settings_fields() -> None:
         "set_aroma_time", caps, time_on="30", time_off="90"
     )
     assert set(patch.values) <= declared
+
+
+# --- Task 12: the matrix through the REAL dispatcher --------------------------
+#
+# Everything below drives `CommandDispatcher.dispatch` against real `HonCommand`
+# objects, the engine's real parameter setters and rule application, the real
+# appliance shadow-sync method, and a fake TRANSPORT. Only the network boundary is
+# replaced, so a payload that the engine would refuse never reaches a test
+# assertion, and the transactional guarantees (rollback, serialization) are
+# exercised rather than described.
+
+
+class _RecordingApi:
+    """The network boundary, and nothing else.
+
+    `HonCommand._send_parameters` raises ApiError when the api returns a falsy
+    result, so a cloud rejection reaches the dispatcher as an exception, not as a
+    False return: `result=False` here reproduces a real rejection.
+    """
+
+    def __init__(self, result: bool = True, error: BaseException | None = None) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.result = result
+        self.error = error
+
+    async def send_command(
+        self,
+        appliance: Any,
+        command_name: str,
+        params: Any,
+        ancillary: Any,
+        category: str,
+    ) -> bool:
+        self.calls.append((command_name, {k: str(v) for k, v in params.items()}))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class _DispatchAppliance(_FakeAppliance):
+    """Appliance surface the dispatcher touches: commands, a shadow, and the
+    engine's OWN `sync_payload_to_params` (bound from `HonAppliance`, not
+    reimplemented, so the reconciliation under test is the real one)."""
+
+    sync_payload_to_params = HonAppliance.sync_payload_to_params
+
+    def __init__(self, shadow: dict[str, str], api: _RecordingApi) -> None:
+        super().__init__()
+        self.api = api
+        self.attributes = {
+            "parameters": {key: HonAttribute(value) for key, value in shadow.items()}
+        }
+
+
+def _dispatch_appliance(
+    case: dict[str, Any],
+    *,
+    api: _RecordingApi | None = None,
+    schema: dict[str, Any] | None = None,
+) -> tuple[_DispatchAppliance, _RecordingApi]:
+    transport = api if api is not None else _RecordingApi()
+    appliance = _DispatchAppliance(case["initial_shadow"], transport)
+    for command_name, body in deepcopy(schema or case["schema"]).items():
+        appliance.commands[command_name] = HonCommand(command_name, body, appliance)
+    return appliance, transport
+
+
+def _plain_shadow(appliance: _DispatchAppliance) -> dict[str, str]:
+    return {
+        key: str(attribute.value)
+        for key, attribute in appliance.attributes["parameters"].items()
+    }
+
+
+def _capabilities_for(appliance: _DispatchAppliance, case: dict[str, Any]):
+    return air_purifier.discover_capabilities(appliance, case["initial_shadow"])
+
+
+def _patch_for(case: dict[str, Any], appliance: _DispatchAppliance):
+    action, kwargs = _INTENT_FOR_CASE[case["id"]]
+    return air_purifier.ap_patch(action, _capabilities_for(appliance, case), **kwargs)
+
+
+def _command_values(appliance: _DispatchAppliance, command_name: str) -> dict[str, str]:
+    command = appliance.commands[command_name]
+    return {
+        name: str(parameter.value) for name, parameter in command.parameters.items()
+    }
+
+
+@pytest.mark.parametrize(
+    "case", load_contract_cases("air_purifier.json"), ids=lambda case: case["id"]
+)
+def test_ap_contract_through_real_dispatcher(case: dict[str, Any]) -> None:
+    appliance, api = _dispatch_appliance(case)
+    before = _plain_shadow(appliance)
+
+    result = asyncio.run(CommandDispatcher().dispatch(appliance, _patch_for(case, appliance)))
+
+    assert result is True, case["id"]
+    assert api.calls == [(case["command_name"], case["expected_payload"])], case["id"]
+    after = _plain_shadow(appliance)
+    delta = {key: value for key, value in after.items() if before[key] != value}
+    assert delta == case["expected_shadow_delta"], case["id"]
+    for key in case["must_not_change"]:
+        assert after[key] == before[key], f"{case['id']}: {key}"
+
+
+@pytest.mark.parametrize(
+    "case", load_contract_cases("air_purifier.json"), ids=lambda case: case["id"]
+)
+def test_every_case_sends_exactly_one_command(case: dict[str, Any]) -> None:
+    """One user action is one cloud call. A second call would mean the payload was
+    split, or a sibling command was restated."""
+    appliance, api = _dispatch_appliance(case)
+    asyncio.run(CommandDispatcher().dispatch(appliance, _patch_for(case, appliance)))
+    assert len(api.calls) == 1, case["id"]
+
+
+def test_the_dispatcher_releases_its_lock_after_every_case() -> None:
+    dispatcher = CommandDispatcher()
+    for case in load_contract_cases("air_purifier.json"):
+        appliance, _api = _dispatch_appliance(case)
+        asyncio.run(dispatcher.dispatch(appliance, _patch_for(case, appliance)))
+    assert dispatcher.lock_count == 0
+
+
+# --- Negative matrix: the engine must REFUSE, and leave nothing behind --------
+
+
+def _expect_refusal(
+    case: dict[str, Any],
+    patch: Any,
+    expected: type[BaseException],
+    *,
+    api: _RecordingApi | None = None,
+    schema: dict[str, Any] | None = None,
+) -> None:
+    """A refused write sends nothing AND leaves both the shadow and the command
+    parameters exactly as they were: that is the transactional guarantee, and it is
+    what a half-applied purifier setting would violate."""
+    appliance, transport = _dispatch_appliance(case, api=api, schema=schema)
+    shadow_before = _plain_shadow(appliance)
+    params_before = {
+        name: _command_values(appliance, name) for name in appliance.commands
+    }
+
+    with pytest.raises(expected):
+        asyncio.run(CommandDispatcher().dispatch(appliance, patch))
+
+    assert transport.calls == []
+    assert _plain_shadow(appliance) == shadow_before
+    assert {
+        name: _command_values(appliance, name) for name in appliance.commands
+    } == params_before
+
+
+def test_an_off_schema_field_is_refused_before_any_send() -> None:
+    case = _ap_case("light_off")
+    patch = CommandPatch(
+        "settings", {"bogusUndeclaredField": "1"}, action="ap_negative"
+    )
+    _expect_refusal(case, patch, ValueError)
+
+
+def test_the_off_state_sentinel_mode_is_refused() -> None:
+    """machMode=0 is the value the device REPORTS while stopped. `ap_patch` never
+    builds it, so this goes straight at the engine: the enum setter must refuse it
+    even when a caller hand-builds the patch."""
+    case = _ap_case("preset_auto")
+    patch = CommandPatch("settings", {"machMode": "0"}, action="ap_negative")
+    _expect_refusal(case, patch, ValueError)
+
+
+def test_the_allergen_mode_is_refused() -> None:
+    case = _ap_case("preset_auto")
+    patch = CommandPatch("settings", {"machMode": "3"}, action="ap_negative")
+    _expect_refusal(case, patch, ValueError)
+
+
+def test_an_undeclared_enum_value_is_refused() -> None:
+    case = _ap_case("light_off")
+    patch = CommandPatch("settings", {"lightStatus": "3"}, action="ap_negative")
+    _expect_refusal(case, patch, ValueError)
+
+
+def test_a_timing_outside_the_declared_range_is_refused() -> None:
+    case = _ap_case("aroma_custom")
+    patch = CommandPatch(
+        "settings",
+        {"aromaStatus": "4", "aromaTimeOn": "99999"},
+        action="ap_negative",
+    )
+    _expect_refusal(case, patch, ValueError)
+
+
+def test_a_missing_command_is_refused() -> None:
+    case = _ap_case("turn_on_auto")
+    schema = {
+        name: body for name, body in case["schema"].items() if name != "startProgram"
+    }
+    patch = CommandPatch("startProgram", {"machMode": "2"}, action="ap_negative")
+    _expect_refusal(case, patch, KeyError, schema=schema)
+
+
+def test_custom_aroma_without_its_timings_never_reaches_the_transport() -> None:
+    """The refusal happens in the intent builder, one layer before the dispatcher,
+    which is why the assertion is that NOTHING was constructed to send."""
+    case = _ap_case("aroma_custom")
+    schema = deepcopy(case["schema"])
+    del schema["settings"]["parameters"]["aromaTimeOff"]
+    appliance, api = _dispatch_appliance(case, schema=schema)
+    capabilities = air_purifier.discover_capabilities(
+        appliance, case["initial_shadow"]
+    )
+    with pytest.raises(ValueError):
+        air_purifier.ap_patch("set_aroma", capabilities, value="4", time_on="30")
+    assert api.calls == []
+
+
+def test_a_cloud_rejection_rolls_everything_back() -> None:
+    case = _ap_case("light_100")
+    appliance, api = _dispatch_appliance(case, api=_RecordingApi(result=False))
+    shadow_before = _plain_shadow(appliance)
+    params_before = _command_values(appliance, "settings")
+
+    with pytest.raises(ApiError):
+        asyncio.run(CommandDispatcher().dispatch(appliance, _patch_for(case, appliance)))
+
+    # The call DID leave: rejection happens at the far end, unlike the refusals above.
+    assert len(api.calls) == 1
+    assert _plain_shadow(appliance) == shadow_before
+    assert _command_values(appliance, "settings") == params_before
+
+
+def test_a_transport_timeout_rolls_everything_back() -> None:
+    case = _ap_case("preset_sleep")
+    appliance, api = _dispatch_appliance(
+        case, api=_RecordingApi(error=asyncio.TimeoutError())
+    )
+    shadow_before = _plain_shadow(appliance)
+    params_before = _command_values(appliance, "settings")
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(CommandDispatcher().dispatch(appliance, _patch_for(case, appliance)))
+
+    assert len(api.calls) == 1
+    assert _plain_shadow(appliance) == shadow_before
+    assert _command_values(appliance, "settings") == params_before
+
+
+def test_concurrent_ap_actions_serialize_and_both_land() -> None:
+    """Two purifier controls written at once (a light change and a lock change) must
+    not interleave: each cloud payload carries its OWN field only, never the other
+    control's. The settings command declares no mandatory parameter (ledger P4), so
+    a sparse settings patch is exactly one key wide."""
+    case = _ap_case("light_off")
+    appliance, api = _dispatch_appliance(case)
+    capabilities = _capabilities_for(appliance, case)
+    dispatcher = CommandDispatcher()
+
+    async def run() -> list[bool]:
+        return list(
+            await asyncio.gather(
+                dispatcher.dispatch(
+                    appliance, air_purifier.ap_patch("set_light", capabilities, value="1")
+                ),
+                dispatcher.dispatch(
+                    appliance, air_purifier.ap_patch("set_lock", capabilities, value="1")
+                ),
+            )
+        )
+
+    assert asyncio.run(run()) == [True, True]
+    assert len(api.calls) == 2
+    payloads = {tuple(sorted(payload)) for _name, payload in api.calls}
+    assert payloads == {("lightStatus",), ("lockStatus",)}
+    shadow = _plain_shadow(appliance)
+    assert shadow["lightStatus"] == "1"
+    assert shadow["lockStatus"] == "1"
+    assert dispatcher.lock_count == 0
