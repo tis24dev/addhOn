@@ -139,7 +139,7 @@ def _install_shared_entity_stubs() -> None:
 
 
 def _install_fan_stubs() -> None:
-    """Shared `fan` and `light` platform stubs.
+    """Shared `fan`, `light` and `switch` platform stubs.
 
     Installed here rather than per test module: the fan platform is imported by
     the AP entity tests AND by the platform-forwarding tests, and a partial
@@ -228,6 +228,12 @@ def _install_fan_stubs() -> None:
     light.LightEntity = getattr(light, "LightEntity", LightEntity)
     light.ColorMode = getattr(light, "ColorMode", ColorMode)
     light.ATTR_BRIGHTNESS = getattr(light, "ATTR_BRIGHTNESS", "brightness")
+
+    # Bare platform bases: the addhon entities define every property themselves,
+    # so nothing beyond the class is needed to subclass them.
+    switch = _ensure_module("homeassistant.components.switch")
+    components.switch = switch
+    switch.SwitchEntity = getattr(switch, "SwitchEntity", type("SwitchEntity", (), {}))
 
     entity_platform = _ensure_module("homeassistant.helpers.entity_platform")
     sys.modules["homeassistant.helpers"].entity_platform = entity_platform

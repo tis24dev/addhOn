@@ -1236,3 +1236,207 @@ class AirPurifierLightArchitectureTest(unittest.TestCase):
         from custom_components.addhon.const import PLATFORMS
 
         self.assertIn("light", PLATFORMS)
+
+
+# --- Task 7: child-lock and touch-tone switches -------------------------------
+
+
+async def _build_switches(
+    attributes: dict | None = None,
+    schema: dict | None = None,
+    client: RecordingClient | None = None,
+):
+    from custom_components.addhon import switch
+    from custom_components.addhon.const import DOMAIN
+
+    data = {
+        "ap-1": {
+            "type": APPLIANCE_AP,
+            "name": "Purifier",
+            "attributes": FULL_ATTRIBUTES if attributes is None else attributes,
+            "appliance": _appliance(schema),
+            "settings": {},
+        }
+    }
+    coordinator = RefreshingCoordinator(data)
+    recording = client if client is not None else RecordingClient()
+    hass = RecordingHass(
+        {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": recording}}}
+    )
+    added: list = []
+    await switch.async_setup_entry(hass, FakeEntry(), added.extend)
+    appliance_switches = [
+        e for e in added if getattr(e, "_appliance_id", None) == "ap-1"
+    ]
+    for entity in appliance_switches:
+        entity.hass = hass
+    return appliance_switches, recording, coordinator
+
+
+def _switch_by_key(entities: list) -> dict:
+    return {e.entity_description.key: e for e in entities}
+
+
+TOGGLE_SCHEMA_EXTRA = {
+    "lockStatus": {
+        "typology": "enum", "category": "command", "mandatory": 0,
+        "defaultValue": "0", "enumValues": ["0", "1"],
+    },
+    "touchToneStatus": {
+        "typology": "enum", "category": "command", "mandatory": 0,
+        "defaultValue": "1", "enumValues": ["0", "1"],
+    },
+}
+
+
+def _toggle_schema(**overrides):
+    schema = copy.deepcopy(AP_SCHEMA)
+    schema["settings"]["parameters"].update(copy.deepcopy(TOGGLE_SCHEMA_EXTRA))
+    for param, values in overrides.items():
+        if values is None:
+            del schema["settings"]["parameters"][param]
+        else:
+            schema["settings"]["parameters"][param]["enumValues"] = values
+            schema["settings"]["parameters"][param]["defaultValue"] = values[0]
+    return schema
+
+
+class AirPurifierSwitchSetupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_both_toggles_are_created(self) -> None:
+        entities, _client, _coord = await _build_switches(schema=_toggle_schema())
+        self.assertEqual(
+            {"child_lock", "touch_tone"}, set(_switch_by_key(entities))
+        )
+
+    async def test_unique_ids_are_per_appliance(self) -> None:
+        entities, _client, _coord = await _build_switches(schema=_toggle_schema())
+        by_key = _switch_by_key(entities)
+        self.assertEqual("ap-1_child_lock", by_key["child_lock"].unique_id)
+        self.assertEqual("ap-1_touch_tone", by_key["touch_tone"].unique_id)
+
+    async def test_each_toggle_needs_its_writable_parameter(self) -> None:
+        entities, _client, _coord = await _build_switches(
+            schema=_toggle_schema(lockStatus=None)
+        )
+        self.assertEqual({"touch_tone"}, set(_switch_by_key(entities)))
+
+    async def test_each_toggle_needs_its_state_attribute(self) -> None:
+        attributes = {
+            k: v for k, v in FULL_ATTRIBUTES.items() if k != "touchToneStatus"
+        }
+        entities, _client, _coord = await _build_switches(
+            attributes=attributes, schema=_toggle_schema()
+        )
+        self.assertEqual({"child_lock"}, set(_switch_by_key(entities)))
+
+    async def test_a_non_binary_parameter_creates_no_toggle(self) -> None:
+        """A three-value lock is different device behavior; writing "1" against it
+        would assert a meaning the schema does not declare."""
+        entities, _client, _coord = await _build_switches(
+            schema=_toggle_schema(lockStatus=["0", "1", "2"])
+        )
+        self.assertEqual({"touch_tone"}, set(_switch_by_key(entities)))
+
+    async def test_no_toggles_without_a_settings_command(self) -> None:
+        schema = _toggle_schema()
+        del schema["settings"]
+        entities, _client, _coord = await _build_switches(schema=schema)
+        self.assertEqual([], entities)
+
+
+class AirPurifierSwitchStateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_state_maps_the_raw_flag(self) -> None:
+        for raw, expected in (("1", True), ("0", False), (1, True), (0, False)):
+            entities, _client, _coord = await _build_switches(
+                {**FULL_ATTRIBUTES, "lockStatus": raw}, schema=_toggle_schema()
+            )
+            self.assertIs(
+                expected, _switch_by_key(entities)["child_lock"].is_on, raw
+            )
+
+    async def test_an_undeclared_raw_value_is_not_on(self) -> None:
+        entities, _client, _coord = await _build_switches(
+            {**FULL_ATTRIBUTES, "lockStatus": "7"}, schema=_toggle_schema()
+        )
+        self.assertIs(False, _switch_by_key(entities)["child_lock"].is_on)
+
+    async def test_both_toggles_stay_available_while_off(self) -> None:
+        """Neither is live telemetry: a lock and a beep setting are meaningful and
+        changeable with the purifier stopped."""
+        entities, _client, _coord = await _build_switches(
+            {**FULL_ATTRIBUTES, "onOffStatus": "0"}, schema=_toggle_schema()
+        )
+        for key, entity in _switch_by_key(entities).items():
+            self.assertTrue(entity.available, key)
+
+
+class AirPurifierSwitchWriteTest(unittest.IsolatedAsyncioTestCase):
+    async def test_each_toggle_writes_only_its_own_field(self) -> None:
+        cases = (
+            ("child_lock", "lockStatus"),
+            ("touch_tone", "touchToneStatus"),
+        )
+        for key, param in cases:
+            entities, client, coordinator = await _build_switches(
+                schema=_toggle_schema()
+            )
+            entity = _switch_by_key(entities)[key]
+            await entity.async_turn_on()
+            await entity.async_turn_off()
+            self.assertEqual(
+                [("settings", {param: "1"}), ("settings", {param: "0"})],
+                _sent(client),
+                key,
+            )
+            self.assertEqual(2, coordinator.refreshes, key)
+
+    async def test_a_toggle_never_restates_a_sibling(self) -> None:
+        entities, client, _coord = await _build_switches(schema=_toggle_schema())
+        by_key = _switch_by_key(entities)
+        await by_key["child_lock"].async_turn_on()
+        await by_key["touch_tone"].async_turn_off()
+        for _command, values in _sent(client):
+            self.assertEqual(1, len(values))
+
+
+class AirPurifierSwitchErrorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_transport_failure_is_a_localized_error(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, _client, coordinator = await _build_switches(
+            schema=_toggle_schema(),
+            client=RecordingClient(fail=RuntimeError("cloud down")),
+        )
+        with self.assertRaises(HomeAssistantError) as caught:
+            await _switch_by_key(entities)["child_lock"].async_turn_on()
+        self.assertEqual("command_error", caught.exception.translation_key)
+        self.assertEqual(0, coordinator.refreshes)
+
+
+class AirPurifierSwitchArchitectureTest(unittest.TestCase):
+    def test_the_legacy_settings_switches_are_untouched(self) -> None:
+        """The AC and wine-cooler switches intentionally send a whole command via
+        the legacy path. The AP switches must not be folded into them."""
+        from custom_components.addhon.switch import _SETTINGS_SWITCHES
+        from custom_components.addhon.const import APPLIANCE_AP
+
+        self.assertNotIn(APPLIANCE_AP, _SETTINGS_SWITCHES)
+
+    def test_the_ap_switches_are_a_separate_sparse_class(self) -> None:
+        from custom_components.addhon import switch
+
+        self.assertTrue(
+            issubclass(switch.HonAirPurifierSwitch, switch.SwitchEntity)
+        )
+        self.assertNotIn(
+            switch.HonSettingsSwitch, switch.HonAirPurifierSwitch.__mro__
+        )
+
+    def test_the_ap_switch_setter_uses_the_dispatcher(self) -> None:
+        import inspect
+
+        from custom_components.addhon import switch
+
+        source = inspect.getsource(switch.HonAirPurifierSwitch)
+        self.assertIn("async_dispatch_patch", source)
+        self.assertNotIn("async_send_settings", source)

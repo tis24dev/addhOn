@@ -16,8 +16,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .ac_command import async_send_settings, settings_param
 from .base_entity import HonAccountEntity, HonBaseEntity
+from .air_purifier import (
+    AirPurifierCapabilities,
+    ap_patch,
+    discover_capabilities,
+    reports_attribute,
+)
+from .command_dispatch import async_dispatch_patch
 from .const import (
     APPLIANCE_AC,
+    APPLIANCE_AP,
     APPLIANCE_TD,
     APPLIANCE_WASH_GROUP,
     APPLIANCE_WC,
@@ -89,6 +97,49 @@ _SETTINGS_SWITCHES: dict[str, tuple[HonSettingsSwitchDescription, ...]] = {
     APPLIANCE_AC: _AC_SWITCHES,
     APPLIANCE_WC: _WC_SWITCHES,
 }
+
+
+@dataclass(frozen=True, kw_only=True)
+class HonAirPurifierSwitchDescription:
+    """Air purifier 0/1 toggle written as a SPARSE settings patch.
+
+    Deliberately separate from HonSettingsSwitchDescription: that one drives
+    HonSettingsSwitch, which applies the value to the whole `settings` command and
+    sends it through the legacy sender. The purifier writes only its own field
+    through the transactional dispatcher, so it needs its own description and its
+    own entity class rather than a flag on the legacy pair.
+
+    `capability` names the AirPurifierCapabilities property that gates the write
+    half; `action` names the `ap_patch` intent that performs it.
+    """
+
+    key: str            # translation_key + unique_id suffix
+    param: str          # the settings parameter, and the attribute read back
+    capability: str
+    action: str
+    icon: str | None = None
+
+
+# Confirmed 0/1 purifier toggles (AP_PARAMS_ENUM "Toggles"). `child_lock` reuses the
+# air conditioner's translation key: same parameter name, same meaning. `touch_tone`
+# is NOT folded into the AC's `mute`, whose polarity is the opposite (mute on = sound
+# off, touch tone on = sound on).
+_AIR_PURIFIER_SWITCHES: tuple[HonAirPurifierSwitchDescription, ...] = (
+    HonAirPurifierSwitchDescription(
+        key="child_lock",
+        param="lockStatus",
+        capability="supports_lock",
+        action="set_lock",
+        icon="mdi:lock",
+    ),
+    HonAirPurifierSwitchDescription(
+        key="touch_tone",
+        param="touchToneStatus",
+        capability="supports_tone",
+        action="set_tone",
+        icon="mdi:volume-high",
+    ),
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -196,6 +247,29 @@ async def async_setup_entry(
                 redact_id(appliance_id),
                 app_type,
                 created_opts,
+            )
+        elif app_type == APPLIANCE_AP:
+            attributes = data.get("attributes")
+            attributes = attributes if isinstance(attributes, dict) else {}
+            capabilities = discover_capabilities(appliance, attributes)
+            created_ap: list[str] = []
+            for desc in _AIR_PURIFIER_SWITCHES:
+                # Both halves are gated: the write schema via the capability, the
+                # read state via the reported attribute. A toggle that cannot be
+                # read back would ship permanently unknown.
+                if not getattr(capabilities, desc.capability):
+                    continue
+                if not reports_attribute(attributes, desc.param):
+                    continue
+                entities.append(
+                    HonAirPurifierSwitch(
+                        coordinator, appliance_id, desc, capabilities, client
+                    )
+                )
+                created_ap.append(desc.key)
+            _LOGGER.debug(
+                "Switch debug: purifier switches id=%s -> %d %s",
+                redact_id(appliance_id), len(created_ap), created_ap,
             )
         elif app_type in _SETTINGS_SWITCHES:
             created: list[str] = []
@@ -332,6 +406,90 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._send_pause_command("resumeProgram", "0")
+
+
+class HonAirPurifierSwitch(HonBaseEntity, SwitchEntity):
+    """Air purifier 0/1 toggle written as a sparse settings patch.
+
+    NOT a HonSettingsSwitch subclass: that class applies the value to the whole
+    `settings` command and sends it, which would restate every sibling setting.
+    This one dispatches a patch carrying its own field alone.
+
+    Never gated on power: a lock and a beep setting are meaningful and changeable
+    with the purifier stopped.
+    """
+
+    entity_description: HonAirPurifierSwitchDescription
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        description: HonAirPurifierSwitchDescription,
+        capabilities: AirPurifierCapabilities,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self.entity_description = description
+        self._capabilities = capabilities
+        self._attr_translation_key = description.key
+        self._attr_unique_id = f"{appliance_id}_{description.key}"
+        if description.icon:
+            self._attr_icon = description.icon
+        _LOGGER.debug(
+            "Switch debug: initialized purifier switch '%s' id=%s param=%s",
+            description.key, redact_id(appliance_id), description.param,
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        raw = self._get_attr(self.entity_description.param)
+        if raw is None:
+            return None
+        return str(raw) == "1"
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._dispatch("1")
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._dispatch("0")
+
+    async def _dispatch(self, value: str) -> None:
+        """Send this toggle's intent, then refresh.
+
+        The intent is built INSIDE the try so a value the live schema rejects
+        surfaces as the same localized command error as a transport failure.
+        """
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        description = self.entity_description
+        try:
+            patch = ap_patch(
+                description.action, self._capabilities, value=value
+            )
+            _LOGGER.debug(
+                "Switch debug: purifier %s=%s id=%s",
+                description.param, value, redact_id(self._appliance_id),
+            )
+            await async_dispatch_patch(self.hass, client, appliance, patch)
+            await self._async_request_command_refresh()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error(
+                "Purifier switch: set %s=%s failed: %s",
+                description.param, value, err, exc_info=True,
+            )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
 
 class HonSettingsSwitch(HonBaseEntity, SwitchEntity):

@@ -634,6 +634,9 @@
       "child_lock": {
         "name": "Blocco Bambini"
       },
+      "touch_tone": {
+        "name": "Suono Tasti"
+      },
       "human_sensing": {
         "name": "Sensore Presenza"
       },

@@ -280,6 +280,10 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
         Path("air_purifier.py"),
         Path("fan.py"),
         Path("light.py"),
+        # Mixed file: the AP switches dispatch, the AC/wine-cooler ones stay legacy.
+        # test_mixed_platform_legacy_classes_keep_the_legacy_sender guards the split,
+        # which this file-level allow-list can no longer express.
+        Path("switch.py"),
     }
     violations = {
         path.relative_to(component_root): _dispatcher_violations(
@@ -1591,3 +1595,32 @@ def test_adapter_propagates_transaction_error_unchanged() -> None:
         asyncio.run(async_dispatch_patch(Hass(), Client(), object(), patch))
 
     assert exc_info.value is transaction_error
+
+
+def test_mixed_platform_legacy_classes_keep_the_legacy_sender() -> None:
+    """Per-CLASS guard for the platform files that contain both senders.
+
+    `switch.py` (and later `select.py` / `number.py`) hold an air purifier entity
+    that dispatches AND legacy entities that intentionally send a whole command.
+    Allow-listing such a file above silences the module-level dispatcher check for
+    everything in it, and `_EXPECTED_LEGACY_CALL_EDGES` does not help either:
+    `async_send_settings` is not one of its tracked callees. Without this test a
+    legacy class could be quietly converted to the dispatcher.
+    """
+    import inspect
+
+    from tests._golden import install_stubs
+
+    install_stubs()
+
+    from custom_components.addhon import switch
+
+    expected = {
+        switch.HonSettingsSwitch: "async_send_settings",
+        switch.HonWashingMachinePauseSwitch: "run_command_sync",
+    }
+    for entity_class, legacy_callee in expected.items():
+        source = inspect.getsource(entity_class)
+        assert legacy_callee in source, entity_class.__name__
+        for forbidden in _FORBIDDEN_DISPATCH_SYMBOLS:
+            assert forbidden not in source, f"{entity_class.__name__}: {forbidden}"

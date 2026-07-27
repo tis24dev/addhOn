@@ -634,6 +634,9 @@
       "child_lock": {
         "name": "Child lock"
       },
+      "touch_tone": {
+        "name": "Touch tone"
+      },
       "human_sensing": {
         "name": "Presence sensor"
       },

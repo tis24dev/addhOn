@@ -22,6 +22,7 @@ release plus user-collected diagnostics, not Tasks 14/15 as written.
 | L3 | `errors` is absent from `AP_PARAMS_ENUM` | Inconclusive (`machMode`/`onOffStatus` are also absent and are documented as shared cross-type params). If a real AP does not report it, the error sensor AND the problem binary both never appear. | Task 4 |
 | L4 | `startProgram` accepted with only `machMode`; a running purifier accepts a `settings` mode change | Contract claims from the design. The "no write ever carries an unrelated field" assertion is what would break most visibly. | Task 5 |
 | L5 | Light encoding assumed inverse (raw 2/1/0 = off/50/100) | Every light test still passes if raw `0` is actually OFF; the panel would simply behave backwards. Second highest-value live check after L1. | Task 6 |
+| L6 | `touchToneStatus` polarity assumed (1 = tone audible). The decompiled enum lists the parameter but not its sense. | The switch reads and writes backwards; every test still passes. | Task 7 |
 
 ## BACKLOG: evidence says more than the design covers
 
@@ -51,10 +52,11 @@ outside the frozen entity lists of Tasks 3-9.
 | V1 | `aroma_custom` fixture uses `aromaTimeOn=30` / `aromaTimeOff=90` instead of the plan's literal `60`/`60`. The AP shadow starts at 60/60, so the literals would make both timing entries no-op deltas and the case would pass with the timing write dropped or the two fields swapped. `test_shadow_deltas_are_real_changes` now makes 60/60 unwritable. | Task 1 |
 | V2 | RESOLVED. `fan` and `light` were NOT added to `PLATFORMS` in Task 2 as Step 4 dictates; each landed in the commit that creates its module (`fan` Task 5, `light` Task 6), so every commit stays runnable on a real instance. Enforced by `test_every_declared_platform_has_a_module`, which exists because the stubbed suite stays green with a platform listed and no module present. | Tasks 2, 5, 6 |
 | V3 | `ap_patch` gained an EIGHTH action, `set_aroma_time`, not in Task 2's Step 5 list. Task 9 needs `aromaStatus=4` plus only the changed timing key, and its file list excludes `air_purifier.py`; without this it would have had to assemble a CommandPatch inside `number.py`, bypassing the intent builder. Shape fully specified by Task 9's Step 6, so nothing was guessed. | Task 2 |
-| V4 | `tests/test_command_dispatch.py` modified although listed in no task before Task 10. Its dormancy guard allow-lists dispatcher callers; this plan is what wakes the dispatcher. Now contains `air_purifier.py` (Task 2), `fan.py` (Task 5) and `light.py` (Task 6); each further AP platform adds itself. | Tasks 2, 5, 6 |
-| V5 | `tests/test_entity_translation_keys.py::_collect_code_keys` hardcodes the platform list, so a new platform's translation block would be entirely unchecked for stale or misspelled keys (the `extra` half of the parity assertion only runs for known platforms). `fan` added in Task 5, `light` in Task 6, although Task 11 owns the file. Every further AP platform must add itself. | Tasks 5, 6 |
+| V4 | `tests/test_command_dispatch.py` modified although listed in no task before Task 10. Its dormancy guard allow-lists dispatcher callers; this plan is what wakes the dispatcher. Now contains `air_purifier.py` (Task 2), `fan.py` (Task 5), `light.py` (Task 6) and `switch.py` (Task 7); each further AP platform adds itself. | Tasks 2, 5, 6, 7 |
+| V8 | **MIXED-FILE allow-listing weakens the guard.** `switch.py` is the first platform file holding both an AP entity that dispatches and legacy entities that intentionally send whole commands; allow-listing a file silences the dispatcher check for everything in it, and `_EXPECTED_LEGACY_CALL_EDGES` does not help because `async_send_settings` is not one of its tracked callees. Replaced by `test_mixed_platform_legacy_classes_keep_the_legacy_sender`, a per-CLASS check. **`select.py` (Task 8) and `number.py` (Task 9) become mixed files too and MUST be added to that test.** | Task 7 |
+| V5 | `tests/test_entity_translation_keys.py::_collect_code_keys` hardcodes the platform list AND each platform's key sources, so a new platform or a new description table would be unchecked for stale or misspelled keys (the `extra` half of the parity assertion only runs for known sources). `fan` added Task 5, `light` Task 6, `_AIR_PURIFIER_SWITCHES` Task 7, although Task 11 owns the file. Every further AP table must add itself. | Tasks 5, 6, 7 |
 | V6 | Translations are added by the task that introduces a key, not by Task 11. `test_code_keys_match_translations_exactly` asserts EXACT set equality per language, so a new key without JSON fails immediately. Task 11 becomes a completeness and wording pass, not the first appearance. | Task 3 |
-| V7 | Task 3 wrote inline test stubs rather than centralizing in `conftest.py`, deferring to Task 5 which the plan says modifies conftest. Resolved in Task 5. | Tasks 3, 5 |
+| V7 | Task 3 wrote inline test stubs rather than centralizing in `conftest.py`, deferring to Task 5 which the plan says modifies conftest. Resolved in Task 5; `switch` added in Task 7. Each addition makes conftest win the first-wins race for modules that stubbed the platform themselves, so the full suite is re-run after every one. | Tasks 3, 5, 7 |
 
 ## LIMIT: known and accepted
 
@@ -69,6 +71,8 @@ outside the frozen entity lists of Tasks 3-9.
 | P7 | Entity `unique_id` suffixes are permanent. The fan uses `purifier`, the light `panel_light`; renaming any AP key in a later task orphans already-registered entities. | Tasks 5, 6 |
 | P8 | `supported_brightness_levels` on the light is a custom property, not a Home Assistant concept. It exists so a test can assert the level set never resizes; HA ignores it. | Task 6 |
 | P9 | The light reports `brightness` 0 rather than None while off. Truthful for this device, and HA does not surface brightness for an off light. | Task 6 |
+| P10 | The AP branch in `switch.async_setup_entry` reads `coordinator.data.items()` directly, matching that module's existing style, while the newer `fan.py`/`light.py` use `coordinator_data_map`. Left consistent with the file it lives in. | Task 7 |
+| P11 | `child_lock` shares a translation key across the AC and the AP. Same parameter, same meaning, so intentional consistency rather than the accidental overlap of `fan_speed` (P5). | Task 7 |
 
 ## Process notes
 
