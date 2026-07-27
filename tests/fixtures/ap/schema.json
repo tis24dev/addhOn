@@ -1,0 +1,26 @@
+{
+  "appliance_type": "AP",
+  "attributes": {
+    "onOffStatus": "1",
+    "machMode": "2",
+    "lightStatus": "0",
+    "lockStatus": "0",
+    "touchToneStatus": "1",
+    "aromaStatus": "0",
+    "aromaTimeOn": "60",
+    "aromaTimeOff": "60"
+  },
+  "commands": {
+    "startProgram": {"machMode": ["1", "2", "4"], "onOffStatus": {"fixed": "1"}},
+    "stopProgram": {"onOffStatus": {"fixed": "0"}},
+    "settings": {
+      "machMode": ["1", "2", "4"],
+      "lightStatus": ["0", "1", "2"],
+      "lockStatus": ["0", "1"],
+      "touchToneStatus": ["0", "1"],
+      "aromaStatus": ["0", "1", "2", "3", "4"],
+      "aromaTimeOn": {"min": 1, "max": 3600, "step": 1},
+      "aromaTimeOff": {"min": 1, "max": 3600, "step": 1}
+    }
+  }
+}

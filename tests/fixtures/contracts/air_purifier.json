@@ -1,0 +1,2487 @@
+[
+  {
+    "id": "turn_on_auto",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "0",
+      "machMode": "0",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "startProgram",
+    "values": {
+      "machMode": "2"
+    },
+    "action": "turn_on_auto",
+    "expected_payload": {
+      "machMode": "2",
+      "onOffStatus": "1"
+    },
+    "expected_shadow_delta": {
+      "machMode": "2",
+      "onOffStatus": "1"
+    },
+    "must_not_change": [
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "turn_off",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "stopProgram",
+    "values": {},
+    "action": "turn_off",
+    "expected_payload": {
+      "onOffStatus": "0"
+    },
+    "expected_shadow_delta": {
+      "onOffStatus": "0"
+    },
+    "must_not_change": [
+      "machMode",
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "preset_sleep",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "machMode": "1"
+    },
+    "action": "preset_sleep",
+    "expected_payload": {
+      "machMode": "1"
+    },
+    "expected_shadow_delta": {
+      "machMode": "1"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "preset_auto",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "1",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "machMode": "2"
+    },
+    "action": "preset_auto",
+    "expected_payload": {
+      "machMode": "2"
+    },
+    "expected_shadow_delta": {
+      "machMode": "2"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "preset_max",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "machMode": "4"
+    },
+    "action": "preset_max",
+    "expected_payload": {
+      "machMode": "4"
+    },
+    "expected_shadow_delta": {
+      "machMode": "4"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "light_off",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "lightStatus": "2"
+    },
+    "action": "light_off",
+    "expected_payload": {
+      "lightStatus": "2"
+    },
+    "expected_shadow_delta": {
+      "lightStatus": "2"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "light_50",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "2",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "lightStatus": "1"
+    },
+    "action": "light_50",
+    "expected_payload": {
+      "lightStatus": "1"
+    },
+    "expected_shadow_delta": {
+      "lightStatus": "1"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "light_100",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "1",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "lightStatus": "0"
+    },
+    "action": "light_100",
+    "expected_payload": {
+      "lightStatus": "0"
+    },
+    "expected_shadow_delta": {
+      "lightStatus": "0"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "lock_on",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "lockStatus": "1"
+    },
+    "action": "lock_on",
+    "expected_payload": {
+      "lockStatus": "1"
+    },
+    "expected_shadow_delta": {
+      "lockStatus": "1"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lightStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "lock_off",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "1",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "lockStatus": "0"
+    },
+    "action": "lock_off",
+    "expected_payload": {
+      "lockStatus": "0"
+    },
+    "expected_shadow_delta": {
+      "lockStatus": "0"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lightStatus",
+      "touchToneStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "tone_on",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "0",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "touchToneStatus": "1"
+    },
+    "action": "tone_on",
+    "expected_payload": {
+      "touchToneStatus": "1"
+    },
+    "expected_shadow_delta": {
+      "touchToneStatus": "1"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lightStatus",
+      "lockStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "tone_off",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "touchToneStatus": "0"
+    },
+    "action": "tone_off",
+    "expected_payload": {
+      "touchToneStatus": "0"
+    },
+    "expected_shadow_delta": {
+      "touchToneStatus": "0"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lightStatus",
+      "lockStatus",
+      "aromaStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "aroma_off",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "1",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "aromaStatus": "0"
+    },
+    "action": "aroma_off",
+    "expected_payload": {
+      "aromaStatus": "0"
+    },
+    "expected_shadow_delta": {
+      "aromaStatus": "0"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "aroma_soft",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "aromaStatus": "1"
+    },
+    "action": "aroma_soft",
+    "expected_payload": {
+      "aromaStatus": "1"
+    },
+    "expected_shadow_delta": {
+      "aromaStatus": "1"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "aroma_mid",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "aromaStatus": "2"
+    },
+    "action": "aroma_mid",
+    "expected_payload": {
+      "aromaStatus": "2"
+    },
+    "expected_shadow_delta": {
+      "aromaStatus": "2"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "aroma_h_biotics",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "aromaStatus": "3"
+    },
+    "action": "aroma_h_biotics",
+    "expected_payload": {
+      "aromaStatus": "3"
+    },
+    "expected_shadow_delta": {
+      "aromaStatus": "3"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus",
+      "aromaTimeOn",
+      "aromaTimeOff"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  },
+  {
+    "id": "aroma_custom",
+    "appliance_type": "AP",
+    "schema": {
+      "startProgram": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "1"
+          }
+        }
+      },
+      "stopProgram": {
+        "parameters": {
+          "onOffStatus": {
+            "typology": "fixed",
+            "category": "command",
+            "mandatory": 1,
+            "fixedValue": "0"
+          }
+        }
+      },
+      "settings": {
+        "parameters": {
+          "machMode": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "2",
+            "enumValues": [
+              "1",
+              "2",
+              "4"
+            ]
+          },
+          "lightStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2"
+            ]
+          },
+          "lockStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "touchToneStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "1",
+            "enumValues": [
+              "0",
+              "1"
+            ]
+          },
+          "aromaStatus": {
+            "typology": "enum",
+            "category": "command",
+            "mandatory": 0,
+            "defaultValue": "0",
+            "enumValues": [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4"
+            ]
+          },
+          "aromaTimeOn": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          },
+          "aromaTimeOff": {
+            "typology": "range",
+            "category": "command",
+            "mandatory": 0,
+            "minimumValue": "1",
+            "maximumValue": "3600",
+            "incrementValue": "1",
+            "defaultValue": "60"
+          }
+        }
+      }
+    },
+    "initial_shadow": {
+      "onOffStatus": "1",
+      "machMode": "2",
+      "lightStatus": "0",
+      "lockStatus": "0",
+      "touchToneStatus": "1",
+      "aromaStatus": "0",
+      "aromaTimeOn": "60",
+      "aromaTimeOff": "60"
+    },
+    "command_name": "settings",
+    "values": {
+      "aromaStatus": "4",
+      "aromaTimeOn": "30",
+      "aromaTimeOff": "90"
+    },
+    "action": "aroma_custom",
+    "expected_payload": {
+      "aromaStatus": "4",
+      "aromaTimeOn": "30",
+      "aromaTimeOff": "90"
+    },
+    "expected_shadow_delta": {
+      "aromaStatus": "4",
+      "aromaTimeOn": "30",
+      "aromaTimeOff": "90"
+    },
+    "must_not_change": [
+      "onOffStatus",
+      "machMode",
+      "lightStatus",
+      "lockStatus",
+      "touchToneStatus"
+    ],
+    "evidence": "live_observation",
+    "support": "confirmed"
+  }
+]
