@@ -16,7 +16,7 @@ Task 6: complete — inverse 3-level panel light; light added to PLATFORMS (V2 c
 Task 7: complete — sparse child_lock + touch_tone switches; per-class legacy guard for mixed files
 Task 8: complete — aroma select (power-gated), custom timings validated against the live range
 Task 9: complete — experimental option (targeted reload), AQ label + CO alarm, custom timing numbers in seconds; number.py is the third mixed file; control mutation exposed an unguarded stub clobber (V11)
-Task 10: pending — diagnostics + passive future-capability capture
+Task 10: complete — AP coverage registration + bounded future_capabilities; Step 5 was already satisfied by the dispatcher; control mutation found the device-class enum stub divergence (V12), new test_stub_hygiene.py
 Task 11: pending — EN/IT translations
 Task 12: pending — contract matrix through real dispatcher
 Task 13: pending — full regression and static validation
