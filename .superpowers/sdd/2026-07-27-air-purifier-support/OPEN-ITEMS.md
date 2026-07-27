@@ -46,7 +46,7 @@ outside the frozen entity lists of Tasks 3-9.
 
 | # | Item | Owner |
 |---|---|---|
-| A1 | `tests/test_air_purifier_contracts.py:210` hardcodes `HHP50CA011` on the trap fixture that proves no code reads a model name. Deliberate, but Task 13's evidence sweep forbids the literal in tracked test code; the trap works with any synthetic string. | Task 12 (owns the file) |
+| A1 | CLOSED (Task 12): the trap fixture now carries `SYNTHETIC-MODEL-NEVER-READ`. The AST guard that forbids reading a model name is unaffected; the evidence sweep is clean. | Task 12 |
 
 ## DECIDE: needs a human call
 
@@ -89,6 +89,8 @@ outside the frozen entity lists of Tasks 3-9.
 | P10 | The AP branch in `switch.async_setup_entry` reads `coordinator.data.items()` directly, matching that module's existing style, while the newer `fan.py`/`light.py` use `coordinator_data_map`. Left consistent with the file it lives in. | Task 7 |
 | P11 | `child_lock` shares a translation key across the AC and the AP. Same parameter, same meaning, so intentional consistency rather than the accidental overlap of `fan_speed` (P5). | Task 7 |
 | P12 | The aroma select is the FIRST AP control that is power-gated (unavailable while stopped), per the design's rule that aroma patches only go out during an active session. Lock and tone deliberately are not. If a live device turns out to accept aroma changes while stopped, this gate is the thing to relax. | Task 8 |
+| P23 | The end-to-end matrix fakes only `api.send_command`, which always accepts. Nothing here proves behavior against a cloud that ACCEPTS a command and then reports a different state; that is L1-L9 territory. | Task 12 |
+| P24 | `HonCommand._send_parameters` raises `ApiError` on a falsy api result, so the dispatcher's `result is not True` branch is unreachable through a REAL HonCommand. It stays covered by `test_command_dispatch.py`'s fake command. | Task 12 |
 | P21 | `test_no_air_purifier_label_leaks_implementation_detail` uses a fixed forbidden-token list, so a NEW parameter name pasted into a label would not be caught. The list covers the parameters this campaign touches. | Task 11 |
 | P22 | The Italian capitalization checker has a small minor-word set (articles, prepositions). A new label using an unlisted preposition is classified "mixed" and fails; the message names the label. | Task 11 |
 | P18 | `AP_ENTITY_PARAMS` (the diagnostics coverage registration) is hand-maintained. Its drift guard derives the switch and number TABLES and asserts containment, but the fan, light and select parameters are fixed-key and cannot be derived. A new AP control whose parameter is forgotten there resurfaces as a phantom coverage gap in the dump: a wrong report, not a functional bug. | Task 10 |
