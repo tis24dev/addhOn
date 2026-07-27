@@ -8,7 +8,7 @@ Design spec: /opt/addhOn/.development/specs/2026-07-27-air-purifier-support-desi
 Aggregate review dependency (Transactional Command Dispatcher): CLOSED, see /opt/addhOn/.superpowers/sdd/2026-07-27-dispatcher-aggregate-fixes/progress.md
 
 Task 1: complete — AP contract matrix, self-validating against its own schema
-Task 2: pending — AP mappings, capabilities, intents
+Task 2: complete — AP mappings, capabilities, intents (fan/light deferred out of PLATFORMS to Tasks 5/6)
 Task 3: pending — AP read-only sensors
 Task 4: pending — AP standard binary sensors
 Task 5: pending — AP fan platform

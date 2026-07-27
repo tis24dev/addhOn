@@ -18,6 +18,7 @@ APPLIANCE_AC = "AC"       # Air conditioner
 APPLIANCE_WM = "WM"       # Washing Machine
 APPLIANCE_TD = "TD"       # Tumble Dryer
 APPLIANCE_WD = "WD"       # Washer-dryer
+APPLIANCE_AP = "AP"       # Air purifier
 
 # --- Tier 2: read-only types --------------------------------------------------
 # Additional types exposed as read-only sensors. The parameters come from the
