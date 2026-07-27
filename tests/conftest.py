@@ -139,7 +139,7 @@ def _install_shared_entity_stubs() -> None:
 
 
 def _install_fan_stubs() -> None:
-    """Shared `fan` platform stubs.
+    """Shared `fan` and `light` platform stubs.
 
     Installed here rather than per test module: the fan platform is imported by
     the AP entity tests AND by the platform-forwarding tests, and a partial
@@ -192,6 +192,42 @@ def _install_fan_stubs() -> None:
 
     fan.FanEntity = getattr(fan, "FanEntity", FanEntity)
     fan.FanEntityFeature = getattr(fan, "FanEntityFeature", FanEntityFeature)
+
+    light = _ensure_module("homeassistant.components.light")
+    components.light = light
+
+    class LightEntity:
+        """Mirror of HA's LightEntity surface the AP panel light overrides."""
+
+        _attr_brightness = None
+        _attr_color_mode = None
+        _attr_supported_color_modes = None
+        _attr_is_on = None
+
+        @property
+        def brightness(self):
+            return self._attr_brightness
+
+        @property
+        def color_mode(self):
+            return self._attr_color_mode
+
+        @property
+        def supported_color_modes(self):
+            return self._attr_supported_color_modes
+
+        @property
+        def is_on(self):
+            return self._attr_is_on
+
+    class ColorMode:
+        UNKNOWN = "unknown"
+        ONOFF = "onoff"
+        BRIGHTNESS = "brightness"
+
+    light.LightEntity = getattr(light, "LightEntity", LightEntity)
+    light.ColorMode = getattr(light, "ColorMode", ColorMode)
+    light.ATTR_BRIGHTNESS = getattr(light, "ATTR_BRIGHTNESS", "brightness")
 
     entity_platform = _ensure_module("homeassistant.helpers.entity_platform")
     sys.modules["homeassistant.helpers"].entity_platform = entity_platform

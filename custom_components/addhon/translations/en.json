@@ -833,6 +833,11 @@
       "purifier": {
         "name": "Purifier"
       }
+    },
+    "light": {
+      "panel_light": {
+        "name": "Panel light"
+      }
     }
   },
   "exceptions": {

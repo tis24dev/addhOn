@@ -182,6 +182,13 @@ FULL_ATTRIBUTES = {
     "coLevel": "1",
     "pollenLevel": "2",
     "ecoModeStatus": "1",
+    # writable controls (light / lock / tone / aroma)
+    "lightStatus": "0",
+    "lockStatus": "0",
+    "touchToneStatus": "1",
+    "aromaStatus": "0",
+    "aromaTimeOn": "60",
+    "aromaTimeOff": "60",
 }
 
 
@@ -980,3 +987,252 @@ class AirPurifierFanArchitectureTest(unittest.TestCase):
         from custom_components.addhon.const import PLATFORMS
 
         self.assertIn("fan", PLATFORMS)
+
+
+# --- Task 6: the inverse panel light ------------------------------------------
+
+
+async def _build_light(
+    attributes: dict | None = None,
+    schema: dict | None = None,
+    client: RecordingClient | None = None,
+):
+    from custom_components.addhon import light
+    from custom_components.addhon.const import DOMAIN
+
+    data = {
+        "ap-1": {
+            "type": APPLIANCE_AP,
+            "name": "Purifier",
+            "attributes": FULL_ATTRIBUTES if attributes is None else attributes,
+            "appliance": _appliance(schema),
+            "settings": {},
+        }
+    }
+    coordinator = RefreshingCoordinator(data)
+    recording = client if client is not None else RecordingClient()
+    hass = RecordingHass(
+        {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": recording}}}
+    )
+    added: list = []
+    await light.async_setup_entry(hass, FakeEntry(), added.extend)
+    for entity in added:
+        entity.hass = hass
+    return added, recording, coordinator
+
+
+class AirPurifierLightSetupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_capable_purifier_gets_one_light(self) -> None:
+        entities, _client, _coord = await _build_light()
+        self.assertEqual(1, len(entities))
+        self.assertEqual("ap-1_panel_light", entities[0].unique_id)
+
+    async def test_only_the_exact_three_level_schema_creates_a_light(self) -> None:
+        """A two- or four-value schema is different device behavior; reusing the
+        observed three-level mapping against it would send an undeclared value."""
+        for values in (["0", "1"], ["0", "1", "2", "3"], ["1", "2"]):
+            schema = copy.deepcopy(AP_SCHEMA)
+            schema["settings"]["parameters"]["lightStatus"]["enumValues"] = values
+            schema["settings"]["parameters"]["lightStatus"]["defaultValue"] = values[0]
+            entities, _client, _coord = await _build_light(schema=schema)
+            self.assertEqual([], entities, values)
+
+    async def test_no_light_without_the_parameter(self) -> None:
+        schema = copy.deepcopy(AP_SCHEMA)
+        del schema["settings"]["parameters"]["lightStatus"]
+        entities, _client, _coord = await _build_light(schema=schema)
+        self.assertEqual([], entities)
+
+    async def test_no_light_without_the_state(self) -> None:
+        attributes = {k: v for k, v in FULL_ATTRIBUTES.items() if k != "lightStatus"}
+        entities, _client, _coord = await _build_light(attributes=attributes)
+        self.assertEqual([], entities)
+
+    async def test_the_light_is_a_brightness_only_light(self) -> None:
+        from homeassistant.components.light import ColorMode
+
+        entities, _client, _coord = await _build_light()
+        entity = entities[0]
+        self.assertEqual({ColorMode.BRIGHTNESS}, entity.supported_color_modes)
+        self.assertEqual(ColorMode.BRIGHTNESS, entity.color_mode)
+
+
+class AirPurifierLightStateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_the_raw_encoding_is_inverse(self) -> None:
+        """Higher raw value means a DIMMER panel: 2 is off, 0 is full."""
+        for raw, brightness, is_on in (("2", 0, False), ("1", 128, True), ("0", 255, True)):
+            entities, _client, _coord = await _build_light(
+                {**FULL_ATTRIBUTES, "lightStatus": raw}
+            )
+            self.assertIs(is_on, entities[0].is_on, raw)
+            self.assertEqual(brightness, entities[0].brightness, raw)
+
+    async def test_an_unreported_level_is_unknown(self) -> None:
+        entities, _client, _coord = await _build_light(
+            {**FULL_ATTRIBUTES, "lightStatus": ""}
+        )
+        self.assertEqual([], entities)
+
+    async def test_an_undeclared_raw_level_reads_as_unknown(self) -> None:
+        entities, _client, _coord = await _build_light(
+            {**FULL_ATTRIBUTES, "lightStatus": "7"}
+        )
+        self.assertIsNone(entities[0].brightness)
+
+    async def test_a_state_update_never_resizes_the_supported_levels(self) -> None:
+        """The level set comes from the schema at construction. A shadow value
+        outside it must not add or drop a level."""
+        entities, _client, coordinator = await _build_light()
+        entity = entities[0]
+        before = entity.supported_color_modes
+        coordinator.data["ap-1"]["attributes"] = {
+            **FULL_ATTRIBUTES, "lightStatus": "7",
+        }
+        entity._handle_coordinator_update()
+        self.assertEqual(before, entity.supported_color_modes)
+        self.assertEqual([0, 128, 255], entity.supported_brightness_levels)
+
+
+class AirPurifierLightQuantizationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_requested_brightness_snaps_to_the_nearest_level(self) -> None:
+        entities, _client, _coord = await _build_light()
+        quantize = entities[0]._quantize
+        for requested, expected in (
+            (0, 0), (1, 0), (63, 0),
+            (65, 128), (128, 128), (150, 128), (191, 128),
+            (192, 255), (200, 255), (255, 255),
+        ):
+            self.assertEqual(expected, quantize(requested), requested)
+
+    async def test_a_tie_rounds_up_to_the_brighter_level(self) -> None:
+        """64 is equidistant from 0 and 128. Rounding up keeps a "make it dimmer"
+        request from silently switching the panel off."""
+        entities, _client, _coord = await _build_light()
+        self.assertEqual(128, entities[0]._quantize(64))
+
+    async def test_out_of_range_requests_are_clamped(self) -> None:
+        entities, _client, _coord = await _build_light()
+        quantize = entities[0]._quantize
+        self.assertEqual(0, quantize(-10))
+        self.assertEqual(255, quantize(999))
+
+
+class AirPurifierLightWriteTest(unittest.IsolatedAsyncioTestCase):
+    async def test_turn_off_sends_the_off_level(self) -> None:
+        entities, client, coordinator = await _build_light()
+        await entities[0].async_turn_off()
+        self.assertEqual([("settings", {"lightStatus": "2"})], _sent(client))
+        self.assertEqual(1, coordinator.refreshes)
+
+    async def test_explicit_brightness_maps_through_the_inverse_encoding(self) -> None:
+        for brightness, raw in ((255, "0"), (128, "1"), (200, "0"), (100, "1")):
+            entities, client, _coord = await _build_light()
+            await entities[0].async_turn_on(brightness=brightness)
+            self.assertEqual(
+                [("settings", {"lightStatus": raw})], _sent(client), brightness
+            )
+
+    async def test_turn_on_never_switches_the_panel_off(self) -> None:
+        """A very low brightness quantizes to the off level, but turn_on must make
+        the light ON: it lands on the dimmest lit level instead."""
+        for brightness in (1, 10, 63):
+            entities, client, _coord = await _build_light(
+                {**FULL_ATTRIBUTES, "lightStatus": "2"}
+            )
+            await entities[0].async_turn_on(brightness=brightness)
+            self.assertEqual(
+                [("settings", {"lightStatus": "1"})], _sent(client), brightness
+            )
+
+    async def test_a_bare_turn_on_defaults_to_full_after_a_reload(self) -> None:
+        entities, client, _coord = await _build_light(
+            {**FULL_ATTRIBUTES, "lightStatus": "2"}
+        )
+        await entities[0].async_turn_on()
+        self.assertEqual([("settings", {"lightStatus": "0"})], _sent(client))
+
+    async def test_a_bare_turn_on_restores_the_last_lit_level(self) -> None:
+        entities, client, coordinator = await _build_light(
+            {**FULL_ATTRIBUTES, "lightStatus": "1"}
+        )
+        entity = entities[0]
+        entity._handle_coordinator_update()
+        coordinator.data["ap-1"]["attributes"] = {
+            **FULL_ATTRIBUTES, "lightStatus": "2",
+        }
+        entity._handle_coordinator_update()
+        await entity.async_turn_on()
+        self.assertEqual([("settings", {"lightStatus": "1"})], _sent(client))
+
+    async def test_the_off_level_never_becomes_the_restored_level(self) -> None:
+        entities, client, _coord = await _build_light(
+            {**FULL_ATTRIBUTES, "lightStatus": "2"}
+        )
+        entity = entities[0]
+        entity._handle_coordinator_update()
+        await entity.async_turn_on()
+        self.assertEqual([("settings", {"lightStatus": "0"})], _sent(client))
+
+    async def test_an_undeclared_level_never_becomes_the_restored_level(self) -> None:
+        entities, client, _coord = await _build_light(
+            {**FULL_ATTRIBUTES, "lightStatus": "7"}
+        )
+        entity = entities[0]
+        entity._handle_coordinator_update()
+        await entity.async_turn_on()
+        self.assertEqual([("settings", {"lightStatus": "0"})], _sent(client))
+
+    async def test_a_selected_level_becomes_the_restored_level(self) -> None:
+        entities, client, _coord = await _build_light()
+        entity = entities[0]
+        await entity.async_turn_on(brightness=128)
+        await entity.async_turn_off()
+        await entity.async_turn_on()
+        self.assertEqual(
+            [
+                ("settings", {"lightStatus": "1"}),
+                ("settings", {"lightStatus": "2"}),
+                ("settings", {"lightStatus": "1"}),
+            ],
+            _sent(client),
+        )
+
+    async def test_no_write_ever_carries_an_unrelated_field(self) -> None:
+        entities, client, _coord = await _build_light()
+        entity = entities[0]
+        await entity.async_turn_on(brightness=255)
+        await entity.async_turn_off()
+        await entity.async_turn_on()
+        for _command, values in _sent(client):
+            self.assertEqual({"lightStatus"}, set(values))
+
+
+class AirPurifierLightErrorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_transport_failure_is_a_localized_error(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, _client, coordinator = await _build_light(
+            client=RecordingClient(fail=RuntimeError("cloud down"))
+        )
+        with self.assertRaises(HomeAssistantError) as caught:
+            await entities[0].async_turn_off()
+        self.assertEqual("command_error", caught.exception.translation_key)
+        self.assertEqual(0, coordinator.refreshes)
+
+
+class AirPurifierLightArchitectureTest(unittest.TestCase):
+    def test_the_light_never_uses_the_legacy_sender(self) -> None:
+        source = (
+            Path(__file__).parents[1]
+            / "custom_components" / "addhon" / "light.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("async_send_command", source)
+        self.assertNotIn("async_send_settings", source)
+        self.assertNotIn("run_command_sync", source)
+        self.assertIn("async_dispatch_patch", source)
+
+    def test_light_is_a_declared_platform(self) -> None:
+        from custom_components.addhon.const import PLATFORMS
+
+        self.assertIn("light", PLATFORMS)

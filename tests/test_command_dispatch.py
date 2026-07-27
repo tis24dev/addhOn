@@ -279,6 +279,7 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
         Path("hon_client.py"),
         Path("air_purifier.py"),
         Path("fan.py"),
+        Path("light.py"),
     }
     violations = {
         path.relative_to(component_root): _dispatcher_violations(

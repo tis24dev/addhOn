@@ -98,6 +98,17 @@ def _attr_value(attributes: Any, key: str) -> Any:
     return value
 
 
+def reports_attribute(attributes: Any, key: str) -> bool:
+    """True when the appliance actually REPORTS `key`.
+
+    A present-but-empty attribute means "not available" (see `_attr_value`), so a
+    plain `key in attributes` check would create an entity that can only ever read
+    unknown. Used by the AP platforms to gate the read half of a control, next to
+    the capability check that gates the write half.
+    """
+    return _attr_value(attributes, key) is not None
+
+
 def _raw(value: Any) -> str:
     """Canonical string form of a raw device value.
 
@@ -467,4 +478,5 @@ __all__ = [
     "filter_remaining",
     "has_problem",
     "normalize_error",
+    "reports_attribute",
 ]
