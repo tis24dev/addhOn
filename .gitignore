@@ -7,3 +7,20 @@ __pycache__/
 # Local working artifacts (not versioned)
 /apk/
 /docs/hon-internal-notes.md
+
+# Local development and agent tooling
+/.gitnexus/
+/.claude/
+/.superpowers/
+/AGENTS.md
+/CLAUDE.md
+/.development/
+
+# Local test and analysis output
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+/.coverage
+/coverage.xml
+/htmlcov/
+/.venv/
