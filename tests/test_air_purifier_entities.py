@@ -546,14 +546,18 @@ class AirPurifierBinaryTableTest(unittest.TestCase):
         self.assertEqual("errors", problem.attr_key)
         self.assertIs(has_problem, problem.value_fn)
 
-    def test_eco_reads_its_own_attribute_as_a_plain_toggle(self) -> None:
+    def test_eco_reads_its_own_attribute_through_the_ap_toggle_rule(self) -> None:
+        """It used to rely on the platform's generic `on_value` comparison, which is
+        shared with every other appliance family and stringifies the live value
+        itself. `is_engaged` keeps the purifier's own signal on the AP rule (see
+        ShadowSpellingTest)."""
+        from custom_components.addhon.air_purifier import is_engaged
         from custom_components.addhon.binary_sensor import BINARY_SENSORS
 
         table = {d.key: d for d in BINARY_SENSORS[APPLIANCE_AP]}
         eco = table["eco_active"]
         self.assertEqual("ecoModeStatus", eco.attr_key)
-        self.assertEqual("1", eco.on_value)
-        self.assertIsNone(eco.value_fn)
+        self.assertIs(is_engaged, eco.value_fn)
 
     def test_the_value_fn_field_defaults_off_everywhere_else(self) -> None:
         """New optional field: no existing binary sensor changes behavior."""
@@ -2251,3 +2255,199 @@ class FutureCapabilityCreatesNothingTest(unittest.IsolatedAsyncioTestCase):
         by_key = _switch_by_key(entities)
         await by_key["child_lock"].async_turn_on()
         self.assertEqual([("settings", {"lockStatus": "1"})], _sent(client))
+
+
+# --- shared shadow-value spelling ---------------------------------------------
+#
+# `air_purifier.raw_text` is the single rule for turning a live value into the
+# spelling the schema uses. The six AP read paths used to hand-roll a weaker
+# `str(raw)`, which disagreed with `environment_available` on the SAME attribute.
+#
+# The fixtures below are deliberately built from real `HonAttribute` objects, not
+# from plain strings like the rest of this module: the divergence is created by the
+# ENGINE, whose `.value` routes through `str_to_float`, so a plain-string fixture
+# cannot reproduce it. A cloud value spelled "1.0" reaches the platform as the
+# float 1.0, and `str(1.0)` matches no schema value.
+
+
+def _shadow(**overrides) -> dict:
+    """FULL_ATTRIBUTES with `overrides` wrapped the way the client wraps them."""
+    from custom_components.addhon.client.engine.attributes import HonAttribute
+
+    return {
+        **FULL_ATTRIBUTES,
+        **{key: HonAttribute(value) for key, value in overrides.items()},
+    }
+
+
+class ShadowSpellingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_decimal_power_state_still_reads_on(self) -> None:
+        entities, _client, _coord = await _build_fan(_shadow(onOffStatus="1.0"))
+        self.assertIs(True, entities[0].is_on)
+
+    async def test_an_unwrapped_bool_power_state_still_reads_on(self) -> None:
+        """`_get_attr` documents that some client versions hand back an already
+        unwrapped raw value; a real bool then bypasses the engine's own folding."""
+        entities, _client, _coord = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": True}
+        )
+        self.assertIs(True, entities[0].is_on)
+
+    async def test_a_decimal_mode_still_maps_to_its_preset(self) -> None:
+        entities, _client, _coord = await _build_fan(_shadow(machMode="2.0"))
+        self.assertEqual("auto", entities[0].preset_mode)
+
+    async def test_a_decimal_mode_is_still_remembered_for_a_bare_turn_on(self) -> None:
+        """The store only accepts a raw the live schema declares, so an
+        unnormalized "4.0" is dropped and the next bare turn-on silently falls back
+        to the default preset instead of restoring Max."""
+        entities, client, _coord = await _build_fan(_shadow(machMode="4.0"))
+        fan_entity = entities[0]
+        fan_entity._handle_coordinator_update()
+        await fan_entity.async_turn_off()
+        await fan_entity.async_turn_on()
+        # The schema-mandatory onOffStatus is added by the dispatcher, which this
+        # recording client stands in for, so the intent carries only machMode.
+        self.assertEqual(
+            [("stopProgram", {}), ("startProgram", {"machMode": "4"})], _sent(client)
+        )
+
+    async def test_a_decimal_light_level_still_maps(self) -> None:
+        entities, _client, _coord = await _build_light(_shadow(lightStatus="0.0"))
+        self.assertEqual(255, entities[0].brightness)
+
+    async def test_a_decimal_toggle_still_reads_on(self) -> None:
+        entities, _client, _coord = await _build_switches(
+            _shadow(lockStatus="1.0", touchToneStatus="1.0"), schema=_toggle_schema()
+        )
+        by_key = _switch_by_key(entities)
+        self.assertIs(True, by_key["child_lock"].is_on)
+        self.assertIs(True, by_key["touch_tone"].is_on)
+
+    async def test_a_decimal_eco_status_still_reads_engaged(self) -> None:
+        entities = _by_key(await _build_binary(_shadow(ecoModeStatus="1.0")))
+        self.assertIs(True, entities["eco_active"].is_on)
+
+    async def test_a_decimal_aroma_mode_still_maps_to_its_option(self) -> None:
+        entities, _client, _coord = await _build_selects(
+            _shadow(aromaStatus="1.0"), schema=_aroma_schema()
+        )
+        self.assertEqual("soft", entities[0].current_option)
+
+    async def test_a_decimal_custom_aroma_keeps_the_timings_usable(self) -> None:
+        """The number refuses the write when Custom is not the reported mode, so an
+        unnormalized "4.0" hides both timings and rejects the user's value right
+        after they selected Custom."""
+        entities, client, _coord = await _build_numbers(_shadow(aromaStatus="4.0"))
+        self.assertEqual(2, len(entities))
+        for entity in entities:
+            self.assertTrue(entity.available, entity.entity_description.key)
+        by_key = {e.entity_description.key: e for e in entities}
+        await by_key["aroma_time_on"].async_set_native_value(120)
+        # The intent restates the mode alongside the timing, in the SCHEMA spelling:
+        # the "4.0" the device reported must never reach the wire.
+        self.assertEqual(
+            [("settings", {"aromaStatus": "4", "aromaTimeOn": "120"})], _sent(client)
+        )
+
+    def test_no_ap_read_path_stringifies_a_live_value_by_hand(self) -> None:
+        """Structural, per MEMBER rather than per file.
+
+        A whole-file substring scan cannot express this: three of the five platform
+        modules also serve other appliance families, whose reads legitimately keep
+        the older `str(raw)` platform convention. So each AP member is located by
+        AST and checked on its own source, which a revert of any single site fails.
+        """
+        import ast
+        import textwrap
+
+        root = Path(__file__).parents[1] / "custom_components" / "addhon"
+        sites = (
+            ("fan.py", "HonAirPurifierFan", "_raw_mode"),
+            ("fan.py", "HonAirPurifierFan", "is_on"),
+            ("light.py", "HonAirPurifierLight", "_raw_level"),
+            ("switch.py", "HonAirPurifierSwitch", "is_on"),
+            ("select.py", "HonAirPurifierAromaSelect", "current_option"),
+            ("number.py", "HonAirPurifierTimeNumber", "_custom_active"),
+        )
+        for module, class_name, member in sites:
+            where = f"{module}:{class_name}.{member}"
+            source = (root / module).read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            classes = [
+                node
+                for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name == class_name
+            ]
+            self.assertEqual(1, len(classes), where)
+            members = [
+                node
+                for node in classes[0].body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == member
+            ]
+            self.assertEqual(1, len(members), where)
+            body = ast.get_source_segment(source, members[0]) or ""
+            self.assertIn("raw_text(", body, where)
+            # Any hand-rolled stringification of the live value, whatever it is
+            # named: the read must not spell the canonicalization itself.
+            for call in ast.walk(ast.parse(textwrap.dedent(body))):
+                if (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "str"
+                ):
+                    self.fail(f"{where}: str() applied to a live value")
+
+    def test_every_ap_binary_resolves_its_value_in_the_ap_module(self) -> None:
+        """The AP binaries route through the SHARED platform comparison, so without
+        a value_fn a purifier signal would be the one AP read left on the older
+        convention."""
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+
+        for description in BINARY_SENSORS[APPLIANCE_AP]:
+            self.assertIsNotNone(description.value_fn, description.key)
+            self.assertEqual(
+                "custom_components.addhon.air_purifier",
+                description.value_fn.__module__,
+                description.key,
+            )
+
+
+class RawTextRuleTest(unittest.TestCase):
+    """The helper itself. Its callers only ever exercise the paths their own device
+    values reach, which left two of its three branches unpinned."""
+
+    def test_a_bool_renders_as_the_device_spelling(self) -> None:
+        from custom_components.addhon.air_purifier import raw_text
+
+        self.assertEqual("1", raw_text(True))
+        self.assertEqual("0", raw_text(False))
+
+    def test_an_integral_float_drops_its_decimal_tail(self) -> None:
+        from custom_components.addhon.air_purifier import raw_text
+
+        self.assertEqual("60", raw_text(60.0))
+        self.assertEqual("0", raw_text(-0.0))
+
+    def test_a_fractional_float_keeps_its_decimals(self) -> None:
+        """A range parameter may legitimately be fractional; truncating it here would
+        send a value the user did not ask for."""
+        from custom_components.addhon.air_purifier import raw_text
+
+        self.assertEqual("60.5", raw_text(60.5))
+
+    def test_non_numeric_text_passes_through(self) -> None:
+        from custom_components.addhon.air_purifier import raw_text
+
+        self.assertEqual("E12", raw_text("E12"))
+        self.assertEqual("2", raw_text("2"))
+
+    def test_an_engaged_status_reads_through_the_same_rule(self) -> None:
+        from custom_components.addhon.air_purifier import is_engaged
+
+        self.assertIs(True, is_engaged(1.0))
+        self.assertIs(True, is_engaged(True))
+        self.assertIs(True, is_engaged("1"))
+        self.assertIs(False, is_engaged("0"))
+        self.assertIs(False, is_engaged("2"))

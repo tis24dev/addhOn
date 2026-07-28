@@ -156,13 +156,24 @@ def reports_attribute(attributes: Any, key: str) -> bool:
     return _attr_value(attributes, key) is not None
 
 
-def _raw(value: Any) -> str:
-    """Canonical string form of a raw device value.
+def raw_text(value: Any) -> str:
+    """Canonical string form of a device value, for comparing against the schema.
 
-    Booleans render as the device's own "1"/"0" spelling: the client may unwrap
-    a status attribute into a real bool, and str(True) would otherwise compare
-    unequal to every schema value. Integral floats drop their decimal tail so a
-    60.0 read back from a range parameter matches the schema's "60".
+    The schema spells every value as a string ("1", "2", "60"), so anything
+    compared against it has to arrive in that spelling. Three sources feed this:
+
+    - Home Assistant, on the WRITE path, hands real Python types: a switch passes
+      a bool and a number passes a float, and str(True) / str(60.0) match no
+      schema value. This is the case the helper exists for.
+    - `HonAttribute.value`, on the READ path, already routes through
+      `str_to_float`, which folds bool, int and integral float onto an int
+      (True -> 1, 1.0 -> 1, "01" -> 1). Those need no help.
+    - a decimal-spelled numeric STRING from the cloud ("1.0") is the one read-path
+      spelling `str_to_float` keeps as a float, so it is also the one a bare
+      str() gets wrong.
+
+    Non-integral floats and non-numeric text pass through untouched: 60.5 stays
+    "60.5" and "E12" stays "E12".
     """
     if isinstance(value, bool):
         return "1" if value else "0"
@@ -216,6 +227,19 @@ def has_problem(raw: Any) -> bool:
     return normalize_error(raw) != "0"
 
 
+def is_engaged(raw: Any) -> bool:
+    """True when a 0/1 purifier status reads as engaged.
+
+    Exists so an AP binary that has no derived meaning still resolves its raw value
+    through `raw_text` like every other AP read, instead of through the generic
+    `on_value` comparison in the binary_sensor platform. That comparison is shared
+    with every other appliance family and follows the older platform convention;
+    routing the purifier's own signals through this module keeps one rule for the
+    whole feature.
+    """
+    return raw_text(raw) == "1"
+
+
 def air_quality_label(raw: Any) -> str | None:
     """The confirmed label for an air-quality ordinal, else None.
 
@@ -225,7 +249,7 @@ def air_quality_label(raw: Any) -> str | None:
     """
     if raw is None:
         return None
-    return AP_AIR_QUALITY_LABELS.get(_raw(raw))
+    return AP_AIR_QUALITY_LABELS.get(raw_text(raw))
 
 
 def co_alarm(raw: Any) -> bool | None:
@@ -237,7 +261,7 @@ def co_alarm(raw: Any) -> bool | None:
     """
     if raw is None:
         return None
-    return True if _raw(raw) == AP_CO_ALARM_RAW else None
+    return True if raw_text(raw) == AP_CO_ALARM_RAW else None
 
 
 def environment_available(attributes: Any) -> bool:
@@ -249,7 +273,7 @@ def environment_available(attributes: Any) -> bool:
     measurement. An unreported power state is not a confirmation, so it hides
     too.
     """
-    return _raw(_attr_value(attributes, _POWER_ATTR)) == "1"
+    return raw_text(_attr_value(attributes, _POWER_ATTR)) == "1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,7 +437,7 @@ def _require(supported: bool, action: str) -> None:
 
 
 def _checked_value(value: Any, allowed: frozenset[str], action: str) -> str:
-    raw = _raw(value)
+    raw = raw_text(value)
     if raw not in allowed:
         raise ValueError(
             f"{action}: {raw!r} is not one of {sorted(allowed)}"
@@ -433,7 +457,7 @@ def _checked_time(value: Any, bounds: _Range | None, name: str) -> str:
     low, high, _step = bounds
     if not low <= number <= high:
         raise ValueError(f"{name}: {number} outside [{low}, {high}]")
-    return _raw(number)
+    return raw_text(number)
 
 
 def _settings_patch(
@@ -554,6 +578,8 @@ __all__ = [
     "environment_available",
     "filter_remaining",
     "has_problem",
+    "is_engaged",
     "normalize_error",
+    "raw_text",
     "reports_attribute",
 ]

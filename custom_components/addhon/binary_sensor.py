@@ -51,7 +51,7 @@ from .const import (
     WM_ATTR_DRY_CLEAN_NEEDED,
     WM_ATTR_FILTER_CLEAN,
 )
-from .air_purifier import co_alarm, has_problem
+from .air_purifier import co_alarm, has_problem, is_engaged
 from .debug_utils import redact_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -322,6 +322,7 @@ _AIR_PURIFIER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
         key="eco_active",
         attr_key="ecoModeStatus",       # AP_PARAMS_ENUM; 1 = eco engaged
         icon="mdi:leaf",
+        value_fn=is_engaged,
     ),
     # Derived through has_problem() rather than compared to one literal: the
     # device spells "no error" as zero, "00" and "100" interchangeably, so a

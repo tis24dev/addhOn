@@ -20,6 +20,7 @@ from .air_purifier import (
     AirPurifierCapabilities,
     ap_patch,
     discover_capabilities,
+    raw_text,
     reports_attribute,
 )
 from .command_dispatch import async_dispatch_patch
@@ -446,7 +447,7 @@ class HonAirPurifierSwitch(HonBaseEntity, SwitchEntity):
         raw = self._get_attr(self.entity_description.param)
         if raw is None:
             return None
-        return str(raw) == "1"
+        return raw_text(raw) == "1"
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._dispatch("1")

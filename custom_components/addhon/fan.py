@@ -29,6 +29,7 @@ from .air_purifier import (
     AirPurifierCapabilities,
     ap_patch,
     discover_capabilities,
+    raw_text,
 )
 from .base_entity import HonBaseEntity, coordinator_data_map
 from .command_dispatch import async_dispatch_patch
@@ -107,14 +108,14 @@ class HonAirPurifierFan(HonBaseEntity, FanEntity):
     @property
     def _raw_mode(self) -> str | None:
         raw = self._get_attr("machMode")
-        return None if raw is None else str(raw)
+        return None if raw is None else raw_text(raw)
 
     @property
     def is_on(self) -> bool | None:
         raw = self._get_attr("onOffStatus")
         if raw is None:
             return None
-        return str(raw) == "1"
+        return raw_text(raw) == "1"
 
     @property
     def preset_mode(self) -> str | None:

@@ -28,6 +28,7 @@ from .air_purifier import (
     AirPurifierCapabilities,
     ap_patch,
     discover_capabilities,
+    raw_text,
     reports_attribute,
 )
 from .base_entity import HonBaseEntity, coordinator_data_map
@@ -117,7 +118,7 @@ class HonAirPurifierLight(HonBaseEntity, LightEntity):
     @property
     def _raw_level(self) -> str | None:
         raw = self._get_attr(_LIGHT_PARAM)
-        return None if raw is None else str(raw)
+        return None if raw is None else raw_text(raw)
 
     @property
     def brightness(self) -> int | None:

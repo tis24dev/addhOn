@@ -21,6 +21,7 @@ from .air_purifier import (
     ap_patch,
     discover_capabilities,
     environment_available,
+    raw_text,
     reports_attribute,
 )
 from .base_entity import HonBaseEntity, coordinator_data_map
@@ -1054,7 +1055,7 @@ class HonAirPurifierAromaSelect(HonBaseEntity, SelectEntity):
         raw = self._get_attr(_AROMA_ATTR)
         if raw is None:
             return None
-        option = AP_AROMA_TO_OPTION.get(str(raw))
+        option = AP_AROMA_TO_OPTION.get(raw_text(raw))
         return option if option in self._attr_options else None
 
     def _custom_time(self, param: str) -> str:

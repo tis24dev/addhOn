@@ -52,6 +52,7 @@ from .air_purifier import (
     ap_patch,
     discover_capabilities,
     environment_available,
+    raw_text,
     reports_attribute,
 )
 from .base_entity import HonBaseEntity
@@ -630,7 +631,7 @@ class HonAirPurifierTimeNumber(HonBaseEntity, NumberEntity):
     def _custom_active(self) -> bool:
         """Whether Custom is the aroma mode the device currently reports."""
         raw = self._get_attr(_AROMA_ATTR)
-        return raw is not None and str(raw) == AP_CUSTOM_AROMA
+        return raw is not None and raw_text(raw) == AP_CUSTOM_AROMA
 
     @property
     def available(self) -> bool:
