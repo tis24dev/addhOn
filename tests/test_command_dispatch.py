@@ -1014,6 +1014,91 @@ def test_dispatch_diagnostic_reports_cloud_rejection(
     assert not any(event == "shadow_update" for event, _ in events)
 
 
+def test_a_cloud_refusal_is_labelled_as_one_however_it_arrives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`outcome="cloud_rejected"` used to sit only on the branch that returns False,
+    which no real refusal reaches: the api answers with a literal True or False, and
+    HonCommand._send_parameters raises ApiError on anything falsy. So every actual
+    refusal was recorded as a generic "error", indistinguishable in diagnostics from a
+    transport or preparation failure, and the label counted zero in the field.
+    """
+    import custom_components.addhon.command_dispatch as dispatch_module
+
+    appliance, _, command = _dispatch_appliance()
+    command.send_error = ApiError("Can't send command")
+    events: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        dispatch_module,
+        "emit_command_event",
+        lambda event, fields: events.append((event, dict(fields))),
+    )
+
+    with pytest.raises(ApiError):
+        asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    result_fields = next(fields for event, fields in events if event == "command_result")
+    assert result_fields["result"] is False
+    assert result_fields["outcome"] == "cloud_rejected"
+
+
+def test_any_other_failure_stays_a_generic_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The label must stay meaningful: only a refusal may carry it."""
+    import custom_components.addhon.command_dispatch as dispatch_module
+
+    appliance, _, command = _dispatch_appliance()
+    command.send_error = TimeoutError("transport timeout")
+    events: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        dispatch_module,
+        "emit_command_event",
+        lambda event, fields: events.append((event, dict(fields))),
+    )
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    result_fields = next(fields for event, fields in events if event == "command_result")
+    assert result_fields["outcome"] == "error"
+
+
+def test_adapter_localizes_the_reachable_refusal() -> None:
+    """The refusal that actually happens arrives as ApiError, not as False.
+
+    Before this it passed through the adapter untouched and reached the entity as a
+    generic failure carrying the untranslated literal "Can't send command", which an
+    Italian user read as "Comando non riuscito: Can't send command". The carefully
+    worded localized string sat on the unreachable branch.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    from custom_components.addhon.command_dispatch import async_dispatch_patch
+
+    refusal = ApiError("Can't send command")
+
+    class Client:
+        def dispatch_patch_sync(self, _appliance: object, _patch: CommandPatch) -> bool:
+            raise refusal
+
+    class Hass:
+        async def async_add_executor_job(
+            self,
+            func: Callable[..., Any],
+            *args: object,
+        ) -> Any:
+            return func(*args)
+
+    patch = CommandPatch("settings", {"mode": "2"}, action="set_mode")
+
+    with pytest.raises(HomeAssistantError) as exc_info:
+        asyncio.run(async_dispatch_patch(Hass(), Client(), object(), patch))
+
+    assert exc_info.value.translation_key == "command_rejected"
+    assert exc_info.value.__cause__ is refusal
+
+
 def test_dispatch_diagnostic_failure_cannot_change_command_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1572,6 +1657,82 @@ def test_adapter_translates_unavailable_client_or_appliance(
 
     assert exc_info.value.translation_domain == "addhon"
     assert exc_info.value.translation_key == "appliance_or_client_unavailable"
+
+
+def test_adapter_turns_a_refused_transaction_into_an_error() -> None:
+    """`dispatch` has three outcomes: raise, True, or False after rolling back.
+
+    The adapter used to discard that False, so the entity went on to refresh and
+    report success on a write the cloud never accepted. Unreachable through the
+    current stack, where a rejection arrives as ApiError, which is exactly why it
+    must be handled rather than trusted.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    from custom_components.addhon.command_dispatch import async_dispatch_patch
+
+    class Client:
+        def dispatch_patch_sync(self, _appliance: object, _patch: CommandPatch) -> bool:
+            return False
+
+    class Hass:
+        async def async_add_executor_job(
+            self,
+            func: Callable[..., Any],
+            *args: object,
+        ) -> Any:
+            return func(*args)
+
+    patch = CommandPatch("settings", {"mode": "2"}, action="set_mode")
+
+    with pytest.raises(HomeAssistantError) as exc_info:
+        asyncio.run(async_dispatch_patch(Hass(), Client(), object(), patch))
+
+    assert exc_info.value.translation_domain == "addhon"
+    assert exc_info.value.translation_key == "command_rejected"
+
+
+def test_only_a_literal_true_is_an_acceptance() -> None:
+    """The adapter applies the SAME rule as the dispatcher it fronts.
+
+    `CommandDispatcher.dispatch` treats anything that is not the literal True as a
+    refusal and rolls back. An adapter that were more permissive would accept a value
+    the dispatcher had already refused. The check is by identity, not equality: 1 and
+    True compare equal in Python, and a client answering with an int is not a client
+    confirming a write.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    from custom_components.addhon.command_dispatch import async_dispatch_patch
+
+    class Hass:
+        async def async_add_executor_job(
+            self,
+            func: Callable[..., Any],
+            *args: object,
+        ) -> Any:
+            return func(*args)
+
+    patch = CommandPatch("settings", {}, action="noop")
+
+    def _client(answer: object) -> object:
+        class Client:
+            def dispatch_patch_sync(
+                self,
+                _appliance: object,
+                _patch: CommandPatch,
+                _answer: object = answer,
+            ) -> object:
+                return _answer
+
+        return Client()
+
+    assert asyncio.run(async_dispatch_patch(Hass(), _client(True), object(), patch)) is None
+
+    for answer in (False, None, 0, 1, "", "ok", [], {}):
+        with pytest.raises(HomeAssistantError) as exc_info:
+            asyncio.run(async_dispatch_patch(Hass(), _client(answer), object(), patch))
+        assert exc_info.value.translation_key == "command_rejected", repr(answer)
 
 
 def test_adapter_propagates_transaction_error_unchanged() -> None:

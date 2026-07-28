@@ -690,14 +690,21 @@ def _appliance(schema: dict | None = None):
 class RecordingClient:
     """Captures the patches the entity dispatches, without touching a device."""
 
-    def __init__(self, fail: Exception | None = None) -> None:
+    def __init__(self, fail: Exception | None = None, answer: object = True) -> None:
         self.patches: list = []
         self.fail = fail
+        # What dispatch_patch_sync reports back, and it defaults to what PRODUCTION
+        # reports: the dispatcher's own bool, propagated verbatim by
+        # _run_on_hon_loop. This fake used to answer None, and that alone is what once
+        # forced the adapter's acceptance check to be looser than the dispatcher's own
+        # rule. False is the dispatcher saying it rolled the transaction back.
+        self.answer = answer
 
-    def dispatch_patch_sync(self, appliance, patch) -> None:
+    def dispatch_patch_sync(self, appliance, patch) -> object:
         if self.fail is not None:
             raise self.fail
         self.patches.append(patch)
+        return self.answer
 
 
 class RecordingHass:
@@ -2727,6 +2734,100 @@ class SharedAttributeNamingTest(unittest.TestCase):
                 f"language, which is what stripping one into _NOISE looks like: "
                 f"{per_language}",
             )
+
+
+class RefusedTransactionTest(unittest.IsolatedAsyncioTestCase):
+    """A refusal the dispatcher reports by RETURN must still reach the user.
+
+    `CommandDispatcher.dispatch` has three outcomes: it raises, it returns True, or it
+    returns False having rolled the transaction back. The adapter discarded that
+    False, so every AP entity went on to refresh and report success on a write the
+    appliance never accepted. It is unreachable through the current stack, where the
+    api answers with a literal True and HonCommand raises ApiError on anything falsy,
+    which is the reason to handle it rather than trust it.
+    """
+
+    async def test_every_ap_write_path_surfaces_a_refusal(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        async def fan(client):
+            entities, _c, coord = await _build_fan(client=client)
+            return entities[0].async_turn_on(), coord
+
+        async def light(client):
+            entities, _c, coord = await _build_light(client=client)
+            return entities[0].async_turn_on(), coord
+
+        async def switch(client):
+            entities, _c, coord = await _build_switches(
+                schema=_toggle_schema(), client=client
+            )
+            return _switch_by_key(entities)["child_lock"].async_turn_on(), coord
+
+        async def select(client):
+            entities, _c, coord = await _build_selects(
+                schema=_aroma_schema(), client=client
+            )
+            return entities[0].async_select_option("soft"), coord
+
+        async def number(client):
+            entities, _c, coord = await _build_numbers(CUSTOM_ACTIVE, client=client)
+            by_key = {e.entity_description.key: e for e in entities}
+            return by_key["aroma_time_on"].async_set_native_value(30), coord
+
+        for build in (fan, light, switch, select, number):
+            with self.subTest(platform=build.__name__):
+                client = RecordingClient(answer=False)
+                coroutine, coordinator = await build(client)
+                with self.assertRaises(HomeAssistantError) as caught:
+                    await coroutine
+                self.assertEqual(
+                    "command_rejected", caught.exception.translation_key
+                )
+                # The refusal must also stop the optimistic refresh that would have
+                # redrawn the entity as though the write had landed.
+                self.assertEqual(0, coordinator.refreshes)
+
+    async def test_the_reachable_refusal_is_localized_too(self) -> None:
+        """A real hOn refusal arrives as ApiError, not as False, and used to reach the
+        user as the generic failure wrapping the English literal "Can't send
+        command"."""
+        from custom_components.addhon.client.engine.exceptions import ApiError
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, _client, coordinator = await _build_fan(
+            client=RecordingClient(fail=ApiError("Can't send command"))
+        )
+        with self.assertRaises(HomeAssistantError) as caught:
+            await entities[0].async_turn_on()
+        self.assertEqual("command_rejected", caught.exception.translation_key)
+        self.assertNotIn(
+            "Can't send command", str(caught.exception.translation_placeholders or {})
+        )
+        self.assertEqual(0, coordinator.refreshes)
+
+    async def test_any_other_transport_failure_stays_generic(self) -> None:
+        """Only a refusal gets the refusal message: a timeout is a different fault and
+        the user needs to be able to tell them apart."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, _client, _coord = await _build_fan(
+            client=RecordingClient(fail=TimeoutError("cloud down"))
+        )
+        with self.assertRaises(HomeAssistantError) as caught:
+            await entities[0].async_turn_on()
+        self.assertEqual("command_error", caught.exception.translation_key)
+
+    async def test_a_plain_success_is_unaffected(self) -> None:
+        """The control: a guard that refused everything would leave the assertions
+        above green. True is what the real client reports, and every other AP write
+        test in this module now runs through the same answer."""
+        entities, client, coordinator = await _build_fan(
+            client=RecordingClient(answer=True)
+        )
+        await entities[0].async_turn_on()
+        self.assertEqual(1, len(client.patches))
+        self.assertEqual(1, coordinator.refreshes)
 
 
 if __name__ == "__main__":

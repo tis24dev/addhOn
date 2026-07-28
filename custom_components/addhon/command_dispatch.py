@@ -13,6 +13,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .command_diagnostics import emit_command_event, record_expected_update
 from .const import DOMAIN
+from .client.engine.exceptions import ApiError
 from .param_rollback import restore_owned_params, snapshot_params
 
 if TYPE_CHECKING:
@@ -424,7 +425,17 @@ class CommandDispatcher:
                         common_fields,
                         started,
                         result=False,
-                        outcome="error",
+                        # A refusal is a refusal however it arrives. ApiError has one
+                        # raise site, HonCommand._send_parameters on a falsy api
+                        # result, and it means exactly this. Recording it as a generic
+                        # error made "cloud_rejected" a label no real refusal ever
+                        # carried, indistinguishable in diagnostics from a transport
+                        # or preparation failure.
+                        outcome=(
+                            "cloud_rejected"
+                            if isinstance(error, ApiError)
+                            else "error"
+                        ),
                         error=error,
                     )
                     raise
@@ -486,8 +497,34 @@ async def async_dispatch_patch(
             translation_key="appliance_or_client_unavailable",
         )
 
-    await hass.async_add_executor_job(
-        client.dispatch_patch_sync,
-        appliance,
-        patch,
-    )
+    try:
+        accepted = await hass.async_add_executor_job(
+            client.dispatch_patch_sync,
+            appliance,
+            patch,
+        )
+    except ApiError as error:
+        # The REACHABLE refusal. `ApiError` has a single raise site,
+        # HonCommand._send_parameters on a falsy api result, so it carries exactly the
+        # meaning the branch below was written for. Without this it reached the entity
+        # as a generic failure carrying the untranslated literal "Can't send command",
+        # which an Italian user read as "Comando non riuscito: Can't send command".
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="command_rejected",
+        ) from error
+    # `dispatch` distinguishes three outcomes: it raises, it returns True, or it
+    # returns False after rolling the transaction back. Discarding that False left the
+    # entity refreshing and reporting success on a write the cloud never accepted, and
+    # the caller had no way to observe the difference.
+    #
+    # Unreachable through the current stack: the api returns a literal True and
+    # HonCommand._send_parameters raises ApiError on anything falsy, so a rejection
+    # arrives here as an exception. That is precisely why it has to be handled rather
+    # than trusted; the day a send path starts returning False the failure would
+    # otherwise be silent.
+    if accepted is not True:
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="command_rejected",
+        )

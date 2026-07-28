@@ -880,6 +880,9 @@
     "command_error": {
       "message": "Comando non riuscito: {error}"
     },
+    "command_rejected": {
+      "message": "Il servizio hOn non ha accettato il comando."
+    },
     "invalid_setpoint": {
       "message": "Il valore {value} non è ammesso (ammessi: {allowed})."
     },
