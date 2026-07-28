@@ -387,7 +387,15 @@ class AirPurifierTranslationTest(unittest.TestCase):
 
     def test_the_two_filter_labels_are_symmetric(self) -> None:
         """Both report a REMAINING percentage. An asymmetric pair ("Filter life" vs
-        "Pre-filter cleaning") reads as one gauge and one alarm."""
+        "Pre-filter cleaning") reads as one gauge and one alarm.
+
+        Overlap is the right rule HERE and only here: these two read different
+        attributes and must stay distinguishable, so they have to share a register
+        without naming the same thing. Entities that read the SAME attribute are held
+        to equality instead, by SharedAttributeNamingTest in
+        test_air_purifier_entities.py, because overlap passed the truncated-referent
+        bug that test was written for.
+        """
         for lang in LANGS:
             sensors = self.data[lang]["entity"]["sensor"]
             main = sensors["filter_life"]["name"]

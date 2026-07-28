@@ -605,7 +605,7 @@
         "name": "Guasto"
       },
       "co_alarm": {
-        "name": "Indicazione Monossido (sperimentale, non è un rilevatore certificato)"
+        "name": "Indicazione Monossido di Carbonio (sperimentale, non è un rilevatore certificato)"
       },
       "update_ok": {
         "name": "Aggiornamento OK"

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import json
+import re
 import sys
 import types
 import unittest
@@ -2555,6 +2557,176 @@ class StoppedPurifierWriteTest(unittest.IsolatedAsyncioTestCase):
             [("settings", {"aromaStatus": "4", "aromaTimeOff": "90"})], _sent(client)
         )
         self.assertEqual(1, coordinator.refreshes)
+
+
+class SharedAttributeNamingTest(unittest.TestCase):
+    """Two purifier entities reading the SAME live attribute must name the same thing.
+
+    The Italian carbon-monoxide binary read "Indicazione Monossido" while the sensor
+    on the very same `coLevel` read "Monossido di Carbonio", so the pair looked like
+    two different substances on one dashboard. English never diverged, because both
+    labels were built from "Carbon monoxide".
+
+    The pairs are DERIVED from the description tables rather than listed here: a new
+    entity that reuses an existing attribute is covered the day it lands, which is
+    exactly how this one slipped in.
+    """
+
+    #: Filler that carries no referent. "Indicazione X" vs "X" must still match on X.
+    _NOISE = frozenset(
+        {
+            "indicazione",
+            "giudizio",
+            "livello",
+            "indication",
+            "rating",
+            "level",
+            "sperimentale",
+            "experimental",
+            "non",
+            "not",
+            "certified",
+            "certificato",
+            "rilevatore",
+            "detector",
+            "and",
+            "the",
+            "del",
+            "della",
+            "dell",
+            "di",
+            "in",
+            "of",
+        }
+    )
+
+    @staticmethod
+    def _enum_device_class():
+        from custom_components.addhon.sensor import SensorDeviceClass
+
+        return SensorDeviceClass.ENUM
+
+    @staticmethod
+    def _translations() -> dict:
+        root = Path(__file__).parents[1] / "custom_components" / "addhon"
+        return {
+            lang: json.loads(
+                (root / "translations" / f"{lang}.json").read_text(encoding="utf-8")
+            )
+            for lang in ("en", "it")
+        }
+
+    @staticmethod
+    def _ap_descriptions() -> list[tuple[str, object]]:
+        from custom_components.addhon.binary_sensor import BINARY_SENSORS
+        from custom_components.addhon.sensor import SENSORS
+
+        return [("sensor", d) for d in SENSORS[APPLIANCE_AP]] + [
+            ("binary_sensor", d) for d in BINARY_SENSORS[APPLIANCE_AP]
+        ]
+
+    def _words(self, name: str) -> set[str]:
+        return {
+            word
+            for word in re.findall(r"[^\W\d_]+", name.lower(), re.UNICODE)
+            if len(word) > 2 and word not in self._NOISE
+        }
+
+    @staticmethod
+    def _pairs() -> dict:
+        """{attribute: [(platform, key), ...]} for attributes read by more than one
+        AP entity, minus the ones whose label is dictated by a device class.
+
+        `errors` backs both the raw code sensor and the PROBLEM binary; the latter
+        takes its name from the Home Assistant device class ("Problem" / "Guasto"),
+        which is the platform's vocabulary and not this feature's to align. The
+        carbon-monoxide binary is deliberately NOT exempt: it carries no device
+        class, precisely because SAFETY would present it as a certified detector.
+
+        ENUM is not an exemption. It declares the VALUE type, not a name, so
+        `air_quality_label` still has to name the same thing as `air_quality`.
+        """
+        by_attribute: dict = {}
+        exempt = set()
+        for platform, description in SharedAttributeNamingTest._ap_descriptions():
+            by_attribute.setdefault(description.attr_key, []).append(
+                (platform, description.key)
+            )
+            device_class = getattr(description, "device_class", None)
+            if device_class is not None and str(device_class) != str(
+                SharedAttributeNamingTest._enum_device_class()
+            ):
+                exempt.add(description.attr_key)
+        return {
+            attribute: entities
+            for attribute, entities in by_attribute.items()
+            if len(entities) > 1 and attribute not in exempt
+        }
+
+    def test_the_sweep_finds_the_pairs_it_is_meant_to(self) -> None:
+        """Anti-vacuity, and it pins the exemption instead of leaving it implicit: an
+        empty sweep would otherwise read the same as a clean one, and a future entity
+        that carries a device class would drop its whole pair out unnoticed."""
+        self.assertEqual({"coLevel", "airQuality"}, set(self._pairs()))
+        by_attribute: dict = {}
+        for platform, description in self._ap_descriptions():
+            by_attribute.setdefault(description.attr_key, []).append(description.key)
+        shared = {
+            attribute
+            for attribute, keys in by_attribute.items()
+            if len(keys) > 1
+        }
+        self.assertEqual({"errors"}, shared - set(self._pairs()), "exempted pairs")
+        self.assertEqual(
+            ["errors", "problem"], sorted(by_attribute["errors"]), "exempted pair"
+        )
+
+    def test_entities_on_one_attribute_name_their_referent_identically(self) -> None:
+        """Strip the qualifiers and what is left must MATCH, not merely overlap.
+
+        Overlap is the check this started as, and it was worthless here: the bug
+        being fixed was "Indicazione Monossido" against "Monossido di Carbonio",
+        which overlaps on "monossido" and passes. A truncated referent is exactly the
+        shape that reads as two different things on a dashboard, so nothing short of
+        equality catches it.
+
+        That makes `_NOISE` load-bearing, and the tempting way to silence a failure
+        is to add the missing noun to it. The referent sizes are therefore compared
+        ACROSS languages: dropping "carbonio" into `_NOISE` to hide the Italian pair
+        leaves it naming the substance with one word where English uses two, and that
+        fails here instead.
+
+        What this cannot judge is whether the shared name is the RIGHT one. Two
+        labels that are identically wrong pass, by construction: this is a
+        consistency check between siblings, and correctness of the wording is the
+        reviewer's.
+        """
+        translations = self._translations()
+        sizes: dict[str, dict[str, int]] = {}
+        for attribute, entities in sorted(self._pairs().items()):
+            for lang, data in translations.items():
+                names = {
+                    f"{platform}.{key}": data["entity"][platform][key]["name"]
+                    for platform, key in entities
+                }
+                referents = {name: self._words(name) for name in names.values()}
+                distinct = {frozenset(words) for words in referents.values()}
+                self.assertEqual(
+                    1,
+                    len(distinct),
+                    f"{lang}: {attribute} labels name different things: {referents}",
+                )
+                referent = distinct.pop()
+                self.assertTrue(referent, f"{lang}: {attribute} has no referent")
+                sizes.setdefault(attribute, {})[lang] = len(referent)
+        for attribute, per_language in sorted(sizes.items()):
+            self.assertEqual(
+                1,
+                len(set(per_language.values())),
+                f"{attribute} is named with a different number of content words per "
+                f"language, which is what stripping one into _NOISE looks like: "
+                f"{per_language}",
+            )
 
 
 if __name__ == "__main__":
