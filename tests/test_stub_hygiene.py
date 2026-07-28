@@ -150,5 +150,119 @@ class StubHygieneTest(unittest.TestCase):
             self.assertIn(f'"{symbol}"', conftest_source, symbol)
 
 
+_MAIN = "__main__"
+# Synthetic guard sources, assembled so this module's own text carries exactly one
+# real `__main__` guard: a literal one inside a string would still read as a second
+# occurrence to anyone grepping, and to a future check that is textual.
+HEAD_GUARD = f"if __name__ == {_MAIN!r}:\n"
+INVERTED_GUARD = f"if __name__ != {_MAIN!r}:\n"
+REVERSED_GUARD = f"if {_MAIN!r} == __name__:\n"
+
+
+def _main_guards(tree: ast.Module) -> list[tuple[int, int]]:
+    """(line, module-level statements that follow) for each `__main__` guard.
+
+    Both operand orders are accepted and the operator must be `==`: an inverted
+    `if __name__ != "__main__":` is a different construct, and reading it as a guard
+    would let a real one hide behind it. Only that exact comparison is recognized,
+    which is the single spelling this corpus uses; a novel one would be invisible
+    here, and that is the trade for a check with no false positives.
+    """
+    found = []
+    for index, node in enumerate(tree.body):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        if not isinstance(test.ops[0], ast.Eq) or len(test.comparators) != 1:
+            continue
+        operands = (test.left, test.comparators[0])
+        names = {n.id for n in operands if isinstance(n, ast.Name)}
+        literals = {
+            n.value
+            for n in operands
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        }
+        if names == {"__name__"} and literals == {"__main__"}:
+            # Every module-level statement, not only definitions: the rule is that the
+            # guard is the LAST thing in the file, and a trailing assignment or call is
+            # just as stranded as a trailing class.
+            found.append((node.lineno, len(tree.body[index + 1 :])))
+    return found
+
+
+class MainGuardPlacementTest(unittest.TestCase):
+    """A `__main__` guard must be the LAST thing in a test module.
+
+    `test_air_purifier_entities.py` carried one at line 490 of 2561 with 54 module
+    level definitions below it, accumulated by appending a class per task. Under
+    pytest it is inert, which is why a full green run never showed it, and that module
+    cannot run standalone at all (it needs conftest's stubs installed first), so
+    nothing was silently skipped either. What it was is a dead entry point that reads
+    as the end of the file and strands everything after it: the next reader appending
+    a class has no signal that they are below the line.
+
+    Placement is all this checks. Whether a guard WORKS is a separate, pre-existing
+    and much wider question, since a standalone run of the corpus shows many modules
+    failing or crashing on their stub bootstrap; curing one of them here would leave
+    its siblings untouched. Absence of a guard is fine too, and several modules have
+    none.
+    """
+
+    #: Floors, not exact counts. They only have to prove the sweep really read the
+    #: corpus: an empty scan would otherwise be indistinguishable from a clean one.
+    MIN_MODULES = 50
+    MIN_GUARDS = 50
+
+    def test_no_statement_follows_a_main_guard(self) -> None:
+        modules = sorted(TESTS_DIR.rglob("*.py"))
+        self.assertGreaterEqual(len(modules), self.MIN_MODULES)
+        guarded, offenders = 0, []
+        for path in modules:
+            for line, following in _main_guards(
+                ast.parse(path.read_text(encoding="utf-8"))
+            ):
+                guarded += 1
+                if following:
+                    offenders.append(
+                        f"{path.name}:{line} has {following} statements after it"
+                    )
+        self.assertEqual([], offenders)
+        self.assertGreaterEqual(guarded, self.MIN_GUARDS)
+
+    def test_at_most_one_main_guard_per_module(self) -> None:
+        for path in sorted(TESTS_DIR.rglob("*.py")):
+            guards = _main_guards(ast.parse(path.read_text(encoding="utf-8")))
+            self.assertLessEqual(len(guards), 1, f"{path.name}: {guards}")
+
+    def test_the_placement_guard_sees_every_stranded_shape(self) -> None:
+        """Anti-vacuity. A class is the shape that actually occurred; a function and a
+        bare statement are counted too, so narrowing the check back to definitions
+        alone fails here rather than silently shrinking the guard."""
+        head = HEAD_GUARD + "    pass\n\n\n"
+        for trailing in (
+            "class Late:\n    pass\n",
+            "def late():\n    pass\n",
+            "async def late():\n    pass\n",
+            "LATE = 1\n",
+        ):
+            self.assertEqual(
+                [(1, 1)], _main_guards(ast.parse(head + trailing)), trailing
+            )
+        clean = "class Early:\n    pass\n\n\n" + HEAD_GUARD + "    pass\n"
+        self.assertEqual([(5, 0)], _main_guards(ast.parse(clean)))
+
+    def test_an_inverted_name_check_is_not_a_main_guard(self) -> None:
+        """`!=` is a different construct; reading it as a guard would let a real one
+        hide behind it and go unchecked."""
+        source = INVERTED_GUARD + "    pass\n\n\nclass Late:\n    pass\n"
+        self.assertEqual([], _main_guards(ast.parse(source)))
+
+    def test_either_operand_order_is_recognized(self) -> None:
+        source = REVERSED_GUARD + "    pass\n\n\nclass Late:\n    pass\n"
+        self.assertEqual([(1, 1)], _main_guards(ast.parse(source)))
+
+
 if __name__ == "__main__":
     unittest.main()

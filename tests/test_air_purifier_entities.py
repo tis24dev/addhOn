@@ -487,10 +487,6 @@ class AirPurifierDescriptionFlagTest(unittest.TestCase):
                 self.assertFalse(description.requires_power, description.key)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # --- Task 4: standard binary sensors -----------------------------------------
 
 
@@ -2559,3 +2555,7 @@ class StoppedPurifierWriteTest(unittest.IsolatedAsyncioTestCase):
             [("settings", {"aromaStatus": "4", "aromaTimeOff": "90"})], _sent(client)
         )
         self.assertEqual(1, coordinator.refreshes)
+
+
+if __name__ == "__main__":
+    unittest.main()
