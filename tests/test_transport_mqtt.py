@@ -911,6 +911,116 @@ class CommandCorrelationTest(unittest.TestCase):
         self.assertEqual(shadow["unexpected_keys"], [])
         self.assertEqual(shadow["missing_keys"], [])
 
+    def test_a_reformatted_echo_is_still_a_match(self) -> None:
+        """What leaves the machine is a parameter's intern_value, always a string.
+        What comes back is the cloud's raw parValue, which it is free to spell its own
+        way. Comparing both with a plain str() reports a healthy round trip as a
+        missing key, and the same comparison picks WHICH pending command a push
+        confirms, so it can hand the push to the wrong one."""
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        for echoed in ("5.0", 5, 5.0, " 5", "05"):
+            with self.subTest(echoed=echoed):
+                appliance = FakeAppliance(topic)
+                record_expected_update(appliance, "set_temp", {"temp": "5"})
+                with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+                    self._client(appliance)._on_message(
+                        _packet(
+                            topic,
+                            {"parameters": [{"parName": "temp", "parValue": echoed}]},
+                        )
+                    )
+                events = _decoded_command_events(captured.records)
+                shadow = next(
+                    event for event in events if event["event"] == "shadow_update"
+                )
+                self.assertEqual(shadow["expected_keys"], ["temp"])
+                self.assertEqual(shadow["missing_keys"], [])
+                self.assertEqual(shadow["unexpected_keys"], [])
+
+    def test_a_genuinely_different_value_is_still_a_mismatch(self) -> None:
+        """The forgiving comparison must not become a blind one.
+
+        Two keys on purpose: a push that matches NOTHING scores zero coverage, so no
+        pending command claims it and no event is emitted at all. The mismatch is
+        only observable next to a key that does match.
+        """
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        for echoed in ("6", "5.5", "high", ""):
+            with self.subTest(echoed=echoed):
+                appliance = FakeAppliance(topic)
+                record_expected_update(
+                    appliance, "set_temp", {"anchor": "1", "temp": "5"}
+                )
+                with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+                    self._client(appliance)._on_message(
+                        _packet(
+                            topic,
+                            {
+                                "parameters": [
+                                    {"parName": "anchor", "parValue": "1"},
+                                    {"parName": "temp", "parValue": echoed},
+                                ]
+                            },
+                        )
+                    )
+                events = _decoded_command_events(captured.records)
+                shadow = next(
+                    event for event in events if event["event"] == "shadow_update"
+                )
+                self.assertEqual(shadow["expected_keys"], ["anchor"])
+                self.assertEqual(shadow["missing_keys"], ["temp"])
+
+    def test_a_numeric_payload_value_matches_its_string_echo(self) -> None:
+        """The other side of the same coin. A command payload is typed
+        dict[str, str | float] and a range parameter's intern_value really can be a
+        float, so the EXPECTED side needs canonicalizing too: str(60.0) is "60.0"
+        against a cloud that echoes "60".
+        """
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        for sent in (60.0, 60, "60.0"):
+            with self.subTest(sent=sent):
+                appliance = FakeAppliance(topic)
+                record_expected_update(appliance, "set_time", {"aromaTimeOn": sent})
+                with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+                    self._client(appliance)._on_message(
+                        _packet(
+                            topic,
+                            {
+                                "parameters": [
+                                    {"parName": "aromaTimeOn", "parValue": "60"}
+                                ]
+                            },
+                        )
+                    )
+                events = _decoded_command_events(captured.records)
+                shadow = next(
+                    event for event in events if event["event"] == "shadow_update"
+                )
+                self.assertEqual(shadow["expected_keys"], ["aromaTimeOn"])
+                self.assertEqual(shadow["missing_keys"], [])
+
+    def test_a_reformatted_echo_reaches_the_right_pending_command(self) -> None:
+        """The correlation half. Two commands are in flight on the same key; the push
+        confirms the second. Unnormalized, it matches NEITHER, and the report is
+        attributed to whichever entry happened to be first."""
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        appliance = FakeAppliance(topic)
+        record_expected_update(appliance, "first", {"temp": "5"})
+        record_expected_update(appliance, "second", {"temp": "6"})
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            self._client(appliance)._on_message(
+                _packet(
+                    topic,
+                    {"parameters": [{"parName": "temp", "parValue": "6.0"}]},
+                )
+            )
+
+        events = _decoded_command_events(captured.records)
+        shadow = next(event for event in events if event["event"] == "shadow_update")
+        self.assertEqual(shadow["action"], "second")
+        self.assertEqual(shadow["missing_keys"], [])
+
     def test_command_correlation_reports_unexpected_sibling(self) -> None:
         topic = "haier/things/MAC/event/appliancestatus/update"
         appliance = FakeAppliance(topic)

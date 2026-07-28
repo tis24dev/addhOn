@@ -89,6 +89,57 @@ _IDENTITY_KEYS = frozenset(
 )
 
 
+def comparable_text(value) -> str:
+    """Canonical text for comparing a value SENT against a value REPORTED BACK.
+
+    The two sides of that comparison arrive spelled differently and neither side is
+    wrong. What leaves the machine is a command parameter's `intern_value`, always a
+    string ("60"). What comes back is the cloud's raw JSON `parValue`, which may be a
+    string, a number or a bool, and which the cloud is free to reformat: "60" echoed
+    as "60.0" is the same setting, and a plain `str()` on both sides calls it a
+    mismatch.
+
+    So numeric values compare NUMERICALLY and everything else compares as trimmed
+    text. Booleans are taken first because everything below goes through str(): a bool
+    would become "True", which no numeric parse accepts, and would then compare as
+    that literal against the device's own 1/0 spelling.
+
+    A decimal comma is accepted for the same reason `client.helpers.str_to_float`
+    accepts it: the hOn cloud does send that spelling, and the engine already reads
+    "5,5" as 5.5, so a diagnostic that called it a mismatch would contradict the value
+    the integration actually stored.
+
+    This is deliberately more forgiving than `air_purifier.raw_text`, which prepares a
+    value to be WRITTEN and must never invent a spelling the schema does not declare.
+    Here nothing reaches the wire; the cost of being too strict is a diagnostic that
+    reports a healthy round trip as a missing key. Forgiving about SPELLING, though,
+    never about value: two different numbers must never land on one string.
+    """
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    text = str(value).strip()
+    number = _as_float(text)
+    if number is None:
+        return text
+    if number != number or number in (float("inf"), float("-inf")):
+        # Overflow and NaN keep their raw text. Not for want of a short form (str()
+        # would give "inf"), but because collapsing every spelling that overflows onto
+        # one token would make "1e400" and a 400-digit number compare EQUAL, which is
+        # the one thing this function must not do. No device parameter is infinite, so
+        # this only ever costs a mismatch on values that are already nonsense.
+        return text
+    return str(int(number)) if number.is_integer() else str(number)
+
+
+def _as_float(text: str) -> float | None:
+    for candidate in (text, text.replace(",", ".", 1)):
+        try:
+            return float(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def redact_identity(obj):
     """Deep-copy a mapping/list masking identity/credential VALUES to '***'.
 
@@ -210,6 +261,7 @@ def redact_remoting_summary(entry) -> dict:
 __all__ = [
     "DEBUG_KEY_SAMPLE_LIMIT",
     "command_names",
+    "comparable_text",
     "debug_key_sample",
     "param_snapshot",
     "redact_email",

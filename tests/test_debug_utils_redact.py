@@ -36,6 +36,7 @@ def _load_debug_utils():
 
 debug_utils = _load_debug_utils()
 redact_email = debug_utils.redact_email
+comparable_text = debug_utils.comparable_text
 
 
 class RedactEmailTest(unittest.TestCase):
@@ -302,6 +303,61 @@ class RedactStoreTest(unittest.TestCase):
 
     def test_exported_in_all(self) -> None:
         self.assertIn("redact_store", debug_utils.__all__)
+
+
+class ComparableTextTest(unittest.TestCase):
+    """`comparable_text` decides whether a command's echo confirms it.
+
+    One side is a parameter's intern_value (always a string), the other is the
+    cloud's raw parValue, which arrives as a string, a number or a bool and which
+    the cloud may reformat. Getting this wrong reports a healthy round trip as a
+    missing key, and it also picks WHICH pending command a push belongs to.
+    """
+
+    def test_the_spellings_of_one_number_all_agree(self) -> None:
+        for value in ("5", "5.0", "05", " 5 ", 5, 5.0):
+            self.assertEqual("5", comparable_text(value), repr(value))
+
+    def test_a_bool_reads_as_the_device_spelling(self) -> None:
+        """Taken before everything else because the rest goes through str(): a bool
+        becomes "True", which no numeric parse accepts, so it would compare as that
+        literal against the device's own 1/0 spelling."""
+        self.assertEqual("1", comparable_text(True))
+        self.assertEqual("0", comparable_text(False))
+        self.assertNotEqual(comparable_text(True), str(True))
+
+    def test_a_fraction_keeps_its_value(self) -> None:
+        self.assertEqual("5.5", comparable_text("5.5"))
+        self.assertEqual("5.5", comparable_text(5.5))
+        self.assertNotEqual(comparable_text("5.5"), comparable_text("5"))
+
+    def test_non_numeric_text_is_trimmed_and_kept(self) -> None:
+        self.assertEqual("high", comparable_text(" high "))
+        self.assertEqual("E12", comparable_text("E12"))
+        self.assertEqual("", comparable_text(""))
+
+    def test_different_values_stay_different(self) -> None:
+        """The comparison is forgiving about spelling, never about value."""
+        distinct = ["5", "6", "5.5", "-5", "0", "high", ""]
+        rendered = [comparable_text(value) for value in distinct]
+        self.assertEqual(len(distinct), len(set(rendered)), rendered)
+
+    def test_overflow_and_nan_keep_their_raw_text(self) -> None:
+        """Not for want of a short form: str(float("1e400")) is "inf", so collapsing
+        these would make "1e400" and a 400-digit number compare EQUAL. Overflow is the
+        one place where being forgiving about spelling would lose a value."""
+        for value in ("nan", "inf", "-inf", "infinity", "1e400", "1" + "0" * 400):
+            self.assertEqual(value, comparable_text(value), value[:12])
+        self.assertEqual(comparable_text("inf"), comparable_text(" inf "))
+        self.assertNotEqual(comparable_text("1e400"), comparable_text("1" + "0" * 400))
+
+    def test_a_decimal_comma_reads_as_a_decimal_point(self) -> None:
+        """The engine's own str_to_float accepts it, so the shadow already holds 5.5
+        for a cloud that sent "5,5"; a diagnostic calling that a mismatch would
+        contradict the value the integration stored."""
+        self.assertEqual("5.5", comparable_text("5,5"))
+        self.assertEqual(comparable_text("5,5"), comparable_text("5.5"))
+        self.assertNotEqual(comparable_text("5,5"), comparable_text("55"))
 
 
 if __name__ == "__main__":

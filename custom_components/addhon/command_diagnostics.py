@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 from weakref import WeakKeyDictionary
 
-from .debug_utils import redact_identity
+from .debug_utils import comparable_text, redact_identity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ def _expected_values(payload: Mapping[str, object]) -> dict[str, str]:
         redacted = redact_identity({name: value}).get(name)
         if redacted == _REDACTED or not isinstance(redacted, (str, int, float)):
             continue
-        result[name] = str(redacted)[:_STRING_LIMIT]
+        result[name] = comparable_text(redacted)[:_STRING_LIMIT]
         if len(result) == _COLLECTION_LIMIT:
             break
     return result
@@ -264,8 +264,12 @@ def observe_mqtt_update(
 ) -> None:
     try:
         now = time.monotonic() if timestamp is None else float(timestamp)
+        # Both sides are canonicalized where they ENTER, not at each comparison:
+        # _match_coverage picks which pending command a push confirms, so a spelling
+        # difference there does not just mis-report a field, it can hand the push to
+        # the wrong command entirely.
         observed = {
-            str(key): str(value)
+            str(key): comparable_text(value)
             for key, value in values.items()
             if isinstance(key, str) and isinstance(value, (str, int, float))
         }
