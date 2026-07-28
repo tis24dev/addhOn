@@ -62,7 +62,14 @@ jobs:
           TRIGGER="${GITHUB_REF_NAME}"
 
           if ! is_pr_tag "${TRIGGER}"; then
-            echo "::error::Invalid trigger '${TRIGGER}'. Push pr-vX.Y.Z (or pr-vX.Y.Z-beta) on dev to start a release."
+            # Defaulted, and it MUST stay defaulted. This body ships with the tag while
+            # the policy above is sourced from origin/main, so every release runs a new
+            # body against the PREVIOUS policy. A bare ${PR_TAG_FORMATS} is an unbound
+            # variable under `set -u` until the constant reaches main, and it would kill
+            # the step one line before delete_remote_tag, leaving the rejected trigger
+            # tag on origin. A leftover trigger makes a re-push a no-op that never
+            # re-fires intake, so that costs a manual deletion.
+            echo "::error::Invalid trigger '${TRIGGER}'. Push ${PR_TAG_FORMATS:-a valid pr-v* trigger tag} on dev to start a release."
             delete_remote_tag "${TRIGGER}"
             exit 1
           fi

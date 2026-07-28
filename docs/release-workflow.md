@@ -1,43 +1,63 @@
 # Release Workflow
 
 This repository uses `dev` as the only release source and `main` as the
-published branch. Releases are driven by tags created on the current `dev`
-commit.
+published branch. Releases are driven by a trigger tag pushed on the current
+`dev` commit.
 
 ## Accepted Tags
 
-Only these formats are accepted from now on:
+Two different tags, and only the first one is ever pushed by hand.
+
+The TRIGGER tag starts a release. It is unprotected on purpose, so it can be
+created and deleted freely, and the intake workflow deletes it once the release
+pull request is open:
+
+```text
+pr-vX.Y.Z
+pr-vX.Y.Z-beta
+pr-vX.Y.Z-betaN
+```
+
+The RELEASE tag is derived from it by dropping the `pr-` prefix. It is created
+ONCE, by the post-merge workflow, on the squash commit, and it is immutable:
 
 ```text
 vX.Y.Z
 vX.Y.Z-beta
+vX.Y.Z-betaN
 ```
 
-Examples:
+Examples: pushing `pr-v1.2.3-beta2` publishes `v1.2.3-beta2`. The numbered form
+exists so more than one prerelease can be cut for the same version; the bare
+`-beta` stays valid, so every already-published tag still matches. A `-beta`
+suffix, numbered or not, publishes as a GitHub prerelease rather than as the
+latest release.
 
-```text
-v1.2.3
-v1.2.3-beta
-```
+`.github/scripts/release-policy.sh` is the single authority for these formats.
+It is sourced from `origin/main`, never from the pushed tag, because the tag
+tree is the unreviewed code being released and the release jobs hold write
+credentials. A change to the policy therefore takes effect on the release AFTER
+the one that lands it on `main`.
 
-The release tag is the source of truth for the integration version. When the tag
-is pushed, the intake workflow updates
-`custom_components/addhon/manifest.json` on `dev` to match the tag without
-the leading `v`. For example, tag `v1.2.3-beta` writes manifest version
-`1.2.3-beta`.
+The release tag is the source of truth for the integration version. The intake
+workflow updates `custom_components/addhon/manifest.json` on `dev` to match the
+tag without the leading `v`, so `pr-v1.2.3-beta` writes manifest version
+`1.2.3-beta`. Never bump the version by hand.
 
 ## Operator Flow
 
 1. Work only on `dev`.
-2. Create the release tag on the current `dev` HEAD.
-3. Push the tag.
+2. Push `dev` first. Intake compares the trigger against `origin/dev` HEAD and,
+   on a mismatch, errors AND deletes the trigger tag.
+3. Create the trigger tag `pr-vX.Y.Z[-betaN]` on that same commit and push it.
 4. Let the workflow update `manifest.json` and open the automatic `dev -> main`
    pull request.
 5. If review (e.g. CodeRabbit) asks for changes, just push the fix commits to
    `dev`. The PR updates in place and stays valid: `release-guard` validates the
    live state of `dev` (the manifest version must still match the release tag),
    not a frozen commit, so advancing `dev` no longer invalidates the release.
-6. Merge that PR with squash only.
+6. Merge that PR with squash only. `post-merge-release` refuses anything else
+   (`PARENT_COUNT != 1`), so a merge commit blocks the release outright.
 7. The post-merge workflow moves `dev` to the squash commit, creates the tag
    on that commit, and publishes the GitHub release. `dev` is synchronized only
    when its content matches the squash, so post-review fixes never get lost.
@@ -84,10 +104,13 @@ Ruleset for release tags:
 
 ```text
 Protect v*.*.*
-Protect v*.*.*-beta
 Block deletion and updates for normal users
 Allow only the release automation identity to update the final tag
 ```
+
+`v*.*.*` covers the prerelease forms too, numbered ones included, since the last
+wildcard absorbs the suffix. The `pr-v*` trigger must NOT be protected: intake
+deletes it as part of a normal run.
 
 ## Token
 
