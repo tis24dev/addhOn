@@ -889,6 +889,9 @@
     "program_not_supported": {
       "message": "Program \"{program}\" is not supported by this device."
     },
+    "purifier_not_running": {
+      "message": "The purifier must be confirmed running to change this."
+    },
     "refresh_after_command_failed": {
       "message": "Refresh after the command failed."
     },

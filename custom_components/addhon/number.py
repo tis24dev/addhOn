@@ -652,6 +652,14 @@ class HonAirPurifierTimeNumber(HonBaseEntity, NumberEntity):
             return None
 
     async def async_set_native_value(self, value: float) -> None:
+        # Both halves of `available` are re-checked, not just the Custom one: the
+        # device can retain aromaStatus=4 while stopped, so a stale-snapshot write
+        # would otherwise reach a purifier that is off.
+        if not environment_available(self._attributes):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="purifier_not_running",
+            )
         if not self._custom_active:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

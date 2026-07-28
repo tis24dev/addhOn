@@ -889,6 +889,9 @@
     "program_not_supported": {
       "message": "Programma \"{program}\" non supportato da questo apparecchio."
     },
+    "purifier_not_running": {
+      "message": "Il purificatore deve risultare in funzione per cambiare questa impostazione."
+    },
     "refresh_after_command_failed": {
       "message": "Aggiornamento dopo il comando non riuscito."
     },

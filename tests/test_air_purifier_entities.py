@@ -2451,3 +2451,111 @@ class RawTextRuleTest(unittest.TestCase):
         self.assertIs(True, is_engaged("1"))
         self.assertIs(False, is_engaged("0"))
         self.assertIs(False, is_engaged("2"))
+
+
+class StoppedPurifierWriteTest(unittest.IsolatedAsyncioTestCase):
+    """`available` hides the aroma select and the two timing numbers while the
+    purifier is stopped, but a hidden entity still receives service calls, and the
+    snapshot it reads can be a refresh behind the device. Both write paths refuse.
+
+    The availability half is already pinned by the per-platform tests above, so this
+    class only covers the write path and keeps one happy-path control per platform to
+    prove the guard is not refusing everything.
+    """
+
+    STOPPED = {**FULL_ATTRIBUTES, "onOffStatus": "0"}
+    # Power NOT REPORTED, which environment_available deliberately treats as "not
+    # confirmed on" rather than as running. The doctrine is stated in
+    # air_purifier.environment_available and pinned for the read side by
+    # AirPurifierAvailabilityTest; the write side must not be more trusting than the
+    # read side on the same attribute.
+    UNREPORTED = {k: v for k, v in FULL_ATTRIBUTES.items() if k != "onOffStatus"}
+
+    async def test_the_aroma_select_refuses_a_write_while_stopped(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, client, coordinator = await _build_selects(
+            self.STOPPED, schema=_aroma_schema()
+        )
+        with self.assertRaises(HomeAssistantError) as caught:
+            await entities[0].async_select_option("soft")
+        self.assertEqual("purifier_not_running", caught.exception.translation_key)
+        self.assertEqual([], _sent(client))
+        self.assertEqual(0, coordinator.refreshes)
+
+    async def test_the_aroma_select_refuses_a_write_on_unreported_power(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, client, _coord = await _build_selects(
+            self.UNREPORTED, schema=_aroma_schema()
+        )
+        with self.assertRaises(HomeAssistantError) as caught:
+            await entities[0].async_select_option("soft")
+        self.assertEqual("purifier_not_running", caught.exception.translation_key)
+        self.assertEqual([], _sent(client))
+
+    async def test_no_option_can_implicitly_start_the_purifier(self) -> None:
+        """The refusal exists for this. The aroma command carries no power field, so a
+        write while stopped is either dropped by the device or starts it as a side
+        effect of a mode change. Covers EVERY offered option, including "off", which
+        is refused too: the rule is about when a patch may be sent, not about which
+        value it carries."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, client, _coord = await _build_selects(
+            self.STOPPED, schema=_aroma_schema()
+        )
+        options = entities[0].options
+        self.assertEqual(["off", "soft", "mid", "h_biotics", "custom"], options)
+        for option in options:
+            with self.assertRaises(HomeAssistantError):
+                await entities[0].async_select_option(option)
+        self.assertEqual([], _sent(client))
+
+    async def test_the_timing_numbers_refuse_a_write_while_stopped(self) -> None:
+        """Custom is a SETTING the device can retain while stopped, so the
+        pre-existing Custom check alone does not cover this."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, client, coordinator = await _build_numbers(
+            {**self.STOPPED, "aromaStatus": "4"}
+        )
+        by_key = {e.entity_description.key: e for e in entities}
+        self.assertEqual({"aroma_time_on", "aroma_time_off"}, set(by_key))
+        for key in sorted(by_key):
+            with self.assertRaises(HomeAssistantError) as caught:
+                await by_key[key].async_set_native_value(30)
+            self.assertEqual(
+                "purifier_not_running", caught.exception.translation_key, key
+            )
+        self.assertEqual([], _sent(client))
+        self.assertEqual(0, coordinator.refreshes)
+
+    async def test_power_is_reported_before_the_custom_mode(self) -> None:
+        """A stopped purifier outside Custom fails both checks. Naming the power one
+        is the actionable message, since turning Custom on would not help."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, _client, _coord = await _build_numbers(
+            {**self.STOPPED, "aromaStatus": "1"}
+        )
+        by_key = {e.entity_description.key: e for e in entities}
+        with self.assertRaises(HomeAssistantError) as caught:
+            await by_key["aroma_time_on"].async_set_native_value(30)
+        self.assertEqual("purifier_not_running", caught.exception.translation_key)
+
+    async def test_a_running_purifier_still_writes(self) -> None:
+        """The control: a guard that refused everything would leave every assertion
+        above green."""
+        entities, client, coordinator = await _build_selects(schema=_aroma_schema())
+        await entities[0].async_select_option("soft")
+        self.assertEqual([("settings", {"aromaStatus": "1"})], _sent(client))
+        self.assertEqual(1, coordinator.refreshes)
+
+        entities, client, coordinator = await _build_numbers(CUSTOM_ACTIVE)
+        by_key = {e.entity_description.key: e for e in entities}
+        await by_key["aroma_time_off"].async_set_native_value(90)
+        self.assertEqual(
+            [("settings", {"aromaStatus": "4", "aromaTimeOff": "90"})], _sent(client)
+        )
+        self.assertEqual(1, coordinator.refreshes)

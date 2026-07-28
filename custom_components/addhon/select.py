@@ -1101,6 +1101,17 @@ class HonAirPurifierAromaSelect(HonBaseEntity, SelectEntity):
                     "allowed": ", ".join(self._attr_options),
                 },
             )
+        if not environment_available(self._attributes):
+            # `available` already hides this entity while the purifier is stopped, but
+            # a hidden entity is not an unreachable one: a script keeps calling the
+            # service, and the snapshot `available` reads can be a refresh behind the
+            # device. Refusing here is what actually holds the rule the class
+            # docstring states, that selecting a mode never implicitly starts the
+            # appliance.
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="purifier_not_running",
+            )
         appliance = self._appliance
         client = self._hon_client
         if not appliance or not client:

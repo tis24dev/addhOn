@@ -404,6 +404,85 @@ class AirPurifierTranslationTest(unittest.TestCase):
             self.assertTrue(message)
             self.assertNotIn("{", message)
 
+    def test_the_stopped_purifier_exception_is_translated(self) -> None:
+        for lang in LANGS:
+            message = self.data[lang]["exceptions"]["purifier_not_running"]["message"]
+            self.assertTrue(message)
+            self.assertNotIn("{", message)
+
+
+class ExceptionKeyParityTest(unittest.TestCase):
+    """Every localized error the code can raise must exist in BOTH languages.
+
+    Nothing checked this before: a `translation_key` with no JSON entry surfaces to
+    the user as the raw key, and only at the moment the error fires.
+
+    Derived by AST rather than by pattern, and over the WHOLE component tree. A
+    textual scan gets this wrong in both directions: keyword order is free, so
+    `translation_placeholders={"error": str(err)}` sitting before `translation_key`
+    hides the raise from any expression that cannot cross a bracket, and a scan
+    limited to the top level would call a key that moved under client/ unused.
+    """
+
+    @staticmethod
+    def _raised_keys() -> dict[str, set[str]]:
+        """{translation_key: {file, ...}} for every raise of a localized error."""
+        import ast
+
+        keys: dict[str, set[str]] = {}
+        for path in sorted(COMPONENT.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Raise) or not isinstance(
+                    node.exc, ast.Call
+                ):
+                    continue
+                for keyword in node.exc.keywords:
+                    if keyword.arg != "translation_key":
+                        continue
+                    if isinstance(keyword.value, ast.Constant) and isinstance(
+                        keyword.value.value, str
+                    ):
+                        keys.setdefault(keyword.value.value, set()).add(
+                            str(path.relative_to(COMPONENT))
+                        )
+                    else:
+                        # A computed key cannot be verified against the JSON, so it
+                        # must not exist: it would reach the user unresolved.
+                        raise AssertionError(
+                            f"{path}:{node.lineno}: non-literal translation_key"
+                        )
+        return keys
+
+    def test_every_raised_key_exists_in_both_languages(self) -> None:
+        keys = self._raised_keys()
+        # Anti-vacuity, by SHAPE rather than by count: one raise with placeholders
+        # after the key, one with placeholders before it would be equally covered,
+        # and the key this test was added for.
+        for expected in (
+            "command_error",
+            "appliance_or_client_unavailable",
+            "purifier_not_running",
+        ):
+            self.assertIn(expected, keys)
+        for lang in LANGS:
+            exceptions = _load(lang).get("exceptions", {})
+            for key, sources in sorted(keys.items()):
+                self.assertIn(key, exceptions, f"{lang}: raised in {sorted(sources)}")
+                self.assertTrue(exceptions[key].get("message"), f"{lang}: {key}")
+
+    def test_no_language_carries_an_unused_exception(self) -> None:
+        """The mirror check: a key no code path raises is dead weight that reads as
+        coverage."""
+        raised = set(self._raised_keys())
+        for lang in LANGS:
+            for key in _load(lang).get("exceptions", {}):
+                self.assertIn(key, raised, f"{lang}: {key} is never raised")
+
+    def test_the_two_languages_declare_the_same_exceptions(self) -> None:
+        en, it = (set(_load(lang).get("exceptions", {})) for lang in LANGS)
+        self.assertEqual(en, it)
+
 
 if __name__ == "__main__":
     unittest.main()
