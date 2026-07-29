@@ -460,7 +460,15 @@ class NativeMqttClient:
                 try:
                     observe_mqtt_update(appliance, observed_values)
                 except Exception:
-                    pass
+                    # observe_mqtt_update is internally failure-safe, so anything
+                    # escaping is a bug in the diagnostics module rather than bad
+                    # input. Still swallowed, because a broken diagnostic must not
+                    # drop an appliance state update, but no longer silently: with a
+                    # bare pass the correlation could be dead for every command and
+                    # look exactly like a correlation that never matched.
+                    _LOGGER.debug(
+                        "MQTT: command correlation failed", exc_info=True
+                    )
             elif topic and "disconnected" in topic:
                 _LOGGER.info(
                     "Disconnected %s: %s",

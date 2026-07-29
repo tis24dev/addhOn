@@ -27,9 +27,15 @@ def load_contract_cases(name: str) -> list[dict[str, object]]:
         missing = _REQUIRED - set(case)
         if missing:
             raise AssertionError(f"{name}: missing {sorted(missing)}")
-        if case["id"] in ids:
+        # Normalized ONCE, then both compared and stored. Testing the raw value
+        # against a set of strings let a duplicate through whenever the spellings
+        # differed: "1" recorded first, then a bare 1, matched nothing and collapsed
+        # onto the same entry, so two cases shared an id and the second silently
+        # shadowed the first in any id-keyed lookup.
+        case_id = str(case["id"])
+        if case_id in ids:
             raise AssertionError(f"{name}: duplicate id {case['id']}")
-        ids.add(str(case["id"]))
+        ids.add(case_id)
         if case["evidence"] not in _EVIDENCE:
             raise AssertionError(f"{name}: bad evidence {case['evidence']}")
         if case["support"] not in _SUPPORT:

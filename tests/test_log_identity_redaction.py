@@ -463,21 +463,45 @@ class CommandDiagnosticReviewTest(unittest.TestCase):
         self.assertLessEqual(len(record), 4096)
         self.assertNotIn("PRIVATE-DEEP-LEAF", record)
 
+    def _time_payload(self, size: int) -> float:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        payload = {f"key-{index:07d}": index for index in range(size)}
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG"):
+            started = time.monotonic()
+            emit_command_event("command_payload", {"payload": payload})
+            return time.monotonic() - started
+
     def test_command_event_bounds_a_very_large_mapping_quickly(self) -> None:
+        """The invariant is that the work is BOUNDED, not that it takes under some
+        number of milliseconds.
+
+        A full sort and copy of 200k items before trimming to 80 measured ~0.6s; a
+        bounded traversal that samples then trims is flat regardless of the
+        collection's real size. This used to assert an absolute 0.2s against a real
+        measurement of well under a millisecond, which pinned nothing about the shape
+        and would have gone red on a contended runner that simply stalled.
+
+        So the large collection is compared against a SMALL one measured in the same
+        process. The ratio cancels machine speed and load: flat work stays within a
+        wide factor, while restoring the unbounded version puts a thousandfold between
+        them. The absolute ceiling stays too, generous enough to be noise-proof, as a
+        guard for the case where both measurements are pathological.
+        """
+        small = self._time_payload(200)
+        large = self._time_payload(200_000)
+
+        floor = 5e-5  # timer granularity; below this a ratio is meaningless
+        self.assertLess(large, max(small, floor) * 50, f"{small=} {large=}")
+        self.assertLess(large, 2.0)
+
+    def test_a_very_large_mapping_is_still_trimmed(self) -> None:
         from custom_components.addhon.command_diagnostics import emit_command_event
 
         huge = {f"key-{index:07d}": index for index in range(200_000)}
-
         with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
-            started = time.monotonic()
             emit_command_event("command_payload", {"payload": huge})
-            elapsed = time.monotonic() - started
 
-        # A full sort/copy of 200k items before trimming to 80 measures ~0.6s
-        # (unbounded pre-limit work); a bounded traversal that samples then
-        # trims stays under 1ms regardless of the collection's real size. 0.2s
-        # gives both a wide margin against timing noise.
-        self.assertLess(elapsed, 0.2)
         record = captured.records[0].getMessage()
         decoded = json.loads(record)
         self.assertLessEqual(len(decoded["payload"]), 80)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -16,6 +17,9 @@ from .const import DOMAIN
 from .client.engine.exceptions import ApiError
 from .param_rollback import restore_owned_params, snapshot_params
 
+_LOGGER = logging.getLogger(__name__)
+
+
 if TYPE_CHECKING:
     from .client.engine.commands import HonCommand
     from .client.interfaces import Appliance
@@ -28,7 +32,10 @@ def _emit_safely(event: str, fields: Mapping[str, object]) -> None:
     try:
         emit_command_event(event, fields)
     except Exception:
-        pass
+        # Diagnostics must never affect the command; that is the whole point of these
+        # wrappers. A trace still has to be left: a systematically broken diagnostic
+        # was previously indistinguishable from a healthy one that had nothing to say.
+        _LOGGER.debug("Command diagnostics step failed", exc_info=True)
 
 
 def _record_expected_safely(
@@ -39,7 +46,10 @@ def _record_expected_safely(
     try:
         record_expected_update(appliance, action, payload)
     except Exception:
-        pass
+        # Diagnostics must never affect the command; that is the whole point of these
+        # wrappers. A trace still has to be left: a systematically broken diagnostic
+        # was previously indistinguishable from a healthy one that had nothing to say.
+        _LOGGER.debug("Command diagnostics step failed", exc_info=True)
 
 
 def _appliance_type(appliance: Appliance) -> str:
@@ -84,7 +94,10 @@ def _emit_intent_safely(
             },
         )
     except Exception:
-        pass
+        # Diagnostics must never affect the command; that is the whole point of these
+        # wrappers. A trace still has to be left: a systematically broken diagnostic
+        # was previously indistinguishable from a healthy one that had nothing to say.
+        _LOGGER.debug("Command diagnostics step failed", exc_info=True)
 
 
 def _emit_payload_safely(
@@ -115,7 +128,10 @@ def _emit_payload_safely(
             },
         )
     except Exception:
-        pass
+        # Diagnostics must never affect the command; that is the whole point of these
+        # wrappers. A trace still has to be left: a systematically broken diagnostic
+        # was previously indistinguishable from a healthy one that had nothing to say.
+        _LOGGER.debug("Command diagnostics step failed", exc_info=True)
 
 
 def _emit_result_safely(
@@ -142,7 +158,10 @@ def _emit_result_safely(
             fields["error_type"] = type(error).__name__
         _emit_safely("command_result", fields)
     except Exception:
-        pass
+        # Diagnostics must never affect the command; that is the whole point of these
+        # wrappers. A trace still has to be left: a systematically broken diagnostic
+        # was previously indistinguishable from a healthy one that had nothing to say.
+        _LOGGER.debug("Command diagnostics step failed", exc_info=True)
 
 
 def _emit_shadow_safely(
@@ -178,7 +197,10 @@ def _emit_shadow_safely(
         _emit_safely("shadow_update", fields)
         _emit_safely("contract_check", fields)
     except Exception:
-        pass
+        # Diagnostics must never affect the command; that is the whole point of these
+        # wrappers. A trace still has to be left: a systematically broken diagnostic
+        # was previously indistinguishable from a healthy one that had nothing to say.
+        _LOGGER.debug("Command diagnostics step failed", exc_info=True)
 
 
 @dataclass(frozen=True, slots=True)

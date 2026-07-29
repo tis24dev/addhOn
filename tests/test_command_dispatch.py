@@ -1064,6 +1064,88 @@ def test_any_other_failure_stays_a_generic_error(
     assert result_fields["outcome"] == "error"
 
 
+def test_a_broken_diagnostic_is_swallowed_but_logged(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: Any,
+) -> None:
+    """Both halves of the contract, together.
+
+    Diagnostics must never affect the command, which is why these wrappers swallow.
+    But a bare `pass` made a systematically broken diagnostic indistinguishable from a
+    healthy one with nothing to say: the correlation could be dead for every command
+    and look identical from outside.
+    """
+    import logging
+
+    import custom_components.addhon.command_dispatch as dispatch_module
+
+    def _explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("diagnostics exploded")
+
+    monkeypatch.setattr(dispatch_module, "emit_command_event", _explode)
+    monkeypatch.setattr(dispatch_module, "record_expected_update", _explode)
+
+    appliance, _, _command = _dispatch_appliance()
+
+    with caplog.at_level(logging.DEBUG, logger=dispatch_module.__name__):
+        result = asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    # Swallowed: the command still committed.
+    assert result is True
+    # And traced: every wrapper that fired left a record.
+    failures = [
+        record
+        for record in caplog.records
+        if record.name == dispatch_module.__name__
+        and "diagnostics step failed" in record.getMessage()
+    ]
+    assert len(failures) >= 3, [r.getMessage() for r in caplog.records]
+    assert all(record.exc_info for record in failures)
+
+
+def test_the_fixture_loader_catches_a_duplicate_id_in_either_spelling(
+    tmp_path: Any,
+) -> None:
+    """The loader guards every contract matrix in this suite, so a duplicate id it
+    misses means one case silently shadows another in any id-keyed lookup.
+
+    It compared the RAW id against a set of strings, so mixed spellings slipped: "1"
+    recorded first, then a bare 1, matched nothing and collapsed onto the same entry.
+    """
+    import json
+
+    import tests.contract_fixtures as fixtures
+
+    def _case(case_id: object) -> dict[str, object]:
+        return {
+            "id": case_id,
+            "evidence": sorted(fixtures._EVIDENCE)[0],
+            "support": sorted(fixtures._SUPPORT)[0],
+            **{key: "x" for key in fixtures._REQUIRED - {"id", "evidence", "support"}},
+        }
+
+    for first, second in (("1", 1), (1, "1"), ("a", "a")):
+        path = tmp_path / "cases.json"
+        path.write_text(json.dumps([_case(first), _case(second)]), encoding="utf-8")
+        original_root = fixtures._ROOT
+        fixtures._ROOT = tmp_path
+        try:
+            with pytest.raises(AssertionError, match="duplicate id"):
+                fixtures.load_contract_cases("cases.json")
+        finally:
+            fixtures._ROOT = original_root
+
+    # The control: genuinely distinct ids still load.
+    path = tmp_path / "cases.json"
+    path.write_text(json.dumps([_case("1"), _case("2")]), encoding="utf-8")
+    original_root = fixtures._ROOT
+    fixtures._ROOT = tmp_path
+    try:
+        assert len(fixtures.load_contract_cases("cases.json")) == 2
+    finally:
+        fixtures._ROOT = original_root
+
+
 def test_adapter_localizes_the_reachable_refusal() -> None:
     """The refusal that actually happens arrives as ApiError, not as False.
 
