@@ -769,7 +769,7 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
 AP_ID = "ap-unique"
 
 
-def _build_ap_coordinator() -> FakeCoordinator:
+def _build_ap_coordinator(attribute_overrides: dict | None = None) -> FakeCoordinator:
     """An AP whose schema and shadow deliberately run AHEAD of the integration.
 
     machMode declares 3 (undeclared by the observed devices and never writable),
@@ -841,14 +841,15 @@ def _build_ap_coordinator() -> FakeCoordinator:
                 # Declared by the application, no entity (ledger B1).
                 "no2ValueIndoor": "7",
                 "macAddress": "AA:BB:CC:DD:EE:FF",
+                **(attribute_overrides or {}),
             },
             "statistics": {},
         },
     })
 
 
-def _ap_block():
-    coord = _build_ap_coordinator()
+def _ap_block(attribute_overrides: dict | None = None):
+    coord = _build_ap_coordinator(attribute_overrides)
     hass = FakeHass(coord)
     result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
     return result["appliances"][0]
@@ -910,6 +911,33 @@ class FutureCapabilityCaptureTest(unittest.TestCase):
             self.assertNotIn(key, future["enum_deltas"])
 
     def test_future_capability_reports_an_unhandled_live_state(self) -> None:
+        future = _ap_block()["future_capabilities"]
+        self.assertEqual({"machMode": "3"}, future["state_values_unhandled"])
+
+    def test_an_unhandled_state_value_is_length_capped(self) -> None:
+        """The section is passive EVIDENCE, not a report: a firmware answering with a
+        long blob must add a hint to the dump, never carry the blob into it.
+
+        Nothing pinned this. The cap was written as a count constant times four,
+        reading as "20 values" while meaning 80 characters, and when it was split into
+        its own bound no test noticed either spelling: removing the slice entirely left
+        the whole suite green.
+        """
+        from custom_components.addhon.diagnostics import _FUTURE_MAX_VALUE_CHARS
+
+        # Derived from the constant, so the MECHANISM is pinned at any value it takes;
+        # the value itself is bounded separately, because a cap large enough to carry
+        # the blob would satisfy the mechanism while defeating its purpose.
+        self.assertLessEqual(_FUTURE_MAX_VALUE_CHARS, 256)
+        blob = "9" * (_FUTURE_MAX_VALUE_CHARS * 3)
+        future = _ap_block({"machMode": blob})["future_capabilities"]
+        captured = future["state_values_unhandled"]["machMode"]
+        self.assertEqual(_FUTURE_MAX_VALUE_CHARS, len(captured))
+        self.assertTrue(blob.startswith(captured))
+
+    def test_a_short_unhandled_state_value_is_untouched(self) -> None:
+        """The control: the cap must not trim a value that fits, or every unhandled
+        reading would arrive mangled."""
         future = _ap_block()["future_capabilities"]
         self.assertEqual({"machMode": "3"}, future["state_values_unhandled"])
 
