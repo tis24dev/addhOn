@@ -1769,8 +1769,6 @@ class ExperimentalGateTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ExperimentalAirQualityLabelTest(unittest.IsolatedAsyncioTestCase):
-    ON = None  # set in setUp-free helpers below
-
     async def _label(self, raw: str | None):
         attributes = dict(FULL_ATTRIBUTES)
         if raw is None:
@@ -2828,6 +2826,51 @@ class RefusedTransactionTest(unittest.IsolatedAsyncioTestCase):
         await entities[0].async_turn_on()
         self.assertEqual(1, len(client.patches))
         self.assertEqual(1, coordinator.refreshes)
+
+
+class PublicSurfaceTest(unittest.TestCase):
+    """`air_purifier.__all__` is the module's declared contract, so it has to match.
+
+    It did not. `AP_CUSTOM_AROMA` was imported by both the aroma select and the
+    timing numbers while absent from the list, and the list itself had drifted out of
+    alphabetical order as each task appended to the end.
+    """
+
+    ROOT = Path(__file__).parents[1] / "custom_components" / "addhon"
+
+    def _declared(self) -> list[str]:
+        import re
+
+        source = (self.ROOT / "air_purifier.py").read_text(encoding="utf-8")
+        start = source.index("__all__ = [")
+        return re.findall(r'"([^"]+)"', source[start : source.index("]", start)])
+
+    def test_every_name_another_module_imports_is_declared(self) -> None:
+        """The direction that matters: importing a name the module does not export is
+        relying on a surface it never promised. The reverse is allowed, since a
+        constant may exist to state a rule (AP_WRITABLE_MODES) rather than to be
+        imported."""
+        import ast
+
+        declared = set(self._declared())
+        imported: set[str] = set()
+        for path in sorted(self.ROOT.rglob("*.py")):
+            if path.name == "air_purifier.py":
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    and node.module.endswith("air_purifier")
+                ):
+                    imported |= {alias.name for alias in node.names}
+        self.assertGreaterEqual(len(imported), 10, imported)
+        self.assertEqual(set(), imported - declared)
+
+    def test_the_declaration_stays_sorted(self) -> None:
+        declared = self._declared()
+        self.assertEqual(sorted(declared), declared)
+        self.assertEqual(len(set(declared)), len(declared))
 
 
 if __name__ == "__main__":

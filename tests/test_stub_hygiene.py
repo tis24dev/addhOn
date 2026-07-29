@@ -264,5 +264,38 @@ class MainGuardPlacementTest(unittest.TestCase):
         self.assertEqual([(1, 1)], _main_guards(ast.parse(source)))
 
 
+class StubInstallerDocstringTest(unittest.TestCase):
+    """conftest's platform installer must say what it installs.
+
+    Its name said `fan` while it stubbed seven platforms, having grown one per
+    campaign task, and its docstring listed five. A reader deciding whether their
+    module needs its own stub was reading a list that had been wrong for weeks.
+    """
+
+    @staticmethod
+    def _installer_source() -> str:
+        import ast
+
+        source = (TESTS_DIR / "conftest.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_install_entity_platform_stubs"
+        )
+        return ast.get_source_segment(source, function) or ""
+
+    def test_the_docstring_lists_every_platform_it_stubs(self) -> None:
+        import re
+
+        body = self._installer_source()
+        stubbed = set(re.findall(r"homeassistant\.components\.([a-z_]+)", body))
+        self.assertGreaterEqual(len(stubbed), 5, stubbed)
+        docstring = body[: body.index('"""', body.index('"""') + 3)]
+        for platform in sorted(stubbed):
+            self.assertIn(f"`{platform}`", docstring, platform)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -139,14 +139,18 @@ def _install_shared_entity_stubs() -> None:
     )
 
 
-def _install_fan_stubs() -> None:
-    """Shared `fan`, `light`, `switch`, `select` and `number` platform stubs.
+def _install_entity_platform_stubs() -> None:
+    """Shared entity-platform stubs: `binary_sensor`, `fan`, `light`, `number`,
+    `select`, `sensor` and `switch`.
 
-    Installed here rather than per test module: the fan platform is imported by
-    the AP entity tests AND by the platform-forwarding tests, and a partial
-    per-file stub winning the first-wins `getattr` race is exactly the
-    order-dependence this conftest exists to remove. `AddEntitiesCallback` lands
-    here for the same reason."""
+    Installed here rather than per test module: each of these is imported by
+    several test modules, and a partial per-file stub winning the first-wins
+    `getattr` race is exactly the order-dependence this conftest exists to
+    remove. `AddEntitiesCallback` lands here for the same reason.
+
+    A test asserts this list against what the function actually stubs, because the
+    name and the docstring were both stale once: it said fan while stubbing seven
+    platforms, having grown one per campaign task."""
     components = _ensure_module("homeassistant.components")
     sys.modules["homeassistant"].components = components
 
@@ -406,5 +410,5 @@ def _ensure_yarl() -> None:
 
 _install_homeassistant_error()
 _install_shared_entity_stubs()
-_install_fan_stubs()
+_install_entity_platform_stubs()
 _ensure_yarl()

@@ -157,6 +157,11 @@ _COVERAGE_META_PARAMS = frozenset(
 # it. Truncation is announced with a `truncated` flag rather than silently applied.
 _FUTURE_MAX_ENTRIES = 40
 _FUTURE_MAX_VALUES = 20
+# A separate CHARACTER bound. An unhandled state value is one scalar, so it needs a
+# length cap rather than a count; reusing _FUTURE_MAX_VALUES here read as "20 values"
+# while meaning "80 characters". Generous, since a value long enough to be truncated
+# is itself the interesting evidence.
+_FUTURE_MAX_VALUE_CHARS = 80
 
 
 def _is_meta_attr(name: str) -> bool:
@@ -490,7 +495,7 @@ def _future_capabilities(app_type, attributes: Mapping, appliance) -> dict:
     for name in sorted(handled):
         text = _scalar_text(attributes.get(name))
         if text is not None and text not in handled[name]:
-            unhandled_state[name] = text[:_FUTURE_MAX_VALUES * 4]
+            unhandled_state[name] = text[:_FUTURE_MAX_VALUE_CHARS]
     section: dict = {
         "enum_deltas": deltas,
         "state_values_unhandled": unhandled_state,

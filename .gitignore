@@ -11,7 +11,17 @@ __pycache__/
 # Local development and agent tooling
 /.gitnexus/
 /.claude/
-/.superpowers/
+# Contents rather than the directory itself: git never descends into an EXCLUDED
+# directory, so a negation inside one can never re-include anything. The campaign
+# records under sdd/ are tracked, and the previous `/.superpowers/` ignored every new
+# one silently: they landed only when someone remembered `git add -f`, and the
+# committed ones stayed visible purely because a tracked file outranks .gitignore.
+# The agent tooling beside sdd/ stays ignored.
+# NB: some setups also carry an untracked `.superpowers/sdd/.gitignore` holding `*`,
+# written by local tooling. That wins over this rule in those working copies, so
+# `git add -f` may still be needed there. It is not part of this repository.
+/.superpowers/*
+!/.superpowers/sdd/
 /AGENTS.md
 /CLAUDE.md
 /.development/
