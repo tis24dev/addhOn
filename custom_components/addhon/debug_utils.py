@@ -89,6 +89,11 @@ _IDENTITY_KEYS = frozenset(
 )
 
 
+# A float holds every integer only up to 2**53. Past that, distinct integers share one
+# double, so rendering them is no longer a spelling choice: it discards value.
+_EXACT_INTEGER_LIMIT = 2**53
+
+
 def comparable_text(value) -> str:
     """Canonical text for comparing a value SENT against a value REPORTED BACK.
 
@@ -127,6 +132,13 @@ def comparable_text(value) -> str:
         # one token would make "1e400" and a 400-digit number compare EQUAL, which is
         # the one thing this function must not do. No device parameter is infinite, so
         # this only ever costs a mismatch on values that are already nonsense.
+        return text
+    if abs(number) >= _EXACT_INTEGER_LIMIT:
+        # The same rule as overflow, one step earlier. Precision is gone well before
+        # inf: str(int(number)) renders the ROUNDED double, so 12345678901234567890
+        # and 12345678901234567891 would both land on 12345678901234567168. Keeping
+        # the raw text costs a mismatch on a spelling nothing sends, and no parameter
+        # in the schema reaches this band.
         return text
     return str(int(number)) if number.is_integer() else str(number)
 

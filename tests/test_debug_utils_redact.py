@@ -351,6 +351,25 @@ class ComparableTextTest(unittest.TestCase):
         self.assertEqual(comparable_text("inf"), comparable_text(" inf "))
         self.assertNotEqual(comparable_text("1e400"), comparable_text("1" + "0" * 400))
 
+    def test_two_integers_past_float_precision_stay_different(self) -> None:
+        """Overflow is not the first place value is lost. A float holds every integer
+        only up to 2**53, so canonicalizing above that renders the ROUNDED double and
+        lands two distinct numbers on one string, which is the one thing this function
+        must not do. Below the bound the numeric form still applies."""
+        low = "12345678901234567890"
+        high = "12345678901234567891"
+        self.assertEqual(low, comparable_text(low))
+        self.assertEqual(high, comparable_text(high))
+        self.assertNotEqual(comparable_text(low), comparable_text(high))
+        # The first pair that collides sits one above the bound, so this pins WHERE
+        # the bound is and not merely that some large numbers are kept: 2**53 + 1 has
+        # no float of its own and rounds onto 2**53.
+        self.assertNotEqual(
+            comparable_text("9007199254740992"), comparable_text("9007199254740993")
+        )
+        # And the numeric form still applies right below it.
+        self.assertEqual("9007199254740991", comparable_text("9007199254740991.0"))
+
     def test_a_decimal_comma_reads_as_a_decimal_point(self) -> None:
         """The engine's own str_to_float accepts it, so the shadow already holds 5.5
         for a cloud that sent "5,5"; a diagnostic calling that a mismatch would
