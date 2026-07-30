@@ -2699,7 +2699,7 @@ class SharedAttributeNamingTest(unittest.TestCase):
         that carries a device class would drop its whole pair out unnoticed."""
         self.assertEqual({"coLevel", "airQuality"}, set(self._pairs()))
         by_attribute: dict = {}
-        for platform, description in self._ap_descriptions():
+        for _platform, description in self._ap_descriptions():
             by_attribute.setdefault(description.attr_key, []).append(description.key)
         shared = {
             attribute
