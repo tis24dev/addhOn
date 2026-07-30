@@ -848,6 +848,12 @@ def _build_ap_coordinator(attribute_overrides: dict | None = None) -> FakeCoordi
     })
 
 
+def _counting_text(length: int) -> str:
+    """A run of digits where no character equals its neighbour, so a slice that keeps
+    the right NUMBER of characters but the wrong ones is still visible."""
+    return "".join(str(index % 10) for index in range(length))
+
+
 def _ap_block(attribute_overrides: dict | None = None):
     coord = _build_ap_coordinator(attribute_overrides)
     hass = FakeHass(coord)
@@ -929,17 +935,29 @@ class FutureCapabilityCaptureTest(unittest.TestCase):
         # the value itself is bounded separately, because a cap large enough to carry
         # the blob would satisfy the mechanism while defeating its purpose.
         self.assertLessEqual(_FUTURE_MAX_VALUE_CHARS, 256)
-        blob = "9" * (_FUTURE_MAX_VALUE_CHARS * 3)
+        # Every character differs from its neighbours, so `startswith` pins WHICH
+        # window was kept. A blob of one repeated character satisfies it under any
+        # shifted slice, which left the cap pinned by length alone.
+        blob = _counting_text(_FUTURE_MAX_VALUE_CHARS * 3)
         future = _ap_block({"machMode": blob})["future_capabilities"]
         captured = future["state_values_unhandled"]["machMode"]
         self.assertEqual(_FUTURE_MAX_VALUE_CHARS, len(captured))
         self.assertTrue(blob.startswith(captured))
 
-    def test_a_short_unhandled_state_value_is_untouched(self) -> None:
+    def test_an_unhandled_state_value_at_the_cap_is_untouched(self) -> None:
         """The control: the cap must not trim a value that fits, or every unhandled
-        reading would arrive mangled."""
-        future = _ap_block()["future_capabilities"]
-        self.assertEqual({"machMode": "3"}, future["state_values_unhandled"])
+        reading would arrive mangled.
+
+        It sits ON the bound rather than well under it. A short value cannot tell a
+        slice at the cap from a slice one character either side of it, so the control
+        that read a plain "3" repeated an assertion the suite already made and could
+        not fail on its own.
+        """
+        from custom_components.addhon.diagnostics import _FUTURE_MAX_VALUE_CHARS
+
+        exact = _counting_text(_FUTURE_MAX_VALUE_CHARS)
+        future = _ap_block({"machMode": exact})["future_capabilities"]
+        self.assertEqual({"machMode": exact}, future["state_values_unhandled"])
 
     def test_future_capability_carries_no_identity(self) -> None:
         import json
