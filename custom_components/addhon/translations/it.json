@@ -906,6 +906,9 @@
     },
     "swing_position_not_allowed": {
       "message": "Posizione oscillazione {position} non ammessa (ammesse: {allowed})."
+    },
+    "speed_not_supported": {
+      "message": "Questo purificatore funziona a modalità discrete e non ha una velocità della ventola. Imposta una modalità preimpostata invece di una percentuale."
     }
   }
 }

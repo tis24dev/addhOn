@@ -906,6 +906,9 @@
     },
     "swing_position_not_allowed": {
       "message": "Swing position {position} is not allowed (allowed: {allowed})."
+    },
+    "speed_not_supported": {
+      "message": "This purifier runs in discrete modes and has no fan speed. Set a preset mode instead of a percentage."
     }
   }
 }

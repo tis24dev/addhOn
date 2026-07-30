@@ -960,6 +960,31 @@ class AirPurifierFanWriteTest(unittest.IsolatedAsyncioTestCase):
 
 
 class AirPurifierFanErrorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_percentage_is_refused_rather_than_dropped(self) -> None:
+        """The purifier has no speed axis, so SET_SPEED is not declared and a
+        percentage cannot be honoured. Dropping it silently would start the device
+        in the REMEMBERED mode and return success, leaving the automation to read as
+        though the requested speed had been applied."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        entities, client, coordinator = await _build_fan(
+            {**FULL_ATTRIBUTES, "onOffStatus": "0", "machMode": "0"}
+        )
+        with self.assertRaises(HomeAssistantError) as caught:
+            await entities[0].async_turn_on(percentage=50)
+        self.assertEqual("speed_not_supported", caught.exception.translation_key)
+        self.assertEqual([], _sent(client))
+        self.assertEqual(0, coordinator.refreshes)
+
+    async def test_the_declared_features_carry_no_speed(self) -> None:
+        """The refusal above is only coherent while no speed is advertised: an entity
+        declaring SET_SPEED and then refusing every percentage would be worse than
+        either choice alone."""
+        from homeassistant.components.fan import FanEntityFeature
+
+        entities, _client, _coord = await _build_fan()
+        self.assertFalse(entities[0].supported_features & FanEntityFeature.SET_SPEED)
+
     async def test_an_unknown_preset_is_a_localized_error(self) -> None:
         from homeassistant.exceptions import HomeAssistantError
 

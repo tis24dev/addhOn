@@ -163,6 +163,23 @@ class HonAirPurifierFan(HonBaseEntity, FanEntity):
     async def async_turn_on(
         self, percentage: int | None = None, preset_mode: str | None = None, **kwargs
     ) -> None:
+        """Start the purifier in a preset, refusing a speed it cannot honour.
+
+        The purifier has no speed axis: it runs in discrete modes, which is why
+        SET_SPEED is not declared and no percentage is exposed anywhere. The
+        parameter stays in the signature because the service passes it positionally.
+
+        A caller can still hand one over, and dropping it silently is the worst of
+        the three options: the device starts in the REMEMBERED mode, the service
+        returns success, and the automation reads as though the speed had been
+        applied. Refusing costs a visible error on a call that was never going to
+        do what it asked.
+        """
+        if percentage is not None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="speed_not_supported",
+            )
         mode = (
             AP_PRESET_TO_MODE.get(preset_mode)
             if preset_mode is not None
