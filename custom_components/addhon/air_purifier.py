@@ -37,11 +37,23 @@ AP_WRITABLE_MODES = frozenset({"1", "2", "4"})
 AP_MODE_TO_PRESET = {"1": "sleep", "2": "auto", "4": "max"}
 AP_PRESET_TO_MODE = {preset: raw for raw, preset in AP_MODE_TO_PRESET.items()}
 
-# The panel light encoding is INVERSE: a higher raw value is a dimmer panel.
-AP_LIGHT_TO_BRIGHTNESS = {"2": 0, "1": 128, "0": 255}
-AP_BRIGHTNESS_TO_LIGHT = {
-    brightness: raw for raw, brightness in AP_LIGHT_TO_BRIGHTNESS.items()
-}
+# The panel light has three discrete steps, not a brightness scale, so it is
+# offered as named positions rather than a percentage the device cannot honour.
+#
+# The ENCODING is the one open question of this feature: this mapping reads a
+# higher raw value as a dimmer panel, which the device's own behaviour supports
+# (stopping the purifier moves lightStatus to 2) while the beta tester reports the
+# opposite from looking at the panel. Both readings cannot be right, and the
+# capture that would settle it disagrees with itself: the appliance attributes and
+# the activity record report 0 and 2 for the same instant. Kept in ONE dict so
+# settling it is a single edit, here, with no entity or option name changing.
+AP_LIGHT_TO_OPTION = {"2": "off", "1": "low", "0": "high"}
+AP_OPTION_TO_LIGHT = {option: raw for raw, option in AP_LIGHT_TO_OPTION.items()}
+
+# Display order of the offered positions, dimmest first. Independent of the raw
+# encoding on purpose: whichever way the encoding is settled, the list a user sees
+# stays off, low, high.
+AP_LIGHT_OPTION_ORDER = ("off", "low", "high")
 
 AP_AROMA_TO_OPTION = {
     "0": "off",
@@ -127,7 +139,7 @@ AP_ENTITY_PARAMS = frozenset(
 AP_HANDLED_VALUES: dict[str, frozenset[str]] = {
     _POWER_ATTR: _TOGGLE_VALUES,
     _MODE_PARAM: AP_WRITABLE_MODES,
-    _LIGHT_PARAM: frozenset(AP_LIGHT_TO_BRIGHTNESS),
+    _LIGHT_PARAM: frozenset(AP_LIGHT_TO_OPTION),
     _LOCK_PARAM: _TOGGLE_VALUES,
     _TONE_PARAM: _TOGGLE_VALUES,
     _AROMA_PARAM: frozenset(AP_AROMA_TO_OPTION),
@@ -578,15 +590,16 @@ def ap_patch(
 __all__ = [
     "AP_AIR_QUALITY_LABELS",
     "AP_AROMA_TO_OPTION",
-    "AP_BRIGHTNESS_TO_LIGHT",
     "AP_CO_ALARM_RAW",
     "AP_CO_CLEAR_RAW",
     "AP_CUSTOM_AROMA",
     "AP_ENTITY_PARAMS",
     "AP_HANDLED_VALUES",
-    "AP_LIGHT_TO_BRIGHTNESS",
+    "AP_LIGHT_OPTION_ORDER",
+    "AP_LIGHT_TO_OPTION",
     "AP_MODE_TO_PRESET",
     "AP_OPTION_TO_AROMA",
+    "AP_OPTION_TO_LIGHT",
     "AP_PRESET_TO_MODE",
     "AP_WRITABLE_MODES",
     "AirPurifierCapabilities",

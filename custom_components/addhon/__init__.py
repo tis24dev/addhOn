@@ -358,6 +358,10 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
       '_total_energy', '_current_energy', '_current_water', '_loading_percentage'.
       Removed ONLY on devices of type TD (cross-checked with the coordinator),
       never on WM/WD/AC.
+    - The air purifier panel LIGHT (unique_id '<id>_panel_light'), replaced by a
+      select with the same unique_id in a different domain. Scoped to the light
+      domain for that reason: removing by unique_id alone would delete the
+      replacement along with the entity it replaces.
 
     Without this cleanup there would be orphan 'unavailable' entities with the '?' badge.
     """
@@ -388,6 +392,13 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
             registry.async_remove(reg_entry.entity_id)
             removed += 1
             _LOGGER.info("Removed legacy power switch: id=%s", redact_id(reg_entry.unique_id))
+        elif domain == "light" and unique_id.endswith("_panel_light"):
+            registry.async_remove(reg_entry.entity_id)
+            removed += 1
+            _LOGGER.info(
+                "Removed legacy purifier panel light: id=%s",
+                redact_id(reg_entry.unique_id),
+            )
         elif unique_id in td_orphans:
             registry.async_remove(reg_entry.entity_id)
             removed += 1

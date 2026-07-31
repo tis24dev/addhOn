@@ -16,7 +16,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .air_purifier import (
     AP_AROMA_TO_OPTION,
     AP_CUSTOM_AROMA,
+    AP_LIGHT_OPTION_ORDER,
+    AP_LIGHT_TO_OPTION,
     AP_OPTION_TO_AROMA,
+    AP_OPTION_TO_LIGHT,
     AirPurifierCapabilities,
     ap_patch,
     discover_capabilities,
@@ -67,6 +70,7 @@ from .program_options import (
 _AROMA_ATTR = "aromaStatus"
 _AROMA_TIME_ON_ATTR = "aromaTimeOn"
 _AROMA_TIME_OFF_ATTR = "aromaTimeOff"
+_LIGHT_ATTR = "lightStatus"
 
 # Fridge family (REF/FR/FRE): the writable program/mode select (discussion #40).
 _COOLING_TYPES = (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE)
@@ -300,6 +304,28 @@ async def async_setup_entry(
                     redact_id(appliance_id),
                     capabilities.aroma_options,
                     reports_attribute(attributes, _AROMA_ATTR),
+                )
+            # The panel light is gated the same way: the write schema through the
+            # capability, the read state through the reported attribute.
+            if capabilities.supports_light and reports_attribute(
+                attributes, _LIGHT_ATTR
+            ):
+                entities.append(
+                    HonAirPurifierPanelLightSelect(
+                        coordinator, appliance_id, capabilities, client
+                    )
+                )
+                _LOGGER.info(
+                    "Added AP panel light select: id=%s", redact_id(appliance_id)
+                )
+            else:
+                _LOGGER.debug(
+                    "Select debug: no panel light select for id=%s "
+                    "(writable=%s values=%s state=%s)",
+                    redact_id(appliance_id),
+                    capabilities.supports_light,
+                    sorted(capabilities.light_values),
+                    reports_attribute(attributes, _LIGHT_ATTR),
                 )
             continue
         if app_type == APPLIANCE_AC:
@@ -1137,6 +1163,103 @@ class HonAirPurifierAromaSelect(HonBaseEntity, SelectEntity):
             raise
         except Exception as err:
             _LOGGER.error("AP aroma select: %s failed: %s", option, err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
+
+
+class HonAirPurifierPanelLightSelect(HonBaseEntity, SelectEntity):
+    """Air purifier panel light: three named positions, not a brightness scale.
+
+    The device declares `lightStatus` over exactly three steps and honours nothing
+    between them. Exposed as a light entity, Home Assistant's continuous 0-255
+    brightness had to be quantized on every write, so two thirds of the slider
+    silently snapped elsewhere and the dark position had to masquerade as the
+    entity being "off". A select says what the device actually does.
+
+    NOT gated on power, like the lock and tone toggles: the panel level is a
+    setting the purifier keeps while stopped, not live telemetry. Every write is a
+    sparse settings patch through the transactional dispatcher, so it carries
+    `lightStatus` alone and cannot disturb the mode, aroma or lock.
+    """
+
+    _attr_translation_key = "panel_light"
+    _attr_icon = "mdi:television-ambient-light"
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        capabilities: AirPurifierCapabilities,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._capabilities = capabilities
+        self._attr_unique_id = f"{appliance_id}_panel_light"
+        # Fixed at construction from the LIVE schema, in the canonical order. A
+        # later shadow value outside this set must never add or drop a position.
+        self._attr_options = [
+            option
+            for option in AP_LIGHT_OPTION_ORDER
+            if AP_OPTION_TO_LIGHT[option] in capabilities.light_values
+        ]
+        _LOGGER.debug(
+            "Select debug: init AP panel light id=%s options=%s",
+            redact_id(appliance_id),
+            self._attr_options,
+        )
+
+    @property
+    def current_option(self) -> str | None:
+        """The live position, or None for a raw value that is not one offered.
+
+        An undeclared reading reads as unknown rather than being folded onto a
+        neighbouring position, which would show the user a level the panel is not
+        at.
+        """
+        raw = self._get_attr(_LIGHT_ATTR)
+        if raw is None:
+            return None
+        option = AP_LIGHT_TO_OPTION.get(raw_text(raw))
+        return option if option in self._attr_options else None
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in self._attr_options:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_setpoint",
+                translation_placeholders={
+                    "value": option,
+                    "allowed": ", ".join(self._attr_options),
+                },
+            )
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        raw = AP_OPTION_TO_LIGHT[option]
+        try:
+            # Built INSIDE the try so a value the live schema rejects surfaces as
+            # the same localized command error as a transport failure.
+            patch = ap_patch("set_light", self._capabilities, value=raw)
+            _LOGGER.info(
+                "Select: AP panel light -> %s id=%s",
+                option,
+                redact_id(self._appliance_id),
+            )
+            await async_dispatch_patch(self.hass, client, appliance, patch)
+            await self._async_request_command_refresh()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error(
+                "AP panel light select: %s failed: %s", option, err, exc_info=True
+            )
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="command_error",

@@ -758,6 +758,14 @@
           "custom": "Custom"
         }
       },
+      "panel_light": {
+        "name": "Panel light",
+        "state": {
+          "off": "Off",
+          "low": "Low",
+          "high": "High"
+        }
+      },
       "ref_program": {
         "name": "Program",
         "state": {
@@ -862,11 +870,6 @@
     "fan": {
       "purifier": {
         "name": "Purifier"
-      }
-    },
-    "light": {
-      "panel_light": {
-        "name": "Panel light"
       }
     }
   },

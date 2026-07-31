@@ -240,10 +240,9 @@ class AirPurifierTranslationTest(unittest.TestCase):
         },
         "binary_sensor": {"eco_active", "problem", "co_alarm"},
         "switch": {"child_lock", "touch_tone"},
-        "select": {"aroma"},
+        "select": {"aroma", "panel_light"},
         "number": {"aroma_time_on", "aroma_time_off"},
         "fan": {"purifier"},
-        "light": {"panel_light"},
     }
 
     def setUp(self) -> None:
@@ -262,13 +261,15 @@ class AirPurifierTranslationTest(unittest.TestCase):
                         f"{lang} entity.{platform}.{key}.name is empty",
                     )
 
-    def test_the_fan_and_light_platforms_exist_at_all(self) -> None:
-        # fan and light are the two platforms this campaign introduced; a whole
-        # missing platform block would leave the generic collector nothing to
-        # compare and pass vacuously.
+    def test_the_purifier_platforms_exist_at_all(self) -> None:
+        # A whole missing platform block would leave the generic collector nothing
+        # to compare and pass vacuously. `light` is deliberately absent: the panel
+        # has three steps and no brightness axis, so it is a select.
         for lang in LANGS:
-            for platform in ("fan", "light"):
-                self.assertIn(platform, self.data[lang]["entity"], f"{lang}: {platform}")
+            entity = self.data[lang]["entity"]
+            for platform in ("fan", "select", "switch"):
+                self.assertIn(platform, entity, f"{lang}: {platform}")
+            self.assertNotIn("light", entity, lang)
 
     def test_the_aroma_states_are_labelled(self) -> None:
         for lang in LANGS:
@@ -314,7 +315,6 @@ class AirPurifierTranslationTest(unittest.TestCase):
             "switch": self.EXPECTED["switch"],
             "select": self.EXPECTED["select"],
             "fan": self.EXPECTED["fan"],
-            "light": self.EXPECTED["light"],
         }
         for lang in LANGS:
             for platform, keys in standard.items():

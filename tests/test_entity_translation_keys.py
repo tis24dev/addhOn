@@ -199,7 +199,7 @@ def _tk(description) -> str:
 
 def _collect_code_keys() -> dict[str, set[str]]:
     from custom_components.addhon import (
-        binary_sensor, fan, light, number, select, sensor, switch,
+        binary_sensor, fan, number, select, sensor, switch,
     )
 
     used: dict[str, set[str]] = {}
@@ -242,14 +242,18 @@ def _collect_code_keys() -> dict[str, set[str]]:
     # Program select (fixed key) + the REF program/mode select (#40) + the
     # program-option selects (#35) + the AC fan-direction selects (#37).
     used["select"] = (
-        {"program", "ref_program", select.HonAirPurifierAromaSelect._attr_translation_key}
+        {
+            "program",
+            "ref_program",
+            select.HonAirPurifierAromaSelect._attr_translation_key,
+            select.HonAirPurifierPanelLightSelect._attr_translation_key,
+        }
         | {d.translation_key for d in select._PROGRAM_OPTION_SELECTS}
         | {d.translation_key for d in select._AC_DIRECTION_SELECTS}
     )
     used["button"] = {"start_program", "stop_program", "force_refresh", "reset_debug"}
     # Air purifier fan: a single fixed-key entity, not a description table.
     used["fan"] = {fan.HonAirPurifierFan._attr_translation_key}
-    used["light"] = {light.HonAirPurifierLight._attr_translation_key}
     return used
 
 

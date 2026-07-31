@@ -6,7 +6,7 @@
 DOMAIN = "addhon"
 
 # Supported platforms
-PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button", "number", "fan", "light"]
+PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button", "number", "fan"]
 
 # Update interval in seconds
 # NOTE: the initial setup + first fetch takes ~22s on a slow cloud.
@@ -61,12 +61,6 @@ PROGRAM_PENDING_STORE = "pending_programs"
 # become the value a later "turn on" replays. Volatile on purpose: after a reload
 # the fan falls back to the deterministic Auto default.
 AP_LAST_MODE_STORE = "ap_last_modes"
-
-# Key of the volatile store holding the last NON-OFF panel-light level observed or
-# selected per appliance. Shape: {appliance_id: ha_brightness}. Lets a bare
-# "turn on" restore the brightness the user last had, instead of always jumping to
-# full. Volatile like the mode store: after a reload the light defaults to 100%.
-AP_LAST_LIGHT_STORE = "ap_last_light_levels"
 
 # Key of the volatile store (kept on the coordinator) that holds the writable
 # program OPTIONS (spin/temp/dry level/extra rinses/delayed start/...) chosen on the

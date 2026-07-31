@@ -249,8 +249,9 @@ def _full_capabilities():
 def test_ap_mappings_are_exact() -> None:
     assert air_purifier.AP_MODE_TO_PRESET == {"1": "sleep", "2": "auto", "4": "max"}
     assert air_purifier.AP_PRESET_TO_MODE == {"sleep": "1", "auto": "2", "max": "4"}
-    assert air_purifier.AP_LIGHT_TO_BRIGHTNESS == {"2": 0, "1": 128, "0": 255}
-    assert air_purifier.AP_BRIGHTNESS_TO_LIGHT == {0: "2", 128: "1", 255: "0"}
+    assert air_purifier.AP_LIGHT_TO_OPTION == {"2": "off", "1": "low", "0": "high"}
+    assert air_purifier.AP_OPTION_TO_LIGHT == {"off": "2", "low": "1", "high": "0"}
+    assert air_purifier.AP_LIGHT_OPTION_ORDER == ("off", "low", "high")
     assert air_purifier.AP_AROMA_TO_OPTION == {
         "0": "off", "1": "soft", "2": "mid", "3": "h_biotics", "4": "custom",
     }
@@ -262,8 +263,11 @@ def test_ap_mappings_are_exact() -> None:
 def test_ap_mappings_round_trip() -> None:
     for raw, preset in air_purifier.AP_MODE_TO_PRESET.items():
         assert air_purifier.AP_PRESET_TO_MODE[preset] == raw
-    for raw, brightness in air_purifier.AP_LIGHT_TO_BRIGHTNESS.items():
-        assert air_purifier.AP_BRIGHTNESS_TO_LIGHT[brightness] == raw
+    for raw, option in air_purifier.AP_LIGHT_TO_OPTION.items():
+        assert air_purifier.AP_OPTION_TO_LIGHT[option] == raw
+    assert set(air_purifier.AP_LIGHT_OPTION_ORDER) == set(
+        air_purifier.AP_LIGHT_TO_OPTION.values()
+    )
     for raw, option in air_purifier.AP_AROMA_TO_OPTION.items():
         assert air_purifier.AP_OPTION_TO_AROMA[option] == raw
 

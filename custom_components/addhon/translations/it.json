@@ -758,6 +758,14 @@
           "custom": "Personalizzato"
         }
       },
+      "panel_light": {
+        "name": "Luce Pannello",
+        "state": {
+          "off": "Spenta",
+          "low": "Bassa",
+          "high": "Alta"
+        }
+      },
       "ref_program": {
         "name": "Programma",
         "state": {
@@ -862,11 +870,6 @@
     "fan": {
       "purifier": {
         "name": "Purificatore"
-      }
-    },
-    "light": {
-      "panel_light": {
-        "name": "Luce Pannello"
       }
     }
   },
