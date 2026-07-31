@@ -1978,10 +1978,18 @@ class ExperimentalCoAlarmTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(entity.is_on)
         self.assertTrue(entity.available)
 
-    async def test_every_other_value_hides_rather_than_reporting_safe(self) -> None:
-        """Only the alarming value has been observed. Reporting "off" for the rest
-        would assert an all-clear that no evidence supports."""
-        for raw in ("0", "1", "3"):
+    async def test_the_observed_quiet_value_reports_no_alarm(self) -> None:
+        """Raw 0 held across every capture of a healthy device in a room with no
+        combustion source, so it is reported as such. Leaving it unavailable made
+        the entity look broken on exactly the devices that are fine."""
+        entity = (await self._co("0"))["co_alarm"]
+        self.assertIs(False, entity.is_on)
+        self.assertTrue(entity.available)
+
+    async def test_a_value_between_the_two_ends_still_hides(self) -> None:
+        """Only the two ends have been observed with their meaning. A middle
+        reading is not evidence of safety, so it must not read as one."""
+        for raw in ("1", "3"):
             entity = (await self._co(raw))["co_alarm"]
             self.assertIsNone(entity.is_on, raw)
             self.assertFalse(entity.available, raw)

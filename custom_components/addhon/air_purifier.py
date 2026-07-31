@@ -63,10 +63,18 @@ AP_CUSTOM_AROMA = "4"
 # paired with its label in the official application.
 AP_AIR_QUALITY_LABELS = {"0": "good"}
 
-# Carbon monoxide: raw 2 is the observed candidate for an alarming device. The
-# all-clear value is NOT known, which is why nothing here ever reports "no
-# alarm" and why the entity must never carry a safety device class.
+# Carbon monoxide: raw 2 is the observed candidate for an alarming device.
+#
+# Raw 0 is now the observed QUIET value: four diagnostics captures from the same
+# HHP50CA011 across five days, in a room with no combustion source, report 0
+# throughout, while the application offers a single "CO Alert" entry rather than a
+# scale. That is enough to call 0 "not alarming" and stop the entity from sitting
+# permanently unavailable on a healthy device, which reads as broken.
+#
+# It is NOT enough to make this a detector: the values BETWEEN the two stay
+# unmapped and unavailable, and the entity must never carry a safety device class.
 AP_CO_ALARM_RAW = "2"
+AP_CO_CLEAR_RAW = "0"
 
 # Raw error payloads that all mean "no error". The device uses several spellings
 # interchangeably, including 100.
@@ -253,15 +261,24 @@ def air_quality_label(raw: Any) -> str | None:
 
 
 def co_alarm(raw: Any) -> bool | None:
-    """True for the observed alarming CO value, None for anything unconfirmed.
+    """True for the observed alarming value, False for the observed quiet one.
 
-    EXPERIMENTAL. Deliberately never returns False: the values that mean "no
-    carbon monoxide" have not been observed, so reporting an all-clear would
-    assert safety on no evidence. None keeps the entity unavailable instead.
+    EXPERIMENTAL, and deliberately not a two-way scale: only the two ENDS have
+    been observed together with their meaning. Anything between them returns None
+    and the entity hides, because a reading this code cannot name must not be
+    presented as an all-clear.
+
+    Returning False for raw 0 is a change from the original all-or-nothing rule.
+    That rule left the entity unavailable on every healthy device, which reads as
+    a broken sensor and buys no safety: a user who cannot tell "quiet" from
+    "not reporting" learns nothing from either.
     """
     if raw is None:
         return None
-    return True if raw_text(raw) == AP_CO_ALARM_RAW else None
+    text = raw_text(raw)
+    if text == AP_CO_ALARM_RAW:
+        return True
+    return False if text == AP_CO_CLEAR_RAW else None
 
 
 def environment_available(attributes: Any) -> bool:
@@ -563,6 +580,7 @@ __all__ = [
     "AP_AROMA_TO_OPTION",
     "AP_BRIGHTNESS_TO_LIGHT",
     "AP_CO_ALARM_RAW",
+    "AP_CO_CLEAR_RAW",
     "AP_CUSTOM_AROMA",
     "AP_ENTITY_PARAMS",
     "AP_HANDLED_VALUES",
