@@ -1510,6 +1510,117 @@ class AirPurifierSwitchArchitectureTest(unittest.TestCase):
         self.assertNotIn("async_send_settings", source)
 
 
+class _ExplodingAppliance:
+    """An appliance whose schema cannot be read at all."""
+
+    zone = 0
+    unique_id = "ap-broken"
+
+    @property
+    def commands(self):
+        raise RuntimeError("schema unreadable")
+
+
+class SwitchPlatformIsolationTest(unittest.IsolatedAsyncioTestCase):
+    """One unreadable appliance must cost only its own switches.
+
+    The setup loop used to run inline: a single exception left `async_setup_entry`
+    before `async_add_entities`, so EVERY switch of the entry disappeared, the
+    account debug toggles included. From the outside that is indistinguishable from
+    "this integration has no child lock".
+    """
+
+    async def _setup(self, data: dict):
+        from custom_components.addhon import switch
+        from custom_components.addhon.const import DOMAIN
+
+        coordinator = RefreshingCoordinator(data)
+        hass = RecordingHass(
+            {
+                DOMAIN: {
+                    "entry-1": {
+                        "coordinator": coordinator,
+                        "client": RecordingClient(),
+                    }
+                }
+            }
+        )
+        added: list = []
+        await switch.async_setup_entry(hass, FakeEntry(), added.extend)
+        return added
+
+    def _data(self, extra: dict | None = None) -> dict:
+        data = {
+            "ap-1": {
+                "type": APPLIANCE_AP,
+                "name": "Purifier",
+                "attributes": FULL_ATTRIBUTES,
+                "appliance": _appliance(_toggle_schema()),
+                "settings": {},
+            }
+        }
+        data.update(extra or {})
+        return data
+
+    async def test_a_healthy_appliance_survives_a_broken_sibling(self) -> None:
+        added = await self._setup(
+            self._data(
+                {
+                    "ap-broken": {
+                        "type": APPLIANCE_AP,
+                        "name": "Broken",
+                        "attributes": FULL_ATTRIBUTES,
+                        "appliance": _ExplodingAppliance(),
+                        "settings": {},
+                    }
+                }
+            )
+        )
+        healthy = [e for e in added if getattr(e, "_appliance_id", None) == "ap-1"]
+        self.assertEqual({"child_lock", "touch_tone"}, set(_switch_by_key(healthy)))
+
+    async def test_the_account_debug_toggles_survive_it_too(self) -> None:
+        """They are not tied to any appliance, so an appliance failure must not
+        reach them. Counted by identity, not by key: they carry no description."""
+        from custom_components.addhon.switch import HonDebugSwitch
+
+        added = await self._setup(
+            self._data(
+                {
+                    "ap-broken": {
+                        "type": APPLIANCE_AP,
+                        "name": "Broken",
+                        "attributes": FULL_ATTRIBUTES,
+                        "appliance": _ExplodingAppliance(),
+                        "settings": {},
+                    }
+                }
+            )
+        )
+        self.assertEqual(
+            2, len([e for e in added if isinstance(e, HonDebugSwitch)])
+        )
+
+    async def test_a_coordinator_without_data_yet_adds_the_debug_toggles(self) -> None:
+        """`coordinator.data` is None until the first refresh lands. Iterating it
+        raised, which took the platform down before it created anything."""
+        from custom_components.addhon import switch
+        from custom_components.addhon.const import DOMAIN
+        from custom_components.addhon.switch import HonDebugSwitch
+
+        coordinator = RefreshingCoordinator({})
+        coordinator.data = None
+        hass = RecordingHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}}
+        )
+        added: list = []
+        await switch.async_setup_entry(hass, FakeEntry(), added.extend)
+
+        self.assertEqual(
+            2, len([e for e in added if isinstance(e, HonDebugSwitch)])
+        )
+
+
 # --- Task 8: aroma selection --------------------------------------------------
 
 AROMA_SCHEMA_EXTRA = {

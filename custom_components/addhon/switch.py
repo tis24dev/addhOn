@@ -15,7 +15,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .ac_command import async_send_settings, settings_param
-from .base_entity import HonAccountEntity, HonBaseEntity
+from .base_entity import HonAccountEntity, HonBaseEntity, coordinator_data_map
 from .air_purifier import (
     AirPurifierCapabilities,
     ap_patch,
@@ -194,6 +194,102 @@ def _param_snapshot(params) -> dict:
     }
 
 
+def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> list:
+    """Every switch ONE appliance contributes, or [] when it contributes none.
+
+    Extracted from the setup loop so an appliance whose schema or state trips an
+    unexpected error costs only its own switches. Inline, one raised exception
+    aborted `async_setup_entry` before `async_add_entities` ever ran, so a single
+    bad appliance silently removed EVERY switch of the entry, the account debug
+    toggles included -- a failure that reads exactly like "the integration does
+    not offer that control". Returning the list instead of appending to a shared
+    one also keeps a partial failure from leaving half an appliance behind.
+    """
+    found: list = []
+    app_type = data.get("type")
+    appliance = data.get("appliance")
+    _LOGGER.debug(
+        "Switch debug: evaluating appliance '%s' id=%s type=%s commands=%s",
+        data.get("name"),
+        redact_id(appliance_id),
+        app_type,
+        _command_names(appliance),
+    )
+    if app_type in APPLIANCE_WASH_GROUP:
+        if appliance and hasattr(appliance, "commands"):
+            cmds = getattr(appliance, "commands", None)
+            cmds = cmds if isinstance(cmds, dict) else {}
+            if "pauseProgram" in cmds and "resumeProgram" in cmds:
+                _LOGGER.debug("Switch debug: creating pause switch for id=%s", redact_id(appliance_id))
+                found.append(HonWashingMachinePauseSwitch(coordinator, appliance_id, client))
+                _LOGGER.info("Added pause switch: id=%s", redact_id(appliance_id))
+            else:
+                _LOGGER.debug(
+                    "Switch debug: pause switch not created for id=%s; pause/resume missing",
+                    redact_id(appliance_id),
+                )
+        # Writable program-option switches (#35): created only for the params this
+        # model genuinely exposes as settable in its startProgram schema.
+        created_opts: list[str] = []
+        for desc in _PROGRAM_OPTION_SWITCHES:
+            if app_type not in desc.types:
+                continue
+            if not HonProgramOptionSwitch.supports(appliance, desc.param):
+                continue
+            found.append(HonProgramOptionSwitch(coordinator, appliance_id, desc, client))
+            created_opts.append(desc.key)
+        if created_opts:
+            _LOGGER.info(
+                "Added %d program-option switches: id=%s",
+                len(created_opts),
+                redact_id(appliance_id),
+            )
+        _LOGGER.debug(
+            "Switch debug: option switches for id=%s type=%s -> %s",
+            redact_id(appliance_id),
+            app_type,
+            created_opts,
+        )
+    elif app_type == APPLIANCE_AP:
+        attributes = data.get("attributes")
+        attributes = attributes if isinstance(attributes, dict) else {}
+        capabilities = discover_capabilities(appliance, attributes)
+        created_ap: list[str] = []
+        for desc in _AIR_PURIFIER_SWITCHES:
+            # Both halves are gated: the write schema via the capability, the
+            # read state via the reported attribute. A toggle that cannot be
+            # read back would ship permanently unknown.
+            if not getattr(capabilities, desc.capability):
+                continue
+            if not reports_attribute(attributes, desc.param):
+                continue
+            found.append(
+                HonAirPurifierSwitch(
+                    coordinator, appliance_id, desc, capabilities, client
+                )
+            )
+            created_ap.append(desc.key)
+        _LOGGER.debug(
+            "Switch debug: purifier switches id=%s -> %d %s",
+            redact_id(appliance_id), len(created_ap), created_ap,
+        )
+    elif app_type in _SETTINGS_SWITCHES:
+        created: list[str] = []
+        for desc in _SETTINGS_SWITCHES[app_type]:
+            # capability-gate: only if the parameter exists in the settings command
+            if settings_param(appliance, desc.param) is None:
+                continue
+            found.append(HonSettingsSwitch(coordinator, appliance_id, desc, client))
+            created.append(desc.key)
+        _LOGGER.debug(
+            "Switch debug: settings switches '%s' id=%s type=%s -> %d %s",
+            data.get("name"), redact_id(appliance_id), app_type, len(created), created,
+        )
+    else:
+        _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
+    return found
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -202,90 +298,22 @@ async def async_setup_entry(
     # FIX: consistent access to the hass.data[DOMAIN][entry_id]["coordinator"] structure
     entry_data = hass.data[DOMAIN][entry.entry_id]
     coordinator = entry_data["coordinator"]
-    client = entry_data["client"]
+    # `.get`, like the light and fan platforms: a missing client leaves the READ half
+    # of every switch working, while a KeyError here would take the whole platform
+    # down, account debug toggles included. The write path already refuses without
+    # one, with a localized error.
+    client = entry_data.get("client")
     entities = []
-    for appliance_id, data in coordinator.data.items():
-        app_type = data.get("type")
-        appliance = data.get("appliance")
-        _LOGGER.debug(
-            "Switch debug: evaluating appliance '%s' id=%s type=%s commands=%s",
-            data.get("name"),
-            redact_id(appliance_id),
-            app_type,
-            _command_names(appliance),
-        )
-        if app_type in APPLIANCE_WASH_GROUP:
-            if appliance and hasattr(appliance, "commands"):
-                cmds = getattr(appliance, "commands", None)
-                cmds = cmds if isinstance(cmds, dict) else {}
-                if "pauseProgram" in cmds and "resumeProgram" in cmds:
-                    _LOGGER.debug("Switch debug: creating pause switch for id=%s", redact_id(appliance_id))
-                    entities.append(HonWashingMachinePauseSwitch(coordinator, appliance_id, client))
-                    _LOGGER.info("Added pause switch: id=%s", redact_id(appliance_id))
-                else:
-                    _LOGGER.debug(
-                        "Switch debug: pause switch not created for id=%s; pause/resume missing",
-                        redact_id(appliance_id),
-                    )
-            # Writable program-option switches (#35): created only for the params this
-            # model genuinely exposes as settable in its startProgram schema.
-            created_opts: list[str] = []
-            for desc in _PROGRAM_OPTION_SWITCHES:
-                if app_type not in desc.types:
-                    continue
-                if not HonProgramOptionSwitch.supports(appliance, desc.param):
-                    continue
-                entities.append(HonProgramOptionSwitch(coordinator, appliance_id, desc, client))
-                created_opts.append(desc.key)
-            if created_opts:
-                _LOGGER.info(
-                    "Added %d program-option switches: id=%s",
-                    len(created_opts),
-                    redact_id(appliance_id),
-                )
-            _LOGGER.debug(
-                "Switch debug: option switches for id=%s type=%s -> %s",
+    for appliance_id, data in coordinator_data_map(coordinator).items():
+        try:
+            entities.extend(
+                _appliance_switches(coordinator, appliance_id, data, client)
+            )
+        except Exception:  # noqa: BLE001 - one appliance must not cost the rest
+            _LOGGER.exception(
+                "Switch debug: appliance id=%s contributed no switches",
                 redact_id(appliance_id),
-                app_type,
-                created_opts,
             )
-        elif app_type == APPLIANCE_AP:
-            attributes = data.get("attributes")
-            attributes = attributes if isinstance(attributes, dict) else {}
-            capabilities = discover_capabilities(appliance, attributes)
-            created_ap: list[str] = []
-            for desc in _AIR_PURIFIER_SWITCHES:
-                # Both halves are gated: the write schema via the capability, the
-                # read state via the reported attribute. A toggle that cannot be
-                # read back would ship permanently unknown.
-                if not getattr(capabilities, desc.capability):
-                    continue
-                if not reports_attribute(attributes, desc.param):
-                    continue
-                entities.append(
-                    HonAirPurifierSwitch(
-                        coordinator, appliance_id, desc, capabilities, client
-                    )
-                )
-                created_ap.append(desc.key)
-            _LOGGER.debug(
-                "Switch debug: purifier switches id=%s -> %d %s",
-                redact_id(appliance_id), len(created_ap), created_ap,
-            )
-        elif app_type in _SETTINGS_SWITCHES:
-            created: list[str] = []
-            for desc in _SETTINGS_SWITCHES[app_type]:
-                # capability-gate: only if the parameter exists in the settings command
-                if settings_param(appliance, desc.param) is None:
-                    continue
-                entities.append(HonSettingsSwitch(coordinator, appliance_id, desc, client))
-                created.append(desc.key)
-            _LOGGER.debug(
-                "Switch debug: settings switches '%s' id=%s type=%s -> %d %s",
-                data.get("name"), redact_id(appliance_id), app_type, len(created), created,
-            )
-        else:
-            _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
     # Account-level debug switches (one set per config entry, independent of the
     # appliances): they mirror the two persisted toggles of the Options flow.
     sw_version = entry_data.get("integration_version")
