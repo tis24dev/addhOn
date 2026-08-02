@@ -51,6 +51,21 @@ AUTH_HOST = urlsplit(AUTH_API).netloc
 # -- IoT command surface -- HHT-sec2 -------------------------------------------
 API_URL = "https://api-iot.he.services"            # OBSERVED: IoT command API host
 
+# -- Anonymous app-config surface (program-label catalog) -- HHT-sec2 ----------
+# The appliance schema does NOT carry program LABELS: a startProgram category is named
+# `PROGRAMS.<TYPE>.<PROGRAM>`, which is an i18n KEY. The hOn app resolves it against a
+# translation catalog it downloads at runtime, so a client that wants readable program
+# names must reproduce that anonymous two-step (app-config -> jsonPath -> catalog).
+#
+# Both values below were captured from the hOn 2.27.9 APK and then confirmed on the
+# wire (2026-08-02): see apk/probe_translations_live.py, which records the offsets in
+# apk/decomp.txt and the response matrix.
+CONFIG_MICROSERVICE = "config"                     # OBSERVED: app-config path segment
+# OBSERVED: the gateway REJECTS the bare AWS api-key with 403 Forbidden. The app builds
+# `x-api-key` as `AWS_API_KEY + "-" + apiKeySuffix`, and `getConfig` passes the suffix
+# "configuration" -- so the suffixed form is the only one the endpoint accepts.
+CONFIG_API_KEY = "GRCqFhC6Gk@ikWXm1RmnSmX1cm,MxY-configuration"
+
 # -- AWS-IoT MQTT surface (custom authorizer) -- HHT-sec10 ---------------------
 AWS_ENDPOINT = "a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com"  # OBSERVED: IoT-Data ATS
 AWS_AUTHORIZER = "candy-iot-authorizer"            # OBSERVED: custom-authorizer name

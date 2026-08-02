@@ -109,6 +109,7 @@ from .air_purifier import (
     normalize_error,
 )
 from .debug_utils import redact_id
+from .program_labels import for_coordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -331,8 +332,14 @@ def _g_int(key: str, attr: str, icon: str | None = None) -> "HonSensorEntityDesc
     return HonSensorEntityDescription(key=key, attr_key=attr, icon=icon, gated=True)
 
 
+# Every description with this key is built as a HonProgramNameSensor (see
+# async_setup_entry), so the raw hOn i18n key gets resolved to a readable label. The
+# per-type generic rows below (`_g_text("program_name", ...)`) share the key on purpose:
+# a dishwasher's or oven's program name needs exactly the same treatment.
+PROGRAM_NAME_KEY = "program_name"
+
 _PROGRAM_NAME = HonSensorEntityDescription(
-    key="program_name",
+    key=PROGRAM_NAME_KEY,
     icon="mdi:format-list-bulleted",
     attr_key=WM_ATTR_PROGRAM_NAME,
     value_fn=_as_text,
@@ -1012,9 +1019,14 @@ async def async_setup_entry(
                 and not any(k in attributes for k in description.attr_fallbacks)
             ):
                 continue
-            entity_class = (
-                HonAirPurifierSensor if app_type == APPLIANCE_AP else HonSensor
-            )
+            if description.key == PROGRAM_NAME_KEY:
+                # Needs the appliance type + the coordinator's catalog to resolve the
+                # i18n key, neither of which a value_fn can see (#71).
+                entity_class = HonProgramNameSensor
+            elif app_type == APPLIANCE_AP:
+                entity_class = HonAirPurifierSensor
+            else:
+                entity_class = HonSensor
             entities.append(entity_class(coordinator, appliance_id, description))
             created.append(description.key)
         # Derived sensors combine MULTIPLE attributes, so they cannot be a
@@ -1104,6 +1116,32 @@ class HonSensor(HonBaseEntity, SensorEntity):
             return float(raw)
         except (ValueError, TypeError):
             return None
+
+
+class HonProgramNameSensor(HonSensor):
+    """Program-name sensor that resolves the hOn i18n key to a readable label (#71).
+
+    The `programName` attribute is a slug derived from the startProgram category
+    (`PROGRAMS.WM_WD.HQD_AUTOCLEAN` -> `hqd_autoclean`), i.e. an i18n key, so the base
+    sensor could only ever render it verbatim. The translation cannot be done by a
+    plain `value_fn`: that receives the raw value alone, while resolving a key needs the
+    appliance TYPE (it selects the catalog namespace) and the coordinator (it holds the
+    catalog). Hence a subclass rather than a new description field.
+
+    Falls back to the description's own `value_fn` output whenever the key is not
+    translatable -- no catalog, an unmapped type, a favourite's user-given name -- so
+    this can only ever improve the displayed text, never blank it.
+    """
+
+    @property
+    def native_value(self):
+        raw = super().native_value
+        if not isinstance(raw, str):
+            return raw
+        label = for_coordinator(self.coordinator).label(
+            self._appliance_data.get("type"), raw
+        )
+        return label or raw
 
 
 class HonAirPurifierSensor(HonSensor):

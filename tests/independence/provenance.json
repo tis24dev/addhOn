@@ -152,6 +152,24 @@
    "must_differ_from_pyhon": true,
    "pyhon_value": "Chrome/999.999.999.999",
    "note": "OWNER-ACTION: capture the real device/WebView User-Agent from the hOn APK or a mitmproxy session and replace this. 'Chrome/999.999.999.999' is a synthetic sentinel no real client emits; it is currently inherited verbatim from pyhOn, so Gate B's anti-copy check for this row is wired xfail until an owner captures the real UA."
+  },
+  {
+   "id": "CONFIG_MICROSERVICE",
+   "value": "config",
+   "spec": "HHT-sec2",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "note": "Path segment of the anonymous app-config endpoint (<API_URL>/config/app-config), the entry point of the program-label catalog. Captured from the hOn 2.27.9 APK (AWS_MICROSERVICE_ENDPOINTS_CONFIG) and confirmed live 2026-08-02 by apk/probe_translations_live.py: the versioned form /config/v1/app-config is rejected with 403, so this exact unversioned segment is required. No pyhon_value recorded: the row is OBSERVED so the anti-copy check does not apply, and asserting an unverified pyhOn literal would be worse than omitting it."
+  },
+  {
+   "id": "CONFIG_API_KEY",
+   "value": "GRCqFhC6Gk@ikWXm1RmnSmX1cm,MxY-configuration",
+   "spec": "HHT-sec2",
+   "class": "OBSERVED",
+   "source": "haier-required",
+   "must_differ_from_pyhon": false,
+   "note": "x-api-key for the anonymous app-config call. The app assembles it as AWS_API_KEY + '-' + apiKeySuffix, with getConfig passing apiKeySuffix='configuration'. Haier-mandated: confirmed live 2026-08-02 that both the bare key and a missing header return 403 Forbidden, so this exact suffixed string is the only accepted form. Same no-pyhon_value rationale as CONFIG_MICROSERVICE."
   }
  ]
 }

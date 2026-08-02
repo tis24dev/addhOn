@@ -38,6 +38,8 @@ inherited literal from hiding as OBSERVED to dodge the anti-copy check.
 | `OAUTH_RESPONSE_TYPE` | `token+id_token` | sec5 | OBSERVED | no | ✅ sourced |
 | `OAUTH_SCOPE` | `api openid refresh_token web` | sec5 | OBSERVED | no | ✅ sourced |
 | `API_URL` | `https://api-iot.he.services` | sec2 | OBSERVED | no | ✅ sourced |
+| `CONFIG_MICROSERVICE` | `config` | sec2 | OBSERVED | no | ✅ sourced |
+| `CONFIG_API_KEY` | `GRCqFhC6Gk@…,MxY-configuration` | sec2 | OBSERVED | no | ✅ sourced |
 | `AWS_ENDPOINT` | `a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com` | sec10 | OBSERVED | no | ✅ sourced |
 | `AWS_AUTHORIZER` | `candy-iot-authorizer` | sec10 | OBSERVED | no | ✅ sourced |
 | `CONTENT_TYPE` | `application/json` | sec4 | OBSERVED | no | ✅ sourced |

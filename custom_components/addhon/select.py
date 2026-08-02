@@ -58,6 +58,7 @@ from .const import (
 )
 from .debug_utils import redact_id, redact_store
 from .hon_commands import async_send_command, command_param, param_range
+from .program_labels import for_coordinator
 from .ac_command import async_send_settings, param_allowed_values, settings_param
 from .program_options import (
     HonProgramOptionEntity,
@@ -407,6 +408,16 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         appliance = self._appliance
         if appliance is not None:
             self._program_map = self._load_programs(appliance)
+
+        # Readable program names (#71). The schema gives no labels -- `_load_programs`
+        # can only echo the code back -- so `hqd_autoclean` reached the UI verbatim.
+        # Translation is applied HERE, to the DISPLAY map only: `_program_map`'s keys
+        # (and therefore everything the send path uses) stay the raw hOn codes.
+        # Untranslatable entries keep their current text, which is what preserves the
+        # user's own names for favourite/downloaded programs.
+        self._program_map = for_coordinator(coordinator).apply(
+            self._appliance_data.get("type"), self._program_map
+        )
 
         # Disambiguate collided labels so every program CODE stays selectable and the
         # reverse map is injective (two codes sharing a display label would otherwise

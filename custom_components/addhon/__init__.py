@@ -44,6 +44,7 @@ from .logging_utils import (
     silence_mqtt_noise,
 )
 from .debug_utils import redact_id, redact_mac
+from . import program_labels
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -558,6 +559,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             len(coordinator.data) if isinstance(coordinator.data, dict) else 0,
         )
         coordinator.hon_client = hon_client
+
+        # Program-label catalog (#71). The appliance schema names a program with its
+        # i18n KEY (`PROGRAMS.WM_WD.HQD_AUTOCLEAN` -> slug `hqd_autoclean`), so readable
+        # names only exist in the catalog the hOn app downloads. Fetched ONCE here and
+        # parked on the coordinator, so no entity ever does I/O for a label. Best-effort
+        # by construction: async_load absorbs every failure and returns an empty catalog,
+        # in which case the entities keep showing the raw code.
+        setattr(
+            coordinator,
+            program_labels.COORDINATOR_ATTR,
+            await program_labels.async_load(hass),
+        )
 
         # Realtime: wire MQTT pushes to the coordinator (#4). Without this the push
         # channel was inert and entities only refreshed on the 60s poll. The push

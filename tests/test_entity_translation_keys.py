@@ -483,11 +483,22 @@ def _collect_select_state_keys() -> dict[str, set[str]]:
     # The AP aroma select is one fixed-key entity rather than a description table,
     # so its option set is registered explicitly; without this its `state` block
     # would never be parity-checked.
-    from custom_components.addhon.air_purifier import AP_AROMA_TO_OPTION
+    from custom_components.addhon.air_purifier import (
+        AP_AROMA_TO_OPTION,
+        AP_LIGHT_TO_OPTION,
+    )
 
     by_tk.setdefault(
         select.HonAirPurifierAromaSelect._attr_translation_key, set()
     ).update(AP_AROMA_TO_OPTION.values())
+    # The AP panel-light select is the same shape as the aroma one and was the only
+    # fixed-key option block left unchecked. Its keys happen to match today, so this
+    # closes a gap rather than fixing a live defect -- but the raw-vs-option encoding of
+    # AP_LIGHT_TO_OPTION is itself under review, and an edit there is exactly what would
+    # otherwise reach the UI as untranslated raw keys.
+    by_tk.setdefault(
+        select.HonAirPurifierPanelLightSelect._attr_translation_key, set()
+    ).update(AP_LIGHT_TO_OPTION.values())
     return by_tk
 
 
