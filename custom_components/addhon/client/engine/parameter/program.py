@@ -171,13 +171,34 @@ class HonParameterProgram(HonParameterEnum):
                 return exact[0]
         return self.ids.get(code)
 
-    def _categories_matching(self, code: int, position: int | None) -> list[str]:
-        """Category names whose prCode (and prPosition, when given) match."""
+    @staticmethod
+    def _is_favourite(category: Any) -> bool:
+        """True if this category is a favourite, i.e. keyed by a USER-TYPED name.
+
+        `HonCommandLoader._add_favourites` injects a fixed `favourite="1"` parameter and
+        files the copy under `favouriteName`. That marker (the same one `ids` filters on)
+        is what tells a schema slug apart from text the user typed -- which matters
+        because the discovery log prints category names.
+        """
+        parameters = getattr(category, "parameters", None)
+        if not isinstance(parameters, dict):
+            return False
+        favourite = parameters.get("favourite")
+        return favourite is not None and str(getattr(favourite, "value", "")) == "1"
+
+    def _categories_matching(
+        self, code: int, position: int | None, schema_only: bool = False
+    ) -> list[str]:
+        """Category names whose prCode (and prPosition, when given) match.
+
+        `schema_only` drops favourites, whose names are user-typed (see `_is_favourite`).
+        """
         return [
             name
             for name, category in self._programs.items()
             if self._category_code(category) == code
             and (position is None or self._category_position(category) == position)
+            and not (schema_only and self._is_favourite(category))
         ]
 
     def _log_position_discovery(self, code: int, position: int) -> None:
@@ -193,12 +214,20 @@ class HonParameterProgram(HonParameterEnum):
         Logged at INFO on purpose, not debug: it fires only on a device that reports the
         field (none known today), so it is zero-noise and would otherwise be invisible
         without the user enabling debug. Grep marker: "prPosition".
+
+        The sample names are SCHEMA-ONLY. Category names normally come from the appliance
+        schema, but favourites are filed under the name the user typed for them, and this
+        line asks to be attached to a diagnostics report -- so a nickname must not ride
+        along. The counts stay whole (they are the actionable part); only the printed
+        samples are filtered.
         """
         if self._position_logged:
             return
         self._position_logged = True
         by_code = self._categories_matching(code, None)
         by_both = self._categories_matching(code, position)
+        sample_code = self._categories_matching(code, None, schema_only=True)
+        sample_both = self._categories_matching(code, position, schema_only=True)
         _LOGGER.info(
             "Program debug: this appliance REPORTS prPosition=%s (prCode=%s) -- the first "
             "one known to. Candidates by prCode alone: %d %s; adding prPosition: %d %s. "
@@ -208,9 +237,9 @@ class HonParameterProgram(HonParameterEnum):
             position,
             code,
             len(by_code),
-            sorted(by_code)[:8],
+            sorted(sample_code)[:8],
             len(by_both),
-            sorted(by_both)[:8],
+            sorted(sample_both)[:8],
         )
 
     def set_value(self, value: str) -> None:
