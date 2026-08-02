@@ -160,15 +160,34 @@ class HonCommandLoader:
     def _set_last_category(
         self, command: HonCommand, name: str, parameters: dict[str, Any]
     ) -> HonCommand:
-        if command.categories:
-            if program := parameters.pop("program", None):
-                command.category = self._clean_name(program)
-            elif category := parameters.pop("category", None):
-                command.category = category
-            else:
-                return command
-            return self.commands[name]
-        return command
+        """Point `name` at the category the last accepted command used.
+
+        The swap is applied to the LOADER's own dict rather than through the
+        ``command.category`` setter. That setter writes into
+        ``appliance.commands[name]``, but during a load the appliance has not adopted
+        this loader's dict yet -- ``HonAppliance.load_commands`` assigns
+        ``self._commands = command_loader.commands`` only AFTER we return, which would
+        overwrite the swapped entry and silently discard the recovery. Writing here is
+        what makes ``return self._commands[name]`` (this method's stated intent) true.
+        """
+        if not command.categories:
+            return command
+        if program := parameters.pop("program", None):
+            category = self._clean_name(str(program))
+        elif (category := parameters.pop("category", None)) is not None:
+            category = str(category)
+        else:
+            return command
+        # Same guard as the category setter: an unknown category leaves the default in
+        # place instead of raising on a stale/renamed program in the history.
+        if category in command.categories:
+            selected = command.categories[category]
+            # This swap bypasses the `category` setter (see the docstring), so the
+            # "deliberately selected" mark has to be applied here too -- otherwise a
+            # recovered program would be indistinguishable from the schema default.
+            selected.mark_selected_explicitly()
+            self._commands[name] = selected
+        return self._commands[name]
 
     def _recover_last_command_states(self) -> None:
         for name, command in self.commands.items():

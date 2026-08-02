@@ -258,7 +258,29 @@ class HonCommand:
     @category.setter
     def category(self, category: str) -> None:
         if category in self.categories:
-            self._appliance.commands[self._name] = self.categories[category]
+            selected = self.categories[category]
+            # Record that THIS category was deliberately chosen (a program set by the
+            # user, or the last-started one recovered from the command history), as
+            # opposed to being the schema's first entry that a fresh load leaves active
+            # by default. `HonParameterProgram.name_for_code` needs to tell the two
+            # apart: a default category sharing the reported prCode is a coincidence,
+            # not evidence of what is running. See `selected_explicitly`.
+            selected.mark_selected_explicitly()
+            self._appliance.commands[self._name] = selected
+
+    def mark_selected_explicitly(self) -> None:
+        """Flag this category command as deliberately selected (see the category setter).
+
+        Lives on the CATEGORY command rather than on the program parameter because a
+        selection swaps the whole command object: a flag on the pre-swap parameter would
+        not survive, while this one travels with the category that was picked.
+        """
+        self._selected_explicitly = True
+
+    @property
+    def selected_explicitly(self) -> bool:
+        """True if this category was chosen, rather than left active by default."""
+        return getattr(self, "_selected_explicitly", False)
 
     @property
     def setting_keys(self) -> list[str]:

@@ -173,8 +173,9 @@ class EdgeRobustnessTest(unittest.TestCase):
 # --- programName end-to-end (full appliance, synthetic with prCode) ---
 
 class DictApi:
-    def __init__(self, commands, attributes) -> None:
+    def __init__(self, commands, attributes, history=None) -> None:
         self._c, self._a = commands, attributes
+        self._h = history or []
 
     async def load_commands(self, a):
         return json.loads(json.dumps(self._c))
@@ -183,7 +184,7 @@ class DictApi:
         return []
 
     async def load_command_history(self, a):
-        return []
+        return json.loads(json.dumps(self._h))
 
     async def load_attributes(self, a):
         return json.loads(json.dumps(self._a))
@@ -240,6 +241,138 @@ class ProgramNameEndToEndTest(unittest.TestCase):
     def test_prcode0_is_no_program(self) -> None:
         # 0 is falsy -> "No Program" even if a program with id-0 exists
         self.assertEqual(self._build(_shadow("0")).attributes["programName"], "No Program")
+
+
+# --- programName under an AMBIGUOUS prCode (the washer case) ---
+#
+# prCode does not identify a program: on a real HW80, code 115 is claimed by
+# HQD_COTTONS, IOT_WASH_PERFECT_WHITE and IOT_WASH_BATHROBE at once (see
+# diagnostics/live-2026-06-22/device-WM.json), and the hOn catalog in the APK has codes
+# shared by up to 35 categories. The fixture below reproduces exactly that shape.
+
+_WM_COMMANDS = {
+    "applianceModel": {"options": {}},
+    "settings": {
+        "setParameters": {
+            "description": "d",
+            "protocolType": "MQTT",
+            "parameters": {
+                "x": {
+                    "typology": "fixed",
+                    "category": "command",
+                    "mandatory": 0,
+                    "fixedValue": "1",
+                }
+            },
+        }
+    },
+    "startProgram": {
+        "PROGRAMS.WM_WD.HQD_COTTONS": _prog("115"),
+        "PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE": _prog("115"),
+        "PROGRAMS.WM_WD.IOT_WASH_BATHROBE": _prog("115"),
+        "PROGRAMS.WM_WD.HQD_SMART": _prog("124"),
+    },
+    "dictionaryId": 1,
+}
+_WM_INFO = {"applianceTypeName": "WM", "applianceModelId": 1, "macAddress": "aa"}
+
+
+def _wm_shadow(prcode):
+    return {
+        "shadow": {
+            "parameters": {
+                "prCode": {"parNewVal": prcode, "lastUpdate": "2024-01-01T00:00:00"},
+            }
+        }
+    }
+
+
+def _history(program):
+    """A startProgram command-history entry naming `program` as the last one started."""
+    return [
+        {
+            "command": {
+                "commandName": "startProgram",
+                "parameters": {"program": program},
+            }
+        }
+    ]
+
+
+class AmbiguousProgramCodeTest(unittest.TestCase):
+    def _build(self, prcode, history=None):
+        from custom_components.addhon.client import factory
+
+        app = factory._native_engine_appliance_cls()(
+            DictApi(_WM_COMMANDS, _wm_shadow(prcode), history), dict(_WM_INFO), zone=0
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(app.load_commands())
+            loop.run_until_complete(app.load_attributes())
+        finally:
+            loop.close()
+        return app
+
+    def test_ids_keeps_only_the_canonical_program_of_a_shared_code(self) -> None:
+        # The `iot_` skip is disambiguation: without it the map would answer with
+        # whichever of the three categories happened to be iterated last.
+        app = self._build("115")
+        program = app.settings["startProgram.program"]
+        self.assertEqual({115: "hqd_cottons", 124: "hqd_smart"}, program.ids)
+
+    def test_a_running_downloaded_program_is_named_precisely(self) -> None:
+        # THE fix. The appliance reports code 115 and the last started program was the
+        # downloaded "Perfect White"; `ids` alone would answer "hqd_cottons", the base
+        # program that merely shares the code.
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+
+    def test_a_stale_active_category_falls_back_to_the_base_program(self) -> None:
+        # The last app-started program was HQD_SMART (code 124) but the appliance now
+        # reports 115: the cycle was started elsewhere, e.g. from the machine's own dial.
+        # The active category is stale, so the unambiguous base program wins -- which is
+        # the behaviour that predates the fix, hence never a regression.
+        app = self._build("115", _history("PROGRAMS.WM_WD.HQD_SMART"))
+        self.assertEqual("hqd_cottons", app.attributes["programName"])
+
+    def test_without_history_the_base_program_is_used(self) -> None:
+        self.assertEqual("hqd_cottons", self._build("115").attributes["programName"])
+
+    def test_a_downloaded_category_listed_first_does_not_hijack_the_name(self) -> None:
+        # REGRESSION. With no history the active category is merely the schema's FIRST
+        # entry, so trusting it because its prCode matches is a coincidence, not
+        # evidence: here the downloaded IOT_WASH_PERFECT_WHITE is listed first and shares
+        # prCode 115, and it would be reported as running when nothing started it.
+        # The previous fixture passed only because it happened to list the base program
+        # first -- ordering was never the contract. Only a DELIBERATELY selected category
+        # (recovered from history, or set through the program parameter) is evidence.
+        from custom_components.addhon.client import factory
+
+        commands = dict(_WM_COMMANDS)
+        commands["startProgram"] = {
+            "PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE": _prog("115"),
+            "PROGRAMS.WM_WD.HQD_COTTONS": _prog("115"),
+            "PROGRAMS.WM_WD.HQD_SMART": _prog("124"),
+        }
+        app = factory._native_engine_appliance_cls()(
+            DictApi(commands, _wm_shadow("115"), None), dict(_WM_INFO), zone=0
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(app.load_commands())
+            loop.run_until_complete(app.load_attributes())
+        finally:
+            loop.close()
+        self.assertEqual("hqd_cottons", app.attributes["programName"])
+
+    def test_an_unshared_code_is_unaffected(self) -> None:
+        app = self._build("124", _history("PROGRAMS.WM_WD.HQD_SMART"))
+        self.assertEqual("hqd_smart", app.attributes["programName"])
+
+    def test_a_code_no_category_declares_is_still_no_program(self) -> None:
+        self.assertEqual("No Program", self._build("999").attributes["programName"])
+
 
 
 if __name__ == "__main__":

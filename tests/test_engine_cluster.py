@@ -343,6 +343,57 @@ class ClusterGoldenTest(unittest.TestCase):
         self.assertEqual(normalize(snap), frozen("engine_cluster", snap))
 
 
+class LastCategoryRecoveryTest(unittest.TestCase):
+    """The command history must actually restore the last started program.
+
+    These are EXPLICIT assertions, not just a golden row, on purpose. The recovery was
+    inert for a long time and the golden happily froze the broken output: `rich_recover`
+    was byte-identical to `rich_load`, so nothing failed. A snapshot can only catch a
+    change, never a wrong baseline -- these pin the intent, so the behaviour cannot be
+    re-frozen broken.
+
+    Root cause of the original defect: `_set_last_category` swapped the category through
+    the `command.category` setter, which writes to `appliance.commands`, while
+    `HonAppliance.load_commands` adopts the loader's dict only afterwards -- overwriting
+    the swap.
+    """
+
+    def _recovered(self, history):
+        return _build(NaAppliance, DictApi(_RICH_COMMANDS, history=history))
+
+    def test_history_program_selects_that_category(self) -> None:
+        app = self._recovered(_RICH_HISTORY)
+        self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", app.commands["startProgram"].category)
+        self.assertEqual(
+            "super_freeze", app.commands["startProgram"].parameters["program"].value
+        )
+
+    def test_recovery_differs_from_the_default_category(self) -> None:
+        # The regression guard: without the fix these two are identical, because the
+        # default (first) category survives the load untouched.
+        default = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        self.assertNotEqual(
+            default.commands["startProgram"].category,
+            self._recovered(_RICH_HISTORY).commands["startProgram"].category,
+        )
+
+    def test_an_unknown_program_keeps_the_default(self) -> None:
+        # A stale or renamed program in the history must not raise, nor blank the command.
+        history = [
+            {
+                "command": {
+                    "commandName": "startProgram",
+                    "parameters": {"program": "PROGRAMS.REF.GONE"},
+                }
+            }
+        ]
+        default = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        self.assertEqual(
+            default.commands["startProgram"].category,
+            self._recovered(history).commands["startProgram"].category,
+        )
+
+
 class ClusterBehaviorTest(unittest.TestCase):
     def test_send_prstr_and_programrules(self) -> None:
         snap = _native_snapshot()

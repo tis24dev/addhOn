@@ -2905,12 +2905,10 @@
         "tempSel": 5
       },
       "startProgram": {
-        "prCode": "1",
+        "prCode": "5",
         "prStr": "x",
-        "program": "super_cool",
-        "programRules": "0",
-        "remoteActionable": "1",
-        "speed": "3",
+        "program": "super_freeze",
+        "speed": 3,
         "tempSel": 7
       },
       "stopProgram": {
@@ -3119,7 +3117,7 @@
           "tempSel": {
             "category": "command",
             "group": "parameters",
-            "intern_value": "7",
+            "intern_value": "5",
             "key": "tempSel",
             "mandatory": 0,
             "max": 8,
@@ -3127,7 +3125,7 @@
             "step": 1,
             "triggers": {},
             "typology": "range",
-            "value": 7,
+            "value": 5,
             "values": [
               "2",
               "3",
@@ -3144,51 +3142,45 @@
           "super_cool",
           "super_freeze"
         ],
-        "category": "PROGRAMS.REF.SUPER_COOL",
+        "category": "PROGRAMS.REF.SUPER_FREEZE",
         "data_keys": [],
         "mandatory_parameter_groups": {
           "parameters": {
-            "prCode": "1",
+            "prCode": "5",
             "prStr": "x"
           }
         },
         "name": "startProgram",
         "parameter_groups": {
-          "ancillaryParameters": {
-            "programRules": "0",
-            "remoteActionable": "1"
-          },
           "custom": {
-            "program": "super_cool"
+            "program": "super_freeze"
           },
           "parameters": {
-            "prCode": "1",
+            "prCode": "5",
             "prStr": "x",
             "speed": "3",
             "tempSel": "7"
           }
         },
         "parameter_value": {
-          "prCode": "1",
+          "prCode": "5",
           "prStr": "x",
-          "program": "super_cool",
-          "programRules": "0",
-          "remoteActionable": "1",
-          "speed": "3",
+          "program": "super_freeze",
+          "speed": 3,
           "tempSel": 7
         },
         "parameters": {
           "prCode": {
             "category": "command",
             "group": "parameters",
-            "intern_value": "1",
+            "intern_value": "5",
             "key": "prCode",
             "mandatory": 1,
             "triggers": {},
             "typology": "fixed",
-            "value": "1",
+            "value": "5",
             "values": [
-              "1"
+              "5"
             ]
           },
           "prStr": {
@@ -3211,42 +3203,16 @@
               "1": "super_cool",
               "5": "super_freeze"
             },
-            "intern_value": "super_cool",
+            "intern_value": "super_freeze",
             "key": "program",
             "mandatory": 0,
             "triggers": {},
             "typology": "enum",
-            "value": "super_cool",
+            "value": "super_freeze",
             "values": [
               "iot_auto",
               "super_cool",
               "super_freeze"
-            ]
-          },
-          "programRules": {
-            "category": "command",
-            "group": "ancillaryParameters",
-            "intern_value": "0",
-            "key": "programRules",
-            "mandatory": 0,
-            "triggers": {},
-            "typology": "fixed",
-            "value": "0",
-            "values": [
-              "0"
-            ]
-          },
-          "remoteActionable": {
-            "category": "command",
-            "group": "ancillaryParameters",
-            "intern_value": "1",
-            "key": "remoteActionable",
-            "mandatory": 0,
-            "triggers": {},
-            "typology": "fixed",
-            "value": "1",
-            "values": [
-              "1"
             ]
           },
           "speed": {
@@ -3255,11 +3221,18 @@
             "intern_value": "3",
             "key": "speed",
             "mandatory": 0,
+            "max": 5,
+            "min": 1,
+            "step": 1,
             "triggers": {},
-            "typology": "fixed",
-            "value": "3",
+            "typology": "range",
+            "value": 3,
             "values": [
-              "3"
+              "1",
+              "2",
+              "3",
+              "4",
+              "5"
             ]
           },
           "tempSel": {
@@ -3391,14 +3364,14 @@
       "startProgram.prCode": {
         "category": "command",
         "group": "parameters",
-        "intern_value": "1",
+        "intern_value": "5",
         "key": "prCode",
         "mandatory": 1,
         "triggers": {},
         "typology": "fixed",
-        "value": "1",
+        "value": "5",
         "values": [
-          "1"
+          "5"
         ]
       },
       "startProgram.prStr": {
@@ -3421,12 +3394,12 @@
           "1": "super_cool",
           "5": "super_freeze"
         },
-        "intern_value": "super_cool",
+        "intern_value": "super_freeze",
         "key": "program",
         "mandatory": 0,
         "triggers": {},
         "typology": "enum",
-        "value": "super_cool",
+        "value": "super_freeze",
         "values": [
           "iot_auto",
           "super_cool",
@@ -3434,29 +3407,29 @@
         ]
       },
       "startProgram.programRules": {
-        "category": "command",
-        "group": "ancillaryParameters",
-        "intern_value": "0",
-        "key": "programRules",
+        "category": "",
+        "group": "",
+        "intern_value": "",
+        "key": "",
         "mandatory": 0,
         "triggers": {},
-        "typology": "fixed",
-        "value": "0",
+        "typology": "",
+        "value": "",
         "values": [
-          "0"
+          ""
         ]
       },
       "startProgram.remoteActionable": {
-        "category": "command",
-        "group": "ancillaryParameters",
-        "intern_value": "1",
-        "key": "remoteActionable",
+        "category": "",
+        "group": "",
+        "intern_value": "",
+        "key": "",
         "mandatory": 0,
         "triggers": {},
-        "typology": "fixed",
-        "value": "1",
+        "typology": "",
+        "value": "",
         "values": [
-          "1"
+          ""
         ]
       },
       "startProgram.speed": {
@@ -3465,11 +3438,18 @@
         "intern_value": "3",
         "key": "speed",
         "mandatory": 0,
+        "max": 5,
+        "min": 1,
+        "step": 1,
         "triggers": {},
-        "typology": "fixed",
-        "value": "3",
+        "typology": "range",
+        "value": 3,
         "values": [
-          "3"
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
         ]
       },
       "startProgram.tempSel": {

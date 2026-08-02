@@ -51,16 +51,25 @@ class ApplianceExtra:
         return cls._value(params, key) == expected
 
     def attributes(self, data: dict[str, Any]) -> dict[str, Any]:
-        # programName: slug from the current program code (the app uses an
-        # i18n key resolved via dictionaryId = wrong altitude for HA).
-        # Robustness: `_raw(...) or "0"` handles an empty/absent prCode -> "No
-        # Program" instead of `int("")` -> ValueError.
+        # programName: the program's stable SLUG, which is also the hOn i18n key
+        # (`PROGRAMS.WM_WD.HQD_AUTOCLEAN` -> `hqd_autoclean`). The engine deliberately
+        # stops here and does not resolve the label: that needs the appliance type and a
+        # downloaded catalog, both HA-layer concerns (see program_labels.py).
+        #
+        # Resolution goes through `name_for_code`, NOT the raw `ids` map: prCode is
+        # ambiguous (up to 35 categories share one code), so `ids` can only ever name a
+        # code's base program -- it would report "Cottons" while a downloaded "Perfect
+        # White" runs. `name_for_code` answers with the active category when its own
+        # prCode agrees with the reported one, and falls back to `ids` otherwise.
+        #
+        # Robustness: `_raw(...) or "0"` handles an empty/absent prCode -> "No Program"
+        # instead of `int("")` -> ValueError.
         program_name = "No Program"
         params = data.get("parameters", {})
         if program := int(self._raw(params, "prCode") or "0"):
             start_cmd = self.parent.settings.get("startProgram.program")
-            if isinstance(start_cmd, HonParameterProgram) and (ids := start_cmd.ids):
-                program_name = ids.get(program, program_name)
+            if isinstance(start_cmd, HonParameterProgram):
+                program_name = start_cmd.name_for_code(program) or program_name
         data["programName"] = program_name
         # available: connectivity as a first-class attribute (app model). Offline
         # is handled by entity availability (base_entity), no longer by zeroing
