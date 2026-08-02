@@ -60,9 +60,12 @@ _LOGGER = logging.getLogger(__name__)
 # have no use for.
 PROGRAMS_ROOT = "PROGRAMS"
 
-# Read cap for the catalog download. The largest observed catalog is ~7.6 MB (en);
-# 32 MB leaves room for growth while still refusing to buffer an unbounded body.
-_MAX_CATALOG_BYTES = 32 * 1024 * 1024
+# Read cap for the catalog download. The largest observed catalog is ~7.6 MB (en), so
+# 16 MB is over 2x headroom while keeping the WORST case survivable: decoding holds the
+# bytes and the resulting str at once, and measuring the real catalog puts the peak at
+# roughly 8x the body (53 MB for 7.6 MB), not the 2x one might assume. At a 32 MB cap
+# that worst case approaches 250 MB, which a Raspberry Pi running HA does not have.
+_MAX_CATALOG_BYTES = 16 * 1024 * 1024
 
 # Chunk size for the accumulating read (see async_fetch_catalog).
 _CHUNK_BYTES = 64 * 1024
@@ -216,14 +219,14 @@ async def async_fetch_catalog(session: Any, url: str) -> dict[str, dict[str, str
         # `iter_chunked` (rather than the simpler `response.read()`) keeps the cap
         # meaningful: it is enforced WHILE reading, so an oversized body is abandoned
         # instead of being fully buffered and only then rejected.
-        chunks: list[bytes] = []
-        size = 0
+        # A bytearray accumulator, NOT a chunk list plus `b"".join`: the join holds the
+        # pieces and the joined copy at the same time, so it adds a whole extra body to
+        # the peak for nothing (measured on the real catalog: 60.8 MB against 53.5 MB).
+        body = bytearray()
         async for chunk in response.content.iter_chunked(_CHUNK_BYTES):
-            size += len(chunk)
-            if size > _MAX_CATALOG_BYTES:
+            if len(body) + len(chunk) > _MAX_CATALOG_BYTES:
                 raise ValueError(f"catalog larger than the {_MAX_CATALOG_BYTES} byte cap")
-            chunks.append(chunk)
-        body = b"".join(chunks)
+            body.extend(chunk)
     # The app validates the download with `startsWith('{')` before trusting it (a
     # captive-portal HTML page is the failure it guards against); same check here.
     if not body.lstrip().startswith(b"{"):
