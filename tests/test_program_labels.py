@@ -464,18 +464,41 @@ class FakeStore:
         cls.saves = 0
 
 
-def _install_ha_helper_stubs(session_factory) -> None:
-    """Wire the two helpers `async_load` imports lazily."""
+def _install_ha_helper_stubs(session_factory) -> list[tuple[object, str, object, bool]]:
+    """Wire the two helpers `async_load` imports lazily; return what to restore.
+
+    `sys.modules.setdefault` hands back the EXISTING module when one is already there, so
+    these assignments land on process-global objects and would otherwise outlive the test
+    that made them. Today only the modules under test resolve these two symbols, so the
+    leak is inert -- but the file already has `_patched` for exactly this hazard, and an
+    inert leak is still a trap for whoever adds the next consumer.
+    """
     client = sys.modules.setdefault(
         "homeassistant.helpers.aiohttp_client",
         types.ModuleType("homeassistant.helpers.aiohttp_client"),
     )
-    client.async_get_clientsession = session_factory
     storage = sys.modules.setdefault(
         "homeassistant.helpers.storage",
         types.ModuleType("homeassistant.helpers.storage"),
     )
+    previous = [
+        (client, "async_get_clientsession",
+         getattr(client, "async_get_clientsession", None),
+         hasattr(client, "async_get_clientsession")),
+        (storage, "Store", getattr(storage, "Store", None), hasattr(storage, "Store")),
+    ]
+    client.async_get_clientsession = session_factory
     storage.Store = FakeStore
+    return previous
+
+
+def _restore_ha_helper_stubs(previous) -> None:
+    """Undo `_install_ha_helper_stubs`, deleting attributes that did not exist before."""
+    for module, name, value, existed in previous:
+        if existed:
+            setattr(module, name, value)
+        else:
+            delattr(module, name)
 
 
 class AsyncLoadDegradationTest(unittest.IsolatedAsyncioTestCase):
@@ -483,7 +506,8 @@ class AsyncLoadDegradationTest(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         FakeStore.reset()
-        _install_ha_helper_stubs(lambda hass: FakeSession({}))
+        self._stubs = _install_ha_helper_stubs(lambda hass: FakeSession({}))
+        self.addCleanup(lambda: _restore_ha_helper_stubs(self._stubs))
         self.hass = types.SimpleNamespace(config=types.SimpleNamespace(language="en"))
 
     async def test_a_failing_fetch_degrades_to_the_empty_catalog(self) -> None:
@@ -532,6 +556,11 @@ class CatalogCacheTest(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         FakeStore.reset()
+        # Snapshot ONCE, before any install: later installs overwrite what an earlier one
+        # put there, so restoring the first snapshot is what returns the modules to their
+        # pre-test state.
+        self._stubs = _install_ha_helper_stubs(lambda hass: FakeSession({}))
+        self.addCleanup(lambda: _restore_ha_helper_stubs(self._stubs))
         self.hass = types.SimpleNamespace(config=types.SimpleNamespace(language="en"))
 
     def _session(self, version=6192, downloads=None):
@@ -611,6 +640,68 @@ class CatalogCacheTest(unittest.IsolatedAsyncioTestCase):
     async def test_no_cache_and_no_network_is_still_the_empty_catalog(self) -> None:
         _install_ha_helper_stubs(lambda hass: FakeSession({}))
         self.assertIs(program_labels.EMPTY, await program_labels.async_load(self.hass))
+
+    async def test_a_failed_save_keeps_the_freshly_downloaded_catalog(self) -> None:
+        # Persisting is best-effort; DOWNLOADING is what the labels depend on. With the
+        # save inside the fetch guard, an unwritable `.storage` sent a successful download
+        # down the failure path and the user saw raw codes plus an "unavailable" warning.
+        self._session()
+
+        async def _boom(_data):
+            raise OSError("read-only .storage")
+
+        with _patched(FakeStore, "async_save", _boom):
+            labels = await program_labels.async_load(self.hass)
+        self.assertEqual("Drum Cleaning", labels.label("WM", "hqd_autoclean"))
+
+    async def test_a_cache_hit_gets_the_short_budget(self) -> None:
+        # With a usable cache the request is only a freshness check, and every second of
+        # it is setup latency: no entity is created until async_load returns.
+        await self._seed_cache()
+        seen: list[float] = []
+        real_timeout = asyncio.timeout
+
+        def _record(budget):
+            seen.append(budget)
+            return real_timeout(budget)
+
+        self._session()
+        with _patched(asyncio, "timeout", _record):
+            await program_labels.async_load(self.hass)
+        # Outer budget first, then the app-config slice nested inside it: without that
+        # inner bound a slow gateway could spend the whole budget and leave the catalog
+        # download no time at all.
+        self.assertEqual(
+            [
+                program_labels.REFRESH_TIMEOUT,
+                min(program_labels.CONFIG_TIMEOUT, program_labels.REFRESH_TIMEOUT),
+            ],
+            seen,
+        )
+
+    async def test_a_slow_app_config_cannot_starve_the_download(self) -> None:
+        # The failure the split budget prevents: app-config hanging past its own slice
+        # must abort there, not after eating the time the ~7.6 MB download needs.
+        # `_slow` is DELIBERATELY a working app-config that merely takes its time: a stub
+        # that simply hung would make this pass with or without the inner bound, because
+        # the chain would fail on the missing config anyway. Here the request eventually
+        # SUCCEEDS, so the only thing that can produce EMPTY is the app-config slice
+        # expiring first.
+        self._session()
+        real_app_config = translations.async_app_config
+
+        async def _slow(session, language):
+            await asyncio.sleep(0.2)
+            return await real_app_config(session, language)
+
+        original = program_labels.CONFIG_TIMEOUT
+        program_labels.CONFIG_TIMEOUT = 0.01
+        try:
+            with _patched(translations, "async_app_config", _slow):
+                labels = await program_labels.async_load(self.hass)
+        finally:
+            program_labels.CONFIG_TIMEOUT = original
+        self.assertIs(program_labels.EMPTY, labels)
 
 
 class ProgramSelectLabelTest(unittest.IsolatedAsyncioTestCase):
@@ -707,6 +798,48 @@ class ProgramNameSensorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(program_sensors))
         self.assertIsInstance(program_sensors[0], sensor_module.HonProgramNameSensor)
         self.assertEqual("Smart A.I.", program_sensors[0].native_value)
+
+
+
+class DiscoveryLogPrivacyTest(unittest.TestCase):
+    """The prPosition discovery line must not carry user-typed names.
+
+    Category names normally come from the appliance schema, but `_add_favourites` files a
+    favourite under the name the user typed for it -- and this line asks to be attached
+    to a diagnostics report.
+    """
+
+    def _param(self):
+        from custom_components.addhon.client.engine.parameter.program import (
+            HonParameterProgram,
+        )
+
+        def category(prcode, favourite=False):
+            parameters = {"prCode": types.SimpleNamespace(value=prcode)}
+            if favourite:
+                parameters["favourite"] = types.SimpleNamespace(value="1")
+            return types.SimpleNamespace(parameters=parameters)
+
+        command = types.SimpleNamespace(
+            category="PROGRAMS.WM_WD.HQD_COTTONS",
+            categories={
+                "hqd_cottons": category("115"),
+                "Anna's nightgowns": category("115", favourite=True),
+            },
+        )
+        return HonParameterProgram("program", command, "custom")
+
+    def test_the_log_counts_favourites_but_never_names_them(self) -> None:
+        program = self._param()
+        with self.assertLogs(
+            "custom_components.addhon.client.engine.parameter.program", level="INFO"
+        ) as captured:
+            program.name_for_code(115, 3)
+        message = captured.records[0].getMessage()
+        self.assertNotIn("Anna", message)
+        self.assertIn("hqd_cottons", message)
+        # The counts stay whole: 2 candidates, one of which is the favourite.
+        self.assertIn("alone: 2", message)
 
 
 if __name__ == "__main__":

@@ -29,10 +29,28 @@ class FakeContent:
         self._chunks = [body[i : i + chunk] for i in range(0, len(body), chunk)] or [b""]
 
     async def read(self, size: int | None = None) -> bytes:
-        # aiohttp-like short read: at most ONE buffered chunk, never the whole body.
+        """One buffered chunk at a time, CONSUMING it, and `b""` at EOF.
+
+        Two properties of the real `StreamReader`, both load-bearing for a fake whose
+        purpose is fidelity: `read` returns at most what is buffered (never the whole
+        body), and it advances. Returning the first chunk forever would let a drain loop
+        spin instead of terminating.
+        """
+        if not self._chunks:
+            return b""
         first = self._chunks[0]
-        return first if size is None else first[:size]
+        if size is None or size >= len(first):
+            self._chunks.pop(0)
+            return first
+        self._chunks[0] = first[size:]
+        return first[:size]
 
     async def iter_chunked(self, size: int):
-        for chunk in self._chunks:
-            yield chunk
+        """Yield the remaining chunks.
+
+        `size` is accepted for signature compatibility and deliberately IGNORED: the
+        fixtures choose their own chunking through the constructor, which is what lets a
+        test reproduce a multi-chunk body cheaply.
+        """
+        while self._chunks:
+            yield self._chunks.pop(0)

@@ -307,11 +307,13 @@ def _history(program):
 
 
 class AmbiguousProgramCodeTest(unittest.TestCase):
-    def _build(self, prcode, history=None):
+    def _build(self, prcode, history=None, commands=None):
         from custom_components.addhon.client import factory
 
         app = factory._native_engine_appliance_cls()(
-            DictApi(_WM_COMMANDS, _wm_shadow(prcode), history), dict(_WM_INFO), zone=0
+            DictApi(commands or _WM_COMMANDS, _wm_shadow(prcode), history),
+            dict(_WM_INFO),
+            zone=0,
         )
         loop = asyncio.new_event_loop()
         try:
@@ -354,23 +356,13 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
         # The previous fixture passed only because it happened to list the base program
         # first -- ordering was never the contract. Only a DELIBERATELY selected category
         # (recovered from history, or set through the program parameter) is evidence.
-        from custom_components.addhon.client import factory
-
         commands = dict(_WM_COMMANDS)
         commands["startProgram"] = {
             "PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE": _prog("115"),
             "PROGRAMS.WM_WD.HQD_COTTONS": _prog("115"),
             "PROGRAMS.WM_WD.HQD_SMART": _prog("124"),
         }
-        app = factory._native_engine_appliance_cls()(
-            DictApi(commands, _wm_shadow("115"), None), dict(_WM_INFO), zone=0
-        )
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(app.load_commands())
-            loop.run_until_complete(app.load_attributes())
-        finally:
-            loop.close()
+        app = self._build("115", commands=commands)
         self.assertEqual("hqd_cottons", app.attributes["programName"])
 
     def test_an_unshared_code_is_unaffected(self) -> None:
