@@ -149,6 +149,18 @@ EMPTY = ProgramLabels()
 # setup for a cosmetic feature; on timeout we simply proceed with the raw codes.
 FETCH_TIMEOUT = 30
 
+# Budget when a usable cache is already in hand. The entities have everything they need,
+# so the request is only a freshness check and the wait is pure setup latency: no entity
+# is created until it returns. Kept short so a stalled CDN costs seconds, not the full
+# first-run budget.
+REFRESH_TIMEOUT = 8
+
+# Slice of the budget the small app-config request may consume. It is ~1 KB against the
+# catalog's ~7.6 MB, so without its own bound a slow gateway could eat the whole budget
+# and leave the download a second to finish -- turning a recoverable slowdown into "no
+# labels". Splitting the wait is what a single outer timeout cannot express.
+CONFIG_TIMEOUT = 5
+
 
 def for_coordinator(coordinator: Any) -> ProgramLabels:
     """The catalog parked on `coordinator`, or the empty one."""
@@ -199,10 +211,14 @@ async def async_load(hass: Any, language: str | None = None) -> ProgramLabels:
         _LOGGER.debug("ProgramLabels debug: cache unreadable (%s); ignoring", err)
         cached = None
 
+    # A cache in hand turns this into a freshness check, so it gets the short budget.
+    budget = REFRESH_TIMEOUT if _cached_catalog(cached, code) is not None else FETCH_TIMEOUT
     try:
         session = async_get_clientsession(hass)
-        async with asyncio.timeout(FETCH_TIMEOUT):
-            config = await async_app_config(session, code)
+        async with asyncio.timeout(budget):
+            # Inner bound so the freshness check cannot starve the download that follows.
+            async with asyncio.timeout(min(CONFIG_TIMEOUT, budget)):
+                config = await async_app_config(session, code)
             version = catalog_version(config)
             known = _cached_catalog(cached, code)
             if known is not None and version is not None and cached.get("version") == version:
@@ -217,9 +233,6 @@ async def async_load(hass: Any, language: str | None = None) -> ProgramLabels:
             if not url:
                 raise ValueError("app-config carries no payload.language.jsonPath")
             catalog = await async_fetch_catalog(session, url)
-        await store.async_save(
-            {"language": code, "version": version, "catalog": catalog}
-        )
     except Exception as err:  # noqa: BLE001 - cosmetic feature, never fails a setup
         known = _cached_catalog(cached, code)
         if known is not None:
@@ -247,6 +260,21 @@ async def async_load(hass: Any, language: str | None = None) -> ProgramLabels:
             err,
         )
         return EMPTY
+
+    # Persisted OUTSIDE the fetch guard. Inside it, an unwritable `.storage` would send a
+    # SUCCESSFUL download down the failure path: the fresh catalog would be dropped for
+    # the stale cache (or EMPTY), and the user would be told it is "unavailable" when it
+    # had in fact just arrived. A catalog we hold is usable whether or not it persists.
+    try:
+        await store.async_save({"language": code, "version": version, "catalog": catalog})
+    except Exception as err:  # noqa: BLE001 - a failed save must not drop a good catalog
+        _LOGGER.debug(
+            "ProgramLabels debug: could not persist catalog '%s' (%s: %s); "
+            "using it for this run only",
+            code,
+            type(err).__name__,
+            err,
+        )
     labels = ProgramLabels(catalog)
     _LOGGER.debug(
         "ProgramLabels debug: catalog '%s' loaded, namespaces=%s",
