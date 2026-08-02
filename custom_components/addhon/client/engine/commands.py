@@ -63,6 +63,10 @@ class HonCommand:
         self._parameters: dict[str, HonParameter] = {}
         self._data: dict[str, Any] = {}
         self._rules: list[HonRuleSet] = []
+        # Set only when this category is deliberately chosen (see the `category` setter
+        # and `mark_selected_explicitly`). Declared here rather than created on first
+        # write so the state is explicit and `__copy__` can reset it.
+        self._selected_explicitly = False
         attributes.pop("description", "")
         attributes.pop("protocolType", "")
         self._load_parameters(attributes)
@@ -82,6 +86,14 @@ class HonCommand:
         new = self.__class__.__new__(self.__class__)
         new.__dict__.update(self.__dict__)
         new._parameters = {name: copy(param) for name, param in self._parameters.items()}
+        # A copy has NOT been selected, whatever the original was. `_add_favourites`
+        # copies a base program category, so without this a favourite could inherit the
+        # flag and `HonParameterProgram.name_for_code` would trust it as the running
+        # program. Unreachable today only because `_add_favourites` runs before
+        # `_recover_last_command_states` and nothing is marked yet -- an ordering, not an
+        # invariant. Isolating it here matches what this method already does for
+        # `_parameters`, the triggers and the rule sets.
+        new._selected_explicitly = False
         # A shallow-copied parameter still SHARES its `_triggers` table with the base, and
         # every rule callback in it closes over THIS command -- so setting a value on the
         # copy would fire rules that mutate the base's parameters (the exact corruption the
@@ -280,7 +292,7 @@ class HonCommand:
     @property
     def selected_explicitly(self) -> bool:
         """True if this category was chosen, rather than left active by default."""
-        return getattr(self, "_selected_explicitly", False)
+        return self._selected_explicitly
 
     @property
     def setting_keys(self) -> list[str]:
