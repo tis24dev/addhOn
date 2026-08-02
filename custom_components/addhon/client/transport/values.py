@@ -61,6 +61,18 @@ API_URL = "https://api-iot.he.services"            # OBSERVED: IoT command API h
 # wire (2026-08-02): see apk/probe_translations_live.py, which records the offsets in
 # apk/decomp.txt and the response matrix.
 CONFIG_MICROSERVICE = "config"                     # OBSERVED: app-config path segment
+# NOT A SECRET -- a PUBLIC CLIENT key, deliberately in source control.
+#
+# It identifies the client software, not a user or an account: every hOn installation
+# ships this same value and anyone can read it out of the app. It grants no access to
+# any account, carries no user data, and cannot be scoped per install -- the endpoint
+# expects the CLIENT's key, so a user-supplied one would simply be rejected. Storing it
+# in the config entry would add no security and would make the integration impossible to
+# install. User credentials and session tokens are a different matter entirely: they are
+# supplied at runtime and appear nowhere in this file. See the OBSERVED class definition
+# in VALUES-PROVENANCE.md, which covers CLIENT_ID, AWS_ENDPOINT and AWS_AUTHORIZER the
+# same way.
+#
 # OBSERVED: the gateway REJECTS the bare AWS api-key with 403 Forbidden. The app builds
 # `x-api-key` as `AWS_API_KEY + "-" + apiKeySuffix`, and `getConfig` passes the suffix
 # "configuration" -- so the suffixed form is the only one the endpoint accepts.

@@ -161,6 +161,10 @@ async def async_app_config(session: Any, language: str) -> dict[str, Any]:
         "appVersion": APP_VERSION,
         "os": OS,
     }
+    # `CONFIG_API_KEY` is a PUBLIC CLIENT key, not a secret: it identifies the client
+    # software rather than the user, every hOn installation ships it, and the endpoint
+    # accepts no other. Nothing about this request is authenticated -- see the note on
+    # the constant in values.py.
     headers = {"Content-Type": CONTENT_TYPE, "x-api-key": CONFIG_API_KEY}
     async with session.get(_APP_CONFIG_URL, params=params, headers=headers) as response:
         response.raise_for_status()
