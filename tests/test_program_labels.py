@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import subprocess
 import sys
 import types
 import unittest
@@ -46,6 +47,7 @@ from test_program_select import (  # noqa: E402
     RecordingCommand,
 )
 import test_sensor_per_type  # noqa: E402,F401 - imported for its stub installation
+from _fake_stream import FakeContent  # noqa: E402
 
 from custom_components.addhon import program_labels  # noqa: E402
 from custom_components.addhon.client.transport import translations  # noqa: E402
@@ -90,31 +92,6 @@ def _coordinator_with_catalog(data: dict, catalog=CATALOG) -> FakeCoordinator:
         program_labels.ProgramLabels(catalog),
     )
     return coordinator
-
-
-class FakeContent:
-    """Stream that honours aiohttp's ACTUAL `StreamReader` contract.
-
-    The first version of this fake returned the whole body from `read(size)` regardless
-    of `size`. aiohttp does not do that: `read(n)` returns *at most* n bytes and returns
-    as soon as the buffer holds anything, so on a multi-megabyte body it hands back a
-    single ~64 KiB high-water-mark slice. The forgiving fake made a short-read bug in
-    `async_fetch_catalog` invisible while the whole suite stayed green -- the feature was
-    dead for every user and nothing failed. Modelling the real semantics is what turns
-    that class of bug back into a test failure.
-    """
-
-    def __init__(self, body: bytes, chunk: int = 64 * 1024) -> None:
-        self._chunks = [body[i : i + chunk] for i in range(0, len(body), chunk)] or [b""]
-
-    async def read(self, size: int | None = None) -> bytes:
-        # aiohttp-like short read: at most ONE buffered chunk, never the whole body.
-        first = self._chunks[0]
-        return first if size is None else first[:size]
-
-    async def iter_chunked(self, size: int):
-        for chunk in self._chunks:
-            yield chunk
 
 
 class FakeResponse:
@@ -337,6 +314,42 @@ class LoadProgramLabelsTest(unittest.IsolatedAsyncioTestCase):
     def test_catalog_url_is_defensive_on_every_hop(self) -> None:
         for broken in (None, {}, {"payload": None}, {"payload": {"language": "x"}}):
             self.assertIsNone(translations.catalog_url(broken))
+
+
+class RealAiohttpContractTest(unittest.TestCase):
+    """Drive `async_fetch_catalog` against the REAL aiohttp, in a clean subprocess.
+
+    Everything else in this file talks to `FakeSession`, and a hand-written fake can only
+    assert the semantics its author believed in. That is not hypothetical: the first
+    version of this suite passed completely while the feature was dead in production,
+    because the fake's `read(size)` returned the whole body while aiohttp's returns at
+    most one buffered chunk. Only the real library is self-checking.
+
+    A SUBPROCESS is what makes this runnable at all. The suite installs a minimal
+    `aiohttp` stub (tests/_golden.py) that is already in `sys.modules` by the time this
+    module is imported in a full run, so an in-process check would drive the stub, or
+    skip forever and never run in CI where aiohttp really is installed. The checks
+    themselves live in tests/_aiohttp_contract.py.
+    """
+
+    def test_real_aiohttp_contract(self) -> None:
+        script = Path(__file__).resolve().parent / "_aiohttp_contract.py"
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode == 77:
+            self.skipTest(
+                "aiohttp is not installed; Home Assistant supplies it and CI installs "
+                "it explicitly (.github/workflows/ci.yml)"
+            )
+        self.assertEqual(
+            0,
+            result.returncode,
+            f"real-aiohttp contract failed:\n{result.stdout}\n{result.stderr}",
+        )
 
 
 class ProgramLabelsLookupTest(unittest.TestCase):
