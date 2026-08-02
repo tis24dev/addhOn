@@ -647,7 +647,10 @@ class CatalogCacheTest(unittest.IsolatedAsyncioTestCase):
         # down the failure path and the user saw raw codes plus an "unavailable" warning.
         self._session()
 
-        async def _boom(_data):
+        # `_patched` replaces a CLASS attribute, so the call binds the instance: without
+        # `_self` this raised TypeError instead of the OSError the test means to drive.
+        # The assertion held either way, which is exactly why it was worth fixing.
+        async def _boom(_self, _data):
             raise OSError("read-only .storage")
 
         with _patched(FakeStore, "async_save", _boom):
