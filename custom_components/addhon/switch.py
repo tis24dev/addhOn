@@ -210,7 +210,7 @@ def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> l
     appliance = data.get("appliance")
     _LOGGER.debug(
         "Switch debug: evaluating appliance '%s' id=%s type=%s commands=%s",
-        data.get("name"),
+        redact_id(data.get("name"), appliance_id),
         redact_id(appliance_id),
         app_type,
         _command_names(appliance),
@@ -283,7 +283,8 @@ def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> l
             created.append(desc.key)
         _LOGGER.debug(
             "Switch debug: settings switches '%s' id=%s type=%s -> %d %s",
-            data.get("name"), redact_id(appliance_id), app_type, len(created), created,
+            redact_id(data.get("name"), appliance_id), redact_id(appliance_id),
+            app_type, len(created), created,
         )
     else:
         _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
