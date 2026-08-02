@@ -15,9 +15,12 @@ program counts as an enum.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .enum import HonParameterEnum
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class HonParameterProgram(HonParameterEnum):
@@ -32,6 +35,10 @@ class HonParameterProgram(HonParameterEnum):
             self._value = command.category
         self._programs: dict[str, Any] = command.categories
         self._typology = "enum"
+        # One-shot latch for the prPosition discovery log (see `name_for_code`). The
+        # attributes are re-derived on every poll, so without it a device that DOES
+        # report the field would log on each refresh.
+        self._position_logged = False
 
     @property
     def value(self) -> str | float:
@@ -81,21 +88,34 @@ class HonParameterProgram(HonParameterEnum):
         return dict(sorted(values.items()))
 
     @staticmethod
-    def _category_code(category: Any) -> int | None:
-        """`prCode` of a program category as an int, or None if absent/unparsable."""
+    def _category_int(category: Any, key: str) -> int | None:
+        """Integer value of a category's `key` parameter, or None if absent/unparsable."""
         parameters = getattr(category, "parameters", None)
         if not isinstance(parameters, dict):
             return None
-        code = parameters.get("prCode")
-        if code is None:
+        parameter = parameters.get(key)
+        if parameter is None:
             return None
         try:
-            return int(code.value)
+            return int(parameter.value)
         except (AttributeError, TypeError, ValueError):
             return None
 
+    @classmethod
+    def _category_code(cls, category: Any) -> int | None:
+        """`prCode` of a program category as an int, or None if absent/unparsable."""
+        return cls._category_int(category, "prCode")
 
-    def name_for_code(self, code: int) -> str | None:
+    @classmethod
+    def _category_position(cls, category: Any) -> int | None:
+        """`prPosition` of a program category as an int, or None if absent/unparsable.
+
+        `prPosition` is the physical dial slot. In the schema it is declared per category
+        as `{'category': 'command', 'typology': 'fixed', 'fixedValue': '<N>'}`.
+        """
+        return cls._category_int(category, "prPosition")
+
+    def name_for_code(self, code: int, position: int | None = None) -> str | None:
         """Program name for the live `prCode`, preferring the ACTIVE category.
 
         `ids` alone can only name the base program of a code (see its docstring), so
@@ -111,7 +131,23 @@ class HonParameterProgram(HonParameterEnum):
         fall back to the unambiguous base program. That fallback is today's behaviour, so
         a mismatch is never a regression.
 
+        `position` is the appliance-reported `prPosition`, the tie-breaker the hOn app
+        itself uses (`findCurrentProgramNameFromPrCodeAndPrPosition`, decomp.txt:2705620,
+        which ANDs prCode and prPosition). It is accepted here but deliberately applied
+        under a STRICT-NARROWING rule -- used only when prCode+prPosition select exactly
+        ONE category -- so it can only ever turn an ambiguous answer into a precise one,
+        never change an already-unambiguous one. That rule also makes it self-limiting in
+        the case where it is useless: a downloaded program is loaded onto a base
+        program's dial slot and inherits BOTH fields, so those groups keep >1 candidate
+        and fall through untouched.
+
+        NOTE: no appliance observed so far reports `prPosition` in its shadow (checked on
+        the real WM/TD/REF dumps in diagnostics/live-2026-06-22/), so this path is
+        currently dead code kept deliberately -- see `_log_position_discovery`.
+        Full analysis: apk/analysis/program-identity-prcode.md.
         """
+        if position is not None:
+            self._log_position_discovery(code, position)
         active = self._programs.get(str(self._value))
         # The active category is trusted ONLY when it was deliberately selected -- the
         # last-started program recovered from the command history, or one set through the
@@ -121,14 +157,61 @@ class HonParameterProgram(HonParameterEnum):
         # whichever the schema happens to list first would hijack the name and could
         # report a downloaded program that was never started. Falling through to `ids`
         # then yields the base program, which is what shipped before.
+        # It must also agree on prPosition when the appliance reports it (see below).
         if (
             active is not None
             and getattr(active, "selected_explicitly", False)
             and self._category_code(active) == code
+            and (position is None or self._category_position(active) == position)
         ):
             return str(self._value)
+        if position is not None:
+            exact = self._categories_matching(code, position)
+            if len(exact) == 1:
+                return exact[0]
         return self.ids.get(code)
 
+    def _categories_matching(self, code: int, position: int | None) -> list[str]:
+        """Category names whose prCode (and prPosition, when given) match."""
+        return [
+            name
+            for name, category in self._programs.items()
+            if self._category_code(category) == code
+            and (position is None or self._category_position(category) == position)
+        ]
+
+    def _log_position_discovery(self, code: int, position: int) -> None:
+        """Report, ONCE, that an appliance actually reports `prPosition`.
+
+        This is the whole reason the `position` path exists. The tie-breaker cannot be
+        validated against any dump we have, and it never will be while nothing tells us a
+        device started sending the field -- the gap would stay permanently unverifiable.
+        So the first time we see it, we log what it is worth ON THIS MODEL: how many
+        categories share the prCode, and how many survive adding prPosition. That single
+        line is the evidence a future implementation needs.
+
+        Logged at INFO on purpose, not debug: it fires only on a device that reports the
+        field (none known today), so it is zero-noise and would otherwise be invisible
+        without the user enabling debug. Grep marker: "prPosition".
+        """
+        if self._position_logged:
+            return
+        self._position_logged = True
+        by_code = self._categories_matching(code, None)
+        by_both = self._categories_matching(code, position)
+        _LOGGER.info(
+            "Program debug: this appliance REPORTS prPosition=%s (prCode=%s) -- the first "
+            "one known to. Candidates by prCode alone: %d %s; adding prPosition: %d %s. "
+            "Please attach this line to a diagnostics report: it is the evidence needed "
+            "to enable the prCode+prPosition tie-break (apk/analysis/"
+            "program-identity-prcode.md).",
+            position,
+            code,
+            len(by_code),
+            sorted(by_code)[:8],
+            len(by_both),
+            sorted(by_both)[:8],
+        )
 
     def set_value(self, value: str) -> None:
         self._value = value

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 import unittest
 from pathlib import Path
@@ -196,9 +197,15 @@ class DictApi:
         return {}
 
 
-def _prog(pr):
-    return {"description": "d", "protocolType": "MQTT",
-            "parameters": {"prCode": {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": pr}}}
+def _prog(pr, pos=None):
+    parameters = {
+        "prCode": {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": pr}
+    }
+    if pos is not None:
+        parameters["prPosition"] = {
+            "typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": pos
+        }
+    return {"description": "d", "protocolType": "MQTT", "parameters": parameters}
 
 
 _PN_COMMANDS = {
@@ -373,6 +380,118 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
     def test_a_code_no_category_declares_is_still_no_program(self) -> None:
         self.assertEqual("No Program", self._build("999").attributes["programName"])
 
+
+# --- prPosition tie-break (dead code kept on purpose, see program.py) ---
+#
+# No appliance observed so far reports prPosition in its shadow, so this path never runs
+# in production today. It is implemented and pinned anyway because the algorithm is known
+# from the app (findCurrentProgramNameFromPrCodeAndPrPosition @ decomp.txt:2705620) and
+# because the discovery log is what would ever let us learn that a device started sending
+# the field. The fixture reproduces the REAL base-vs-base collision measured in the hOn
+# catalog: prCode 4 is claimed by two BASE programs, which prPosition separates.
+
+_POS_COMMANDS = {
+    "applianceModel": {"options": {}},
+    "startProgram": {
+        "PROGRAMS.WM_WD.NIGHT_AND_DAY": _prog("4", "17"),
+        "PROGRAMS.WM_WD.SYNTHETIC_AND_COLOURED": _prog("4", "6"),
+        # Two downloaded variants riding on NIGHT_AND_DAY's dial slot: they inherit BOTH
+        # fields, which is exactly why prPosition cannot separate downloaded from base.
+        "PROGRAMS.WM_WD.IOT_WASH_BACKPACKS": _prog("4", "17"),
+        "PROGRAMS.WM_WD.IOT_WASH_COLORED": _prog("4", "17"),
+    },
+    "dictionaryId": 1,
+}
+
+
+def _pos_shadow(prcode, prposition=None):
+    parameters = {"prCode": {"parNewVal": prcode, "lastUpdate": "2024-01-01T00:00:00"}}
+    if prposition is not None:
+        parameters["prPosition"] = {
+            "parNewVal": prposition, "lastUpdate": "2024-01-01T00:00:00"
+        }
+    return {"shadow": {"parameters": parameters}}
+
+
+class PrPositionTieBreakTest(unittest.TestCase):
+    def _build(self, prcode, prposition=None, history=None):
+        from custom_components.addhon.client import factory
+
+        app = factory._native_engine_appliance_cls()(
+            DictApi(_POS_COMMANDS, _pos_shadow(prcode, prposition), history),
+            dict(_WM_INFO),
+            zone=0,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(app.load_commands())
+            loop.run_until_complete(app.load_attributes())
+        finally:
+            loop.close()
+        return app
+
+    def test_without_prposition_a_base_collision_is_arbitrary_but_stable(self) -> None:
+        # Today's reality: `ids` keeps ONE of the two base programs of code 4.
+        name = self._build("4").attributes["programName"]
+        self.assertIn(name, {"night_and_day", "synthetic_and_coloured"})
+
+    def test_prposition_separates_two_base_programs(self) -> None:
+        # THE case the tie-break exists for: prPosition 6 can only be SYNTHETIC_AND_COLOURED.
+        self.assertEqual(
+            "synthetic_and_coloured", self._build("4", "6").attributes["programName"]
+        )
+
+    def test_prposition_does_not_separate_downloaded_from_base(self) -> None:
+        # Slot 17 holds the base program AND two downloaded variants: 3 candidates, so
+        # the strict-narrowing rule declines and we fall back to `ids`. The invariant
+        # that matters is that the answer is a BASE program -- never a downloaded one
+        # that may not be running. Which of the two base programs `ids` keeps is an
+        # insertion-order artifact of a prCode claimed by two of them, so it is
+        # deliberately not pinned here.
+        name = self._build("4", "17").attributes["programName"]
+        self.assertIn(name, {"night_and_day", "synthetic_and_coloured"})
+
+    def test_an_unmatched_position_falls_back_instead_of_blanking(self) -> None:
+        # A position no category declares must never produce "No Program".
+        name = self._build("4", "99").attributes["programName"]
+        self.assertIn(name, {"night_and_day", "synthetic_and_coloured"})
+
+    def test_the_active_category_still_wins_over_prposition(self) -> None:
+        # The active category is a PRECISE identity (it distinguishes downloaded variants,
+        # which prPosition provably cannot), so it must keep priority.
+        app = self._build("4", "17", _history("PROGRAMS.WM_WD.IOT_WASH_BACKPACKS"))
+        self.assertEqual("iot_wash_backpacks", app.attributes["programName"])
+
+    def test_discovery_is_logged_once_with_the_candidate_counts(self) -> None:
+        # The log line IS the deliverable: it is the evidence a future implementation
+        # needs. The derivation runs once per POLL (load_attributes), not per property
+        # access, so the latch is what keeps a 60s poll from repeating it forever.
+        with self.assertLogs(
+            "custom_components.addhon.client.engine.parameter.program", level="INFO"
+        ) as captured:
+            app = self._build("4", "6")
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(app.load_attributes())  # second poll
+            finally:
+                loop.close()
+        self.assertEqual(1, len(captured.records))
+        message = captured.records[0].getMessage()
+        self.assertIn("prPosition=6", message)
+        self.assertIn("prCode=4", message)
+        # The counts are the actionable part: 4 candidates by prCode, 1 once prPosition
+        # is added. Without them the line would not tell us whether the field is worth
+        # anything on that model.
+        self.assertIn("alone: 4", message)
+        self.assertIn("prPosition: 1", message)
+
+    def test_no_log_when_the_appliance_does_not_report_the_field(self) -> None:
+        # Zero noise on every device known today.
+        logger = logging.getLogger(
+            "custom_components.addhon.client.engine.parameter.program"
+        )
+        with self.assertNoLogs(logger, level="INFO"):
+            self._build("4")
 
 
 if __name__ == "__main__":

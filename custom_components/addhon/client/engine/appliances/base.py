@@ -45,6 +45,23 @@ class ApplianceExtra:
         return attr.value if attr is not None and hasattr(attr, "value") else default
 
     @classmethod
+    def _int_or_none(cls, params: dict[str, Any], key: str) -> int | None:
+        """Integer reading of `key`, or None when absent/blank/non-numeric.
+
+        Distinct from `_raw` (which flattens a missing key to ""): callers here need to
+        tell "the appliance did not report this field" from "it reported 0". Used for the
+        optional `prPosition` tie-break, whose whole contract is None = not reported.
+        """
+        # `_raw` is inside the try on purpose: it goes through `HonAttribute.__str__`,
+        # which returns `self._value` unconverted, so a numerically-set attribute makes
+        # `str()` raise TypeError (the hazard `_raw`'s own docstring warns about). An
+        # optional read must never be able to break the whole attribute derivation.
+        try:
+            return int(cls._raw(params, key))
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
     def _is_value(cls, params: dict[str, Any], key: str, expected: Any) -> bool:
         """True if the `key` attribute's `.value` == expected. Comparison by VALUE
         (flags "1"/"0" become int 1/0), so the flags evaluate correctly."""
@@ -69,7 +86,10 @@ class ApplianceExtra:
         if program := int(self._raw(params, "prCode") or "0"):
             start_cmd = self.parent.settings.get("startProgram.program")
             if isinstance(start_cmd, HonParameterProgram):
-                program_name = start_cmd.name_for_code(program) or program_name
+                program_name = (
+                    start_cmd.name_for_code(program, self._int_or_none(params, "prPosition"))
+                    or program_name
+                )
         data["programName"] = program_name
         # available: connectivity as a first-class attribute (app model). Offline
         # is handled by entity availability (base_entity), no longer by zeroing
