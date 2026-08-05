@@ -1288,6 +1288,25 @@ class EntityInventoryTest(unittest.TestCase):
         self.assertTrue(entities["truncated"])
         self.assertTrue(result["platforms"]["truncated"])
 
+    def test_only_the_appliance_that_lost_rows_is_marked_truncated(self) -> None:
+        """A complete inventory carrying someone else's truncation flag reads as
+        incomplete. With one appliance the flag's scope is unobservable, so this
+        needs a second, small one."""
+        cap = diagnostics._ENTITY_MAX_PER_DOMAIN
+        big = [
+            FakeRegistryEntry(f"ap-unique_sensor_{n}", f"sensor.p_{n}")
+            for n in range(cap + 5)
+        ]
+        small = [FakeRegistryEntry("ap-two_purifier", "fan.second")]
+
+        inventory, platforms = diagnostics._entity_inventory(
+            big + small, ["ap-unique", "ap-two"], "e1", None
+        )
+
+        self.assertTrue(inventory["ap-unique"]["truncated"])
+        self.assertNotIn("truncated", inventory["ap-two"])
+        self.assertTrue(platforms["truncated"])
+
     def test_the_device_dump_carries_the_same_inventory(self) -> None:
         """The tester downloads diagnostics from the DEVICE page, not the entry."""
         coord = _build_ap_coordinator()

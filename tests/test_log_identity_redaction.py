@@ -85,8 +85,12 @@ _FILES = {
     # The dump builder walks the entity registry like __init__.py does, so it gets
     # the same forbidden attributes: entity_id embeds the nickname slug and
     # unique_id embeds the appliance id. `row` is the loop variable it walks with.
+    # Both spellings are forbidden: the registry walk reads them as attributes
+    # (row.unique_id) and immediately binds them as plain locals, so an
+    # attribute-only rule would let a later `_LOGGER.debug("uid=%s", unique_id)`
+    # straight through.
     "diagnostics.py": (
-        frozenset({"appliance_id", "row", "entries"}),
+        frozenset({"appliance_id", "row", "entries", "entity_id", "unique_id"}),
         frozenset({"entity_id", "unique_id"}),
     ),
     # Setup orchestration: the raw cloud appliance dict (CR#2 malformed-appliance

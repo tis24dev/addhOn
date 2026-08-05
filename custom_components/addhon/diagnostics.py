@@ -700,6 +700,11 @@ def _entity_inventory(
         section = per_appliance[appliance_id]
         bucket = section["by_domain"].setdefault(domain, [])
         if len(bucket) >= _ENTITY_MAX_PER_DOMAIN:
+            # Marked on the section that actually dropped a row, not entry-wide:
+            # a complete inventory carrying someone else's truncation flag reads
+            # as incomplete, and the reader stops trusting the one thing this
+            # section exists to state.
+            section["truncated"] = True
             truncated = True
             continue
         key = _entity_row(unique_id, appliance_id)
@@ -725,8 +730,6 @@ def _entity_inventory(
         for field in ("disabled", "hidden", "not_created"):
             if field in section and isinstance(section[field], list):
                 section[field] = sorted(section[field])
-        if truncated:
-            section["truncated"] = True
 
     platforms = {
         "status": status,
