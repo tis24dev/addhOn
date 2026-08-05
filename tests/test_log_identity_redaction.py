@@ -82,7 +82,13 @@ _FILES = {
         _ENTITY_NAMES,
         _ENTITY_ATTRS | frozenset({"entity_id", "unique_id"}),
     ),
-    "diagnostics.py": (frozenset({"appliance_id"}), frozenset()),
+    # The dump builder walks the entity registry like __init__.py does, so it gets
+    # the same forbidden attributes: entity_id embeds the nickname slug and
+    # unique_id embeds the appliance id. `row` is the loop variable it walks with.
+    "diagnostics.py": (
+        frozenset({"appliance_id", "row", "entries"}),
+        frozenset({"entity_id", "unique_id"}),
+    ),
     # Setup orchestration: the raw cloud appliance dict (CR#2 malformed-appliance
     # log). It must never be passed bare to _LOGGER -- key-name redaction cannot mask
     # nested identity (attributes[].parValue), so the malformed path logs structure

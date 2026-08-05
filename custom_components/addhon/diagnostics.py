@@ -20,10 +20,26 @@ Per appliance the dump carries, beyond the bare key list it used to emit:
                     currently reporting that this code does NOT handle. Passive: it
                     surfaces a firmware ahead of the integration without any entity
                     being guessed into existence.
+  * `entities`    - what Home Assistant ACTUALLY has for this appliance, read from
+                    the entity registry and cross-checked against the live state
+                    machine. `coverage` above says what the code could map for this
+                    TYPE; it is computed from static tables and stays identical
+                    whether an entity was created or the whole platform crashed.
+                    That gap is why "the control is missing from Home Assistant"
+                    used to be unanswerable from a dump and needed the log as well.
+
+The entry-level `platforms` block is the same reading one level up, and it exists
+for the case the per-appliance one cannot cover: when setup fails there are no
+appliances at all, and the registry is owned by Home Assistant core, so it is
+still readable. Its per-domain `account` counts are the discriminator between a
+platform that DIED and a device that was legitimately gated out: the two account
+debug entities are created unconditionally, so a domain missing them never ran.
 
 Identity (id/serial/mac and credential-ish keys) is redacted. The device nickname
 (`name`) is kept readable on purpose, to correlate the dump with the physical
-appliance.
+appliance. The entity inventory deliberately emits neither `entity_id` (its
+object_id is the nickname slug) nor a raw `unique_id` (its prefix is the
+appliance id): only the entity domain and the code-authored unique_id suffix.
 """
 from __future__ import annotations
 
@@ -155,6 +171,11 @@ _COVERAGE_META_PARAMS = frozenset(
 # Bounds for the future-capability section. It is passive evidence, not a report:
 # a firmware declaring hundreds of values must add a hint to the dump, never bloat
 # it. Truncation is announced with a `truncated` flag rather than silently applied.
+# Bound for the entity inventory, per appliance and per domain. An appliance has a
+# few dozen entities today; the cap is a runaway guard, not a filter, and like the
+# future-capability bounds it announces itself rather than truncating silently.
+_ENTITY_MAX_PER_DOMAIN = 80
+
 _FUTURE_MAX_ENTRIES = 40
 _FUTURE_MAX_VALUES = 20
 # A separate CHARACTER bound. An unhandled state value is one scalar, so it needs a
@@ -505,8 +526,15 @@ def _future_capabilities(app_type, attributes: Mapping, appliance) -> dict:
     return section
 
 
-def _appliance_block(appliance_id: str, data: Mapping) -> dict:
-    """Build the (redacted) diagnostics block for a single appliance."""
+def _appliance_block(
+    appliance_id: str, data: Mapping, entities: Mapping | None = None
+) -> dict:
+    """Build the (redacted) diagnostics block for a single appliance.
+
+    `entities` is the registry-derived inventory for THIS appliance, already
+    computed once for the whole dump. It defaults to None so the helper stays
+    hass-less and pure, and so a caller with no registry still produces a block.
+    """
     appliance = data.get("appliance")
     app_type = data.get("type")
     attributes = data.get("attributes")
@@ -540,9 +568,203 @@ def _appliance_block(appliance_id: str, data: Mapping) -> dict:
         "attributes": dict(attributes),
         "commands": commands,
         "coverage": coverage,
+        # Next to coverage on purpose: one says what the code could map for this
+        # type, the other what Home Assistant actually holds. Reading them together
+        # is the whole point, and a disagreement between them IS the finding.
+        "entities": dict(entities) if isinstance(entities, Mapping) else None,
         "future_capabilities": future,
     }
     return _redact(block)
+
+
+def _registry_entries(hass: HomeAssistant, entry: ConfigEntry) -> list | None:
+    """Every registry row of this config entry, or None when unreadable.
+
+    The import is function-local, mirroring `_remove_legacy_entities`: the module
+    must stay importable where `homeassistant.helpers.entity_registry` is not
+    installed, and the registry is only ever needed while a dump is being built.
+
+    None and [] mean DIFFERENT things and must never be folded together: [] is
+    "Home Assistant remembers nothing for this entry", which is a finding, while
+    None is "this dump could not look", which is the absence of one. Reporting the
+    second as the first would invent the exact failure the section exists to
+    detect.
+    """
+    try:
+        from homeassistant.helpers import entity_registry as er
+
+        registry = er.async_get(hass)
+        if registry is None:
+            return None
+        entries = er.async_entries_for_config_entry(registry, entry.entry_id)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: entity registry unreadable", exc_info=True)
+        return None
+    return list(entries)
+
+
+def _states_getter(hass: HomeAssistant):
+    """`hass.states.get`, or None where there is no state machine to ask."""
+    try:
+        return getattr(getattr(hass, "states", None), "get", None)
+    except Exception:  # noqa: BLE001 - same rule as above
+        return None
+
+
+def _entity_row(unique_id: str, appliance_id: str) -> str:
+    """The unique_id with its appliance prefix removed.
+
+    Every entity in this integration is named `f"{appliance_id}_{suffix}"` where the
+    suffix is a constant written in this repository, so what is emitted is drawn
+    from a closed, already-public vocabulary. Slicing (rather than masking) is what
+    keeps the appliance id out: the caller has already proven the prefix matches.
+    """
+    return unique_id[len(appliance_id) + 1:]
+
+
+def _entity_inventory(
+    entries: list | None,
+    appliance_ids: list,
+    entry_id: str,
+    state_get,
+) -> tuple[dict, dict]:
+    """Split the registry rows into a per-appliance view and an entry-wide one.
+
+    Returns ``(per_appliance, platforms)``. Pure: it takes the rows, never `hass`.
+
+    Three facts drive the shape:
+
+    - A row is attributed by unique_id PREFIX, longest id first. Prefixes nest for
+      real (a multi-zone appliance expands into `<id>`, `<id>_z1`), and the
+      mandatory separator plus longest-first order resolves that. Suffix matching,
+      which the legacy cleanup documents as ambiguous, is never used.
+    - A DISABLED row has no state by construction: Home Assistant does not add
+      disabled entities to the state machine. Consulting the state machine for one
+      would report every user-disabled entity as "the platform failed", which is
+      the single most common reason a control is missing and the least alarming.
+    - A row that is enabled and yet has no live state (or a `restored` one) is the
+      interesting case: Home Assistant remembers the entity from an earlier run but
+      nothing re-created it now. That is what a dead platform looks like, and it is
+      invisible to the registry alone, which survives reloads.
+    """
+    unavailable = {"status": "unavailable"}
+    ids = sorted(
+        (i for i in appliance_ids if isinstance(i, str) and i), key=len, reverse=True
+    )
+    if entries is None:
+        return ({appliance_id: dict(unavailable) for appliance_id in ids}, dict(unavailable))
+
+    status = "ok" if callable(state_get) else "registry_only"
+    # Seeded for EVERY appliance, before a single row is read: an appliance with no
+    # rows must render as "nothing was created", never as "nothing was looked at".
+    per_appliance: dict = {
+        appliance_id: {"status": status, "by_domain": {}} for appliance_id in ids
+    }
+    account: dict = {}
+    account_not_created: dict = {}
+    unattributed = 0
+    truncated = False
+
+    for row in entries:
+        unique_id = getattr(row, "unique_id", None) or ""
+        entity_id = getattr(row, "entity_id", None) or ""
+        domain = entity_id.split(".", 1)[0]
+        if not unique_id or not domain:
+            unattributed += 1
+            continue
+        if entry_id and unique_id.startswith(f"{entry_id}_diag_"):
+            # Account-level debug entities: they belong to no appliance, and they
+            # are created unconditionally. A domain missing from here is a domain
+            # whose platform did not finish, which is what separates a dead
+            # platform from a device that was simply gated out.
+            #
+            # Counted the same way an appliance row is: a registry row left over
+            # from an earlier run proves the platform ran ONCE, not that it ran
+            # now, and taking it at face value would clear the very platform that
+            # just died. Disabled rows are skipped for the same reason as below.
+            account[domain] = account.get(domain, 0) + 1
+            if (
+                callable(state_get)
+                and not _enum_text(getattr(row, "disabled_by", None))
+                and _is_restored(state_get, entity_id)
+            ):
+                account_not_created[domain] = account_not_created.get(domain, 0) + 1
+            continue
+        appliance_id = next(
+            (i for i in ids if unique_id.startswith(f"{i}_")), None
+        )
+        if appliance_id is None:
+            unattributed += 1
+            continue
+
+        section = per_appliance[appliance_id]
+        bucket = section["by_domain"].setdefault(domain, [])
+        if len(bucket) >= _ENTITY_MAX_PER_DOMAIN:
+            truncated = True
+            continue
+        key = _entity_row(unique_id, appliance_id)
+        bucket.append(key)
+        disabled_by = _enum_text(getattr(row, "disabled_by", None))
+        hidden_by = _enum_text(getattr(row, "hidden_by", None))
+        if disabled_by:
+            section.setdefault("disabled", {})[key] = disabled_by
+            continue
+        if hidden_by:
+            section.setdefault("hidden", {})[key] = hidden_by
+        if not callable(state_get):
+            continue
+        if _is_restored(state_get, entity_id):
+            section.setdefault("not_created", []).append(key)
+
+    totals: dict = {}
+    for section in per_appliance.values():
+        for domain, keys in section["by_domain"].items():
+            totals[domain] = totals.get(domain, 0) + len(keys)
+        for domain in section["by_domain"]:
+            section["by_domain"][domain] = sorted(section["by_domain"][domain])
+        for field in ("disabled", "hidden", "not_created"):
+            if field in section and isinstance(section[field], list):
+                section[field] = sorted(section[field])
+        if truncated:
+            section["truncated"] = True
+
+    platforms = {
+        "status": status,
+        "appliance_totals": totals,
+        "account": account,
+        "account_not_created": account_not_created,
+        "unattributed": unattributed,
+    }
+    if truncated:
+        platforms["truncated"] = True
+    return per_appliance, platforms
+
+
+def _enum_text(value) -> str | None:
+    """A registry flag as plain text: these are enums whose `.value` is the token."""
+    if value is None:
+        return None
+    inner = getattr(value, "value", value)
+    return str(inner)
+
+
+def _is_restored(state_get, entity_id: str) -> bool:
+    """True when the registry remembers the entity but nothing created it now.
+
+    Home Assistant writes a placeholder state carrying ``restored: True`` for a
+    registered entity no platform added, so the two cases (no state at all, and a
+    restored one) are the same finding.
+    """
+    try:
+        state = state_get(entity_id)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        return False
+    if state is None:
+        return True
+    attributes = getattr(state, "attributes", None)
+    if isinstance(attributes, Mapping):
+        return bool(attributes.get("restored"))
+    return False
 
 
 def _coordinator(hass: HomeAssistant, entry: ConfigEntry):
@@ -594,12 +816,21 @@ async def async_get_config_entry_diagnostics(
         coordinator is not None,
     )
 
-    appliances: list[dict] = []
     coord_data = getattr(coordinator, "data", None)
-    if isinstance(coord_data, Mapping):
-        for appliance_id, data in coord_data.items():
-            if isinstance(data, Mapping):
-                appliances.append(_appliance_block(appliance_id, data))
+    coord_data = coord_data if isinstance(coord_data, Mapping) else {}
+    inventory, platforms = _entity_inventory(
+        _registry_entries(hass, entry),
+        list(coord_data),
+        getattr(entry, "entry_id", "") or "",
+        _states_getter(hass),
+    )
+
+    appliances: list[dict] = []
+    for appliance_id, data in coord_data.items():
+        if isinstance(data, Mapping):
+            appliances.append(
+                _appliance_block(appliance_id, data, inventory.get(appliance_id))
+            )
 
     return {
         "entry": {
@@ -611,6 +842,12 @@ async def async_get_config_entry_diagnostics(
             "options": dict(entry.options),
         },
         "last_error": _last_error(hass, entry),
+        # Entry-wide, next to last_error rather than inside an appliance: a failed
+        # setup leaves no appliances at all, and this is exactly the dump where the
+        # question "did anything get created" needs an answer. Closed-domain
+        # primitives only (platform domains, counts, a status token), so like
+        # last_error it is leak-proof by construction and skips _redact.
+        "platforms": platforms,
         "appliances": appliances,
     }
 
@@ -640,4 +877,17 @@ async def async_get_device_diagnostics(
     data = coord_data.get(appliance_id)
     if not isinstance(data, Mapping):
         return {}
-    return {"appliance": _appliance_block(appliance_id, data)}
+    # The inventory is built over EVERY appliance id, not just this one: attribution
+    # is by unique_id prefix and those prefixes nest, so hiding the siblings would
+    # let a longer id's rows fall into this block.
+    inventory, _platforms = _entity_inventory(
+        _registry_entries(hass, entry),
+        list(coord_data),
+        getattr(entry, "entry_id", "") or "",
+        _states_getter(hass),
+    )
+    return {
+        "appliance": _appliance_block(
+            appliance_id, data, inventory.get(appliance_id)
+        )
+    }
