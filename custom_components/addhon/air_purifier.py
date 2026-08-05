@@ -40,14 +40,16 @@ AP_PRESET_TO_MODE = {preset: raw for raw, preset in AP_MODE_TO_PRESET.items()}
 # The panel light has three discrete steps, not a brightness scale, so it is
 # offered as named positions rather than a percentage the device cannot honour.
 #
-# The ENCODING is the one open question of this feature: this mapping reads a
-# higher raw value as a dimmer panel, which the device's own behaviour supports
-# (stopping the purifier moves lightStatus to 2) while the beta tester reports the
-# opposite from looking at the panel. Both readings cannot be right, and the
-# capture that would settle it disagrees with itself: the appliance attributes and
-# the activity record report 0 and 2 for the same instant. Kept in ONE dict so
-# settling it is a single edit, here, with no entity or option name changing.
-AP_LIGHT_TO_OPTION = {"2": "off", "1": "low", "0": "high"}
+# The encoding is DIRECT, and this is measured rather than inferred: two captures
+# taken from the same HHP50CA011 straight after driving the official application's
+# own slider report lightStatus 2 at 100% and 0 at Off, with the appliance
+# attributes, the shadow parameters and the settings command all agreeing in both.
+#
+# It used to read the other way round, from the device moving lightStatus to 2
+# when the purifier stops. That inference was wrong, and it cost the beta tester a
+# control that did the opposite of what it said: asking for 100% sent raw 0 and
+# switched the panel off.
+AP_LIGHT_TO_OPTION = {"0": "off", "1": "low", "2": "high"}
 AP_OPTION_TO_LIGHT = {option: raw for raw, option in AP_LIGHT_TO_OPTION.items()}
 
 # Display order of the offered positions, dimmest first. Independent of the raw

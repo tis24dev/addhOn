@@ -188,9 +188,9 @@ _INTENT_FOR_CASE = {
     "preset_sleep": ("set_preset", {"value": "1"}),
     "preset_auto": ("set_preset", {"value": "2"}),
     "preset_max": ("set_preset", {"value": "4"}),
-    "light_off": ("set_light", {"value": "2"}),
+    "light_off": ("set_light", {"value": "0"}),
     "light_50": ("set_light", {"value": "1"}),
-    "light_100": ("set_light", {"value": "0"}),
+    "light_100": ("set_light", {"value": "2"}),
     "lock_on": ("set_lock", {"value": "1"}),
     "lock_off": ("set_lock", {"value": "0"}),
     "tone_on": ("set_tone", {"value": "1"}),
@@ -249,8 +249,8 @@ def _full_capabilities():
 def test_ap_mappings_are_exact() -> None:
     assert air_purifier.AP_MODE_TO_PRESET == {"1": "sleep", "2": "auto", "4": "max"}
     assert air_purifier.AP_PRESET_TO_MODE == {"sleep": "1", "auto": "2", "max": "4"}
-    assert air_purifier.AP_LIGHT_TO_OPTION == {"2": "off", "1": "low", "0": "high"}
-    assert air_purifier.AP_OPTION_TO_LIGHT == {"off": "2", "low": "1", "high": "0"}
+    assert air_purifier.AP_LIGHT_TO_OPTION == {"0": "off", "1": "low", "2": "high"}
+    assert air_purifier.AP_OPTION_TO_LIGHT == {"off": "0", "low": "1", "high": "2"}
     assert air_purifier.AP_LIGHT_OPTION_ORDER == ("off", "low", "high")
     assert air_purifier.AP_AROMA_TO_OPTION == {
         "0": "off", "1": "soft", "2": "mid", "3": "h_biotics", "4": "custom",

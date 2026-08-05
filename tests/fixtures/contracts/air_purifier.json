@@ -844,7 +844,7 @@
     "initial_shadow": {
       "onOffStatus": "1",
       "machMode": "2",
-      "lightStatus": "0",
+      "lightStatus": "2",
       "lockStatus": "0",
       "touchToneStatus": "1",
       "aromaStatus": "0",
@@ -853,14 +853,14 @@
     },
     "command_name": "settings",
     "values": {
-      "lightStatus": "2"
+      "lightStatus": "0"
     },
     "action": "light_off",
     "expected_payload": {
-      "lightStatus": "2"
+      "lightStatus": "0"
     },
     "expected_shadow_delta": {
-      "lightStatus": "2"
+      "lightStatus": "0"
     },
     "must_not_change": [
       "onOffStatus",
@@ -990,7 +990,7 @@
     "initial_shadow": {
       "onOffStatus": "1",
       "machMode": "2",
-      "lightStatus": "2",
+      "lightStatus": "0",
       "lockStatus": "0",
       "touchToneStatus": "1",
       "aromaStatus": "0",
@@ -1145,14 +1145,14 @@
     },
     "command_name": "settings",
     "values": {
-      "lightStatus": "0"
+      "lightStatus": "2"
     },
     "action": "light_100",
     "expected_payload": {
-      "lightStatus": "0"
+      "lightStatus": "2"
     },
     "expected_shadow_delta": {
-      "lightStatus": "0"
+      "lightStatus": "2"
     },
     "must_not_change": [
       "onOffStatus",

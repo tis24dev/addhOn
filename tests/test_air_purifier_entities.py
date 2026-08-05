@@ -1126,7 +1126,7 @@ class AirPurifierPanelLightSetupTest(unittest.IsolatedAsyncioTestCase):
 
 class AirPurifierPanelLightStateTest(unittest.IsolatedAsyncioTestCase):
     async def test_each_raw_level_maps_to_its_position(self) -> None:
-        for raw, option in (("2", "off"), ("1", "low"), ("0", "high")):
+        for raw, option in (("0", "off"), ("1", "low"), ("2", "high")):
             entities, _client, _coord = await _build_panel_light(
                 {**FULL_ATTRIBUTES, "lightStatus": raw}
             )
@@ -1168,7 +1168,7 @@ class AirPurifierPanelLightStateTest(unittest.IsolatedAsyncioTestCase):
 
 class AirPurifierPanelLightWriteTest(unittest.IsolatedAsyncioTestCase):
     async def test_each_position_sends_its_raw_level(self) -> None:
-        for option, raw in (("off", "2"), ("low", "1"), ("high", "0")):
+        for option, raw in (("off", "0"), ("low", "1"), ("high", "2")):
             entities, client, coordinator = await _build_panel_light()
             await entities[0].async_select_option(option)
             self.assertEqual(
@@ -1189,7 +1189,7 @@ class AirPurifierPanelLightWriteTest(unittest.IsolatedAsyncioTestCase):
             {**FULL_ATTRIBUTES, "onOffStatus": "0"}
         )
         await entities[0].async_select_option("high")
-        self.assertEqual([("settings", {"lightStatus": "0"})], _sent(client))
+        self.assertEqual([("settings", {"lightStatus": "2"})], _sent(client))
 
 
 class AirPurifierPanelLightErrorTest(unittest.IsolatedAsyncioTestCase):
@@ -2412,7 +2412,7 @@ class ShadowSpellingTest(unittest.IsolatedAsyncioTestCase):
         entities, _client, _coord = await _build_panel_light(
             _shadow(lightStatus="0.0")
         )
-        self.assertEqual("high", entities[0].current_option)
+        self.assertEqual("off", entities[0].current_option)
 
     async def test_a_decimal_toggle_still_reads_on(self) -> None:
         entities, _client, _coord = await _build_switches(
