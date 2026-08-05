@@ -611,6 +611,14 @@ def _states_getter(hass: HomeAssistant):
         return None
 
 
+# A zoned appliance id is `<base>_z<N>` (client/engine/appliance.py `_check_name_zone`),
+# so the base id is a proper prefix of its own zones'. Longest-first matching handles
+# that while every zone is present, but a zone the current poll dropped would have its
+# rows fall back onto the base appliance. No entity of the base appliance has a
+# unique_id suffix in this shape, so it is a safe tell.
+_ZONE_SUFFIX_RE = re.compile(r"^z\d+_")
+
+
 def _entity_row(unique_id: str, appliance_id: str) -> str:
     """The unique_id with its appliance prefix removed.
 
@@ -693,6 +701,15 @@ def _entity_inventory(
         appliance_id = next(
             (i for i in ids if unique_id.startswith(f"{i}_")), None
         )
+        if appliance_id is not None and _ZONE_SUFFIX_RE.match(
+            _entity_row(unique_id, appliance_id)
+        ):
+            # The row belongs to a ZONE of this appliance, and that zone is not in
+            # the data this dump was built from: the poll dropped it, or the cloud
+            # stopped declaring it. Attributing it to the base appliance would put
+            # an entity in a block that does not own it, and would drag its
+            # not_created finding along with it.
+            appliance_id = None
         if appliance_id is None:
             unattributed += 1
             continue
@@ -709,17 +726,27 @@ def _entity_inventory(
             continue
         key = _entity_row(unique_id, appliance_id)
         bucket.append(key)
+        # Qualified with the domain OUTSIDE by_domain, which is the only structure
+        # carrying it implicitly. Home Assistant scopes unique_id uniqueness to the
+        # domain and this integration relies on that: a wine cooler holds both a
+        # `light` switch and a `light` binary sensor, and the purifier's panel light
+        # became a select keeping the light's unique_id. Bare suffixes would let one
+        # overwrite the other in these maps, silently dropping a finding, and would
+        # leave the reader unable to tell which of the two a finding is about.
+        # It LOOKS like an entity_id and is not one: the right-hand side is the
+        # code-authored unique_id suffix, never the nickname-derived object_id.
+        tagged = f"{domain}.{key}"
         disabled_by = _enum_text(getattr(row, "disabled_by", None))
         hidden_by = _enum_text(getattr(row, "hidden_by", None))
         if disabled_by:
-            section.setdefault("disabled", {})[key] = disabled_by
+            section.setdefault("disabled", {})[tagged] = disabled_by
             continue
         if hidden_by:
-            section.setdefault("hidden", {})[key] = hidden_by
+            section.setdefault("hidden", {})[tagged] = hidden_by
         if not callable(state_get):
             continue
         if _is_restored(state_get, entity_id):
-            section.setdefault("not_created", []).append(key)
+            section.setdefault("not_created", []).append(tagged)
 
     totals: dict = {}
     for section in per_appliance.values():

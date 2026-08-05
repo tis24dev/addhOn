@@ -1151,7 +1151,7 @@ class EntityInventoryTest(unittest.TestCase):
         rows = self._rows(AP_ROWS[:1], disabled_by="user") + self._rows(AP_ROWS[1:])
         live = FakeStates(live=[eid for _uid, eid in AP_ROWS[1:]])
         _result, entities = self._dump(rows, states=live)
-        self.assertEqual({"child_lock": "user"}, entities["disabled"])
+        self.assertEqual({"switch.child_lock": "user"}, entities["disabled"])
         self.assertNotIn("not_created", entities)
         self.assertIn("child_lock", entities["by_domain"]["switch"])
 
@@ -1161,14 +1161,16 @@ class EntityInventoryTest(unittest.TestCase):
         rows = self._rows(AP_ROWS[:1], hidden_by="user") + self._rows(AP_ROWS[1:])
         live = FakeStates(live=[eid for _uid, eid in AP_ROWS])
         _result, entities = self._dump(rows, states=live)
-        self.assertEqual({"child_lock": "user"}, entities["hidden"])
+        self.assertEqual({"switch.child_lock": "user"}, entities["hidden"])
 
     def test_a_row_with_no_live_entity_is_reported_as_not_created(self) -> None:
         """The registry survives reloads, so a platform that broke AFTER a working
         install still has its rows. Only the state machine tells them apart."""
         live = FakeStates(live=[eid for _uid, eid in AP_ROWS[2:]])
         _result, entities = self._dump(self._rows(), states=live)
-        self.assertEqual(["child_lock", "touch_tone"], entities["not_created"])
+        self.assertEqual(
+            ["switch.child_lock", "switch.touch_tone"], entities["not_created"]
+        )
 
     def test_a_restored_state_counts_as_not_created(self) -> None:
         """Home Assistant leaves a placeholder state carrying restored=True for a
@@ -1178,7 +1180,7 @@ class EntityInventoryTest(unittest.TestCase):
             restored=[AP_ROWS[0][1]],
         )
         _result, entities = self._dump(self._rows(), states=states)
-        self.assertEqual(["child_lock"], entities["not_created"])
+        self.assertEqual(["switch.child_lock"], entities["not_created"])
 
     def test_without_a_state_machine_the_status_says_so(self) -> None:
         """FakeHass has no `states`. The section must not claim a cross-check it
@@ -1326,6 +1328,175 @@ class EntityInventoryTest(unittest.TestCase):
         )
 
 
+class EntityInventoryScopeTest(unittest.TestCase):
+    """The claims the single-appliance tests structurally cannot make."""
+
+    def tearDown(self) -> None:
+        _restore_registry()
+
+    def test_two_entities_sharing_a_suffix_across_domains_do_not_collide(self) -> None:
+        """A wine cooler holds a `light` SWITCH and a `light` BINARY SENSOR: same
+        unique_id suffix, different domains, both legitimate. Keyed by the bare
+        suffix, one silently overwrote the other and the reader could not tell
+        which entity a finding was about."""
+        rows = [
+            FakeRegistryEntry("wc-1_light", "switch.cantina_light", disabled_by="user"),
+            FakeRegistryEntry("wc-1_light", "binary_sensor.cantina_light"),
+        ]
+        inventory, _platforms = diagnostics._entity_inventory(
+            rows, ["wc-1"], "e1", FakeStates().get
+        )
+        section = inventory["wc-1"]
+
+        self.assertEqual({"switch.light": "user"}, section["disabled"])
+        self.assertEqual(["binary_sensor.light"], section["not_created"])
+        self.assertEqual(
+            {"switch": ["light"], "binary_sensor": ["light"]}, section["by_domain"]
+        )
+
+    def test_a_zone_row_never_lands_on_the_base_appliance(self) -> None:
+        """A zoned appliance is `<base>_z1`. When the poll drops the zone but its
+        registry rows survive, the row must not fall back onto the base appliance
+        and drag its not_created finding with it."""
+        rows = [
+            FakeRegistryEntry("ac-1_child_lock", "switch.ac_child_lock"),
+            FakeRegistryEntry("ac-1_z1_purifier", "fan.ac_zone_one"),
+        ]
+        inventory, platforms = diagnostics._entity_inventory(
+            rows, ["ac-1"], "e1", FakeStates().get
+        )
+
+        self.assertEqual({"switch": ["child_lock"]}, inventory["ac-1"]["by_domain"])
+        self.assertEqual(["switch.child_lock"], inventory["ac-1"]["not_created"])
+        self.assertEqual(1, platforms["unattributed"])
+
+    def test_a_present_zone_still_gets_its_own_rows(self) -> None:
+        """The guard above must not cost a correctly-declared zone its entities."""
+        rows = [
+            FakeRegistryEntry("ac-1_child_lock", "switch.ac_child_lock"),
+            FakeRegistryEntry("ac-1_z1_purifier", "fan.ac_zone_one"),
+        ]
+        inventory, platforms = diagnostics._entity_inventory(
+            rows, ["ac-1", "ac-1_z1"], "e1", None
+        )
+
+        self.assertEqual({"switch": ["child_lock"]}, inventory["ac-1"]["by_domain"])
+        self.assertEqual({"fan": ["purifier"]}, inventory["ac-1_z1"]["by_domain"])
+        self.assertEqual(0, platforms["unattributed"])
+
+    def test_only_the_zone_shape_is_treated_as_a_zone(self) -> None:
+        """The guard keys on the `z<N>_` shape the id builder produces, not on the
+        letter: a future entity key that merely starts with a z stays attributed."""
+        rows = [FakeRegistryEntry("ac-1_zone_mode", "select.ac_zone_mode")]
+        inventory, platforms = diagnostics._entity_inventory(
+            rows, ["ac-1"], "e1", None
+        )
+
+        self.assertEqual({"select": ["zone_mode"]}, inventory["ac-1"]["by_domain"])
+        self.assertEqual(0, platforms["unattributed"])
+
+    def test_the_entry_dump_keeps_two_appliances_apart(self) -> None:
+        """Attribution through the real entry point, which every other dump-level
+        test cannot check because it builds a single appliance."""
+        coord = _build_ap_coordinator()
+        coord.data["ap-unique_z1"] = dict(coord.data[AP_ID])
+        rows = [
+            FakeRegistryEntry("ap-unique_child_lock", "switch.first_child_lock"),
+            FakeRegistryEntry("ap-unique_z1_purifier", "fan.second"),
+        ]
+        hass = RegistryHass(coord, rows=rows, states=FakeStates())
+        _install_registry(hass)
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+        )
+        # Blocks come out in coordinator order: the base appliance, then its zone.
+        base, zone = result["appliances"]
+
+        self.assertEqual({"switch": ["child_lock"]}, base["entities"]["by_domain"])
+        self.assertEqual({"fan": ["purifier"]}, zone["entities"]["by_domain"])
+        self.assertEqual(
+            {"switch": 1, "fan": 1}, result["platforms"]["appliance_totals"]
+        )
+
+    def test_the_device_dump_carries_only_its_own_appliance(self) -> None:
+        """The device hook builds the inventory over EVERY id on purpose; this pins
+        that the sibling's rows do not leak into the requested block."""
+        coord = _build_ap_coordinator()
+        coord.data["ap-unique_z1"] = dict(coord.data[AP_ID])
+        rows = [
+            FakeRegistryEntry("ap-unique_child_lock", "switch.first_child_lock"),
+            FakeRegistryEntry("ap-unique_z1_purifier", "fan.second"),
+        ]
+        hass = RegistryHass(coord, rows=rows, states=FakeStates())
+        _install_registry(hass)
+        result = _run(
+            diagnostics.async_get_device_diagnostics(
+                hass, FakeEntry(), FakeDevice(identifiers={(DOMAIN, AP_ID)})
+            )
+        )
+        self.assertEqual(
+            {"switch": ["child_lock"]},
+            result["appliance"]["entities"]["by_domain"],
+        )
+
+    def test_the_entry_totals_add_the_appliances_up(self) -> None:
+        """appliance_totals was only ever asserted negatively, so the accumulation
+        itself was never exercised."""
+        rows = [
+            FakeRegistryEntry("ap-a_child_lock", "switch.a_child_lock"),
+            FakeRegistryEntry("ap-a_touch_tone", "switch.a_touch_tone"),
+            FakeRegistryEntry("ap-b_child_lock", "switch.b_child_lock"),
+            FakeRegistryEntry("ap-b_purifier", "fan.b"),
+        ]
+        inventory, platforms = diagnostics._entity_inventory(
+            rows, ["ap-a", "ap-b"], "e1", None
+        )
+
+        self.assertEqual({"switch": 3, "fan": 1}, platforms["appliance_totals"])
+        counted = sum(
+            len(keys)
+            for section in inventory.values()
+            for keys in section["by_domain"].values()
+        )
+        self.assertEqual(sum(platforms["appliance_totals"].values()), counted)
+
+    def test_a_hidden_entity_is_still_checked_for_life(self) -> None:
+        """Deliberately asymmetric with the disabled case: hidden entities ARE
+        added by their platform and do get a state, so a hidden row with no state
+        is the same finding as any other."""
+        rows = [
+            FakeRegistryEntry(
+                "ap-1_child_lock", "switch.p_child_lock", hidden_by="integration"
+            )
+        ]
+        inventory, _platforms = diagnostics._entity_inventory(
+            rows, ["ap-1"], "e1", FakeStates().get
+        )
+        section = inventory["ap-1"]
+
+        self.assertEqual({"switch.child_lock": "integration"}, section["hidden"])
+        self.assertEqual(["switch.child_lock"], section["not_created"])
+
+    def test_the_lists_come_out_sorted(self) -> None:
+        """Fed in reverse order, so a test that never observes ordering cannot
+        pass by accident."""
+        rows = [
+            FakeRegistryEntry("ap-1_touch_tone", "switch.p_tt"),
+            FakeRegistryEntry("ap-1_child_lock", "switch.p_cl"),
+            FakeRegistryEntry("ap-1_aroma", "select.p_aroma"),
+        ]
+        inventory, _platforms = diagnostics._entity_inventory(
+            rows, ["ap-1"], "e1", FakeStates().get
+        )
+        section = inventory["ap-1"]
+
+        self.assertEqual(["child_lock", "touch_tone"], section["by_domain"]["switch"])
+        self.assertEqual(
+            ["select.aroma", "switch.child_lock", "switch.touch_tone"],
+            section["not_created"],
+        )
+
+
 class EntityInventoryIdentityTest(unittest.TestCase):
     def tearDown(self) -> None:
         _restore_registry()
@@ -1350,7 +1521,9 @@ class EntityInventoryIdentityTest(unittest.TestCase):
 
         self.assertNotIn(AP_ID, encoded)
         self.assertNotIn("purificatore_di_mario", encoded)
-        self.assertNotIn("switch.", encoded)
+        # The qualified key looks like an entity_id and is not one: its right-hand
+        # side is the code-authored unique_id suffix, never the nickname slug.
+        self.assertNotIn("switch.purificatore", encoded)
         self.assertIn("child_lock", encoded)
 
 
