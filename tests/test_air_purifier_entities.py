@@ -1456,6 +1456,76 @@ class AirPurifierSwitchArchitectureTest(unittest.TestCase):
         self.assertNotIn("async_send_settings", source)
 
 
+class AirPurifierSwitchSkipLoggingTest(unittest.IsolatedAsyncioTestCase):
+    """A rejected toggle must say WHY.
+
+    Both gates used to `continue` in silence while the summary line named only
+    what was built, so a purifier missing a control looked exactly like a
+    purifier that never reached the branch. A field report sat in that state for
+    two weeks because neither the log nor the dump carried the deciding input.
+    """
+
+    async def _skip_records(self, **kwargs):
+        import logging
+
+        from custom_components.addhon import switch
+
+        with self.assertLogs(switch._LOGGER, level=logging.DEBUG) as caught:
+            await _build_switches(**kwargs)
+        return [line for line in caught.output if "no purifier" in line]
+
+    async def test_a_capability_rejection_names_the_capability(self) -> None:
+        """lockStatus declared over three values is not a toggle, so the gate
+        refuses it. The log must say which capability said no."""
+        records = await self._skip_records(
+            schema=_toggle_schema(lockStatus=["0", "1", "2"])
+        )
+        joined = "\n".join(records)
+
+        self.assertIn("child_lock", joined)
+        self.assertIn("supports_lock", joined)
+        self.assertIn("supports_lock=False", joined)
+
+    async def test_a_missing_state_is_distinguished_from_a_missing_capability(
+        self,
+    ) -> None:
+        """The two gates fail for opposite reasons and the reader must be able to
+        tell them apart: here the schema is complete and the STATE is absent."""
+        attributes = {k: v for k, v in FULL_ATTRIBUTES.items() if k != "lockStatus"}
+        records = await self._skip_records(
+            attributes=attributes, schema=_toggle_schema()
+        )
+        joined = "\n".join(records)
+
+        self.assertIn("supports_lock=True", joined)
+        self.assertIn("reports_lockStatus=False", joined)
+
+    async def test_the_rejection_carries_the_capability_set(self) -> None:
+        """The materialised schema values are what the gate compares, and no
+        other artifact carries them: the dump casts a range's bounds to float, so
+        "0"/"1" and "0.0"/"1.0" are indistinguishable there."""
+        records = await self._skip_records(
+            schema=_toggle_schema(lockStatus=["0", "1", "2"])
+        )
+        joined = "\n".join(records)
+
+        self.assertIn("lock_values=", joined)
+        self.assertIn("settings_command=", joined)
+
+    async def test_nothing_is_logged_when_both_toggles_are_built(self) -> None:
+        records = await self._skip_records(schema=_toggle_schema())
+        self.assertEqual([], records)
+
+    async def test_the_rejection_never_carries_the_appliance_id(self) -> None:
+        records = await self._skip_records(
+            schema=_toggle_schema(lockStatus=["0", "1", "2"])
+        )
+        joined = "\n".join(records)
+
+        self.assertNotIn("ap-1", joined)
+        self.assertIn("***", joined)
+
+
 class _ExplodingAppliance:
     """An appliance whose schema cannot be read at all."""
 

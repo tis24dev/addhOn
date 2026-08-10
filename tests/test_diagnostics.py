@@ -395,6 +395,63 @@ class DiagnosticsValuesTest(unittest.TestCase):
         schema = diagnostics._param_schema(param)
         self.assertEqual((schema["min"], schema["max"], schema["step"]), (0, 1400, 100))
         self.assertNotIn("enum", schema)
+        self.assertNotIn("values", schema)
+
+    def test_a_small_range_carries_the_values_it_materialises(self):
+        """min/max/step cannot answer why a 0/1 control is missing: param_range
+        casts through float(), so "0"/"1" and "0.0"/"1.0" print the same here,
+        while the capability gates compare those exact strings."""
+        param = FakeParam(
+            value="0", typology="range", rng=(0, 1, 1), values=["0", "1"]
+        )
+        self.assertEqual(["0", "1"], diagnostics._param_schema(param)["values"])
+
+    def test_a_decimal_spelled_range_is_visible_as_such(self):
+        """The whole point: the dump must distinguish the grid that passes a
+        capability gate from the one that silently removes the control."""
+        param = FakeParam(
+            value="0", typology="range", rng=(0, 1, 1), values=["0.0", "1.0"]
+        )
+        schema = diagnostics._param_schema(param)
+        self.assertEqual((schema["min"], schema["max"], schema["step"]), (0, 1, 1))
+        self.assertEqual(["0.0", "1.0"], schema["values"])
+
+    def test_the_materialised_grid_is_bounded(self):
+        """Emitted only for a grid small enough to be a toggle or a few-position
+        control. The bound is evaluated arithmetically, so `.values` is never read
+        for a real setpoint range."""
+        cap = diagnostics._RANGE_MAX_MATERIALISED
+        inside = FakeParam(
+            value="0", typology="range", rng=(0, cap - 1, 1),
+            values=[str(v) for v in range(cap)],
+        )
+        outside = FakeParam(
+            value="0", typology="range", rng=(0, cap, 1),
+            values=[str(v) for v in range(cap + 1)],
+        )
+        self.assertIn("values", diagnostics._param_schema(inside))
+        self.assertNotIn("values", diagnostics._param_schema(outside))
+
+    def test_a_huge_grid_is_never_materialised_to_measure_it(self):
+        """A parameter whose `.values` would explode must be refused WITHOUT the
+        property ever being read: the count comes from min/max/step. Not a
+        FakeParam subclass, because that one ASSIGNS self.values and a property
+        cannot be assigned over."""
+
+        class ExplodingRange:
+            typology = "range"
+            category = "command"
+            mandatory = 0
+            value = "0"
+            min, max, step = 0, 100000, 1
+
+            @property
+            def values(self):  # pragma: no cover - must never be reached
+                raise AssertionError("`.values` was materialised for a huge range")
+
+        schema = diagnostics._param_schema(ExplodingRange())
+        self.assertNotIn("values", schema)
+        self.assertEqual(100000, schema["max"])
 
     def test_mac_in_value_under_benign_key_is_masked(self):
         # Identity that lands in a string VALUE under a non-redacted key (an event

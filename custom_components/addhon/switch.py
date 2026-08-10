@@ -259,9 +259,36 @@ def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> l
             # Both halves are gated: the write schema via the capability, the
             # read state via the reported attribute. A toggle that cannot be
             # read back would ship permanently unknown.
-            if not getattr(capabilities, desc.capability):
-                continue
-            if not reports_attribute(attributes, desc.param):
+            #
+            # A REJECTION is logged, with both verdicts and the whole capability
+            # set. These two gates used to `continue` in silence and the summary
+            # below names only what WAS built, so a purifier missing a toggle
+            # read exactly like a purifier that never reached this branch -- the
+            # state a field report sat in for two weeks. The sibling platforms
+            # (light.py, select.py) have always logged their skips this way.
+            #
+            # The capability set is the deciding input and nothing else carries
+            # it: the gate compares MATERIALISED schema values, while the
+            # diagnostics dump casts a range's bounds through float(), so "0"/"1"
+            # and "0.0"/"1.0" look identical there though only the first passes.
+            # Logged whole because `settings_command` answers a second question
+            # in the same line, namely which command the parameters were resolved
+            # against. Every field is derived data -- raw values, bools, a command
+            # name -- and none of it is identity.
+            writable = bool(getattr(capabilities, desc.capability, False))
+            readable = reports_attribute(attributes, desc.param)
+            if not writable or not readable:
+                _LOGGER.debug(
+                    "Switch debug: no purifier '%s' switch for id=%s "
+                    "(%s=%s reports_%s=%s caps=%s)",
+                    desc.key,
+                    redact_id(appliance_id),
+                    desc.capability,
+                    writable,
+                    desc.param,
+                    readable,
+                    capabilities,
+                )
                 continue
             found.append(
                 HonAirPurifierSwitch(

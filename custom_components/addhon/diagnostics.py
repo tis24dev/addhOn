@@ -184,6 +184,13 @@ _COVERAGE_META_PARAMS = frozenset(
 # future-capability bounds it announces itself rather than truncating silently.
 _ENTITY_MAX_PER_DOMAIN = 80
 
+# Bound on materialising a RANGE's grid into the dump (see `_param_schema`). Only a
+# grid this small is enumerated, so the never-enumerate-a-setpoint rule stands. 8
+# covers every few-position control observed so far -- a 0/1 lock or tone, a 0..2
+# panel light, a 0..4 aroma -- and eight short numeric strings are noise next to the
+# blocks around them.
+_RANGE_MAX_MATERIALISED = 8
+
 _FUTURE_MAX_ENTRIES = 40
 _FUTURE_MAX_VALUES = 20
 # A separate CHARACTER bound. An unhandled state value is one scalar, so it needs a
@@ -266,8 +273,9 @@ def _param_value(param):
 
 
 def _param_schema(param) -> dict:
-    """Schema of one command parameter: value + metadata, plus range (min/max/step)
-    for a range param OR enum as a fallback only when the param is not a range."""
+    """Schema of one command parameter: value + metadata, plus range (min/max/step,
+    and the materialised grid when it is small enough) for a range param OR enum as
+    a fallback only when the param is not a range."""
     schema: dict = {
         "value": _param_value(param),
         "typology": getattr(param, "typology", None),
@@ -282,7 +290,27 @@ def _param_schema(param) -> dict:
     # meaningful for enum/fixed params, where param_range() returns None.
     rng = param_range(param)
     if rng is not None:
+        low, high, step = rng
         schema["min"], schema["max"], schema["step"] = rng
+        # ...and, for a SMALL grid only, the values it actually materialises.
+        #
+        # min/max/step cannot answer the question a missing 0/1 control raises.
+        # param_range() casts through float(), so a schema spelling its bounds
+        # "0"/"1" and one spelling them "0.0"/"1.0" print IDENTICALLY here, while
+        # `.values` yields ['0', '1'] for the first and ['0.0', '1.0'] for the
+        # second -- and the capability gates compare exactly those STRINGS
+        # (air_purifier.supports_lock is `lock_values == {"0", "1"}`). A single
+        # decimal-spelled minimumValue or incrementValue therefore removes a
+        # control, and until now the deciding input appeared nowhere in the dump.
+        #
+        # The bound is what keeps the rule above intact: a real setpoint range is
+        # still never enumerated. The point count is computed ARITHMETICALLY, and
+        # param_range() has already guaranteed step > 0 and max >= min, so a
+        # 0..1400 step 100 grid is refused without `.values` ever being read.
+        # Emitted under its own key, never `enum`: this is the grid a range
+        # materialises, not an enumeration the device declares.
+        if (high - low) / step + 1 <= _RANGE_MAX_MATERIALISED:
+            schema["values"] = param_values(param)
     else:
         enum = param_values(param)
         if enum:
