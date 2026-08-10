@@ -348,6 +348,50 @@ class RealtimeReconciliationTest(unittest.TestCase):
         self.assertFalse(app.connection)  # NOT resurrected
 
 
+class ModelAttributesTest(unittest.TestCase):
+    """`applianceModel.attributes` -> parName/parValue mapping.
+
+    Model CATALOGUE metadata, not shadow telemetry: it is what tells us the
+    appliance declares e.g. `zones = fridge|freezer|vtRoom1`, which the hOn app
+    treats as authoritative for which zones exist. Feeds diagnostics.
+    """
+
+    def test_empty_before_commands_are_loaded(self) -> None:
+        app = NaRoot(FakeApi(), json.loads(json.dumps(_INFO)), zone=0)
+        self.assertEqual(app.model_attributes, {})
+
+    def test_list_payload_flattened_from_real_dump(self) -> None:
+        app = NaRoot(FakeApi(), json.loads(json.dumps(_INFO)), zone=0)
+        _run(app.load_commands())
+        attrs = app.model_attributes
+        self.assertEqual(attrs["zones"], "fridge|freezer|vtRoom1")
+        self.assertEqual(attrs["seriesVersion"], "2d60Series3bis")
+        self.assertEqual(attrs["doorNumber"], "2")
+
+    def test_mapping_payload_accepted_as_is(self) -> None:
+        app = NaRoot(FakeApi(), json.loads(json.dumps(_INFO)), zone=0)
+        app._appliance_model = {"attributes": {"zones": "fridge|vtRoom2"}}
+        self.assertEqual(app.model_attributes, {"zones": "fridge|vtRoom2"})
+
+    def test_malformed_rows_skipped_without_raising(self) -> None:
+        app = NaRoot(FakeApi(), json.loads(json.dumps(_INFO)), zone=0)
+        app._appliance_model = {
+            "attributes": [
+                {"parName": "zones", "parValue": "fridge"},
+                {"parValue": "orphan"},  # no parName
+                {"parName": "", "parValue": "empty name"},
+                "not-a-row",
+                {"parName": "noValue"},  # present but valueless -> None, still kept
+            ]
+        }
+        self.assertEqual(app.model_attributes, {"zones": "fridge", "noValue": None})
+
+    def test_absent_or_wrong_typed_payload_is_empty(self) -> None:
+        app = NaRoot(FakeApi(), json.loads(json.dumps(_INFO)), zone=0)
+        app._appliance_model = {"attributes": "fridge|freezer"}
+        self.assertEqual(app.model_attributes, {})
+
+
 class RootGoldenTest(unittest.TestCase):
     def test_native_root_matches_golden(self) -> None:
         snap = _native_snapshot()

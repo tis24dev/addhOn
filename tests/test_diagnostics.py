@@ -233,6 +233,19 @@ class FakeCommand:
 
 
 class FakeAppliance:
+    def __init__(self, commands, model_attributes=None):
+        self.commands = commands
+        if model_attributes is not None:
+            self.model_attributes = model_attributes
+
+
+class FakeApplianceNoModel:
+    """An appliance implementation with NO `model_attributes` surface at all.
+
+    Guards the getattr default: an older/foreign appliance object must not make
+    the whole dump raise.
+    """
+
     def __init__(self, commands):
         self.commands = commands
 
@@ -276,9 +289,16 @@ def _build_coordinator() -> FakeCoordinator:
                 # no entity writes this -> unmapped writable
                 "mysteryParam": FakeParam(value="3", typology="enum", values=["3", "4"]),
             }),
-        }
+        },
+        # Cloud CATALOGUE metadata (applianceModel.attributes), not shadow telemetry.
+        model_attributes={
+            "zones": "fridge|freezer|vtRoom2",
+            "seriesVersion": "fd90Series7a",
+            "doorNumber": 4,
+        },
     )
-    wd = FakeAppliance(
+    # No model_attributes surface at all -> the block must still build, with {}.
+    wd = FakeApplianceNoModel(
         commands={
             "settings": FakeCommand({
                 "program": FakeParam(value="9", typology="enum", values=["9", "10"]),  # mapped
@@ -397,6 +417,54 @@ class DiagnosticsValuesTest(unittest.TestCase):
         dumped = json.dumps(out)
         self.assertNotIn("3C:71:BF:BD:32:2C", dumped)
         self.assertEqual(out["deviceInfo"], "mac ***")
+
+
+class DiagnosticsModelAttributesTest(unittest.TestCase):
+    """The model CATALOGUE block (`applianceModel.attributes`).
+
+    It answers what the appliance IS where the shadow cannot: which zones the
+    model declares, which series it belongs to. Without it a zone-indexing
+    report cannot be diagnosed from the dump alone (issue #75).
+    """
+
+    def test_model_attributes_present_and_readable(self):
+        _, blocks = _entry_diag()
+        model = blocks["AC"]["model_attributes"]
+        self.assertEqual(model["zones"], "fridge|freezer|vtRoom2")
+        self.assertEqual(model["seriesVersion"], "fd90Series7a")
+        self.assertEqual(model["doorNumber"], 4)
+
+    def test_appliance_without_the_surface_gets_empty_dict(self):
+        _, blocks = _entry_diag()
+        self.assertEqual(blocks["WD"]["model_attributes"], {})
+
+    def test_distinct_from_shadow_attributes(self):
+        # Same block, two axes: catalogue vs telemetry. A key of one must not
+        # leak into the other.
+        _, blocks = _entry_diag()
+        self.assertNotIn("zones", blocks["AC"]["attributes"])
+        self.assertNotIn("tempIndoor", blocks["AC"]["model_attributes"])
+
+    def test_non_mapping_surface_is_ignored(self):
+        self.assertEqual(diagnostics._model_attributes(object()), {})
+        self.assertEqual(
+            diagnostics._model_attributes(
+                FakeAppliance(commands={}, model_attributes=["zones"])
+            ),
+            {},
+        )
+
+    def test_redaction_still_applies_to_the_block(self):
+        # model_attributes goes through _redact like every other section: a
+        # catalogue row named after an identity key must not pass in cleartext.
+        app = FakeAppliance(
+            commands={}, model_attributes={"macAddress": "AA:BB:CC:DD:EE:FF", "zones": "fridge"}
+        )
+        block = diagnostics._appliance_block(
+            "id1", {"appliance": app, "type": "AC", "attributes": {}, "statistics": {}}
+        )
+        self.assertEqual(block["model_attributes"]["macAddress"], "***")
+        self.assertEqual(block["model_attributes"]["zones"], "fridge")
 
 
 class DiagnosticsCoverageTest(unittest.TestCase):

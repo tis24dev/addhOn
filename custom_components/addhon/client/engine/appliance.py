@@ -145,6 +145,33 @@ class HonAppliance:
         return dict(self._appliance_model.get("options", {}))
 
     @property
+    def model_attributes(self) -> dict[str, Any]:
+        """Per-MODEL metadata from `applianceModel.attributes` (cloud catalogue).
+
+        Distinct from `attributes`, which is the device SHADOW (live telemetry):
+        this describes what the MODEL is, not what it is currently doing:
+        `zones`, `vtRoom1`/`vtRoom2`, `seriesVersion`, `doorNumber`, ... The hOn
+        app treats these as authoritative where the shadow is not: it decides
+        which fridge zones exist from `zones`.split("|"), never from which
+        `tempZ*`/`tempSel*` keys the shadow happens to carry.
+
+        The cloud sends a LIST of `{parName, parValue, ...}` rows; flatten it to
+        parName -> parValue, the same normalisation __init__ applies to the
+        appliance-level `attributes`. Some payloads send a mapping already;
+        accept both and never raise on a malformed row.
+        """
+        raw = self._appliance_model.get("attributes")
+        if isinstance(raw, Mapping):
+            return {str(key): value for key, value in raw.items()}
+        if isinstance(raw, list):
+            return {
+                str(row["parName"]): row.get("parValue")
+                for row in raw
+                if isinstance(row, Mapping) and row.get("parName")
+            }
+        return {}
+
+    @property
     def commands(self) -> dict[str, HonCommand]:
         return self._commands
 

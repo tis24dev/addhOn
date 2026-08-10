@@ -9,6 +9,14 @@ diagnostics" button for the config entry AND for each device (the latter is wire
 by async_get_device_diagnostics below); no custom button is needed.
 
 Per appliance the dump carries, beyond the bare key list it used to emit:
+  * `model_attributes` - the cloud CATALOGUE metadata for the model
+                    (`applianceModel.attributes`): `zones`, `seriesVersion`,
+                    `doorNumber`, `vtRoom1`/`vtRoom2`, ... It answers what the
+                    appliance IS, which the shadow cannot: the hOn app decides
+                    which fridge zones exist from `zones`.split("|"), not from
+                    which `tempZ*` keys the shadow carries. Without it, a
+                    zone-indexing report (issue #75) needs a round trip to the
+                    reporter before it can even be diagnosed.
   * `attributes`  - the attribute VALUES (telemetry/state), recursively redacted;
   * `commands`    - the writable schema per command param: value + enum + min/max/
                     step + typology, so a maintainer sees the real ranges/options;
@@ -282,6 +290,20 @@ def _param_schema(param) -> dict:
     return schema
 
 
+def _model_attributes(appliance) -> dict:
+    """Cloud catalogue metadata for the MODEL, flattened to parName -> parValue.
+
+    Read straight off the appliance (`applianceModel.attributes`, already
+    normalised by the engine), not off the coordinator entry: it is per-model
+    and immutable for the session, so it never belongs in the polled snapshot.
+    Returns {} for any appliance implementation that does not expose it.
+    """
+    raw = getattr(appliance, "model_attributes", None)
+    if not isinstance(raw, Mapping):
+        return {}
+    return {str(name): value for name, value in raw.items()}
+
+
 def _command_schema(appliance) -> dict:
     """Per-command, per-parameter schema for every command the appliance exposes."""
     commands = getattr(appliance, "commands", None)
@@ -543,16 +565,18 @@ def _appliance_block(
     statistics = statistics if isinstance(statistics, Mapping) else {}
 
     commands = _command_schema(appliance)
+    model_attributes = _model_attributes(appliance)
     coverage = _coverage(app_type, attributes, statistics, appliance)
     future = _future_capabilities(app_type, attributes, appliance)
 
     _LOGGER.debug(
-        "Diagnostics debug: appliance id=%s name=%s type=%s attrs=%d commands=%d "
-        "unmapped_attrs=%d unmapped_params=%d",
+        "Diagnostics debug: appliance id=%s name=%s type=%s attrs=%d model_attrs=%d "
+        "commands=%d unmapped_attrs=%d unmapped_params=%d",
         redact_id(appliance_id),
         data.get("name"),
         app_type,
         len(attributes),
+        len(model_attributes),
         len(commands),
         len(coverage["attributes_unmapped"]),
         len(coverage["command_params_unmapped"]),
@@ -565,6 +589,8 @@ def _appliance_block(
         "model": data.get("model"),
         "serial": _REDACTED,
         "mac": _REDACTED,
+        # Before `attributes` on purpose: what the model IS, then what it is doing.
+        "model_attributes": model_attributes,
         "attributes": dict(attributes),
         "commands": commands,
         "coverage": coverage,
