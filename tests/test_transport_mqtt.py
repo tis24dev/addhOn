@@ -180,6 +180,48 @@ class StopTest(unittest.TestCase):
         self.assertFalse(m._connection)
 
 
+class SetupPhaseMirrorTest(unittest.TestCase):
+    """The MQTT step must survive the scope `NativeHon.setup()` wraps around it (#76).
+
+    The start is now bounded by MQTT_START under a `phase("mqtt_start")` scope, and that
+    scope writes the HIERARCHICAL mirror -- the one `HonClient._run_on_hon_loop` reads
+    from another thread and PREFERS to the flat one. So the flat mirror this method has
+    always written is no longer enough on its own: without the refinement the outer name
+    would shield it and the connect/subscribe distinction (ADDHON-310 vs 320) would be
+    lost. `step()` does not push the ContextVar, so the enclosing scope still restores
+    everything on the way out.
+    """
+
+    def test_the_step_reaches_both_mirrors_and_does_not_outlive_the_scope(self) -> None:
+        from custom_components.addhon.client.phase import PhaseTracker, phase
+
+        class _Hon(FakeHon):
+            """A session that exposes BOTH mirrors, the way NativeHon does."""
+
+            def __init__(self) -> None:
+                super().__init__([])
+                self._setup_phase = ""
+                self._phase_tracker = PhaseTracker()
+
+        hon = _Hon()
+        client = NativeMqttClient(hon, "MID")
+        with phase("mqtt_start", hon._phase_tracker):
+            client._set_setup_phase("mqtt_connect")
+            self.assertEqual("mqtt_connect", hon._setup_phase)
+            self.assertEqual("mqtt_start/mqtt_connect", hon._phase_tracker.current)
+            client._set_setup_phase("mqtt_subscribe")
+            self.assertEqual("mqtt_start/mqtt_subscribe", hon._phase_tracker.current)
+        # Restored: a refinement can never outlive the scope that framed it.
+        self.assertEqual("", hon._phase_tracker.current)
+
+    def test_a_session_without_a_tracker_is_still_tolerated(self) -> None:
+        # Same defensive contract as the flat write above: a double (or an older
+        # session object) must not break the MQTT start.
+        client = NativeMqttClient(FakeHon([]), "MID")
+        client._set_setup_phase("mqtt_connect")
+        self.assertEqual("mqtt_connect", client._hon._setup_phase)
+
+
 class CreatePathTest(unittest.TestCase):
     """Drives the REAL path create()->_start->_subscribe->watchdog with richer awscrt
     stubs: catches a wiring error (builder/subscribe) invisible to the other tests

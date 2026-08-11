@@ -230,6 +230,33 @@ class CoordinatorResilienceTest(unittest.TestCase):
         self.assertIs(classify(ctx.exception), DECODE_ERROR)
         self.assertFalse(c._first_poll_done)
 
+    def test_first_poll_failure_keeps_the_phase_the_cause_knows(self) -> None:
+        # The strict first-poll wrapper is the twin of the all-failed raise in
+        # `NativeHon.setup()`, which passes phase="load_appliance". This one did not, so
+        # the ONE failure the hierarchical phase was introduced to name arrived with
+        # phase=None: __init__.py reads `getattr(err, "phase", None)` off THIS wrapper
+        # (the __cause__ chain below it is never consulted) and Download Diagnostics
+        # showed a null phase for a fault that knew exactly where it happened.
+        # DECODE_ERROR rather than a timeout for the same reason as the test above: a
+        # retryable code would spend the 15s of server backoff before reaching the
+        # branch under test. What is being pinned is the wrapper forwarding the phase,
+        # which does not depend on which non-auth code the cause carries.
+        from custom_components.addhon.error_codes import DECODE_ERROR
+
+        bad = FakeAppliance("bad")
+        c = _client([bad])  # _first_poll_done False -> the strict branch
+
+        def _update(appliance):
+            raise HonCodedError(
+                DECODE_ERROR, "unreadable command payload", phase="load_appliance"
+            )
+
+        c._update_appliance_sync = _update
+        with self.assertRaises(HonCodedError) as ctx:
+            asyncio.run(c.async_get_appliances_data())
+        self.assertIs(DECODE_ERROR, ctx.exception.error_code)
+        self.assertEqual("load_appliance", ctx.exception.phase)
+
     def test_zero_appliances_returns_empty_without_raising(self) -> None:
         c = _client([])
         c._update_appliance_sync = lambda appliance: None

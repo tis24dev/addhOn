@@ -61,6 +61,7 @@ def _install_stubs() -> None:
 
 _install_stubs()
 
+from custom_components.addhon import error_codes as ec  # noqa: E402
 from custom_components.addhon.client import factory  # noqa: E402
 from custom_components.addhon.client import session as session_mod  # noqa: E402
 from custom_components.addhon.client.session import NativeHon  # noqa: E402
@@ -240,14 +241,25 @@ class NativeSessionSetupTest(unittest.TestCase):
         self.assertEqual([a.mac_address for a in nh.appliances], ["A", "B"])
         self.assertEqual(h.events[0], "load_appliances")
         self.assertEqual(h.events[-1], "mqtt")
-        # for each appliance: cmd -> attr -> stat, and all BEFORE mqtt
+        # for each appliance: cmd -> attr, and all BEFORE mqtt. load_statistics is NOT
+        # part of setup any more (#76): the first coordinator refresh redoes it before
+        # any platform is forwarded, so loading it here only spent 2 extra sequential
+        # round-trips per appliance inside the budget we were overflowing.
         self.assertEqual(
             h.events,
             ["load_appliances",
-             "cmd:A:0", "attr:A:0", "stat:A:0",
-             "cmd:B:0", "attr:B:0", "stat:B:0",
+             "cmd:A:0", "attr:A:0",
+             "cmd:B:0", "attr:B:0",
              "mqtt"],
         )
+
+    def test_setup_never_calls_load_statistics(self) -> None:
+        data = [{"macAddress": "A", "applianceTypeName": "REF"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual([e for e in h.events if e.startswith("stat:")], [])
 
     def test_zone_appliance_split(self) -> None:
         data = [{"macAddress": "Z", "applianceTypeName": "AC", "zone": "2"}]
@@ -542,6 +554,187 @@ class NativeSessionSetupTest(unittest.TestCase):
         nh = self._nh_with_api(h)
         with self.assertRaises(asyncio.CancelledError):
             _run(nh.setup())
+
+    def test_transport_error_on_one_appliance_keeps_the_others(self) -> None:
+        # #76 cause 4. asyncio.TimeoutError derives from OSError, not from any of the
+        # five _APPLIANCE_BUILD_ERRORS, so it used to escape _create_appliance, unwind
+        # setup() and tear the whole config entry down. One slow device must now be
+        # contained: it is kept with partial data and the others still load.
+        class SlowAppliance(FakeAppliance):
+            async def load_commands(self) -> None:
+                self.events.append(f"cmd:{self.mac_address}:{self.zone}")
+                raise asyncio.TimeoutError()
+
+        bad = {"macAddress": "BAD", "applianceTypeName": "REF"}
+        good = {"macAddress": "OK", "applianceTypeName": "WM"}
+        h = _Harness(self, [bad, good])
+
+        def fake_create_appliance(api, data, zone=0):
+            cls = SlowAppliance if data.get("macAddress") == "BAD" else FakeAppliance
+            return cls(api, data, zone, h.events)
+
+        async def fake_make_mqtt(hon):
+            h.events.append("mqtt")
+            return FakeMqtt(h)
+
+        self._patch(factory, "create_appliance", fake_create_appliance)
+        self._patch(NativeHon, "_make_mqtt", fake_make_mqtt)
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="WARNING") as cm:
+            _run(nh.setup())
+        self.assertEqual([a.mac_address for a in nh.appliances], ["BAD", "OK"])
+        self.assertIn("cmd:OK:0", h.events)
+        self.assertEqual(h.events[-1], "mqtt")
+        self.assertEqual(["BAD#0"], list(nh.degraded_appliances))
+        # The WARNING is not gated by the debug toggles -> it lands in
+        # home-assistant.log and must be leak-proof: code label + count, no mac.
+        blob = "\n".join(cm.output)
+        self.assertNotIn("BAD", blob)
+
+    def test_auth_error_during_hydration_still_aborts_setup(self) -> None:
+        # Containing a transport fault must NOT swallow a credentials rejection: it has
+        # to reach _raise_setup_error and open the reauth flow.
+        class RejectedAppliance(FakeAppliance):
+            async def load_commands(self) -> None:
+                raise NativeAuthError("api_auth: status 401")
+
+        data = [{"macAddress": "A", "applianceTypeName": "REF"}]
+        h = _Harness(self, data)
+
+        def fake_create_appliance(api, data, zone=0):
+            return RejectedAppliance(api, data, zone, h.events)
+
+        self._patch(factory, "create_appliance", fake_create_appliance)
+        self._patch(NativeHon, "_make_mqtt", lambda hon: None)
+        nh = self._nh_with_api(h)
+        with self.assertRaises(NativeAuthError):
+            _run(nh.setup())
+
+    def test_all_appliances_failing_hydration_raises_the_real_cause(self) -> None:
+        # Containing ONE appliance is a degradation; containing ALL of them would be a
+        # masked failure that ships an empty integration. And it must carry the REAL
+        # cause: a generic ADDHON-220 with no __cause__ threw away the only code that
+        # tells the user (and Download Diagnostics) what actually happened -- the loss
+        # CR#6 had already fixed on the poll path.
+        class SlowAppliance(FakeAppliance):
+            async def load_commands(self) -> None:
+                raise asyncio.TimeoutError()
+
+        data = [
+            {"macAddress": "A", "applianceTypeName": "REF"},
+            {"macAddress": "B", "applianceTypeName": "WM"},
+        ]
+        h = _Harness(self, data)
+
+        def fake_create_appliance(api, data, zone=0):
+            return SlowAppliance(api, data, zone, h.events)
+
+        self._patch(factory, "create_appliance", fake_create_appliance)
+        self._patch(NativeHon, "_make_mqtt", lambda hon: None)
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            with self.assertRaises(session_mod.HonCodedError) as ctx:
+                _run(nh.setup())
+        self.assertIs(ec.NETWORK_TIMEOUT, ctx.exception.error_code)
+        # The chain reaches the original exception, not a synthetic replacement.
+        chain, cause = [], ctx.exception.__cause__
+        while cause is not None and len(chain) < 5:
+            chain.append(cause)
+            cause = cause.__cause__
+        self.assertTrue(
+            any(isinstance(link, asyncio.TimeoutError) for link in chain),
+            f"the real cause is gone: {chain}",
+        )
+        # Never identity, not even in the "which appliances" message.
+        self.assertNotIn("A", str(ctx.exception).replace("ADDHON", ""))
+        # And it says WHERE. `HonClient.setup_sync` prefers the phase the error carries
+        # over the flat auth mirror, and `__init__.py` reads it straight off this
+        # exception -- drop the keyword and the one report that could have named the
+        # step shows a null phase instead.
+        self.assertEqual("load_appliance", ctx.exception.phase)
+
+    def test_a_mixed_inventory_of_partial_appliances_still_fails(self) -> None:
+        # The under-count the guard used to have: one appliance MALFORMED (counted
+        # nowhere) plus one killed by a transport fault read as "1 failure out of 2"
+        # and shipped an entry whose every device was unusable.
+        class Broken(FakeAppliance):
+            async def load_commands(self) -> None:
+                if self.mac_address == "A":
+                    raise KeyError("malformed payload")
+                raise asyncio.TimeoutError()
+
+        data = [
+            {"macAddress": "A", "applianceTypeName": "REF"},
+            {"macAddress": "B", "applianceTypeName": "WM"},
+        ]
+        h = _Harness(self, data)
+
+        def fake_create_appliance(api, data, zone=0):
+            return Broken(api, data, zone, h.events)
+
+        self._patch(factory, "create_appliance", fake_create_appliance)
+        self._patch(NativeHon, "_make_mqtt", lambda hon: None)
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            with self.assertRaises(session_mod.HonCodedError):
+                _run(nh.setup())
+
+    def test_an_only_malformed_inventory_still_ships_degraded(self) -> None:
+        # The other side of the same rule: raising means "Home Assistant, retry". A
+        # payload the parser cannot read will parse the same way next time, so failing
+        # forever would leave the user with LESS than the degraded entry that ships
+        # today (attributes still work, only the commands are missing).
+        data = [{"macAddress": "A", "applianceTypeName": "REF"}]
+        h = _Harness(self, data, fail_macs={"A"})
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual(1, len(nh.appliances))
+        self.assertFalse(nh.needs_rehydration(nh.appliances[0]))
+
+    def test_a_transport_degraded_appliance_is_queued_for_rehydration(self) -> None:
+        # Containing the fault is only legitimate because the first poll re-runs
+        # load_commands before any entity is created (hon_client).
+        class SlowAppliance(FakeAppliance):
+            async def load_commands(self) -> None:
+                if self.mac_address == "B":
+                    raise asyncio.TimeoutError()
+                await super().load_commands()
+
+        data = [
+            {"macAddress": "A", "applianceTypeName": "REF"},
+            {"macAddress": "B", "applianceTypeName": "WM"},
+        ]
+        h = _Harness(self, data)
+
+        async def no_mqtt(hon):
+            return None
+
+        def fake_create_appliance(api, data, zone=0):
+            return SlowAppliance(api, data, zone, h.events)
+
+        self._patch(factory, "create_appliance", fake_create_appliance)
+        self._patch(NativeHon, "_make_mqtt", no_mqtt)
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            _run(nh.setup())
+        by_mac = {app.mac_address: app for app in nh.appliances}
+        self.assertTrue(nh.needs_rehydration(by_mac["B"]))
+        self.assertFalse(nh.needs_rehydration(by_mac["A"]))
+
+    def test_setup_exposes_a_phase_ledger(self) -> None:
+        data = [{"macAddress": "A", "applianceTypeName": "REF"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        phases = [entry["phase"] for entry in nh.phase_ledger]
+        self.assertIn("load_appliances", phases)
+        self.assertIn("load_appliance", phases)
+        self.assertTrue(all(entry["outcome"] == "ok" for entry in nh.phase_ledger))
+        # Cleared after a clean setup: the hierarchical mirror follows the flat one.
+        self.assertEqual("", nh.current_phase)
+        self.assertNotIn("@", nh.phase_summary)
 
     def test_log_malformed_tolerates_unorderable_keys(self) -> None:
         # _log_malformed runs INSIDE the except handlers, so it must NEVER raise: a

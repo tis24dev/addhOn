@@ -8,24 +8,33 @@ import asyncio
 import concurrent.futures
 import logging
 import threading
+import time
 from typing import Any
 
+from .client import budget
 from .client.auth_diagnostics import (
     AuthDiagnosticTrace,
     classify_failure_reason,
 )
+# Aliased: `_run_on_hon_loop` binds a LOCAL named `phase` for the attribution it
+# samples, and shadowing the scope factory there would be a trap for the next edit.
+from .client.phase import phase as phase_scope
 from .command_dispatch import CommandDispatcher, CommandPatch
 from .debug_utils import debug_key_sample, redact_email, redact_id, redact_mac
 from .error_codes import (
-    APPLIANCE_LOAD_FAILED,
+    CLIENT_SHUTDOWN,
     MFA_REQUIRED,
-    UNKNOWN,
     HonCodedError,
     HonErrorCode,
     classify,
+    error_detail,
     is_rate_limited_text,
     is_server_failure_text,
     phase_timeout_code,
+    # Moved to error_codes so the SETUP path can apply the same rule (the session
+    # cannot import this module). Kept under its original private name: it is the
+    # name every call site and its test already use.
+    representative_failure as _representative_failure,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -267,37 +276,6 @@ def _must_propagate(err: BaseException) -> bool:
     return _requires_reauth(err) or _is_retryable_server_error(err)
 
 
-def _representative_failure(
-    failures: list[tuple[str, Exception]]
-) -> tuple[HonErrorCode, Exception | None]:
-    """Pick a representative (code, error) from per-appliance update failures (CR#6).
-
-    The all-failed (and first-poll) paths used to raise a bare RuntimeError, which
-    classify() maps to UNKNOWN (ADDHON-999) -- losing the real cause from the logs,
-    the UpdateFailed message and Download Diagnostics. This surfaces a MEANINGFUL,
-    NON-AUTH code instead: deterministically, the FIRST failure (in poll order) whose
-    classify() is neither UNKNOWN nor a reauth code; if none qualifies, fall back to
-    APPLIANCE_LOAD_FAILED (ADDHON-220) paired with the first error.
-
-    Rejecting reauth codes is what keeps routing correct. Every error here already
-    passed the non-auth gate (_requires_reauth was False at the call site), but
-    classify() is substring-based and could still name an auth code (e.g. a message
-    that merely contains "login")  -- surfacing it would flip the transient
-    UpdateFailed into a reauth (ConfigEntryAuthFailed). APPLIANCE_LOAD_FAILED is
-    requires_reauth=False, so the fallback stays non-auth too.
-    """
-    chosen: Exception | None = None  # the first failure, kept as the fallback cause
-    for _name, err in failures:
-        if chosen is None:
-            chosen = err
-        code = classify(err)
-        if code is not UNKNOWN and not code.requires_reauth:
-            return code, err
-    # No meaningful non-auth code found (or -- defensively -- an empty list, which the
-    # two gated call sites never pass): fall back to APPLIANCE_LOAD_FAILED, NEVER UNKNOWN.
-    return APPLIANCE_LOAD_FAILED, chosen
-
-
 class HonClient:
     """Manages the connection to the Haier hOn APIs via the native client.
 
@@ -337,6 +315,10 @@ class HonClient:
         # leak-proof 2FA summary, surfaced in the downloadable diagnostics for triage.
         self.last_error_phase: str | None = None
         self.last_mfa_summary: dict | None = None
+        # Per-phase duration+outcome of the last setup attempt (leak-proof primitives:
+        # phase names, rounded seconds, ok/error/timeout). This is the artefact that
+        # makes a report like #76 diagnosable without a live probe.
+        self.last_phase_ledger: list[dict] | None = None
         self._hon_instance = None
         self._api = None
         self._hon_loop: asyncio.AbstractEventLoop | None = None
@@ -369,11 +351,26 @@ class HonClient:
         self._hon_thread.start()
         _LOGGER.debug("Dedicated hOn loop started on thread '%s'", self._hon_thread.name)
 
-    def _run_on_hon_loop(self, coro) -> Any:
+    def _run_on_hon_loop(self, coro, timeout: float | None = None) -> Any:
         """Run a coroutine on the dedicated loop and wait for the result.
 
         Call only from a non-loop thread (e.g. HA's executor).
+
+        `timeout` is the WATCHDOG for this call site, not a budget: every phase inside
+        bounds itself (client/budget.py) and converts its own expiry into an attributed
+        coded error. A single constant used to cover the login, the appliance list, the
+        per-appliance loads and a one-appliance poll alike -- workloads an order of
+        magnitude apart -- which is why it fired first and produced the opaque
+        ADDHON-400 of #76. Omitted -> the legacy 60s.
         """
+        cap = self._RUN_TIMEOUT if timeout is None else timeout
+        # The lock covers the LIFECYCLE read (which loop/thread we are talking to) and
+        # the scheduling, NOT the wait. Waiting under it made every caller of
+        # `close_sync`/`setup_sync` queue behind the SLOWEST in-flight call, and the
+        # caps this file now passes are minutes rather than the legacy 60s: a stalled
+        # poll (APPLIANCE_POLL) would have blocked an unload/reload for ~5 minutes and
+        # Home Assistant would report the unload as slow. Nothing in the wait touches
+        # the lifecycle fields, so it does not belong inside the lock.
         with self._lifecycle_lock:
             loop = self._hon_loop
             if loop is None or not loop.is_running():
@@ -426,47 +423,123 @@ class HonClient:
                     coro.close()
                 raise
 
-            try:
-                return future.result(timeout=self._RUN_TIMEOUT)
-            except concurrent.futures.TimeoutError as timeout_err:
-                drain_future: concurrent.futures.Future = concurrent.futures.Future()
+        started = time.monotonic()
+        try:
+            return future.result(timeout=cap)
+        except concurrent.futures.CancelledError as cancelled:
+            # TEARDOWN, not a timeout: an unload/reload stopped the dedicated loop while
+            # this call was in flight, so `_cancel_pending_tasks` cancelled the task and
+            # `_copy_result` cancelled the future under us. Reachable because the wait
+            # above is deliberately NOT under the lifecycle lock -- holding it made every
+            # unload queue behind the SLOWEST in-flight call, minutes with these caps.
+            #
+            # Without this clause the caller gets a bare, message-less CancelledError
+            # that `classify` can only map to ADDHON-999 (and `representative_failure`
+            # to ADDHON-220): the user's command or poll fails with "Unknown error" and
+            # no line anywhere says the client was shutting down -- precisely the kind of
+            # unfalsifiable report #76 was filed as. It is NOT re-raised as a
+            # cancellation because it is not one: THIS thread is a plain executor thread
+            # that was never cancelled (`concurrent.futures.CancelledError` has been a
+            # separate, ordinary Exception from `asyncio.CancelledError` since 3.8, so
+            # nothing here swallows a real task cancellation). Waiting for the in-flight
+            # call instead is the slow unload this shape exists to avoid.
+            raise HonCodedError(
+                CLIENT_SHUTDOWN, "The hOn client was shut down while the call was running"
+            ) from cancelled
+        except concurrent.futures.TimeoutError as timeout_err:
+            if future.done():
+                # NOT our cap: since Python 3.11 `concurrent.futures.TimeoutError IS
+                # asyncio.TimeoutError IS TimeoutError`, so a BARE TimeoutError raised BY
+                # the coroutine (an aiohttp per-request timeout that no budgeted scope
+                # converted -- e.g. the first-poll `load_commands` rehydration) arrives
+                # here as the very type the cap raises. Telling them apart by TYPE is
+                # impossible; by STATE it is exact: on a real cap expiry the future is
+                # still PENDING, while a coroutine that raised has already FINISHED.
+                # Without this, a fault that had a name was logged as "watchdog fired
+                # after 0.0s" and delivered as the mute ADDHON-460 instead of its own
+                # code. Re-raise it untouched (or hand back a result that landed in the
+                # microsecond race) and let the caller classify it.
+                return future.result()
+            # Phase attribution, read BEFORE anything is cancelled. The
+            # hierarchical mirror (client/phase.py) names the innermost step
+            # actually running -- a lazy sign-in inside the appliance-list request
+            # reads "load_appliances/auth/..." and maps to ADDHON-405/406 instead
+            # of borrowing the caller's label and producing the misleading
+            # ADDHON-400 of #76. It MUST be sampled here: cancelling the task
+            # unwinds the phase scopes, and every `phase()` restores the mirror on
+            # the way out, so a read taken after the drain finds "" and silently
+            # falls back to the flat mirror -- which is the label that was wrong in
+            # the first place. Flat mirror as the fallback (the MQTT layer still
+            # writes only that one). ("" -> LOOP_TIMEOUT.)
+            phase = (
+                getattr(self._hon_instance, "current_phase", "")
+                or getattr(self._hon_instance, "_setup_phase", "")
+                or ""
+            )
+            drain_future: concurrent.futures.Future = concurrent.futures.Future()
+            # The real cause, recovered from the task we are about to cancel. Without
+            # it, a coroutine that failed for a NAMED reason a moment after the cap
+            # expired was reported as a synthetic, message-less timeout -- which is
+            # what made every hypothesis about #76 unfalsifiable on a real install.
+            drained: dict[str, BaseException] = {}
 
-                def _cancel_and_drain() -> None:
-                    task = task_holder.get("task")
-                    if task is None:
+            def _cancel_and_drain() -> None:
+                task = task_holder.get("task")
+                if task is None:
+                    future.cancel()
+                    if not drain_future.done():
+                        drain_future.set_result(None)
+                    return
+
+                # Lost race: the task finished (with an exception) between the cap
+                # expiring and this callback running. Take its error before cancel().
+                if task.done() and not task.cancelled():
+                    done_err = task.exception()
+                    if done_err is not None:
+                        drained["error"] = done_err
+
+                async def _drain_task() -> None:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as err:
+                        drained["error"] = err
+                    if not future.done():
                         future.cancel()
-                        if not drain_future.done():
-                            drain_future.set_result(None)
-                        return
+                    if not drain_future.done():
+                        drain_future.set_result(None)
 
-                    async def _drain_task() -> None:
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as err:
-                            _LOGGER.debug("Error while cancelling hOn task: %s", err)
-                        if not future.done():
-                            future.cancel()
-                        if not drain_future.done():
-                            drain_future.set_result(None)
+                loop.create_task(_drain_task())
 
-                    loop.create_task(_drain_task())
+            try:
+                loop.call_soon_threadsafe(_cancel_and_drain)
+                drain_future.result(timeout=self._CANCEL_TIMEOUT)
+            except Exception as err:
+                _LOGGER.debug("Timeout while cancelling hOn task: %s", err)
+            elapsed = round(time.monotonic() - started, 1)
+            original = drained.get("error")
+            _LOGGER.error(
+                "hOn loop watchdog fired after %ss (phase=%s, cause=%s) [%s]",
+                elapsed,
+                phase or "?",
+                type(original).__name__ if original is not None else "stall",
+                getattr(self._hon_instance, "phase_summary", "") or "no ledger",
+            )
+            if original is not None:
+                # A 2FA challenge that landed across the cap must stay NAKED: wrapping
+                # it in a HonCodedError would break the interactive resume branch.
+                from .client.transport.auth import MFAChallengeRequired
 
-                try:
-                    loop.call_soon_threadsafe(_cancel_and_drain)
-                    drain_future.result(timeout=self._CANCEL_TIMEOUT)
-                except Exception as err:
-                    _LOGGER.debug("Timeout while cancelling hOn task: %s", err)
-                # The bare concurrent.futures.TimeoutError has no message and the
-                # cancelled coroutine's own exception is gone, so re-raise it as a
-                # phase-attributed coded error: the dedicated loop runs setup() on the
-                # hOn session, which records where it stalled (auth / appliance list /
-                # MQTT) in _setup_phase. This is what turns the #30 "spins then
-                # cannot_connect" into a precise ADDHON-NNN. (phase "" -> LOOP_TIMEOUT.)
-                phase = getattr(self._hon_instance, "_setup_phase", "") or ""
-                raise HonCodedError(phase_timeout_code(phase), phase=phase) from timeout_err
+                if isinstance(original, MFAChallengeRequired):
+                    raise original
+                raise HonCodedError(
+                    classify(original, phase=phase), phase=phase
+                ) from original
+            # Genuine stall: the drain produced only a cancellation, so the phase
+            # code is all we know.
+            raise HonCodedError(phase_timeout_code(phase), phase=phase) from timeout_err
 
     def _cancel_pending_tasks(self, loop: asyncio.AbstractEventLoop) -> None:
         """Cancel leftover tasks before stopping the dedicated loop."""
@@ -518,7 +591,10 @@ class HonClient:
 
             if hon is not None:
                 try:
-                    self._run_on_hon_loop(hon.__aexit__(None, None, None))
+                    # Teardown must never wait as long as a setup.
+                    self._run_on_hon_loop(
+                        hon.__aexit__(None, None, None), budget.CLOSE
+                    )
                 except Exception as err:
                     _LOGGER.debug("Error closing hOn session: %s", err)
             self._stop_hon_loop()
@@ -543,6 +619,7 @@ class HonClient:
             self.last_error_code = None
             self.last_error_phase = None
             self.last_mfa_summary = None
+            self.last_phase_ledger = None
             try:
                 if self._hon_loop is None or not self._hon_loop.is_running():
                     self._start_hon_loop()
@@ -557,8 +634,13 @@ class HonClient:
                 )
                 _LOGGER.debug("Hon instance created")
 
-                # Login + aiohttp session init, on the dedicated loop
-                self._api = self._run_on_hon_loop(self._hon_instance.__aenter__())
+                # Login + aiohttp session init, on the dedicated loop. The validation
+                # path (minimal, no MQTT, no per-appliance loads) gets the tighter of
+                # the two watchdogs: a human is waiting on the config-flow form.
+                self._api = self._run_on_hon_loop(
+                    self._hon_instance.__aenter__(),
+                    budget.VALIDATION_CAP if self._validation else budget.SETUP_CAP,
+                )
                 _LOGGER.info("Connection to hOn succeeded for %s", redact_email(self._email))
                 # Re-apply the realtime notify callback to the freshly built session
                 # (rebuilt on every setup/re-auth with _notify_function=None);
@@ -586,11 +668,26 @@ class HonClient:
                 _LOGGER.info("hOn login needs 2FA verification [%s]", MFA_REQUIRED.label)
                 raise
             except Exception as err:
-                self.last_error_phase = getattr(self._hon_instance, "auth_phase", "") or None
+                # Prefer the phase the error CARRIES (hierarchical, recorded where it
+                # was raised) over the auth mirror, which only knows the login steps.
+                self.last_error_phase = (
+                    getattr(err, "phase", None)
+                    or getattr(self._hon_instance, "auth_phase", "")
+                    or None
+                )
                 self.last_error_code = classify(err, phase=self.last_error_phase)
+                self.last_phase_ledger = (
+                    getattr(self._hon_instance, "phase_ledger", None) or None
+                )
                 _LOGGER.error(
-                    "hOn setup failed [%s] (phase=%s): %s",
-                    self.last_error_code.label, self.last_error_phase or "?", err,
+                    # error_detail() strips a leading "ADDHON-NNN: " so the code is not
+                    # printed twice ("Validation failed [ADDHON-400]: ADDHON-400: ..."
+                    # is the doubled line reported in #76).
+                    "hOn setup failed [%s] (phase=%s): %s [%s]",
+                    self.last_error_code.label,
+                    self.last_error_phase or "?",
+                    error_detail(err),
+                    getattr(self._hon_instance, "phase_summary", "") or "no ledger",
                 )
                 self.emit_auth_diagnostics(
                     self.last_error_code,
@@ -636,8 +733,14 @@ class HonClient:
             if self._hon_instance is None:
                 raise RuntimeError("no pending MFA challenge")
             try:
+                # The resume verifies the OTP and then runs the full setup, so it gets
+                # the OTP exchange PLUS the same setup watchdog setup_sync chose --
+                # including the tighter validation one when a human is waiting on the
+                # config-flow form, which is the whole reason the two were split.
                 self._api = self._run_on_hon_loop(
-                    self._hon_instance.submit_mfa_code(context, code)
+                    self._hon_instance.submit_mfa_code(context, code),
+                    budget.MFA_RESUME
+                    + (budget.VALIDATION_CAP if self._validation else budget.SETUP_CAP),
                 )
             except Exception as err:
                 # Record the precise code/phase so the form + diagnostics reflect the real
@@ -664,7 +767,9 @@ class HonClient:
             if self._hon_instance is None:
                 raise RuntimeError("no pending MFA challenge")
             try:
-                self._run_on_hon_loop(self._hon_instance.resend_mfa_code(context))
+                self._run_on_hon_loop(
+                    self._hon_instance.resend_mfa_code(context), budget.COMMAND
+                )
             except Exception as err:
                 self.last_error_phase = "mfa_send"
                 self.last_error_code = classify(err, phase=self.last_error_phase)
@@ -675,11 +780,11 @@ class HonClient:
 
         To be called in executor, not on HA's event loop.
         """
-        return self._run_on_hon_loop(coro)
+        return self._run_on_hon_loop(coro, budget.COMMAND)
 
     def dispatch_patch_sync(self, appliance, patch: CommandPatch) -> bool:
         return self._run_on_hon_loop(
-            self._command_dispatcher.dispatch(appliance, patch)
+            self._command_dispatcher.dispatch(appliance, patch), budget.COMMAND
         )
 
     # -- Appliances -----------------------------------------------------------
@@ -693,12 +798,57 @@ class HonClient:
             _LOGGER.error("Error fetching appliances: %s", err)
             raise RuntimeError(f"Error fetching appliances: {err}") from err
 
+    def _needs_rehydration(self, appliance) -> bool:
+        """Did setup append this appliance without its commands, for a retryable reason?
+
+        getattr so a session double (or an older session object) simply answers "no"
+        instead of breaking the poll.
+        """
+        asker = getattr(self._api, "needs_rehydration", None)
+        return bool(callable(asker) and asker(appliance))
+
     def _update_appliance_sync(self, appliance) -> None:
         """Update an appliance on the dedicated loop (synchronous, called in executor)."""
 
         async def _do_update():
             update_returned_empty = False
             _debug_appliance_consumption("before update", appliance)
+
+            # Attempt 0, first poll only: RE-HYDRATE an appliance the setup contained a
+            # transport fault for (client/session.py::needs_rehydration). update() only
+            # reloads the ATTRIBUTES, so without this the appliance would sail through
+            # the first snapshot with empty `commands` -- and since the platforms call
+            # async_add_entities exactly once, from that snapshot, and the integration
+            # has no dynamic discovery, its select/number/switch/button/climate/fan
+            # entities would never exist until a MANUAL reload. That is the half of the
+            # fault boundary that makes containing the failure legitimate rather than a
+            # silently crippled entry. After the first poll it is pointless (the
+            # entities are already decided), so it costs at most one request per
+            # degraded appliance, once.
+            if not self._first_poll_done and self._needs_rehydration(appliance):
+                loader = getattr(appliance, "load_commands", None)
+                if callable(loader):
+                    # NOT tolerated: a second failure propagates into the strict
+                    # first-poll branch -> ConfigEntryNotReady -> Home Assistant retries
+                    # the whole setup, the only path that can still produce a COMPLETE
+                    # entity inventory.
+                    #
+                    # Under the SAME scope pair `NativeHon._build_appliance` opens for
+                    # the identical call at setup (client/session.py). Without it this
+                    # was the one await on the poll path with no budget and no phase, so
+                    # a per-request aiohttp timeout left it BARE -- and a bare
+                    # TimeoutError carries no phase, so `representative_failure` maps it
+                    # to the mute ADDHON-460 "Setup timed out" instead of the
+                    # ADDHON-400 the failure actually is. Converted here it is attributed
+                    # (issue #76), and the budget stops an unbounded retry of the very
+                    # request that already failed once from spending the whole cap.
+                    with phase_scope(
+                        "load_appliance",
+                        getattr(self._hon_instance, "_phase_tracker", None),
+                    ):
+                        async with budget.budgeted(budget.APPLIANCE_ONE):
+                            await loader()
+                    _debug_appliance_consumption("after rehydrating commands", appliance)
 
             # Attempt 1: standard update()
             if hasattr(appliance, "update") and callable(appliance.update):
@@ -779,7 +929,11 @@ class HonClient:
                     "check the integration version."
                 )
 
-        self._run_on_hon_loop(_do_update())
+        # One appliance = the waves client/budget.py sizes APPLIANCE_ONE on, plus the
+        # lazy sign-in a rejected token can start inline. A cap is waited on from THIS
+        # thread and cannot be suspended the way a scope budget is, so it has to
+        # contain the sign-in instead (client/budget.py::cap).
+        self._run_on_hon_loop(_do_update(), budget.APPLIANCE_POLL)
 
     # -- Re-auth ---------------------------------------------------------------
 
@@ -988,7 +1142,15 @@ class HonClient:
                             [(redact_id(_get_name(appliance)), err)]
                         )
                         raise HonCodedError(
-                            code, "Error updating an appliance on the first poll"
+                            code,
+                            "Error updating an appliance on the first poll",
+                            # Carry the phase the cause already knows (its twin in
+                            # session.py::setup passes phase="load_appliance"). Without
+                            # it Download Diagnostics showed phase=null on exactly the
+                            # failure the hierarchical phase was introduced to name:
+                            # __init__.py reads `getattr(err, "phase", None)` off THIS
+                            # wrapper, and the chain below it is not consulted.
+                            phase=getattr(cause, "phase", None),
                         ) from cause
                     # Steady state: per-appliance resilience. A non-auth failure on ONE
                     # appliance (a transient cloud 5xx that outlived the retries, a

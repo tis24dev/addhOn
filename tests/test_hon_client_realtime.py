@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -125,7 +127,7 @@ class AuthDiagnosticClientTest(unittest.TestCase):
 
         client._command_dispatcher = Dispatcher()  # type: ignore[assignment]
 
-        def run_on_hon_loop(coro: object) -> bool:
+        def run_on_hon_loop(coro: object, timeout: float | None = None) -> bool:
             loop_calls.append(coro)
             return asyncio.run(coro)  # type: ignore[arg-type]
 
@@ -164,6 +166,490 @@ class AuthDiagnosticClientTest(unittest.TestCase):
                 thread.join(timeout=5)
 
 
+class LoopWatchdogAttributionTest(unittest.TestCase):
+    """What the dedicated-loop watchdog reports when it fires (issue #76).
+
+    It used to throw the cancelled coroutine's exception away and rebuild a synthetic
+    error out of phase + code, so a failure that had a NAME arrived nameless. That is
+    why no hypothesis about #76 was falsifiable on a real install.
+    """
+
+    def _client(self) -> HonClient:
+        client = HonClient(email="e@x", password="p")
+        client._start_hon_loop()
+
+        def _stop() -> None:
+            loop = client._hon_loop
+            if loop is not None:
+                loop.call_soon_threadsafe(loop.stop)
+            thread = client._hon_thread
+            if thread is not None:
+                thread.join(timeout=5)
+
+        self.addCleanup(_stop)
+        return client
+
+    def test_genuine_stall_keeps_the_phase_code(self) -> None:
+        from custom_components.addhon import error_codes as ec
+
+        client = self._client()
+        client._hon_instance = types.SimpleNamespace(
+            current_phase="load_appliances", phase_summary=""
+        )
+
+        async def _forever() -> None:
+            await asyncio.sleep(30)
+
+        with self.assertLogs("custom_components.addhon.hon_client", level="ERROR"):
+            with self.assertRaises(ec.HonCodedError) as ctx:
+                client._run_on_hon_loop(_forever(), 0.2)
+        self.assertIs(ec.NETWORK_TIMEOUT, ctx.exception.error_code)
+        self.assertIsInstance(ctx.exception.__cause__, TimeoutError)
+
+    def test_nested_auth_phase_is_attributed_to_the_auth_timeout(self) -> None:
+        # A REAL PhaseTracker driven by REAL phase() scopes, not a frozen string. With
+        # a types.SimpleNamespace whose `current_phase` is a constant, this test passed
+        # while production still answered ADDHON-400: the scopes UNWIND when the task is
+        # cancelled and every phase() restores the mirror on the way out, so a mirror
+        # read after the drain is always "". Only a mirror that really unwinds can pin
+        # that the read happens BEFORE the cancellation.
+        from custom_components.addhon import error_codes as ec
+        from custom_components.addhon.client.phase import PhaseTracker, phase
+
+        tracker = PhaseTracker()
+
+        class _Session:
+            """What NativeHon exposes to the watchdog, backed by the live tracker."""
+
+            _setup_phase = "load_appliances"
+
+            @property
+            def current_phase(self) -> str:
+                return tracker.current
+
+            @property
+            def phase_summary(self) -> str:
+                return tracker.summary()
+
+        client = self._client()
+        client._hon_instance = _Session()
+
+        async def _stalls_inside_a_lazy_signin() -> None:
+            # The exact #76 shape: the sign-in starts inside the appliance-list request.
+            with phase("load_appliances", tracker):
+                with phase("auth/refresh", tracker):
+                    await asyncio.sleep(30)
+
+        with self.assertLogs("custom_components.addhon.hon_client", level="ERROR"):
+            with self.assertRaises(ec.HonCodedError) as ctx:
+                client._run_on_hon_loop(_stalls_inside_a_lazy_signin(), 0.2)
+        self.assertIs(ec.REFRESH_TIMEOUT, ctx.exception.error_code)
+        self.assertEqual("load_appliances/auth/refresh", ctx.exception.phase)
+        # The scopes really did unwind: the mirror is empty by now, so the code above
+        # could only have come from a read taken before the cancellation.
+        self.assertEqual("", tracker.current)
+
+    def test_real_cause_survives_the_race_with_the_watchdog(self) -> None:
+        from custom_components.addhon import error_codes as ec
+
+        client = self._client()
+        client._hon_instance = types.SimpleNamespace(
+            current_phase="load_appliances", phase_summary=""
+        )
+
+        async def _reveals_its_error_on_cancel() -> None:
+            # The lost race, made deterministic: the coroutine's real failure only
+            # surfaces once the watchdog cancels it. Before, `_drain_task` swallowed it
+            # into a DEBUG line and the caller got a synthetic, message-less timeout.
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                raise RuntimeError("hOn server error (status 503)") from None
+
+        with self.assertLogs("custom_components.addhon.hon_client", level="ERROR"):
+            with self.assertRaises(ec.HonCodedError) as ctx:
+                client._run_on_hon_loop(_reveals_its_error_on_cancel(), 0.2)
+        # The real cause, not a synthetic ADDHON-400/460.
+        self.assertIs(ec.SERVER_ERROR, ctx.exception.error_code)
+        self.assertIsInstance(ctx.exception.__cause__, RuntimeError)
+
+    def test_a_timeout_cause_that_loses_the_race_keeps_its_phase(self) -> None:
+        # SAME branch as the test above, other flavour of cause. The recovered error is
+        # classified with `classify(original, phase=phase)`, and for a TIMEOUT the phase
+        # is the WHOLE answer: drop the keyword and `classify` resolves it without one,
+        # turning the attributed ADDHON-406 back into the mute ADDHON-460 of #76 -- on a
+        # failure that had a name. The sibling test uses a RuntimeError, which classify
+        # resolves from the message alone, so it can never see that regression.
+        #
+        # The lost race, made deterministic: the coroutine yields once, then BLOCKS the
+        # loop past the cap and raises a bare per-request TimeoutError. `_cancel_and_drain`
+        # therefore runs only after the task has already finished, which is what selects
+        # the drained-cause branch instead of the genuine-stall one.
+        import time as _time
+
+        from custom_components.addhon import error_codes as ec
+        from custom_components.addhon.client.phase import PhaseTracker, phase
+
+        tracker = PhaseTracker()
+
+        class _Session:
+            _setup_phase = "load_appliances"
+
+            @property
+            def current_phase(self) -> str:
+                return tracker.current
+
+            @property
+            def phase_summary(self) -> str:
+                return tracker.summary()
+
+        client = self._client()
+        client._hon_instance = _Session()
+
+        async def _raises_a_bare_timeout_just_too_late() -> None:
+            with phase("load_appliances", tracker):
+                with phase("auth/refresh", tracker):
+                    await asyncio.sleep(0.05)
+                    _time.sleep(0.5)  # blocking: the drain cannot run before the raise
+                    raise TimeoutError()
+
+        with self.assertLogs("custom_components.addhon.hon_client", level="ERROR"):
+            with self.assertRaises(ec.HonCodedError) as ctx:
+                client._run_on_hon_loop(_raises_a_bare_timeout_just_too_late(), 0.2)
+        self.assertIs(ec.REFRESH_TIMEOUT, ctx.exception.error_code)
+        self.assertEqual("load_appliances/auth/refresh", ctx.exception.phase)
+        self.assertIsInstance(ctx.exception.__cause__, TimeoutError)
+
+    def test_a_teardown_gives_the_in_flight_caller_a_coded_error(self) -> None:
+        # The other side of the narrow lifecycle lock. The wait is deliberately NOT held
+        # under it (an unload used to queue behind the slowest in-flight call, minutes
+        # with these caps), so `close_sync` can now cancel the task under a waiter, and
+        # the waiter gets a bare, message-less concurrent.futures.CancelledError back
+        # from the future -- which classify can only call ADDHON-999 "Unknown error",
+        # with nothing anywhere saying the client was shutting down.
+        #
+        # This pins the decision between the two available semantics: the in-flight call
+        # is ABORTED, never waited for (waiting is the ~5-minute unload the narrow lock
+        # exists to prevent), and the abort is converted into an attributed, ordinary
+        # Exception every guard in the integration already handles.
+        import concurrent.futures
+
+        from custom_components.addhon import error_codes as ec
+
+        client = HonClient(email="e@x", password="p")
+        client._start_hon_loop()
+        client._hon_instance = types.SimpleNamespace(current_phase="", phase_summary="")
+        entered = threading.Event()
+        seen: dict[str, BaseException] = {}
+
+        async def _slow() -> None:
+            entered.set()
+            await asyncio.sleep(30)
+
+        def _wait() -> None:
+            try:
+                client._run_on_hon_loop(_slow(), 30)
+            except BaseException as err:  # noqa: BLE001 - that is the point
+                seen["err"] = err
+
+        worker = threading.Thread(target=_wait, daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 10)
+        self.assertTrue(entered.wait(5), "the coroutine never started")
+
+        started = time.monotonic()
+        client._close_sync()
+        # The teardown does NOT wait for the in-flight call (that is the rejected
+        # alternative: up to APPLIANCE_POLL, ~5 minutes, with Home Assistant reporting
+        # the unload as slow).
+        self.assertLess(time.monotonic() - started, 15)
+        worker.join(10)
+
+        err = seen.get("err")
+        self.assertIsInstance(err, ec.HonCodedError)
+        self.assertIs(ec.CLIENT_SHUTDOWN, err.error_code)
+        self.assertIsInstance(err.__cause__, concurrent.futures.CancelledError)
+        # It routes as a transient failure, never as a reauth prompt...
+        self.assertFalse(ec.CLIENT_SHUTDOWN.requires_reauth)
+        # ...and a real task cancellation is NOT what was swallowed: since 3.8 the two
+        # CancelledErrors are different classes, and only the futures one is caught.
+        self.assertNotIsInstance(err.__cause__, asyncio.CancelledError)
+        # Without the conversion this is all the caller could have been told.
+        self.assertIs(ec.UNKNOWN, ec.classify(err.__cause__))
+
+    def test_mfa_challenge_at_the_cap_propagates_naked(self) -> None:
+        from custom_components.addhon.client.transport.auth import MFAChallengeRequired
+
+        client = self._client()
+        client._hon_instance = types.SimpleNamespace(
+            current_phase="load_appliances", phase_summary=""
+        )
+
+        async def _challenges_on_cancel() -> None:
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                raise MFAChallengeRequired("otp") from None
+
+        with self.assertLogs("custom_components.addhon.hon_client", level="ERROR"):
+            # Wrapping it in a HonCodedError would break the interactive 2FA resume.
+            with self.assertRaises(MFAChallengeRequired):
+                client._run_on_hon_loop(_challenges_on_cancel(), 0.2)
+
+    def test_a_timeout_raised_by_the_coroutine_is_not_the_watchdog(self) -> None:
+        # Since Python 3.11 `concurrent.futures.TimeoutError IS asyncio.TimeoutError IS
+        # TimeoutError`, so a BARE per-request timeout coming out of the coroutine is
+        # the very type the cap raises. Caught by the cap's own clause, it produced a
+        # false "watchdog fired after 0.0s" on a cap that never expired and handed the
+        # caller the mute ADDHON-460 instead of the failure's own code -- with the
+        # first-poll `load_commands` rehydration (an await nothing budgets) as a live
+        # trigger. Told apart by STATE, not type: on a real expiry the future is still
+        # pending, here it has already finished.
+        client = self._client()
+        client._hon_instance = types.SimpleNamespace(
+            current_phase="load_appliance", phase_summary=""
+        )
+
+        async def _times_out_instantly() -> None:
+            raise asyncio.TimeoutError()
+
+        with self.assertNoLogs("custom_components.addhon.hon_client", level="ERROR"):
+            with self.assertRaises(TimeoutError) as ctx:
+                client._run_on_hon_loop(_times_out_instantly(), 300)
+        self.assertNotIsInstance(ctx.exception, HonCodedError)
+
+    def test_the_wait_does_not_hold_the_lifecycle_lock(self) -> None:
+        # The wait is not a lifecycle transition, and the caps this file passes are now
+        # minutes rather than the legacy 60s: holding the lock across it made an
+        # unload/reload (`close_sync`) and a re-login queue behind the slowest in-flight
+        # call, so a stalled poll blocked them for a whole APPLIANCE_POLL (~5 min) and
+        # Home Assistant reported the unload as slow.
+        client = self._client()
+        client._hon_instance = types.SimpleNamespace(current_phase="", phase_summary="")
+        entered = threading.Event()
+
+        async def _slow() -> None:
+            entered.set()
+            await asyncio.sleep(1)
+
+        worker = threading.Thread(
+            target=lambda: client._run_on_hon_loop(_slow(), 5), daemon=True
+        )
+        worker.start()
+        self.addCleanup(worker.join, 10)
+        self.assertTrue(entered.wait(5), "the coroutine never started")
+        acquired = client._lifecycle_lock.acquire(timeout=0.5)
+        if acquired:
+            client._lifecycle_lock.release()
+        self.assertTrue(acquired, "the lifecycle lock was held across the wait")
+
+    def test_watchdog_log_carries_the_phase_and_no_identity(self) -> None:
+        from custom_components.addhon import error_codes as ec
+
+        client = self._client()
+        client._hon_instance = types.SimpleNamespace(
+            current_phase="load_appliances/auth",
+            phase_summary="load_appliances 0.2s timeout",
+        )
+
+        async def _forever() -> None:
+            await asyncio.sleep(30)
+
+        with self.assertLogs("custom_components.addhon.hon_client", level="ERROR") as cm:
+            with self.assertRaises(ec.HonCodedError):
+                client._run_on_hon_loop(_forever(), 0.2)
+        blob = "\n".join(cm.output)
+        self.assertIn("load_appliances/auth", blob)
+        self.assertNotIn("@", blob)
+
+
+class FirstPollRehydrationTest(unittest.TestCase):
+    """The other half of the per-appliance transport fault boundary (issue #76).
+
+    Containing a `load_commands` failure at setup is only legitimate if the commands
+    come back BEFORE the platforms build their entities. They do not come back on
+    their own: `update()` reloads the ATTRIBUTES, the platforms call
+    `async_add_entities` exactly once from the first snapshot, and the integration has
+    no dynamic discovery -- so without this the contained appliance shipped without
+    select/number/switch/button/climate/fan until a manual reload.
+    """
+
+    class _Appliance:
+        def __init__(self) -> None:
+            self.unique_id = "APP-1"
+            self.attributes = {"parameters": {"a": 1}}
+            self.settings: dict = {}
+            self.statistics: dict = {}
+            self.commands: dict = {}
+            self.calls: list[str] = []
+            self.commands_error: BaseException | None = None
+
+        async def update(self) -> None:
+            self.calls.append("update")
+
+        async def load_commands(self) -> None:
+            self.calls.append("load_commands")
+            if self.commands_error is not None:
+                raise self.commands_error
+            self.commands = {"startProgram": object()}
+
+    class _Session:
+        """What NativeHon answers: the REAL predicate, not a stubbed boolean."""
+
+        def __init__(self, degraded) -> None:
+            self._degraded = degraded
+
+        def needs_rehydration(self, appliance) -> bool:
+            return any(item is appliance for item in self._degraded)
+
+    def _client(self, degraded) -> HonClient:
+        c = HonClient(email="e@x", password="p")
+        c._run_on_hon_loop = lambda coro, timeout=None: asyncio.run(coro)  # type: ignore[assignment]
+        c._api = self._Session(degraded)
+        return c
+
+    def test_a_degraded_appliance_reloads_its_commands_on_the_first_poll(self) -> None:
+        appliance = self._Appliance()
+        self._client([appliance])._update_appliance_sync(appliance)
+        self.assertEqual(["load_commands", "update"], appliance.calls)
+        self.assertTrue(appliance.commands)
+
+    def test_a_healthy_appliance_is_not_re_requested(self) -> None:
+        appliance = self._Appliance()
+        self._client([])._update_appliance_sync(appliance)
+        self.assertEqual(["update"], appliance.calls)
+
+    def test_after_the_first_poll_the_entities_are_decided_so_nothing_is_re_requested(
+        self,
+    ) -> None:
+        appliance = self._Appliance()
+        client = self._client([appliance])
+        client._first_poll_done = True
+        client._update_appliance_sync(appliance)
+        self.assertEqual(["update"], appliance.calls)
+
+    def test_a_second_failure_is_not_contained_a_second_time(self) -> None:
+        # It must reach the strict first-poll branch -> ConfigEntryNotReady -> Home
+        # Assistant retries the setup, the only path that can still produce a COMPLETE
+        # entity inventory. Swallowing it here would ship the crippled entry after all.
+        appliance = self._Appliance()
+        appliance.commands_error = RuntimeError("commands endpoint is down")
+        with self.assertRaises(RuntimeError):
+            self._client([appliance])._update_appliance_sync(appliance)
+
+    def test_a_second_failure_that_times_out_is_still_attributed(self) -> None:
+        # The rehydration used to be the ONE await on the poll path with no budget and
+        # no phase around it. A per-request aiohttp timeout therefore left it BARE, and
+        # a bare TimeoutError carries no phase: `representative_failure` classified it
+        # with nothing to go on and the user got the mute ADDHON-460 "Setup timed out"
+        # from a cap that had not expired -- for a failure whose real name is
+        # ADDHON-400. It still propagates (the containment is NOT repeated), but now
+        # under its own code, on the phase that actually stalled.
+        from custom_components.addhon import error_codes as ec
+
+        appliance = self._Appliance()
+        appliance.commands_error = asyncio.TimeoutError()
+        with self.assertRaises(HonCodedError) as ctx:
+            self._client([appliance])._update_appliance_sync(appliance)
+        self.assertIs(ec.NETWORK_TIMEOUT, ctx.exception.error_code)
+        self.assertEqual("load_appliance", ctx.exception.phase)
+        self.assertIsInstance(ctx.exception.__cause__, TimeoutError)
+        # And what the first poll would hand Home Assistant is that code, not the 460.
+        self.assertIs(
+            ec.NETWORK_TIMEOUT, ec.representative_failure([("x", ctx.exception)])[0]
+        )
+
+
+class SetupFailureRecordTest(unittest.TestCase):
+    """What a failed setup_sync leaves behind for Download Diagnostics (issue #76).
+
+    Three fields move together, and setup_sync says so out loud: the code, the phase and
+    the per-phase LEDGER. The ledger is the artefact that makes a report like #76
+    diagnosable without a live probe -- it is what finally answers "which phase burned
+    the time". `diagnostics.py` publishes it and a test pins that READER, but nothing
+    pinned the WRITER: delete the three lines in the client and the ledger silently
+    disappears from every report with the suite still green.
+
+    The phase must come from the ERROR (hierarchical, recorded where it was raised) and
+    not from the flat auth mirror, which only knows the login steps -- preferring the
+    mirror is how a lazy sign-in got called "load_appliances" in the first place.
+    """
+
+    class _Session:
+        auth_phase = "login"
+        phase_summary = "load_appliances 0.2s timeout"
+        phase_ledger = [
+            {"phase": "load_appliances/auth/refresh", "seconds": 0.2, "outcome": "timeout"}
+        ]
+
+        def __init__(self, error: BaseException | None) -> None:
+            self._error = error
+
+        async def __aenter__(self):
+            if self._error is not None:
+                raise self._error
+            return self
+
+        def subscribe_updates(self, fn) -> None:
+            pass
+
+    def _client(self, error: BaseException | None):
+        import custom_components.addhon.client.factory as factory
+
+        session = self._Session(error)
+        original = factory.create_session
+        factory.create_session = lambda email, password, **kw: session
+        self.addCleanup(setattr, factory, "create_session", original)
+
+        client = HonClient(email="e@x", password="p")
+        client._start_hon_loop = lambda: None  # type: ignore[assignment]
+        client._run_on_hon_loop = lambda coro, timeout=None: asyncio.run(coro)  # type: ignore[assignment]
+        client._close_sync = lambda: None  # type: ignore[assignment]
+        return client
+
+    def test_a_failed_setup_publishes_the_phase_ledger(self) -> None:
+        from custom_components.addhon import error_codes as ec
+
+        client = self._client(
+            ec.HonCodedError(ec.REFRESH_TIMEOUT, phase="load_appliances/auth/refresh")
+        )
+        with self.assertRaises(ec.HonCodedError):
+            client.setup_sync()
+        self.assertEqual(self._Session.phase_ledger, client.last_phase_ledger)
+        self.assertIs(ec.REFRESH_TIMEOUT, client.last_error_code)
+
+    def test_the_phase_comes_from_the_error_not_from_the_auth_mirror(self) -> None:
+        # The session's flat mirror says "login"; the error knows it was the refresh
+        # nested inside the appliance-list request. The hierarchical one wins, and the
+        # code follows it (ADDHON-406, not the ADDHON-405 "login" would give).
+        from custom_components.addhon import error_codes as ec
+
+        client = self._client(
+            ec.HonCodedError(ec.REFRESH_TIMEOUT, phase="load_appliances/auth/refresh")
+        )
+        with self.assertRaises(ec.HonCodedError):
+            client.setup_sync()
+        self.assertEqual("load_appliances/auth/refresh", client.last_error_phase)
+
+    def test_a_fresh_attempt_never_shows_the_previous_ledger(self) -> None:
+        # The three failure fields are cleared together at the top of setup_sync: a
+        # SUCCESS must not leave a report carrying the phases of an earlier failure.
+        from custom_components.addhon import error_codes as ec
+
+        client = self._client(ec.HonCodedError(ec.REFRESH_TIMEOUT, phase="auth/refresh"))
+        with self.assertRaises(ec.HonCodedError):
+            client.setup_sync()
+        self.assertIsNotNone(client.last_phase_ledger)
+
+        import custom_components.addhon.client.factory as factory
+
+        factory.create_session = lambda email, password, **kw: self._Session(None)
+        client.setup_sync()
+        self.assertIsNone(client.last_phase_ledger)
+        self.assertIsNone(client.last_error_code)
+        self.assertIsNone(client.last_error_phase)
+
+
 class _FallbackAppliance:
     """No update() attribute -> _do_update takes the load_* fallback path directly.
     Records which loads ran; load_statistics can be made to raise a chosen error."""
@@ -197,7 +683,7 @@ class FallbackLoadStatisticsToleranceTest(unittest.TestCase):
     def _client_running(self) -> HonClient:
         c = HonClient(email="e@x", password="p")
         # Run _do_update inline instead of on the dedicated loop.
-        c._run_on_hon_loop = lambda coro: asyncio.run(coro)  # type: ignore[assignment]
+        c._run_on_hon_loop = lambda coro, timeout=None: asyncio.run(coro)  # type: ignore[assignment]
         return c
 
     def test_non_auth_load_statistics_failure_is_tolerated(self) -> None:
@@ -275,7 +761,7 @@ class HonClientRealtimeTest(unittest.TestCase):
             c.subscribe_updates(cb)  # stored on the client (no session yet)
             # run setup_sync offline: stub the dedicated-loop machinery
             c._start_hon_loop = lambda: None  # type: ignore[assignment]
-            c._run_on_hon_loop = lambda coro: coro.close()  # type: ignore[assignment]
+            c._run_on_hon_loop = lambda coro, timeout=None: coro.close()  # type: ignore[assignment]
             c.setup_sync()
             self.assertIs(c._hon_instance, new_session)
             self.assertIs(new_session._notify_function, cb)  # re-applied to new session
@@ -294,7 +780,7 @@ class HonClientRealtimeTest(unittest.TestCase):
         try:
             c = HonClient(email="e@x", password="p", refresh_token="")
             c._start_hon_loop = lambda: None  # type: ignore[assignment]
-            c._run_on_hon_loop = lambda coro: coro.close()  # type: ignore[assignment]
+            c._run_on_hon_loop = lambda coro, timeout=None: coro.close()  # type: ignore[assignment]
             self.assertEqual("", c._refresh_token)
             c.setup_sync()
             self.assertEqual("RT_LIVE", c._refresh_token)  # seed adopted the live token
@@ -315,7 +801,7 @@ class HonClientRealtimeTest(unittest.TestCase):
         try:
             c = HonClient(email="e@x", password="p", refresh_token="RT_OLD")
             c._start_hon_loop = lambda: None  # type: ignore[assignment]
-            c._run_on_hon_loop = lambda coro: asyncio.run(coro)  # type: ignore[assignment]
+            c._run_on_hon_loop = lambda coro, timeout=None: asyncio.run(coro)  # type: ignore[assignment]
             with self.assertRaises(RuntimeError):  # the injected setup failure, re-raised as-is
                 c.setup_sync()
             self.assertEqual("RT_OLD", c._refresh_token)  # seed preserved on failure
@@ -340,7 +826,7 @@ class HonClientRealtimeTest(unittest.TestCase):
         try:
             c = HonClient(email="e@x", password="p", refresh_token="")
             c._start_hon_loop = lambda: None  # type: ignore[assignment]
-            c._run_on_hon_loop = lambda coro: coro.close()  # type: ignore[assignment]
+            c._run_on_hon_loop = lambda coro, timeout=None: coro.close()  # type: ignore[assignment]
             c.setup_sync()  # build #1 seeded with ""
             c.setup_sync()  # build #2 must be seeded with RT1 (the 1st session's token)
             self.assertEqual(["", "RT1"], seen)
@@ -358,7 +844,7 @@ class HonClientRealtimeTest(unittest.TestCase):
         try:
             c = HonClient(email="e@x", password="p", refresh_token="RT_OLD")
             c._start_hon_loop = lambda: None  # type: ignore[assignment]
-            c._run_on_hon_loop = lambda coro: coro.close()  # type: ignore[assignment]
+            c._run_on_hon_loop = lambda coro, timeout=None: coro.close()  # type: ignore[assignment]
             c.setup_sync()
             self.assertEqual("RT_OLD", c._refresh_token)  # fallback kept the good seed
         finally:
@@ -397,7 +883,7 @@ class HonClientRealtimeTest(unittest.TestCase):
         try:
             c = HonClient(email="e@x", password="p")  # never subscribed
             c._start_hon_loop = lambda: None  # type: ignore[assignment]
-            c._run_on_hon_loop = lambda coro: coro.close()  # type: ignore[assignment]
+            c._run_on_hon_loop = lambda coro, timeout=None: coro.close()  # type: ignore[assignment]
             c.setup_sync()  # must NOT raise
             self.assertIs(c._hon_instance, new_session)
             self.assertIsNone(new_session._notify_function)  # nothing to apply
@@ -422,7 +908,7 @@ class HonClientRealtimeTest(unittest.TestCase):
             cb = lambda _a: None  # noqa: E731
             c.subscribe_updates(cb)
             c._start_hon_loop = lambda: None  # type: ignore[assignment]
-            c._run_on_hon_loop = lambda coro: asyncio.run(coro)  # type: ignore[assignment]
+            c._run_on_hon_loop = lambda coro, timeout=None: asyncio.run(coro)  # type: ignore[assignment]
             with self.assertRaises(RuntimeError):
                 c.setup_sync()
             self.assertIsNone(c._hon_instance)  # _close_sync ran on failure
