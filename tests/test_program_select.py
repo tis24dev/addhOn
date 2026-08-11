@@ -784,7 +784,7 @@ class GetAttributesStatisticsTest(unittest.TestCase):
 
         appliance = Appliance()
         client = HonClient(email="user@example.com", password="secret")
-        client._run_on_hon_loop = lambda coro: asyncio.run(coro)
+        client._run_on_hon_loop = lambda coro, timeout=None: asyncio.run(coro)
 
         client._update_appliance_sync(appliance)
 

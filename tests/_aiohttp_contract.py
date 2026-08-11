@@ -139,6 +139,34 @@ async def _checks(aiohttp, web, translations, FakeContent) -> list[str]:
             (real_partial != body) == (fake_partial != body),
             f"real short={real_partial != body} fake short={fake_partial != body}",
         )
+        # 4. The attributes the STRUCTURAL classifier duck-types on (issue #76).
+        #    `error_codes` is a pure module and cannot import aiohttp, so it reads
+        #    `ClientConnectorError.os_error` and `ClientResponseError.status` by name
+        #    and relies on the aiohttp SSL errors deriving from `ssl.SSLError`. If the
+        #    library ever renames or drops one of those, the classifier would silently
+        #    fall back to grepping the message -- exactly the drift this file exists to
+        #    catch. Nothing here needs the server.
+        import ssl
+
+        check(
+            "ClientConnectorError exposes .os_error",
+            "os_error" in dir(aiohttp.ClientConnectorError),
+        )
+        response_error = aiohttp.ClientResponseError(
+            None, (), status=503, message="boom"
+        )
+        check(
+            "ClientResponseError carries an int .status",
+            getattr(response_error, "status", None) == 503,
+        )
+        check(
+            "aiohttp SSL connector errors derive from ssl.SSLError",
+            issubclass(aiohttp.ClientConnectorCertificateError, ssl.SSLError),
+        )
+        check(
+            "ServerTimeoutError is an asyncio.TimeoutError",
+            issubclass(aiohttp.ServerTimeoutError, asyncio.TimeoutError),
+        )
     finally:
         await runner.cleanup()
     return failures

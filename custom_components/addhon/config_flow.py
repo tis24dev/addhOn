@@ -29,6 +29,7 @@ from .error_codes import (
     UNKNOWN,
     HonErrorCode,
     classify,
+    error_detail,
 )
 from .hon_client import HonClient, _requires_reauth
 
@@ -133,12 +134,19 @@ async def validate_input(
         except ImportError as err:
             code = classify(err)
             client.emit_auth_diagnostics(code, "setup", "unexpected")
-            _LOGGER.error("Validation failed [%s]: required dependency not installed: %s", code.label, err)
+            _LOGGER.error(
+                "Validation failed [%s]: required dependency not installed: %s",
+                code.label, error_detail(err),
+            )
             raise CannotConnect(code) from err
         except Exception as err:
             code = classify(err)
             client.emit_auth_diagnostics(code, "setup", "unexpected")
-            _LOGGER.error("Validation failed [%s]: %s", code.label, err)
+            # error_detail() strips a leading "ADDHON-NNN: ": a HonCodedError already
+            # renders as "ADDHON-400: reason", so printing the label too produced
+            # "Validation failed [ADDHON-400]: ADDHON-400: ..." -- the doubled line
+            # reported in #76, which also crowds out the detail that would help.
+            _LOGGER.error("Validation failed [%s]: %s", code.label, error_detail(err))
             if _requires_reauth(err):
                 raise InvalidAuth(code) from err
             raise CannotConnect(code) from err
@@ -163,7 +171,10 @@ async def validate_input(
             client.emit_auth_diagnostics(
                 code, "appliance_list", "appliance_list_failed"
             )
-            _LOGGER.error("Validation failed [%s] fetching appliances: %s", code.label, err)
+            _LOGGER.error(
+                "Validation failed [%s] fetching appliances: %s",
+                code.label, error_detail(err),
+            )
             if _requires_reauth(err):
                 raise InvalidAuth(code) from err
             raise CannotConnect(code) from err

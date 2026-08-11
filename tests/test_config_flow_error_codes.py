@@ -146,6 +146,18 @@ class UserStepErrorCodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["errors"]["base"], "network_timeout")
         self.assertEqual(res["description_placeholders"]["error_code"], "ADDHON-400")
 
+    async def test_auth_timeout_code_drives_its_own_slug(self) -> None:
+        # ADDHON-405/406 are what a slow sign-in reports now; before #76 they did not
+        # exist and the login timeout was shown as ADDHON-400 "network timeout".
+        res = await self._run_user(cf.CannotConnect(ec.AUTH_TIMEOUT))
+        self.assertEqual(res["errors"]["base"], "auth_timeout")
+        self.assertEqual(res["description_placeholders"]["error_code"], "ADDHON-405")
+
+    async def test_refresh_timeout_code_drives_its_own_slug(self) -> None:
+        res = await self._run_user(cf.CannotConnect(ec.REFRESH_TIMEOUT))
+        self.assertEqual(res["errors"]["base"], "refresh_timeout")
+        self.assertEqual(res["description_placeholders"]["error_code"], "ADDHON-406")
+
     async def test_invalid_auth_code(self) -> None:
         res = await self._run_user(cf.InvalidAuth(ec.INVALID_CREDENTIALS))
         self.assertEqual(res["errors"]["base"], "invalid_credentials")

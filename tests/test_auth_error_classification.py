@@ -161,6 +161,25 @@ class CoordinatorErrorClassificationTest(unittest.TestCase):
         with self.assertRaises(AuthFailed):
             upd(MFACodeInvalid("mfa: invalid verification code"))
 
+    def test_ha_messages_show_the_code_exactly_once(self) -> None:
+        # #76: HonCodedError already renders as "ADDHON-400: reason", so prepending the
+        # label produced "[ADDHON-400] Unable to connect to hOn: ADDHON-400: ...". Home
+        # Assistant SHOWS these two messages on the config-entry page, so the user
+        # really did read the code twice.
+        from custom_components.addhon.error_codes import HonCodedError, NETWORK_TIMEOUT
+
+        _AF, NotReady, UpdateFailed, setup, upd = self._imports()
+        for raiser, expected in ((setup, NotReady), (upd, UpdateFailed)):
+            with self.subTest(raiser=raiser.__name__):
+                try:
+                    raiser(HonCodedError(NETWORK_TIMEOUT))
+                except expected as wrapped:
+                    text = str(wrapped)
+                    self.assertEqual(1, text.count("ADDHON-"), text)
+                    self.assertIn("Network timeout contacting hOn", text)
+                else:
+                    self.fail("expected a raise")
+
     def test_chaining_preserves_original_error(self) -> None:
         _AF, _NotReady, UpdateFailed, _setup, upd = self._imports()
         original = RuntimeError("root cause")

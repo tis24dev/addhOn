@@ -870,6 +870,48 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
         self.assertFalse(le["had_refresh_token"])
         self.assertNotIn("mfa", le)  # not an MFA-band code
 
+    def test_last_error_includes_a_leak_free_phase_ledger(self) -> None:
+        # #76: without per-phase durations a report cannot say WHICH phase burned the
+        # time, so no timeout hypothesis is falsifiable on the user's machine.
+        from custom_components.addhon import error_codes as ec
+
+        class _Client:
+            last_error_code = ec.REFRESH_TIMEOUT
+            last_error_phase = "load_appliances/auth/refresh"
+            last_mfa_summary = None
+            last_phase_ledger = [
+                {"phase": "load_appliances/auth/refresh", "seconds": 50.0, "outcome": "timeout"},
+                {"phase": "load_appliances", "seconds": 50.1, "outcome": "error"},
+            ]
+            _refresh_token = "rt"
+
+        hass = FakeHass(_build_coordinator())
+        hass.data[DOMAIN]["e1"]["client"] = _Client()
+        result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+        le = result["last_error"]
+        self.assertEqual("ADDHON-406", le["code"])
+        self.assertEqual(2, len(le["phase_ledger"]))
+        blob = json.dumps(le["phase_ledger"])
+        self.assertNotIn("@", blob)
+        self.assertNotIn("http", blob)
+        for entry in le["phase_ledger"]:
+            self.assertIn(entry["outcome"], ("ok", "error", "timeout"))
+
+    def test_last_error_omits_the_ledger_when_absent(self) -> None:
+        from custom_components.addhon import error_codes as ec
+
+        class _Client:
+            last_error_code = ec.NETWORK_TIMEOUT
+            last_error_phase = "load_appliances"
+            last_mfa_summary = None
+            last_phase_ledger = None
+            _refresh_token = ""
+
+        hass = FakeHass(_build_coordinator())
+        hass.data[DOMAIN]["e1"]["client"] = _Client()
+        result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+        self.assertNotIn("phase_ledger", result["last_error"])
+
     def test_last_error_includes_mfa_summary_for_mfa_code(self) -> None:
         from custom_components.addhon import error_codes as ec
 

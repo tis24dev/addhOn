@@ -877,6 +877,13 @@ def _last_error(hass: HomeAssistant, entry: ConfigEntry) -> dict | None:
         "phase": getattr(client, "last_error_phase", None),
         "had_refresh_token": bool(getattr(client, "_refresh_token", "")),
     }
+    # Per-phase duration+outcome of the failed attempt (issue #76): without it a report
+    # cannot say WHICH phase burned the time, so no hypothesis about a timeout is
+    # falsifiable. Same leak-proof shape as the block above: phase names from a closed
+    # vocabulary, rounded seconds, and an outcome in {ok, error, timeout}.
+    ledger = getattr(client, "last_phase_ledger", None)
+    if ledger:
+        out["phase_ledger"] = ledger
     # 2FA summary only when the failure is in the MFA band (160-169) -- challenge_kind is
     # the enum "email"/None and can_resend is a bool; the MfaContext secrets are NEVER here.
     mfa = getattr(client, "last_mfa_summary", None)
