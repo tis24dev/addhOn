@@ -43,8 +43,11 @@ from ..auth_diagnostics import (
     summarize_response,
     summarize_tokens,
 )
+from ..budget import AUTH_FULL, current_deadline
+from ..phase import PhaseTracker
 from .device import HonDevice
 from .headers import USER_AGENT
+from .retry import RetryBudget, retry_transport
 from .oauth import (
     APEXREMOTE_PATH,
     AUTH_API,
@@ -163,6 +166,7 @@ class HonAuth:
         password: str,
         device: HonDevice,
         auth_trace: AuthDiagnosticTrace | None = None,
+        phase_tracker: PhaseTracker | None = None,
     ) -> None:
         self._session = session
         self._email = email
@@ -181,13 +185,23 @@ class HonAuth:
         self._loaded: Any = None
         self._page_url = ""
         # Last login phase reached, for the DEBUG trace + diagnostics attribution ("failed
-        # during mfa_verify"). Updated by _phase(); read via NativeHon.auth_phase.
+        # during mfa_verify"). Updated by _phase(); read via NativeHon.auth_phase. Stays
+        # FLAT on purpose: it is the legacy mirror the diagnostics already publish.
         self._current_phase = ""
+        # Shared with the session/connection (client/phase.py): the cross-thread mirror
+        # of the HIERARCHICAL phase, so a login running lazily inside load_appliances
+        # says "load_appliances/auth/..." instead of borrowing its caller's label (#76).
+        self._phase_tracker = phase_tracker
+        # Extra attempts for the idempotent steps of the CURRENT authenticate(); None
+        # outside it, so the refresh and 2FA paths are never retried.
+        self._retry_budget: RetryBudget | None = None
 
     def _phase(self, name: str, **fields: Any) -> None:
         """Mark + DEBUG-log a login phase. Content is STRUCTURE only (status/booleans/
         phase name) -- never email/password/OTP/token/csrf/cookie/url (leak-proof)."""
         self._current_phase = name
+        if self._phase_tracker is not None:
+            self._phase_tracker.step(name)
         if _LOGGER.isEnabledFor(logging.DEBUG):
             extra = " ".join(f"{k}={v}" for k, v in fields.items())
             _LOGGER.debug("auth phase %s%s", name, f": {extra}" if extra else "")
@@ -370,8 +384,13 @@ class HonAuth:
 
     async def _handle_redirects(self, login_url: str) -> str:
         self._phase("redirects")
-        r1 = await self._manual_redirect(login_url)
-        r2 = await self._manual_redirect(r1)
+        budget = self._retry_budget
+        r1 = await retry_transport(
+            budget, "manual_redirect", lambda: self._manual_redirect(login_url)
+        )
+        r2 = await retry_transport(
+            budget, "manual_redirect", lambda: self._manual_redirect(r1)
+        )
         return f"{r2}&System=IoT_Mobile_App&RegistrationSubChannel=hOn"
 
     async def _open_login_page(self, login_url: str) -> None:
@@ -578,20 +597,58 @@ class HonAuth:
         self._phase("api_auth", status=resp.status, cognito_token=True)
 
     async def authenticate(self) -> None:
+        # WHAT IS RETRIED, and why the rest is not (issue #76). Retried, because a
+        # duplicate delivery costs nothing: _introduce (a GET whose replay only opens
+        # another authorize session, and which re-mints its own nonce), the two
+        # _manual_redirect hops (GETs with allow_redirects=False that read one header),
+        # _open_login_page (a GET, and the replay re-reads the fwuid/loaded that a
+        # framework rotation would have invalidated) and _api_auth (the hOn endpoint we
+        # already re-invoke on every successful refresh).
+        #
+        # NOT retried: _login submits the credentials and advances the Salesforce
+        # session (its payload embeds the fwuid captured one step earlier, and a
+        # duplicate delivery races the `sid` cookie the next three steps depend on); the
+        # three GETs inside _get_token each consume a SINGLE-USE hand-off (a second
+        # post-login fetch lands on a login page -> "no href" -> a transient blip would
+        # become a permanent credentials error, and a second ProgressiveLogin fetch mints
+        # a NEW MfaContext that any already-sent OTP no longer matches); refresh() spends
+        # a rotating, single-use refresh token; every MFA step sends an email or burns a
+        # verification attempt.
         self.clear()
+        # Deadline for the shared retry budget, taken from the budget scope that is
+        # ACTUALLY in force (client/budget.py) rather than re-derived from AUTH_FULL.
+        # Re-deriving it was a fiction: the enclosing scope may be tighter, and a gate
+        # measured against a deadline nobody enforces never refuses anything -- so the
+        # retry became the very thing that spent the budget, the opposite of the
+        # invariant retry.py claims. None only outside any scope (direct use, unit
+        # tests), where the phase budget the call sites open is the honest stand-in.
+        deadline = current_deadline()
+        if deadline is None:
+            deadline = time.monotonic() + AUTH_FULL
+        budget = RetryBudget(deadline=deadline)
+        self._retry_budget = budget
+        # The enclosing `phase("auth")` scope is opened by the CALLER (connection.py),
+        # next to the AUTH_FULL budget it belongs to, so an expiry is still inside the
+        # scope when it is converted into a coded error.
         try:
-            login_url = await self._introduce()
-            redirect = await self._handle_redirects(login_url)
-            await self._open_login_page(redirect)
-            url = await self._login()
-            await self._get_token(url)
-            await self._api_auth()
-        except _NoAuthNeeded:
-            # The authorize page already carried the OAuth tokens (a still-valid SSO
-            # cookie), so the login steps are skipped -- but cognito_token is minted
-            # ONLY by _api_auth and connection.py needs it for every API call. Run it
-            # so this path completes with usable auth headers instead of empty ones.
-            await self._api_auth()
+            try:
+                login_url = await retry_transport(budget, "introduce", self._introduce)
+                redirect = await self._handle_redirects(login_url)
+                await retry_transport(
+                    budget, "login_page", lambda: self._open_login_page(redirect)
+                )
+                url = await self._login()
+                await self._get_token(url)
+                await retry_transport(budget, "api_auth", self._api_auth)
+            except _NoAuthNeeded:
+                # The authorize page already carried the OAuth tokens (a still-valid
+                # SSO cookie), so the login steps are skipped -- but cognito_token is
+                # minted ONLY by _api_auth and connection.py needs it for every API
+                # call. Run it so this path completes with usable auth headers
+                # instead of empty ones.
+                await retry_transport(budget, "api_auth", self._api_auth)
+        finally:
+            self._retry_budget = None
         # Login complete: clear the phase so a LATER non-auth failure (e.g. a poll) is
         # not mis-attributed to the last auth step.
         self._current_phase = ""

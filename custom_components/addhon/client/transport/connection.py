@@ -21,20 +21,29 @@ from typing import Any
 import aiohttp
 
 from ...error_codes import DECODE_ERROR
+from ..budget import AUTH_FULL, AUTH_REFRESH, MFA_RESUME
+from ..budget import CONNECT_TIMEOUT as _CONNECT_TIMEOUT
+from ..budget import SOCK_READ_TIMEOUT as _SOCK_READ_TIMEOUT
+from ..budget import TOTAL_TIMEOUT as _TOTAL_TIMEOUT
+from ..budget import budgeted as _budgeted
+from ..phase import PhaseTracker, phase
 from .auth import HonAuth, NativeAuthError
 from .device import HonDevice
 from .headers import build_auth_headers
 
 _LOGGER = logging.getLogger(__name__)
 
-# Per-request HTTP timeouts on the session WE own. Without them aiohttp defaults to
-# a 300s total, so a dead/blocked endpoint (e.g. api-iot.he.services or AWS IoT
-# unreachable on the user's network) only failed when the 60s dedicated-loop cap
-# fired, as an opaque message-less timeout (issue #30). These bound each request
-# well under that cap, so a stuck endpoint fails fast and attributable.
-_CONNECT_TIMEOUT = 10  # TCP connect + TLS handshake to one endpoint
-_TOTAL_TIMEOUT = 30  # whole request incl. response read
-_SOCK_READ_TIMEOUT = 20  # gap between received chunks
+# The per-request HTTP timeouts now live in client/budget.py, which derives the
+# per-phase budgets from them: a budget must never be computed from a number that
+# someone can change in another file (issue #76). Re-exported under the original
+# private names so this module reads as before. `_budgeted` comes from there too, so
+# the session and the transport cannot drift apart on the conversion rule.
+#
+# EVERY auth scope below passes `suspends_caller=True`. The sign-in is LAZY: it starts
+# inside whatever request happened to need a token, so its budget is nested inside a
+# CALLER's budget that is deliberately smaller (a single POST is worth 40s, a
+# nine-hop login 184s). Without the suspension the outer scope always fired first and
+# the login was reported as "load_appliances timed out" -- issue #76 itself.
 
 
 class HonConnection:
@@ -48,12 +57,17 @@ class HonConnection:
         mobile_id: str = "",
         refresh_token: str = "",
         auth_trace: Any = None,
+        phase_tracker: PhaseTracker | None = None,
     ) -> None:
         self._email = email
         self._password = password
         self._device = HonDevice(mobile_id)
         self._refresh_token = refresh_token
         self._auth_trace = auth_trace
+        # Hierarchical-phase mirror shared with the session (client/phase.py). It lives
+        # on the CONNECTION (a stable owner) and not on HonAuth, which create() replaces
+        # on every re-login.
+        self._phase_tracker = phase_tracker or PhaseTracker()
         self._owns_session = session is None
         self._session = session
         self._auth: HonAuth | None = None
@@ -113,6 +127,7 @@ class HonConnection:
                 self._password,
                 self._device,
                 auth_trace=self._auth_trace,
+                phase_tracker=self._phase_tracker,
             )
         except BaseException:
             # We just created (and own) the ClientSession; if anything after that fails
@@ -145,11 +160,21 @@ class HonConnection:
                     # refresh (token endpoint outage, consumed token). Bumping the gen
                     # anyway would make a concurrent 401-retry sibling believe a fresh
                     # token exists and SKIP its own refresh, reusing stale tokens.
-                    if await self.auth.refresh(self._refresh_token):
+                    #
+                    # The phase scope + budget are HERE, not inside HonAuth: this is the
+                    # lazy sign-in that #76 mis-attributed. Nested under whatever the
+                    # caller is doing, so the phase reads e.g.
+                    # "load_appliances/auth/refresh" -> ADDHON-406, not ADDHON-400.
+                    with phase("auth/refresh", self._phase_tracker):
+                        async with _budgeted(AUTH_REFRESH, suspends_caller=True):
+                            refreshed = await self.auth.refresh(self._refresh_token)
+                    if refreshed:
                         self._refresh_token = self.auth.refresh_token
                         self._refresh_gen += 1
                 if _need_auth():
-                    await self.auth.authenticate()
+                    with phase("auth", self._phase_tracker):
+                        async with _budgeted(AUTH_FULL, suspends_caller=True):
+                            await self.auth.authenticate()
                     self._refresh_token = self.auth.refresh_token
                     self._refresh_gen += 1
         return build_auth_headers(self.auth.cognito_token, self.auth.id_token, headers)
@@ -176,7 +201,10 @@ class HonConnection:
             # returns False leaving the stale tokens in place. Bumping regardless would
             # let a concurrent sibling skip its own refresh and reuse tokens that were
             # never actually rotated -- guaranteeing its next request 401s too.
-            if await self.auth.refresh(self._refresh_token):
+            with phase("auth/refresh", self._phase_tracker):
+                async with _budgeted(AUTH_REFRESH, suspends_caller=True):
+                    refreshed = await self.auth.refresh(self._refresh_token)
+            if refreshed:
                 self._refresh_token = self.auth.refresh_token
                 self._refresh_gen += 1
 
@@ -204,8 +232,15 @@ class HonConnection:
                     raise self._reauth_error
                 return  # a sibling already re-authenticated; reuse its fresh tokens
             try:
-                await self.create()
-                await self.auth.authenticate()
+                # Budget INSIDE the try: the expiry is converted to a coded error here,
+                # so the `except BaseException` below caches it in _reauth_error exactly
+                # like any other failure. Without that, the siblings of a burst would
+                # each fire their own login -- the multiple-OTP scenario this
+                # single-flight exists to prevent.
+                with phase("auth", self._phase_tracker):
+                    async with _budgeted(AUTH_FULL, suspends_caller=True):
+                        await self.create()
+                        await self.auth.authenticate()
             except asyncio.CancelledError:
                 # A cancellation is specific to THIS task, not a shared auth failure:
                 # caching it in _reauth_error would re-raise it into sibling requests
@@ -332,12 +367,23 @@ class HonConnection:
     async def submit_mfa_code(self, context: Any, code: str) -> None:
         """Resume a paused 2FA login: verify the OTP on the auth, then adopt the
         freshly minted tokens (so the rest of setup runs without re-authenticating)."""
-        await self.auth.submit_mfa_code(context, code)
+        with phase("auth/mfa_verify", self._phase_tracker):
+            async with _budgeted(MFA_RESUME, suspends_caller=True):
+                await self.auth.submit_mfa_code(context, code)
         self._refresh_token = self.auth.refresh_token
         self._refresh_gen += 1
 
     async def resend_mfa_code(self, context: Any) -> None:
-        await self.auth.resend_mfa_code(context)
+        # The same scope its twin submit_mfa_code opens. Without it this was the ONE
+        # auth entry point reaching `HonAuth._phase()` with no `phase()` around it, so
+        # the cross-thread mirror stayed at "mfa_send" for the life of the client: every
+        # scope RESTORES the value it found on exit, and `_run_on_hon_loop` prefers the
+        # hierarchical mirror to the flat one, so a stale "mfa_send" SHIELDED the flat
+        # mirror that would have been accurate and collapsed every later expiry to the
+        # mute ADDHON-460. The config flow calls this on EVERY entry into the 2FA step,
+        # not only on a resend, so the leak was on the normal 2FA path.
+        with phase("auth/mfa_send", self._phase_tracker):
+            await self.auth.resend_mfa_code(context)
 
     async def close(self) -> None:
         if self._owns_session and self._session is not None:
