@@ -25,8 +25,11 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import errno as _errno
 import json
 import re
+import socket
+import ssl
 from dataclasses import dataclass
 
 CODE_PREFIX = "ADDHON"
@@ -160,6 +163,29 @@ RATE_LIMITED = _reg(440, "rate_limited", "Rate limited by hOn (try again later)"
 SERVER_ERROR = _reg(450, "server_error", "hOn server error")
 LOOP_TIMEOUT = _reg(460, "loop_timeout", "Setup timed out")
 DECODE_ERROR = _reg(470, "decode_error", "Unreadable server response")
+# 405/406: a sign-in that runs out of time is NOT a rejection (requires_reauth=False).
+# The login is lazy -- it starts inside the request that load_appliances issues -- so
+# before these existed a slow sign-in was reported as ADDHON-400 "network timeout"
+# (issue #76) or fell through to the mute ADDHON-460. The reason_en MUST keep the word
+# "timeout": hon_client._is_retryable_server_error looks for that substring, which is
+# what keeps a phase-timeout code retryable instead of reauth. 401/402 were deliberately
+# NOT used: hon_client._is_auth_error matches the bare substrings "401"/"403", so a
+# message that lost its carried code would turn a transient timeout into a reauth.
+AUTH_TIMEOUT = _reg(405, "auth_timeout", "Timeout during hOn sign-in")
+REFRESH_TIMEOUT = _reg(406, "refresh_timeout", "Timeout refreshing the hOn session")
+# 480: the dedicated loop was torn down while a call was still in flight (an unload or
+# a reload racing a poll/command). `HonClient._run_on_hon_loop` no longer waits under
+# the lifecycle lock -- that wait made an unload queue behind the slowest in-flight
+# call, minutes with the per-site caps -- so the teardown can now cancel the task under
+# a waiter. What reaches the waiter is a bare, message-less
+# concurrent.futures.CancelledError, which classify can only call ADDHON-999: the
+# user's command fails with "Unknown error" and nothing says the client was shutting
+# down. NOT reauth and NOT "timeout"-flavoured: nothing timed out and nothing was
+# rejected, the call was simply abandoned, so the coordinator files a plain transient
+# failure while the entry goes away.
+CLIENT_SHUTDOWN = _reg(
+    480, "client_shutdown", "hOn client shut down while the request was running", ui=False
+)
 # 9xx - fallback
 UNKNOWN = _reg(999, "unknown", "Unknown error")
 
@@ -202,20 +228,120 @@ _PHASE_TIMEOUT: dict[str, HonErrorCode] = {
     "connect": NETWORK_TIMEOUT,
 }
 
+# Phases are now HIERARCHICAL ("load_appliances/auth/refresh", client/phase.py), so a
+# lazy sign-in nested inside the appliance-list request can name itself instead of
+# borrowing the caller's label. Per-SEGMENT table, scanned innermost-first: the deepest
+# step that we recognise is the one that actually stalled.
+_PHASE_TIMEOUT_SEGMENT: dict[str, HonErrorCode] = {
+    **_PHASE_TIMEOUT,
+    "auth": AUTH_TIMEOUT,
+    "refresh": REFRESH_TIMEOUT,
+    "subscribe": MQTT_SUBSCRIBE_TIMEOUT,
+    # The scope `NativeHon.setup()` opens around the MQTT start (its budget is
+    # MQTT_START, summed into SETUP_CAP). Coded as a CONNECT timeout because that is
+    # what the budget mostly pays for; the finer mqtt_connect/mqtt_subscribe split
+    # survives on the cross-thread mirror, which the MQTT layer keeps refining while
+    # the scope is open (transport/mqtt.py::_set_setup_phase).
+    "mqtt_start": MQTT_CONNECT_TIMEOUT,
+}
+
+# Everything `phase_timeout_code` can return. `client/phase.py` needs it because a
+# budget expiry reaches its scope ALREADY converted into a HonCodedError (the
+# conversion has to happen inside the phase scope to name the innermost step), so
+# without this set the ledger would file every expiry as a plain 'error'.
+PHASE_TIMEOUT_CODES = frozenset({*_PHASE_TIMEOUT_SEGMENT.values(), LOOP_TIMEOUT})
+
 
 def phase_timeout_code(phase: str | None) -> HonErrorCode:
-    """Timeout code for a stalled setup phase (empty/unknown -> LOOP_TIMEOUT)."""
+    """Timeout code for a stalled setup phase (empty/unknown -> LOOP_TIMEOUT).
+
+    Resolution, innermost wins: the exact flat name first (total backward
+    compatibility with the phases the MQTT layer and the legacy mirrors still
+    write), then each '/'-separated segment from the leaf outwards, then the
+    ``load_appliance*`` prefix rule, then LOOP_TIMEOUT.
+    """
     if not phase:
         return LOOP_TIMEOUT
+    exact = _PHASE_TIMEOUT.get(phase)
+    if exact is not None:
+        return exact
+    for segment in reversed(phase.split("/")):
+        code = _PHASE_TIMEOUT_SEGMENT.get(segment)
+        if code is not None:
+            return code
     if phase.startswith("load_appliance"):
         return NETWORK_TIMEOUT
-    return _PHASE_TIMEOUT.get(phase, LOOP_TIMEOUT)
+    return LOOP_TIMEOUT
+
+
+# A HonCodedError renders as "ADDHON-400: reason" all by itself (see __str__), so a log
+# line that prepends the label again reads "Validation failed [ADDHON-400]: ADDHON-400:
+# Network timeout contacting hOn" -- the doubled string reported in #76, which also
+# occupies the room the useful detail would need. Anchored at the START only: a message
+# that merely cites a code mid-sentence is left alone.
+_CODE_PREFIX_RE = re.compile(rf"^{CODE_PREFIX}-\d+:\s*")
+
+
+def error_detail(err: BaseException) -> str:
+    """`str(err)` without a leading ``ADDHON-NNN:`` prefix (never empty)."""
+    return _CODE_PREFIX_RE.sub("", str(err), count=1).strip() or type(err).__name__
 
 
 def _is_timeout(err: BaseException) -> bool:
     return isinstance(
         err, (asyncio.TimeoutError, concurrent.futures.TimeoutError, TimeoutError)
     )
+
+
+# Errnos that all mean "the peer/route did not accept the connection". Kept separate
+# from the OSError subclasses because a raw OSError carries only the number.
+_REFUSED_ERRNOS = frozenset(
+    {
+        _errno.ECONNREFUSED,
+        _errno.ECONNRESET,
+        _errno.ECONNABORTED,
+        _errno.EHOSTUNREACH,
+        _errno.ENETUNREACH,
+        _errno.ENETDOWN,
+        _errno.EPIPE,
+    }
+)
+
+
+def _structural_transport_code(err: BaseException) -> HonErrorCode | None:
+    """TLS vs DNS vs refused decided by TYPE/errno, not by the message text.
+
+    aiohttp cannot be imported here (pure module, and it is not even installed in the
+    offline test environment), so this uses the stdlib types the aiohttp errors DERIVE
+    from -- `ssl.SSLError` covers ClientConnectorCertificateError/SSLError -- plus the
+    documented `.os_error` attribute that `ClientConnectorError` exposes for the
+    underlying OSError. That is what tells a name-resolution failure apart from a
+    refusal without reading "Name or service not known" out of a string.
+    """
+    candidate: BaseException | None = err
+    # `.os_error` nests at most one level in aiohttp; the bound is defensive.
+    for _ in range(3):
+        if candidate is None:
+            return None
+        if isinstance(candidate, ssl.SSLError):
+            return TLS_FAILURE
+        if isinstance(candidate, socket.gaierror):
+            return DNS_FAILURE
+        if isinstance(
+            candidate,
+            (
+                ConnectionRefusedError,
+                ConnectionResetError,
+                ConnectionAbortedError,
+                BrokenPipeError,
+            ),
+        ):
+            return CONNECTION_REFUSED
+        if getattr(candidate, "errno", None) in _REFUSED_ERRNOS:
+            return CONNECTION_REFUSED
+        nested = getattr(candidate, "os_error", None)
+        candidate = nested if isinstance(nested, BaseException) else None
+    return None
 
 
 def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
@@ -237,6 +363,20 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
     if isinstance(err, (json.JSONDecodeError, UnicodeDecodeError)):
         return DECODE_ERROR
 
+    # A RECEIVED HTTP response carries its status as a field (aiohttp's
+    # ClientResponseError, raised by our raise_for_status() call sites). Reading it
+    # beats grepping the message for a number. Any other value FALLS THROUGH on
+    # purpose: a ContentTypeError with status 200 must stay a decode problem, and an
+    # exception of ours that happens to own a `status` attribute must not be
+    # reclassified by accident. 401/403 do not return here -- they feed the existing
+    # rejection cascade below, which also names the auth STEP.
+    status = getattr(err, "status", None)
+    if isinstance(status, int) and not isinstance(status, bool):
+        if status == 429:
+            return RATE_LIMITED
+        if 500 <= status <= 599:
+            return SERVER_ERROR
+
     name = type(err).__name__.lower()
     class_names = " ".join(cls.__name__.lower() for cls in type(err).__mro__)
     text = str(err).lower()
@@ -255,7 +395,8 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
     # converted to MQTT polling-only retries. Retryable 429/5xx/timeouts above retain
     # priority, including NativeAuthError("api_auth: status 503").
     auth_rejected = (
-        "unauthorized" in hay
+        status in (401, 403)
+        or "unauthorized" in hay
         or any(
             marker in hay
             for marker in (
@@ -287,6 +428,15 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
             return AUTH_LOGIN
         return INVALID_CREDENTIALS
 
+    # Structural transport (TYPE/errno) BEFORE the textual TLS/DNS/refused rules, so a
+    # real ssl.SSLError or a gaierror wrapped in ClientConnectorError.os_error is named
+    # correctly even when its message says nothing recognisable. Deliberately AFTER
+    # rate-limit/5xx, timeouts and the explicit rejection markers: those decide WHETHER
+    # this is a transport fault at all, this only decides WHICH one.
+    structural = _structural_transport_code(err)
+    if structural is not None:
+        return structural
+
     # TLS/certificate: key off the exception CLASS NAME or explicit certificate text,
     # NOT a bare "ssl" in the message. aiohttp's ClientConnectorError __str__ ALWAYS
     # contains "ssl:default" for ANY HTTPS connect failure (a plain outage, not a TLS
@@ -313,7 +463,7 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
         or "network is unreachable" in text
     ):
         return CONNECTION_REFUSED
-    if "clientpayloaderror" in class_names:
+    if "clientpayloaderror" in class_names or "contenttypeerror" in class_names:
         return DECODE_ERROR
     if "decode error" in hay:
         return DECODE_ERROR
@@ -359,3 +509,39 @@ def classify(err: BaseException, *, phase: str | None = None) -> HonErrorCode:
     if _is_auth_error(err):
         return INVALID_CREDENTIALS
     return UNKNOWN
+
+
+def representative_failure(
+    failures: list[tuple[str, Exception]]
+) -> tuple[HonErrorCode, Exception | None]:
+    """Pick a representative (code, error) from a batch of per-appliance failures (CR#6).
+
+    The all-failed (and first-poll) paths used to raise a bare RuntimeError, which
+    classify() maps to UNKNOWN (ADDHON-999) -- losing the real cause from the logs,
+    the UpdateFailed message and Download Diagnostics. This surfaces a MEANINGFUL,
+    NON-AUTH code instead: deterministically, the FIRST failure (in poll order) whose
+    classify() is neither UNKNOWN nor a reauth code; if none qualifies, fall back to
+    APPLIANCE_LOAD_FAILED (ADDHON-220) paired with the first error.
+
+    Rejecting reauth codes is what keeps routing correct. Every error here already
+    passed the non-auth gate (_requires_reauth was False at the call site), but
+    classify() is substring-based and could still name an auth code (e.g. a message
+    that merely contains "login")  -- surfacing it would flip the transient
+    UpdateFailed into a reauth (ConfigEntryAuthFailed). APPLIANCE_LOAD_FAILED is
+    requires_reauth=False, so the fallback stays non-auth too.
+
+    Lives HERE, not in `hon_client`, because the setup path needs the same rule: the
+    session cannot import the client (the client imports the session), and a private
+    copy would be the exact "the cause is lost again" drift this function exists to
+    stop.
+    """
+    chosen: Exception | None = None  # the first failure, kept as the fallback cause
+    for _name, err in failures:
+        if chosen is None:
+            chosen = err
+        code = classify(err)
+        if code is not UNKNOWN and not code.requires_reauth:
+            return code, err
+    # No meaningful non-auth code found (or -- defensively -- an empty list, which the
+    # gated call sites never pass): fall back to APPLIANCE_LOAD_FAILED, NEVER UNKNOWN.
+    return APPLIANCE_LOAD_FAILED, chosen

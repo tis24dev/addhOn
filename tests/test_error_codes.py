@@ -346,11 +346,159 @@ class CodedErrorTest(unittest.TestCase):
         self.assertIs(ec.phase_timeout_code("aws_token"), ec.MQTT_CONNECT_TIMEOUT)
         # Every phase-timeout code must read as retryable (so the failure is retried,
         # never mistaken for a reauth) -> its message must trip _is_retryable_server_error.
-        for slug in ("loop_timeout", "network_timeout", "mqtt_connect_timeout", "mqtt_subscribe_timeout"):
+        for slug in (
+            "loop_timeout",
+            "network_timeout",
+            "mqtt_connect_timeout",
+            "mqtt_subscribe_timeout",
+            "auth_timeout",
+            "refresh_timeout",
+        ):
             self.assertTrue(
                 hc._is_retryable_server_error(ec.HonCodedError(ec.by_slug(slug))),
                 f"{slug} should be retryable",
             )
+
+
+class HierarchicalPhaseTest(unittest.TestCase):
+    """Phases are hierarchical now (client/phase.py); the INNERMOST known step wins.
+
+    This is what makes #76's misattribution impossible: a lazy sign-in nested inside
+    the appliance-list request no longer borrows its caller's label.
+    """
+
+    def test_flat_phases_are_unchanged(self) -> None:
+        for phase, expected in (
+            ("load_appliances", ec.NETWORK_TIMEOUT),
+            ("load_appliance", ec.NETWORK_TIMEOUT),
+            ("connect", ec.NETWORK_TIMEOUT),
+            ("mqtt_connect", ec.MQTT_CONNECT_TIMEOUT),
+            ("mqtt_subscribe", ec.MQTT_SUBSCRIBE_TIMEOUT),
+            ("aws_token", ec.MQTT_CONNECT_TIMEOUT),
+        ):
+            with self.subTest(phase=phase):
+                self.assertIs(ec.phase_timeout_code(phase), expected)
+
+    def test_nested_leaf_wins(self) -> None:
+        for phase, expected in (
+            # THE #76 CASE: today ADDHON-400, now the refresh names itself.
+            ("load_appliances/auth/refresh", ec.REFRESH_TIMEOUT),
+            ("load_appliances/auth", ec.AUTH_TIMEOUT),
+            ("auth/mfa_verify", ec.AUTH_TIMEOUT),
+            ("load_appliance/auth", ec.AUTH_TIMEOUT),
+            ("mqtt/subscribe", ec.MQTT_SUBSCRIBE_TIMEOUT),
+        ):
+            with self.subTest(phase=phase):
+                self.assertIs(ec.phase_timeout_code(phase), expected)
+
+    def test_unknown_stays_mute(self) -> None:
+        self.assertIs(ec.phase_timeout_code("nothing/known"), ec.LOOP_TIMEOUT)
+
+    def test_any_future_appliance_load_step_is_a_network_timeout(self) -> None:
+        # The `load_appliance*` PREFIX rule is a forward-compatibility net: the two
+        # names in use today are in the exact table, so the rule only ever fires for a
+        # step someone adds later. Without it such a step falls through to the mute
+        # ADDHON-460 "Setup timed out" -- the answer #76 was filed about -- for a
+        # failure that is plainly a network timeout on an appliance request.
+        for phase in ("load_appliance_statistics", "load_appliances_v2"):
+            with self.subTest(phase=phase):
+                self.assertIs(ec.phase_timeout_code(phase), ec.NETWORK_TIMEOUT)
+
+    def test_the_mqtt_start_scope_keeps_its_own_code(self) -> None:
+        # `NativeHon.setup()` bounds the MQTT start with MQTT_START; the scope name has
+        # to resolve, or the one phase that was UNBUDGETED until now would trade a
+        # 574s stall for a correctly fast but mute ADDHON-460.
+        self.assertIs(ec.phase_timeout_code("mqtt_start"), ec.MQTT_CONNECT_TIMEOUT)
+        self.assertIs(
+            ec.phase_timeout_code("mqtt_start/mqtt_subscribe"),
+            ec.MQTT_SUBSCRIBE_TIMEOUT,
+        )
+
+    def test_auth_timeout_is_not_an_auth_error(self) -> None:
+        # The reason 405/406 were chosen over 401/402: hon_client._is_auth_error looks
+        # for the BARE substrings "401"/"403", so a message that lost its carried code
+        # would turn a transient timeout into a reauth.
+        for code in (ec.AUTH_TIMEOUT, ec.REFRESH_TIMEOUT):
+            with self.subTest(code=code.label):
+                self.assertFalse(hc._is_auth_error(ec.HonCodedError(code)))
+                self.assertFalse(hc._requires_reauth(ec.HonCodedError(code)))
+
+
+class ErrorDetailTest(unittest.TestCase):
+    """The doubled code of #76: "Validation failed [ADDHON-400]: ADDHON-400: ..."."""
+
+    def test_strips_only_a_leading_code_prefix(self) -> None:
+        self.assertEqual(
+            "Network timeout contacting hOn",
+            ec.error_detail(ec.HonCodedError(ec.NETWORK_TIMEOUT)),
+        )
+        self.assertEqual("boom", ec.error_detail(RuntimeError("boom")))
+        # Mid-sentence citations are left alone.
+        self.assertEqual(
+            "see ADDHON-400: docs", ec.error_detail(RuntimeError("see ADDHON-400: docs"))
+        )
+
+    def test_empty_message_falls_back_to_the_type(self) -> None:
+        self.assertEqual("RuntimeError", ec.error_detail(RuntimeError("")))
+        self.assertEqual("TimeoutError", ec.error_detail(asyncio.TimeoutError()))
+
+    def test_code_appears_once_in_a_formatted_line(self) -> None:
+        err = ec.HonCodedError(ec.NETWORK_TIMEOUT)
+        line = f"Validation failed [{ec.NETWORK_TIMEOUT.label}]: {ec.error_detail(err)}"
+        self.assertEqual(1, line.count("ADDHON-"))
+
+
+class StructuralClassifyTest(unittest.TestCase):
+    """TLS vs DNS vs refused decided by TYPE/errno, not by grepping the message."""
+
+    def test_wrapped_gaierror_is_dns_even_without_dns_words(self) -> None:
+        import socket
+
+        class ClientConnectorError(OSError):
+            pass
+
+        err = ClientConnectorError("cannot connect to host api.example:443")
+        err.os_error = socket.gaierror(-2, "boom")
+        # The message alone would have said "cannot connect to host" -> refused.
+        self.assertIs(ec.classify(err), ec.DNS_FAILURE)
+
+    def test_real_ssl_error_is_tls_even_without_certificate_words(self) -> None:
+        import ssl
+
+        self.assertIs(ec.classify(ssl.SSLError("handshake gave up")), ec.TLS_FAILURE)
+
+    def test_wrapped_refusal_is_connection_refused(self) -> None:
+        class ClientConnectorError(OSError):
+            pass
+
+        err = ClientConnectorError("nope")
+        err.os_error = ConnectionRefusedError(111, "Connection refused")
+        self.assertIs(ec.classify(err), ec.CONNECTION_REFUSED)
+
+    def test_status_field_beats_the_message(self) -> None:
+        class ClientResponseError(Exception):
+            def __init__(self, status):
+                super().__init__("request failed")
+                self.status = status
+
+        self.assertIs(ec.classify(ClientResponseError(503)), ec.SERVER_ERROR)
+        self.assertIs(ec.classify(ClientResponseError(429)), ec.RATE_LIMITED)
+        self.assertIs(ec.classify(ClientResponseError(401)), ec.INVALID_CREDENTIALS)
+        # Any other status falls THROUGH: a decode problem with a 200 must stay one.
+        self.assertIs(ec.classify(ClientResponseError(200)), ec.UNKNOWN)
+
+    def test_order_guards_still_hold(self) -> None:
+        # The structural branch decides WHICH transport fault, never WHETHER: the
+        # rate-limit/5xx and explicit-rejection rules keep priority.
+        self.assertIs(ec.classify(ConnectionError("503 server error")), ec.SERVER_ERROR)
+
+        class ClientConnectionError(ConnectionError):
+            pass
+
+        self.assertIs(
+            ec.classify(ClientConnectionError("HTTP 401 unauthorized")),
+            ec.INVALID_CREDENTIALS,
+        )
 
 
 class RequiresReauthCouplingTest(unittest.TestCase):

@@ -50,6 +50,8 @@
       "account_action_required": "Your password was accepted, but hOn is asking for an extra step on the account (for example a new password to set, or terms to accept). Sign in on the hOn website or app, complete the requested step, then try again here. ({error_code})",
       "appliance_list_failed": "Could not fetch your appliance list. ({error_code})",
       "network_timeout": "Timed out contacting the hOn servers. Check your internet connection. ({error_code})",
+      "auth_timeout": "Timed out while signing in to hOn. The servers are slow or your connection dropped. Try again. ({error_code})",
+      "refresh_timeout": "Timed out while refreshing the hOn session. Try again in a moment. ({error_code})",
       "dns_failure": "Could not resolve the hOn servers (DNS). Check your network and DNS. ({error_code})",
       "tls_failure": "TLS/certificate error contacting hOn. Check the system date/time and network. ({error_code})",
       "connection_refused": "Could not connect to the hOn servers (refused, reset or unreachable). Check your network and firewall. ({error_code})",
