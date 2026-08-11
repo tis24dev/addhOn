@@ -1107,6 +1107,37 @@ class DiscoveryLogRedactionTest(unittest.TestCase):
         self.assertNotIn(nick1, str(ctx.exception))  # nor the raised coded error
         self.assertNotIn(nick2, str(ctx.exception))
 
+    def test_the_all_failed_wrapper_forwards_the_phase_of_its_cause(self) -> None:
+        # `__init__.py` reads `phase` off the wrapper and never walks `__cause__`, so a
+        # wrapper that drops it files phase=null in Download Diagnostics for a cause that
+        # knew where it died. The first-poll twin already forwards it; this is the
+        # steady-state sibling that used to lose it.
+        from custom_components.addhon import error_codes as ec
+
+        app = types.SimpleNamespace(
+            mac_address="AA:BB:CC:DD:EE:11", unique_id="AA:BB:CC:DD:EE:11",
+            appliance_type="REF", nick_name="n",
+            attributes={}, settings={}, statistics={},
+        )
+        c = HonClient(email="e@x", password="p")
+        c._first_poll_done = True
+
+        async def fake_get_appliances():
+            return [app]
+
+        coded = ec.HonCodedError(ec.NETWORK_TIMEOUT, phase="load_appliance/auth")
+
+        def boom(_appliance):
+            raise coded
+
+        c.async_get_appliances = fake_get_appliances  # type: ignore[assignment]
+        c._update_appliance_sync = boom  # type: ignore[assignment]
+
+        with self.assertRaises(HonCodedError) as ctx:
+            asyncio.run(c.async_get_appliances_data())
+        self.assertIs(coded, ctx.exception.__cause__)
+        self.assertEqual("load_appliance/auth", ctx.exception.phase)
+
 
 class RealtimeWiringSourceGuard(unittest.TestCase):
     """The cross-thread wiring in async_setup_entry can't be exercised by the stub

@@ -833,7 +833,7 @@ class HonClient:
                     # the whole setup, the only path that can still produce a COMPLETE
                     # entity inventory.
                     #
-                    # Under the SAME scope pair `NativeHon._build_appliance` opens for
+                    # Under the SAME scope pair `NativeHon._create_appliance` opens for
                     # the identical call at setup (client/session.py). Without it this
                     # was the one await on the poll path with no budget and no phase, so
                     # a per-request aiohttp timeout left it BARE -- and a bare
@@ -844,7 +844,10 @@ class HonClient:
                     # request that already failed once from spending the whole cap.
                     with phase_scope(
                         "load_appliance",
-                        getattr(self._hon_instance, "_phase_tracker", None),
+                        # Same attribute `_needs_rehydration` asked above: both names
+                        # hold the one NativeHon (`__aenter__` returns self), and reading
+                        # one of them here keeps the guard and the scope from drifting.
+                        getattr(self._api, "_phase_tracker", None),
                     ):
                         async with budget.budgeted(budget.APPLIANCE_ONE):
                             await loader()
@@ -1183,6 +1186,11 @@ class HonClient:
                 raise HonCodedError(
                     code,
                     f"Update failed for all {len(failed_appliances)} appliance(s)",
+                    # Same reason as the first-poll wrapper below: `__init__.py` reads
+                    # `phase` off THIS object and never walks the `__cause__` chain, so
+                    # without forwarding it a total-failure cycle files phase=null in
+                    # Download Diagnostics even when the cause knows its phase.
+                    phase=getattr(cause, "phase", None),
                 ) from cause
 
             if failed_appliances:
