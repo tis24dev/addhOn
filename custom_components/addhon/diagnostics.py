@@ -1079,7 +1079,8 @@ def _as_utc(value, assume_naive_utc: bool) -> datetime | None:
 # shape this pattern accepts is a shape a datetime SUBCLASS could smuggle
 # through the output validation below. The narrower it is, the less it admits.
 _ISO_RE = re.compile(
-    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:[+-]\d{2}:\d{2})?"
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?(?:[+-][0-9]{2}:[0-9]{2})?"
 )
 _STAMP_MAX_CHARS = 40
 
@@ -1205,6 +1206,238 @@ def _future_capabilities(app_type, attributes: Mapping, appliance) -> dict:
     return section
 
 
+# Bound on the ROWS of the instant map below, one row per shadow parameter. The
+# largest real device this repository holds a dump from is a washing machine
+# with 112 of them (counted in diagnostics/live-2026-06-22/: REF 16, TD 41,
+# AC 74, WM 112), so at 200 this is a runaway guard against a firmware that
+# starts publishing thousands of parameters, not a filter -- exactly the framing
+# _ENTITY_MAX_PER_DOMAIN carries above, and on every appliance seen so far it
+# does not fire. It exists at all because `attributes` beside it is emitted
+# UNCAPPED: if a shadow ever did explode, this map would be the second copy of
+# the explosion in one document and the reader would pay for it twice.
+_STAMP_MAX_ROWS = 200
+
+# "This value exposes no `last_update` surface at all", which has to stay
+# distinguishable from "it exposes one and the answer is None". The first is not
+# a shadow parameter and gets NO row; the second is one and gets a `null` row,
+# and those are two different findings. It is the same distinction
+# `_registry_entries` draws between None and [], and it is why the plain
+# `getattr(value, "last_update", None)` is not good enough here.
+_NO_LAST_UPDATE = object()
+
+# The cloud's "this parameter has never been stamped" sentinel. Every one of the
+# 66 `lastUpdate` values in the only real REF capture this repository holds
+# (tests/fixtures/ref_10136, apk/dump/ref_10136) is exactly this instant, while
+# the AC capture beside it carries real 2023 dates. It is not an instant, and it
+# must never become the newest one: printed as an age it reads as a 56-year-old
+# shadow on a fridge that is connected and reporting.
+_NEVER_STAMPED = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _attribute_timestamps(
+    attributes: Mapping,
+) -> tuple[dict[str, str | None], bool, datetime | None]:
+    """The cloud instant behind each shadow value: the map, the cap flag, the newest.
+
+    The device shadow arrives as `{parNewVal, lastUpdate}` per parameter and the
+    engine keeps both on a `HonAttribute` (`client/engine/attributes.py`), but
+    `_jsonable` unwraps only `.value`, so every instant the cloud sent has until
+    now been discarded at the last step before the dump. The difference that
+    makes is the difference between "the appliance reports tempZ3 = -43" and
+    "the appliance last moved tempZ3 four days ago and has been repeating it
+    since", and answering the second used to require a SECOND dump days later --
+    which is precisely the round trip issue #75 paid for. The hOn app's own
+    mocked shadow shows how much signal sits in the field: of its 74 parameters
+    38 carry one identical instant from 2020 and the remainder spread over 21
+    distinct ones (`apk/decomp.txt:1836416-1836566`).
+
+    Three values are returned, deliberately out of ONE pass:
+
+      [0] `{parameter name: ISO text or None}`, one row for each value that
+          exposes a `last_update` surface. That set is also the only honest
+          answer to "which of these keys are shadow parameters", a bit the dump
+          carries today only by duplicating the whole `attributes["parameters"]`
+          sub-map.
+      [1] True when the ROW CAP dropped rows, and for nothing else. In this
+          module a flag named `truncated` means dropped ROWS -- see
+          `_future_capabilities`, `_entity_inventory` and the platform summary,
+          which all use it that way -- and a character cap would need a
+          different name. There is no character cap here.
+      [2] the newest instant, as an AWARE UTC datetime, computed over ALL
+          parameters INCLUDING any the row cap dropped, and never emitted from
+          here. It is handed back rather than left for the caller to recompute
+          so that anything reporting freshness from it and the map above it are
+          physically incapable of disagreeing: a second pass over an already
+          truncated map would quietly report the newest SURVIVING instant as
+          the newest instant, which is the worst kind of wrong -- plausible.
+
+    `None` in [0] is OVERLOADED and a reader has to be told all three ways it is
+    reached. It means "no parseable instant has ever arrived for this
+    parameter"; it means "reading the instant raised"; and it means "a datetime
+    did arrive and `_stamp_text` refused its output", which happens when a
+    datetime SUBCLASS returns something from `isoformat` that is too long or is
+    not an ISO instant. It does NOT mean "the cloud stopped stamping this
+    parameter": `attributes.py:73` is a walrus guard (`if last_update :=
+    data.get("lastUpdate"):`), so an update carrying no `lastUpdate` leaves the
+    previous instant standing, and only a present-but-unparseable value resets
+    it (`attributes.py:75-77`). The consequence is worth stating plainly,
+    because it will otherwise be read as a bug: a stamp here can legitimately be
+    OLDER than the value printed beside it in `attributes`, on the plain REST
+    path, with nothing wrong anywhere.
+
+    Formatting is delegated to `_stamp_text` and NOT reimplemented here. That
+    helper owns the three properties this section would otherwise have to
+    rediscover: an aware instant is normalised to UTC because `_MAC_RE` eats a
+    sub-minute offset ('2026-04-09T12:34:56-05:30:15' survives `_jsonable` as
+    '2026-04-09T***'); awareness is decided on `utcoffset()` and not on
+    `tzinfo`, because a tzinfo whose `utcoffset()` returns None makes CPython
+    silently re-read the instant in the HOST's zone and then label it '+00:00';
+    and the OUTPUT is validated, because `isinstance(x, datetime)` admits
+    subclasses and a subclass may return anything at all from `isoformat`.
+
+    The `parameters` sub-map is walked as a SECOND source, and the reason is not
+    the obvious one. `hon_client._get_attributes` merges `raw` -- which carries
+    that sub-map under its own key -- at :187, and only then flattens the
+    parameters over the top at :191, so on a healthy device the `HonAttribute`
+    IS already the bare value and the nested copy is pure duplication (all four
+    live dumps agree on every key, zero mismatches in 243 parameters). The
+    reachable failure is :192-196: when `parameters` is a Mapping that is not a
+    `dict`, the merge goes through `dict(params)`, whose argument is evaluated
+    in full before anything is merged, so a Mapping whose iteration or
+    `__getitem__` misbehaves leaves NOTHING flattened and the nested object as
+    the only surviving carrier of the instants.
+
+    Only a Mapping is followed there. A non-Mapping iterable under that key (a
+    generator, a list) is deliberately NOT walked: this runs on the event loop,
+    `len()` is the only bound available before iterating, and a section that
+    would hang the loop to rescue a degraded corner is worse than the corner.
+
+    Two shapes were weighed and rejected, on the record.
+
+    Re-using `attributes["parameters"]` by replacing its values with the
+    instants is measurably cheaper than a sibling map (one key, one nesting
+    level, and the duplication is paid for already). It is refused because it
+    silently redefines a key four live dumps already carry: a maintainer
+    comparing a June dump against an August one would read instants where the
+    older file has values, with nothing in either file to announce the change.
+    It would also mean special-casing one key inside the `dict(attributes)`
+    copy, and that copy's whole contract is to be a faithful echo of what the
+    device said. The honest treatment of that duplication is to DELETE the
+    nested map, which is a separate decision from this one and is taken (or
+    not) at the point where `attributes` is normalised.
+
+    Emitting relative AGES (`{"tempZ3": 345}`) instead of absolute instants is
+    the privacy-cheaper shape: an age carries no wall clock and no zone. It is
+    refused because an age is only meaningful against the moment the dump was
+    taken, which `generated_at` now supplies at the top of the document, so the
+    absolute form gives that up for nothing; because two dumps taken days apart
+    can be aligned on absolute instants and cannot be aligned on ages; and
+    because an age is computed from the REPORTER's clock, which adds a
+    dependency on that clock being right, where the instants are cloud-authored
+    and arrive already agreed.
+    """
+    rows: dict[str, str | None] = {}
+    newest: datetime | None = None
+    truncated = False
+    seen: set[str] = set()
+
+    sources: list[Mapping] = [attributes]
+    try:
+        nested = attributes.get("parameters")
+    except Exception:  # pragma: no cover - a Mapping that refuses one key
+        # Guarded even though `.get` looks total: `Mapping.get` only swallows
+        # KeyError, and this is the FIRST read of `attributes` in the block, so
+        # an unguarded call here would take the dump down before `_coverage`
+        # ever gets its own chance to fail on the same object.
+        nested = None
+    if isinstance(nested, Mapping):
+        sources.append(nested)
+
+    for source in sources:
+        try:
+            names = sorted(source, key=str)
+        except Exception:  # pragma: no cover - a Mapping that cannot list keys
+            # Honest scope: for the NESTED map this is the reachable guard, and
+            # it is what keeps a half-broken Mapping from taking the document
+            # down. For `attributes` itself it is a formality -- `_coverage`
+            # iterates the same object a few lines below with no guard at all,
+            # so a mapping that cannot list its keys ends the dump regardless.
+            _LOGGER.debug(
+                "Diagnostics debug: attribute names unreadable", exc_info=True
+            )
+            continue
+        for name in names:
+            key = str(name)
+            if key in seen:
+                continue
+            try:
+                value = source[name]
+            except Exception:
+                # A key that enumerates and then refuses to resolve is exactly
+                # the object that made `dict(params)` raise upstream. Skip the
+                # one key rather than the whole source, so a single bad entry
+                # costs one row and not the entire section.
+                continue
+            try:
+                raw = getattr(value, "last_update", _NO_LAST_UPDATE)
+            except Exception:
+                # A `last_update` PROPERTY that raises. This must land as a
+                # `null` row, never as a missing one: dropping it here would
+                # merge "this parameter has never carried a parseable instant"
+                # into "this key is not a shadow parameter at all", and telling
+                # those two apart is most of what the section is for.
+                raw = None
+            if raw is _NO_LAST_UPDATE:
+                continue
+            seen.add(key)
+            # Two conversions of one value, on purpose, because the two answers
+            # follow different policies. `_stamp_text` keeps a naive instant
+            # naive, so the dump never claims a zone the cloud did not send;
+            # `_as_utc(..., True)` reads that same naive instant AS UTC, because
+            # an age has to be computed under some assumption and stating it is
+            # better than dropping the row. The newest is tracked for EVERY
+            # parameter, including the ones the cap below refuses to print.
+            try:
+                instant = _as_utc(raw, True)
+                if instant is not None:
+                    # Rebuilt from the integer fields, INSIDE the guard, and
+                    # both halves of that matter. `isinstance(x, datetime)`
+                    # admits SUBCLASSES: the door `_stamp_text` closes on
+                    # `isoformat` is wide open on the `__gt__` below and on the
+                    # `__sub__` that whoever consumes this value will perform,
+                    # and a subclass raising in either does not produce a wrong
+                    # age, it produces NO DUMP AT ALL. Rebuilding also means the
+                    # instant handed on is a plain `datetime`, so no later
+                    # consumer inherits the risk.
+                    instant = datetime(
+                        instant.year,
+                        instant.month,
+                        instant.day,
+                        instant.hour,
+                        instant.minute,
+                        instant.second,
+                        instant.microsecond,
+                        tzinfo=timezone.utc,
+                    )
+                    if instant > _NEVER_STAMPED and (
+                        newest is None or instant > newest
+                    ):
+                        newest = instant
+            except Exception:  # pragma: no cover - a hostile datetime subclass
+                _LOGGER.debug(
+                    "Diagnostics debug: instant not comparable", exc_info=True
+                )
+            if len(rows) >= _STAMP_MAX_ROWS:
+                truncated = True
+                continue
+            rows[key] = _stamp_text(raw)
+    # Sorted ONCE, at the end, and not per source: the two sources are each
+    # walked in sorted order but a bare key and a nested one can both be
+    # productive, and a map whose second half restarts the alphabet reads as a
+    # rendering bug.
+    return dict(sorted(rows.items())), truncated, newest
+
+
 def _appliance_block(
     appliance_id: str,
     data: Mapping,
@@ -1232,6 +1465,11 @@ def _appliance_block(
     app_type = data.get("type")
     attributes = data.get("attributes")
     attributes = attributes if isinstance(attributes, Mapping) else {}
+    # Read the instants HERE, off the same mapping the block echoes below, and
+    # once. The third value is the newest of them: it is computed in the same
+    # pass so that anything reporting freshness from it can never disagree with
+    # the map the reader is looking at, even after the row cap has fired.
+    stamps, stamps_truncated, newest_stamp = _attribute_timestamps(attributes)
     statistics = data.get("statistics")
     statistics = statistics if isinstance(statistics, Mapping) else {}
     # Normalised HERE and nowhere else. A caller may pass nothing, a naive
@@ -1279,6 +1517,24 @@ def _appliance_block(
         # Before `attributes` on purpose: what the model IS, then what it is doing.
         "model_attributes": model_attributes,
         "attributes": dict(attributes),
+        # BESIDE the values, never inside them. `attributes` above has one
+        # contract -- a flat name -> value echo of what the device said -- and a
+        # section that turned its leaves into {value, last_update} objects would
+        # break every reader, every jq filter and the value-type partition
+        # `_coverage` runs over exactly those leaves.
+        #
+        # The truncation flag is a SIBLING key rather than a `truncated` entry
+        # inside the map, and that is a deliberate deviation from the three
+        # precedents in this module (`_future_capabilities`, `_entity_inventory`
+        # and the platform summary all put it inside). The reason is specific to
+        # this map and does not generalise: every key in it is a cloud-CHOSEN
+        # parameter name, so a reserved key named `truncated` would be
+        # indistinguishable from a device that publishes a parameter called
+        # `truncated` -- the section would be unable to say whether it had
+        # dropped rows or merely found one oddly named. It is emitted only when
+        # true and immediately after the map, so it still reads as part of it.
+        "attributes_last_update": stamps,
+        **({"attributes_last_update_truncated": True} if stamps_truncated else {}),
         "commands": commands,
         "coverage": coverage,
         # Next to coverage on purpose: one says what the code could map for this

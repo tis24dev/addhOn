@@ -21,6 +21,7 @@ import json
 import sys
 import types
 import unittest
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 
@@ -202,6 +203,19 @@ class FakeWrapper:
         self.value = value
 
 
+class FakeShadowAttribute:
+    """A HonAttribute: a `.value` PLUS the cloud instant that last moved it.
+
+    Deliberately NOT folded into `FakeWrapper` above: that one stands for every
+    `.value` wrapper in the engine (a HonParameter has no instant), and giving
+    it a `last_update` would put a row in every timestamp map in this file.
+    """
+
+    def __init__(self, value, last_update=None):
+        self.value = value
+        self.last_update = last_update
+
+
 class Opaque:
     """A non-primitive value with NO `.value` (must be stringified, not crash JSON)."""
 
@@ -274,6 +288,13 @@ class FakeHass:
         self.data = {DOMAIN: {entry_id: {"coordinator": coordinator}}}
 
 
+# Pinned instants for the shared AC fixture. They are constants rather than
+# offsets from now() so that a section asserting an AGE can subtract them from a
+# frozen clock; a fixture built on the wall clock is how age assertions turn
+# into tests that fail once a year on a slow machine.
+AC_STAMP_OLD = datetime(2026, 4, 9, 5, 31, 2, tzinfo=timezone.utc)
+AC_STAMP_NEW = datetime(2026, 4, 9, 5, 34, 16, tzinfo=timezone.utc)
+
 AC_ID = "ac-unique"
 WD_ID = "wd-unique"
 
@@ -316,7 +337,11 @@ def _build_coordinator() -> FakeCoordinator:
             "serial": "PLAINTEXT-SERIAL",
             "mac": "AA:BB:CC:DD:EE:FF",
             "attributes": {
-                "tempIndoor": 22.5,           # mapped (sensor + custom)
+                # Wrapped the way the real shadow arrives: a value AND the
+                # instant the cloud last moved it. Every other section must be
+                # blind to the wrapper -- `_jsonable` still unwraps it to 22.5,
+                # and the coverage denominator still counts one bare key.
+                "tempIndoor": FakeShadowAttribute(22.5, AC_STAMP_OLD),  # mapped
                 "available": True,            # mapped (connectivity)
                 "settings.machMode": "1",     # dotted -> excluded from attr axis
                 "weirdAcSensor": 9,           # UNMAPPED bare telemetry
@@ -324,8 +349,13 @@ def _build_coordinator() -> FakeCoordinator:
                 # writable params also surface BARE in the device shadow; they must
                 # NOT be reported as unmapped read-only attributes (fix: subtract
                 # settings params from the attribute axis).
-                "tempSel": "22",
-                "machMode": "1",
+                # tempSel carries the NEWEST instant in this fixture, so a
+                # section reporting "when did anything last move" has a
+                # deterministic answer. machMode carries none, which is the
+                # `null` row: `attributes.py:73` is a walrus guard, so an update
+                # with no lastUpdate never clears a previous instant.
+                "tempSel": FakeShadowAttribute("22", AC_STAMP_NEW),
+                "machMode": FakeShadowAttribute("1", None),
                 # wrapper objects (HonAttribute/HonParameter) must be JSON-coerced.
                 "liveParam": FakeWrapper(7),
                 "opaqueObj": Opaque(),
@@ -2861,6 +2891,597 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
             for half in ("read", "write"):
                 if half in entry:
                     self.assertIsInstance(entry[half], tuple, entry["tag"])
+
+
+# --- step 3: the per-parameter cloud instants (P1) ---------------------------
+
+
+class _Raising:
+    """A shadow value whose `last_update` PROPERTY raises when it is read.
+
+    Not a contrived shape: `last_update` is a property on the real
+    `HonAttribute`, and a foreign or half-migrated appliance implementation is
+    free to compute it. `_appliance_block` is called with no try/except around
+    it from either entry point, so this is the object that decides whether one
+    bad parameter costs one row or the whole document.
+    """
+
+    def __init__(self):
+        self.value = "1"
+
+    @property
+    def last_update(self):
+        raise RuntimeError("boom")
+
+
+class _BrokenNested(Mapping):
+    """A Mapping that is NOT a dict and refuses one of the keys it enumerates.
+
+    This is the object behind `hon_client.py:192-196`: the merge there goes
+    through `dict(params)`, whose argument is evaluated in full before anything
+    is merged, so one refusing key means NOTHING is flattened and the nested map
+    is the only surviving carrier of the instants.
+    """
+
+    def __init__(self, rows, broken):
+        self._rows = dict(rows)
+        self._broken = broken
+
+    def __getitem__(self, key):
+        if key == self._broken:
+            raise RuntimeError("boom")
+        return self._rows[key]
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def __len__(self):
+        return len(self._rows)
+
+
+def _stamp_block(attributes, app_type="AC"):
+    """A single appliance block built from an ad-hoc attributes mapping.
+
+    Built here rather than by bolting keys onto `_build_coordinator`: that
+    fixture's AC and WD attribute dicts are hand-counted by
+    `test_coverage_totals` (`attributes_total == 6`), so a section that needs an
+    extra key builds its own appliance instead of perturbing the shared one.
+    """
+    return diagnostics._appliance_block(
+        "id1",
+        {
+            "appliance": FakeApplianceNoModel(commands={}),
+            "type": app_type,
+            "attributes": attributes,
+            "statistics": {},
+        },
+    )
+
+
+class AttributeTimestampTest(unittest.TestCase):
+    """The per-parameter cloud instants `_jsonable` used to throw away."""
+
+    def test_the_map_sits_beside_the_values_it_describes(self):
+        # Placement is the feature: a reader scrolling `attributes` finds the
+        # instants in the next section, not after `future_capabilities`.
+        _, blocks = _entry_diag()
+        keys = list(blocks["AC"])
+        self.assertEqual(
+            keys.index("attributes") + 1, keys.index("attributes_last_update")
+        )
+        self.assertEqual(
+            keys.index("attributes_last_update") + 1, keys.index("commands")
+        )
+
+    def test_every_shadow_parameter_gets_a_row(self):
+        _, blocks = _entry_diag()
+        self.assertEqual(
+            {
+                "machMode": None,
+                "tempIndoor": "2026-04-09T05:31:02+00:00",
+                "tempSel": "2026-04-09T05:34:16+00:00",
+            },
+            blocks["AC"]["attributes_last_update"],
+        )
+
+    def test_a_value_with_no_last_update_surface_gets_no_row(self):
+        # The map answers "which keys are shadow parameters", so a plain scalar,
+        # a bare `.value` wrapper, an opaque object and an envelope dict must all
+        # be absent -- not present with a null, which would claim they are shadow
+        # parameters that never carried an instant.
+        _, blocks = _entry_diag()
+        rows = blocks["AC"]["attributes_last_update"]
+        for name in (
+            "weirdAcSensor",
+            "available",
+            "liveParam",
+            "opaqueObj",
+            "commandHistory",
+            "macAddress",
+        ):
+            self.assertNotIn(name, rows)
+
+    def test_a_shadow_parameter_with_no_instant_is_null_not_missing(self):
+        # machMode is wrapped and carries no instant. Dropping the row would
+        # merge "no parseable instant has ever arrived" into "not a shadow
+        # parameter", which are two different findings.
+        _, blocks = _entry_diag()
+        rows = blocks["AC"]["attributes_last_update"]
+        self.assertIn("machMode", rows)
+        self.assertIsNone(rows["machMode"])
+
+    def test_an_appliance_with_no_shadow_wrappers_emits_an_empty_map(self):
+        # The WD fixture is plain scalars throughout. An empty map is the honest
+        # answer; it is not omitted, because "this device sent no instants" and
+        # "this dump did not look" must stay distinguishable.
+        _, blocks = _entry_diag()
+        self.assertEqual({}, blocks["WD"]["attributes_last_update"])
+
+    def test_the_rows_are_sorted_across_both_sources(self):
+        # Sorted ONCE at the end and not per source: the nested `parameters` map
+        # is walked second, so a per-source sort would emit a map whose second
+        # half restarts the alphabet.
+        _, blocks = _entry_diag()
+        rows = list(blocks["AC"]["attributes_last_update"])
+        self.assertEqual(sorted(rows), rows)
+        mixed, _, _ = diagnostics._attribute_timestamps(
+            {
+                "zzz": FakeShadowAttribute("1", AC_STAMP_OLD),
+                "parameters": {"aaa": FakeShadowAttribute("1", AC_STAMP_NEW)},
+            }
+        )
+        self.assertEqual(["aaa", "zzz"], list(mixed))
+
+    def test_every_stamp_is_aware_utc_iso_text(self):
+        # The shape guard. `read`/`write`-style free text is not in `_TO_REDACT`
+        # and `_MAC_RE` catches only MAC shapes, so the only thing keeping this
+        # field safe is that it cannot be anything but an instant.
+        result, _ = _entry_diag()
+        seen = 0
+        for block in result["appliances"]:
+            for stamp in block["attributes_last_update"].values():
+                if stamp is None:
+                    continue
+                seen += 1
+                self.assertRegex(
+                    stamp,
+                    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?\+00:00$",
+                )
+        self.assertEqual(2, seen, "the guard would be vacuous with no stamps")
+
+    def test_the_wrapped_fixture_still_reads_as_a_plain_value(self):
+        # The wrappers must be invisible to every other section: `_jsonable`
+        # unwraps `.value`, and the coverage denominator is a key count.
+        _, blocks = _entry_diag()
+        self.assertEqual(22.5, blocks["AC"]["attributes"]["tempIndoor"])
+        self.assertEqual("1", blocks["AC"]["attributes"]["machMode"])
+        self.assertEqual(6, blocks["AC"]["coverage"]["attributes_total"])
+
+
+class AttributeTimestampTruncationTest(unittest.TestCase):
+    """The row cap announces itself, and never silently drops a row."""
+
+    @staticmethod
+    def _many(count):
+        rows = {
+            "p%03d" % i: FakeShadowAttribute(str(i), AC_STAMP_OLD)
+            for i in range(count)
+        }
+        # Alphabetically LAST, so the cap is guaranteed to drop it. That is what
+        # makes the "the newest is computed over the dropped rows too" claim
+        # below a real test rather than a restatement.
+        rows["zzz_newest"] = FakeShadowAttribute("9", AC_STAMP_NEW)
+        return rows
+
+    def test_the_flag_is_absent_when_nothing_was_dropped(self):
+        _, blocks = _entry_diag()
+        self.assertNotIn("attributes_last_update_truncated", blocks["AC"])
+        self.assertNotIn("attributes_last_update_truncated", blocks["WD"])
+
+    def test_the_cap_drops_rows_and_says_so_adjacently(self):
+        block = _stamp_block(self._many(250))
+        self.assertEqual(200, len(block["attributes_last_update"]))
+        self.assertTrue(block["attributes_last_update_truncated"])
+        keys = list(block)
+        self.assertEqual(
+            keys.index("attributes_last_update") + 1,
+            keys.index("attributes_last_update_truncated"),
+        )
+
+    def test_the_newest_is_computed_over_the_rows_the_cap_dropped(self):
+        # The third element exists so a freshness header cannot report the
+        # newest SURVIVING instant as the newest instant. Here the newest row is
+        # provably not in the emitted map.
+        rows = self._many(250)
+        stamps, truncated, newest = diagnostics._attribute_timestamps(rows)
+        self.assertTrue(truncated)
+        self.assertNotIn("zzz_newest", stamps)
+        self.assertEqual(AC_STAMP_NEW, newest)
+
+    def test_exactly_at_the_cap_nothing_is_flagged(self):
+        rows = {
+            "p%03d" % i: FakeShadowAttribute("1", AC_STAMP_OLD)
+            for i in range(diagnostics._STAMP_MAX_ROWS)
+        }
+        stamps, truncated, _ = diagnostics._attribute_timestamps(rows)
+        self.assertEqual(diagnostics._STAMP_MAX_ROWS, len(stamps))
+        self.assertFalse(truncated)
+
+    def test_the_cap_clears_the_largest_real_device(self):
+        # Anti-rot: the cap is a runaway guard, not a filter. The biggest shadow
+        # this repository holds a dump from is the WM at 112 parameters
+        # (diagnostics/live-2026-06-22/device-WM.json).
+        self.assertGreater(diagnostics._STAMP_MAX_ROWS, 112)
+
+
+class AttributeTimestampNewestTest(unittest.TestCase):
+    """The third element: one pass, so nothing downstream can disagree with it."""
+
+    def test_the_newest_is_the_maximum_not_the_last_seen(self):
+        stamps, _, newest = diagnostics._attribute_timestamps(
+            {
+                "a": FakeShadowAttribute("1", AC_STAMP_NEW),
+                "b": FakeShadowAttribute("1", AC_STAMP_OLD),
+            }
+        )
+        self.assertEqual(AC_STAMP_NEW, newest)
+        self.assertEqual(2, len(stamps))
+
+    def test_the_newest_is_aware_utc_whatever_arrived(self):
+        # It is returned for subtraction, so it has to be aware or the age that
+        # uses it raises TypeError and takes the whole dump down.
+        for value in (
+            datetime(2026, 4, 9, 5, 34, 16),
+            datetime(2026, 4, 9, 5, 34, 16, tzinfo=timezone(timedelta(hours=3))),
+        ):
+            _, _, newest = diagnostics._attribute_timestamps(
+                {"a": FakeShadowAttribute("1", value)}
+            )
+            self.assertIsNotNone(newest)
+            self.assertIsNotNone(newest.utcoffset())
+
+    def test_the_newest_is_a_plain_datetime_whatever_arrived(self):
+        # Rebuilt from the integer fields, so a hostile subclass cannot ride out
+        # of this helper into whatever subtracts it next.
+        class Hostile(datetime):
+            def __sub__(self, other):
+                raise RuntimeError("boom")
+
+            def __rsub__(self, other):
+                raise RuntimeError("boom")
+
+        _, _, newest = diagnostics._attribute_timestamps(
+            {"a": FakeShadowAttribute("1", Hostile(2026, 4, 9, tzinfo=timezone.utc))}
+        )
+        self.assertIs(type(newest), datetime)
+        (FROZEN - newest).total_seconds()  # must not raise
+
+    def test_a_subclass_that_refuses_to_compare_does_not_kill_the_dump(self):
+        # The one unguarded expression this helper could have shipped: the first
+        # instant is short-circuited by `newest is None`, so the comparison only
+        # runs on the SECOND stamped parameter -- which is why a single-value
+        # test would have missed it entirely.
+        class Hostile(datetime):
+            def __gt__(self, other):
+                raise RuntimeError("boom")
+
+        block = _stamp_block(
+            {
+                "a": FakeShadowAttribute("1", AC_STAMP_OLD),
+                "b": FakeShadowAttribute(
+                    "1", Hostile(2026, 4, 9, 6, 0, 0, tzinfo=timezone.utc)
+                ),
+            }
+        )
+        self.assertEqual(
+            "2026-04-09T05:31:02+00:00", block["attributes_last_update"]["a"]
+        )
+
+    def test_the_newest_is_none_when_no_instant_ever_arrived(self):
+        stamps, _, newest = diagnostics._attribute_timestamps(
+            {"a": FakeShadowAttribute("1", None)}
+        )
+        self.assertEqual({"a": None}, stamps)
+        self.assertIsNone(newest)
+
+    def test_the_newest_is_never_emitted_from_here(self):
+        # It is a datetime, which HA's JSON encoder raises on. Nothing in the
+        # block may carry it: only `_stamp_text` output reaches the document.
+        _, blocks = _entry_diag()
+        json.dumps(blocks["AC"])  # must not raise
+
+
+class AttributeTimestampConversionTest(unittest.TestCase):
+    """What reaches the map is `_stamp_text` output and nothing else."""
+
+    def test_a_sub_minute_offset_survives_the_mac_mask(self):
+        # End to end, through `_redact`. An aware instant is normalised to UTC
+        # first, and that is CORRECTNESS: `_MAC_RE` reads '12:34:56-05:30:15' as
+        # six octet groups and eats the field down to '2026-04-09T***'.
+        odd = timezone(-timedelta(hours=5, minutes=30, seconds=15))
+        block = _stamp_block(
+            {"a": FakeShadowAttribute("1", datetime(2026, 4, 9, 12, 34, 56, tzinfo=odd))}
+        )
+        self.assertEqual(
+            "2026-04-09T18:05:11+00:00", block["attributes_last_update"]["a"]
+        )
+        self.assertNotIn("***", json.dumps(block["attributes_last_update"]))
+
+    def test_a_naive_instant_is_not_shifted_onto_the_host_zone(self):
+        block = _stamp_block(
+            {"a": FakeShadowAttribute("1", datetime(2020, 9, 29, 10, 1, 26))}
+        )
+        self.assertEqual("2020-09-29T10:01:26", block["attributes_last_update"]["a"])
+
+    def test_a_tzinfo_whose_offset_is_none_is_treated_as_naive(self):
+        # CPython does not raise here: it re-reads the instant in the HOST's zone
+        # and labels it '+00:00'. A wrong time wearing an authoritative offset is
+        # worse than a time with no offset at all.
+        class NoOffset(tzinfo):
+            def utcoffset(self, dt):
+                return None
+
+            def tzname(self, dt):
+                return None
+
+            def dst(self, dt):
+                return None
+
+        block = _stamp_block(
+            {
+                "a": FakeShadowAttribute(
+                    "1", datetime(2020, 9, 29, 10, 1, 26, tzinfo=NoOffset())
+                )
+            }
+        )
+        self.assertEqual("2020-09-29T10:01:26", block["attributes_last_update"]["a"])
+
+    def test_a_datetime_subclass_cannot_smuggle_a_string(self):
+        # `isinstance(x, datetime)` admits subclasses and a subclass may return
+        # anything from `isoformat`. The row survives as a null; the string does
+        # not reach a document about to be attached to a public issue. This is
+        # also the THIRD way a `null` row is reached, and the docstring says so.
+        class Smuggler(datetime):
+            def isoformat(self, *args, **kwargs):
+                return "user@example.com"
+
+        block = _stamp_block({"a": FakeShadowAttribute("1", Smuggler(2026, 4, 9))})
+        self.assertEqual({"a": None}, block["attributes_last_update"])
+        self.assertNotIn("user@example.com", json.dumps(block))
+
+    def test_a_non_datetime_instant_is_a_null_row(self):
+        # A cloud STRING instant is refused by design: the map's promise is that
+        # every value in it was built by `datetime.isoformat`.
+        block = _stamp_block(
+            {
+                "a": FakeShadowAttribute("1", "2026-04-09T05:34:16Z"),
+                "b": FakeShadowAttribute("1", 1775712856741),
+            }
+        )
+        self.assertEqual({"a": None, "b": None}, block["attributes_last_update"])
+
+
+class AttributeTimestampEngineSemanticsTest(unittest.TestCase):
+    """Pinned against the real `HonAttribute`, not against a fake of it."""
+
+    @staticmethod
+    def _attr(payload):
+        # Imported inside the test on purpose: the point of these two cases is
+        # that the map's `null` semantics match the ENGINE's, so a fake would
+        # test nothing. Local, so the module's import block stays untouched.
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        return HonAttribute(payload)
+
+    def test_a_stale_stamp_survives_a_stampless_update(self):
+        # `attributes.py:73` is a walrus guard, so an update with no
+        # `lastUpdate` at all leaves the previous instant standing. This is why
+        # the docstring must NOT say a null means "the cloud stopped stamping
+        # it", and why a stamp may legitimately be older than the value beside
+        # it with nothing wrong anywhere.
+        attr = self._attr({"parNewVal": "1", "lastUpdate": "2020-09-29 10:01:26"})
+        attr.update({"parNewVal": "2"})
+        self.assertEqual("2", str(attr))
+        stamps, _, _ = diagnostics._attribute_timestamps({"a": attr})
+        self.assertEqual({"a": "2020-09-29T10:01:26"}, stamps)
+
+    def test_an_unparseable_instant_resets_the_row_to_null(self):
+        # The other half of the same guard (`attributes.py:75-77`): a
+        # present-but-unparseable value is the ONLY thing that clears an instant.
+        attr = self._attr({"parNewVal": "1", "lastUpdate": "2020-09-29 10:01:26"})
+        attr.update({"parNewVal": "2", "lastUpdate": "not-a-date"})
+        stamps, _, newest = diagnostics._attribute_timestamps({"a": attr})
+        self.assertEqual({"a": None}, stamps)
+        self.assertIsNone(newest)
+
+    def test_a_real_engine_attribute_produces_a_row(self):
+        # Anti-vacuity for the two cases above: the engine class really does
+        # expose the surface this section keys on.
+        attr = self._attr({"parNewVal": "1", "lastUpdate": "2026-04-09T05:34:16"})
+        stamps, _, newest = diagnostics._attribute_timestamps({"a": attr})
+        self.assertEqual({"a": "2026-04-09T05:34:16"}, stamps)
+        self.assertEqual(datetime(2026, 4, 9, 5, 34, 16, tzinfo=timezone.utc), newest)
+
+
+class AttributeTimestampDegradationTest(unittest.TestCase):
+    """A dump degrades; it never raises. `_appliance_block` has no net."""
+
+    def test_a_raising_property_becomes_a_null_row_not_a_missing_one(self):
+        stamps, truncated, newest = diagnostics._attribute_timestamps(
+            {"boom": _Raising(), "ok": FakeShadowAttribute("1", AC_STAMP_NEW)}
+        )
+        self.assertEqual(
+            {"boom": None, "ok": "2026-04-09T05:34:16+00:00"}, stamps
+        )
+        self.assertFalse(truncated)
+        self.assertEqual(AC_STAMP_NEW, newest)
+
+    def test_a_raising_property_does_not_break_the_dump(self):
+        block = _stamp_block({"boom": _Raising()})
+        self.assertEqual({"boom": None}, block["attributes_last_update"])
+
+    def test_an_empty_mapping_is_an_empty_map(self):
+        self.assertEqual(({}, False, None), diagnostics._attribute_timestamps({}))
+
+    def test_a_non_string_key_still_produces_a_row(self):
+        # The dump has to be JSON-native, and a non-string key would make HA's
+        # encoder the place the failure surfaces.
+        stamps, _, _ = diagnostics._attribute_timestamps(
+            {7: FakeShadowAttribute("1", AC_STAMP_NEW)}
+        )
+        self.assertEqual({"7": "2026-04-09T05:34:16+00:00"}, stamps)
+        json.dumps(stamps)  # must not raise
+
+    def test_a_mapping_that_refuses_the_parameters_key_is_survived(self):
+        # This helper makes the FIRST read of `attributes` in the block, so an
+        # unguarded `.get` here would take the dump down ahead of `_coverage`,
+        # which reads the same object a few lines below. `Mapping.get` only
+        # swallows KeyError, so a `__getitem__` raising anything else escapes it.
+        nested = _BrokenNested(
+            {"tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD)}, broken="parameters"
+        )
+        self.assertEqual(
+            ({"tempZ1": "2026-04-09T05:31:02+00:00"}, False, AC_STAMP_OLD),
+            diagnostics._attribute_timestamps(nested),
+        )
+
+
+class AttributeTimestampNestedSourceTest(unittest.TestCase):
+    """The `parameters` sub-map, and why it is read at all."""
+
+    def test_the_nested_map_is_the_fallback_when_nothing_was_flattened(self):
+        # `hon_client.py:192-196`: `dict(params)` is evaluated in full before
+        # anything is merged, so one refusing key leaves NO bare parameter and
+        # the nested object as the only carrier of the instants.
+        nested = _BrokenNested(
+            {
+                "tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD),
+                "tempZ3": FakeShadowAttribute("-43", AC_STAMP_NEW),
+            },
+            broken=None,
+        )
+        stamps, _, newest = diagnostics._attribute_timestamps({"parameters": nested})
+        self.assertEqual(
+            {
+                "tempZ1": "2026-04-09T05:31:02+00:00",
+                "tempZ3": "2026-04-09T05:34:16+00:00",
+            },
+            stamps,
+        )
+        self.assertEqual(AC_STAMP_NEW, newest)
+
+    def test_a_bare_row_wins_over_the_nested_copy(self):
+        # On a healthy device the two agree, so this only matters if they ever
+        # stop agreeing: the bare value is what `attributes` prints, so it is
+        # the one the instants must describe.
+        bare = FakeShadowAttribute("1", AC_STAMP_NEW)
+        shadow = FakeShadowAttribute("1", AC_STAMP_OLD)
+        stamps, _, _ = diagnostics._attribute_timestamps(
+            {"tempZ1": bare, "parameters": {"tempZ1": shadow}}
+        )
+        self.assertEqual({"tempZ1": "2026-04-09T05:34:16+00:00"}, stamps)
+
+    def test_the_nested_key_itself_never_becomes_a_row(self):
+        stamps, _, _ = diagnostics._attribute_timestamps(
+            {"parameters": {"tempZ1": FakeShadowAttribute("1", AC_STAMP_NEW)}}
+        )
+        self.assertNotIn("parameters", stamps)
+
+    def test_a_non_mapping_parameters_value_is_not_walked(self):
+        # Deliberate: this runs on the event loop and `len()` is the only bound
+        # available before iterating, so an iterator under that key is left
+        # alone rather than consumed to rescue a degraded corner. Measured: with
+        # the `isinstance(nested, Mapping)` guard relaxed to `hasattr(nested,
+        # "__iter__")`, an endless iterator here hangs the test run forever,
+        # which on the event loop is a Home Assistant that stops responding.
+        #
+        # The witness is a FLAG and a finite generator rather than an endless
+        # one, on purpose: a test that proves its point by hanging is a test
+        # that hangs CI instead of reporting.
+        walked = []
+
+        def _rows():
+            walked.append(True)
+            yield ("x", FakeShadowAttribute("1", AC_STAMP_NEW))
+
+        stamps, _, _ = diagnostics._attribute_timestamps({"parameters": _rows()})
+        self.assertEqual({}, stamps)
+        self.assertEqual([], walked, "the iterator was consumed")
+        self.assertEqual({}, diagnostics._attribute_timestamps({"parameters": []})[0])
+
+    def test_one_refusing_key_costs_one_row_not_the_section(self):
+        # Scope note, verified on HEAD: this is asserted on the helper, not on a
+        # whole block, because a Mapping like this one already takes the entire
+        # dump down at `_redact(block)` -- which walks it with `.items()` and has
+        # no guard of its own. That exposure predates this section and is not
+        # fixed here; what IS fixed is that the new section is not the thing
+        # that dies, and that the instants it can read still get through.
+        nested = _BrokenNested(
+            {
+                "bad": FakeShadowAttribute("1", AC_STAMP_OLD),
+                "good": FakeShadowAttribute("1", AC_STAMP_NEW),
+            },
+            broken="bad",
+        )
+        stamps, _, newest = diagnostics._attribute_timestamps({"parameters": nested})
+        self.assertEqual({"good": "2026-04-09T05:34:16+00:00"}, stamps)
+        self.assertEqual(AC_STAMP_NEW, newest)
+
+
+class AttributeTimestampPrivacyTest(unittest.TestCase):
+    """The map adds no name and no value the dump did not already carry."""
+
+    def test_no_identity_reaches_the_whole_dump(self):
+        # The first whole-document identity scan outside `future_capabilities`
+        # and the entity inventory. The instants are a new section reading a new
+        # surface off cloud objects, so it is worth pinning at the document
+        # level rather than field by field.
+        result, _ = _entry_diag()
+        encoded = json.dumps(result)
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", encoded)
+        self.assertNotIn("PLAINTEXT-SERIAL", encoded)
+        self.assertNotIn("SN-PLAINTEXT", encoded)
+        self.assertNotIn("phone-install-xyz", encoded)
+
+    def test_a_stamp_under_a_redacted_key_name_is_still_redacted(self):
+        # No re-keying: the row keeps the cloud's own parameter name, so
+        # `_redact` -- which matches by EXACT key name -- still reaches it. A map
+        # that renamed its rows to something generic would put them permanently
+        # out of the redactor's reach, and that is the failure this pins.
+        block = _stamp_block(
+            {"serialNumber": FakeShadowAttribute("SN-X", AC_STAMP_NEW)}
+        )
+        self.assertEqual("***", block["attributes_last_update"]["serialNumber"])
+
+    def test_the_row_names_are_names_the_attributes_section_already_prints(self):
+        # The map introduces no new string into the document: on the bare path
+        # its keys are keys of `attributes`, which is emitted verbatim one
+        # section earlier, and on the nested-fallback path they are the keys of
+        # the `parameters` sub-map printed one level deeper in that same
+        # section. That is why the keys need no cap of their own.
+        _, blocks = _entry_diag()
+        for block in blocks.values():
+            self.assertLessEqual(
+                set(block["attributes_last_update"]), set(block["attributes"])
+            )
+        nested_block = _stamp_block(
+            {"parameters": {"tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD)}}
+        )
+        self.assertEqual(
+            set(nested_block["attributes_last_update"]),
+            set(nested_block["attributes"]["parameters"]),
+        )
+
+    def test_a_stamp_can_only_ever_be_an_instant(self):
+        # The values are `_stamp_text` output, validated against `_ISO_RE`
+        # before they are returned, so the row cannot carry free text however
+        # the cloud object behaves.
+        class Sneaky:
+            value = "1"
+            last_update = "AA:BB:CC:DD:EE:FF"
+
+        block = _stamp_block({"a": Sneaky()})
+        self.assertEqual({"a": None}, block["attributes_last_update"])
 
 
 if __name__ == "__main__":
