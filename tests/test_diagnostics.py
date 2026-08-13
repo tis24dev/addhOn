@@ -3484,5 +3484,643 @@ class AttributeTimestampPrivacyTest(unittest.TestCase):
         self.assertEqual({"a": None}, block["attributes_last_update"])
 
 
+# --- step 4: the reduced `freshness` block (P2b) -----------------------------
+#
+# The clock seam, FROZEN and FROZEN_TEXT are step 1's and are REUSED, not
+# redefined: a second `class _FrozenClock` further down this file would silently
+# shadow the first and quietly stop patching what the earlier tests think it does.
+#
+# Every appliance below is built HERE. Nothing in this section touches
+# `_build_coordinator`: its AC/WD attribute dicts are hand-counted by
+# `test_coverage_totals` (`attributes_total == 6`), so bolting a `lastConnEvent`
+# onto them to save a fixture would break an assertion three hundred lines away
+# for a reason nobody reading it could guess.
+
+# The pinned connection event, and the age that follows from it by hand:
+# 07:09:40 (FROZEN) - 07:02:46 = 6m54s = 414s. The epoch spelling is the same
+# instant to the millisecond, so a test can tell WHICH of the two fields the code
+# read only by making them disagree on purpose (see the preference test).
+CONN_STAMP_TEXT = "2026-08-13T07:02:46+00:00"
+CONN_STAMP_EPOCH_MS = 1786604566000
+CONN_STAMP_ISO = "2026-08-13T07:02:46Z"
+CONN_AGE_S = 414
+# An OLD instant used only to prove which field wins: years away from the one
+# above, so a preference bug cannot hide inside a rounding difference.
+OLD_STAMP_ISO = "2020-09-29T10:01:26Z"
+OLD_STAMP_TEXT = "2020-09-29T10:01:26+00:00"
+
+MAC_IN_THE_CLEAR = "3c:71:bf:bd:32:2c"
+
+
+class FakeLinkAppliance:
+    """An appliance exposing the engine's `connection` surface.
+
+    `HonAppliance.connection` is a property backed by `_connection`, and the whole
+    point of the `connected` field is to print what that property says, so the
+    fixture has to have one rather than relying on a bare attribute lookup that
+    happens to succeed.
+    """
+
+    def __init__(self, connection):
+        self.commands = {}
+        self.connection = connection
+
+
+class FakeExplodingLinkAppliance:
+    """An appliance whose `connection` property RAISES.
+
+    Not a hypothetical: `connection` is a real property, `_appliance_block` is
+    called with no try/except around it from either entry point, and the dumps
+    that matter most are the ones taken while something is already broken.
+    """
+
+    def __init__(self):
+        self.commands = {}
+
+    @property
+    def connection(self):
+        raise RuntimeError("boom")
+
+
+class ExplodingMapping(dict):
+    """A Mapping whose `.get` raises, i.e. a hostile cloud envelope."""
+
+    def get(self, *args, **kwargs):
+        raise RuntimeError("boom")
+
+
+def _conn_event(**overrides):
+    """The live `lastConnEvent` shape, MAC sibling included.
+
+    Verified against diagnostics/live-2026-06-22/device-REF.json: the envelope
+    really does carry a `macAddress` next to the `category`, which is the reason
+    `category` is type-guarded instead of stringified.
+    """
+    event = {
+        "macAddress": "AA:BB:CC:DD:EE:FF",
+        "category": "DISCONNECTED",
+        "instantTime": CONN_STAMP_ISO,
+        "timestampEvent": CONN_STAMP_EPOCH_MS,
+    }
+    event.update(overrides)
+    return event
+
+
+def _freshness_of(attributes, appliance=None, now=FROZEN, app_type="REF"):
+    """A `freshness` section produced by the REAL block, redaction included.
+
+    Deliberately not a direct `_freshness` call: the section has to survive
+    `_redact` and `_jsonable` on the way out, and a helper that skipped them would
+    pass while the shipped dump raised on a datetime.
+    """
+    block = diagnostics._appliance_block(
+        "id1",
+        {
+            "appliance": appliance,
+            "type": app_type,
+            "attributes": attributes,
+            "statistics": {},
+        },
+        None,
+        now,
+    )
+    return block["freshness"]
+
+
+def _json_native(value) -> bool:
+    """True when `value` is something HA's JSON encoder will not raise on."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return True
+    if isinstance(value, list):
+        return all(_json_native(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(k, str) and _json_native(v) for k, v in value.items()
+        )
+    return False
+
+
+def _iter_stamps(section):
+    """Every `at` string anywhere in a freshness section."""
+    for value in section.values():
+        if isinstance(value, dict) and isinstance(value.get("at"), str):
+            yield value["at"]
+
+
+class FreshnessPlacementTest(unittest.TestCase):
+    """Where the section sits, which is most of what it buys."""
+
+    def test_freshness_sits_between_the_identity_keys_and_the_model(self):
+        # The section's whole claim is prominence: `available` was already in the
+        # dump as one of sixty attribute keys. If it drifts below `attributes` it
+        # stops answering the question before the values arrive and becomes a
+        # duplicate of a scalar that was always there.
+        _, blocks = _entry_diag()
+        for app_type, block in blocks.items():
+            keys = list(block)
+            self.assertIn("freshness", keys, app_type)
+            self.assertEqual("mac", keys[keys.index("freshness") - 1], app_type)
+            self.assertEqual(
+                "model_attributes", keys[keys.index("freshness") + 1], app_type
+            )
+
+    def test_every_appliance_block_carries_the_section(self):
+        # Including the one with nothing to say. An absent section would read as
+        # "this dump does not do freshness"; an empty-ish one reads as "nothing
+        # here reported a connection state", which is the honest finding.
+        _, blocks = _entry_diag()
+        for app_type, block in blocks.items():
+            self.assertIsInstance(block["freshness"], dict, app_type)
+
+    def test_the_device_dump_carries_it_too(self):
+        coord = _build_coordinator()
+        hass = FakeHass(coord)
+        device = FakeDevice(identifiers={(DOMAIN, AC_ID)})
+        with _FrozenClock(FROZEN):
+            result = _run(
+                diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device)
+            )
+        self.assertIn("freshness", result["appliance"])
+
+
+class FreshnessShippedFieldsTest(unittest.TestCase):
+    """The reduced shape, pinned so the dropped fields cannot creep back."""
+
+    def _full_section(self):
+        """Every field this block can emit, all four present at once.
+
+        Asserting a key set against a thin fixture only proves what happened to be
+        missing; this one has a connection state, an availability flag, a conn
+        event and a shadow, so the assertions below are about what IS shipped.
+        """
+        return diagnostics._freshness(
+            FakeLinkAppliance(False),
+            {"available": False, "lastConnEvent": _conn_event()},
+            AC_STAMP_NEW,
+            FROZEN,
+        )
+
+    def test_the_dropped_connectivity_fields_never_appear(self):
+        # `decided_by`, `realtime` and `realtime_ttl_s` were designed for this
+        # block and dropped for three independent reasons, all of which make them
+        # print a claim the same dump disproves a line later. The sharpest:
+        # `mark_realtime_disconnected` sets connection False and CLEARS both
+        # realtime marks while leaving the cached lastConnEvent at its last REST
+        # value, so the mirror would print `connected: false` beside a CONNECTED
+        # category and two empty marks -- every printed input saying online. This
+        # test is here so reintroducing them is a deliberate act with a failing
+        # test attached, not a merge that looked harmless.
+        section = self._full_section()
+        for dropped in ("decided_by", "realtime", "realtime_ttl_s"):
+            self.assertNotIn(dropped, section)
+        encoded = json.dumps(section)
+        for dropped in ("decided_by", "realtime", "rest_connected"):
+            self.assertNotIn(dropped, encoded)
+
+    def test_poll_is_absent_and_that_is_deliberate(self):
+        # There is no honest source for it from inside `_appliance_block`. The
+        # coordinator entry carries no fetch instant, the coordinator itself is not
+        # passed in and must not be, and the engine's `_last_update` is private,
+        # NAIVE and in the host's zone (so read as UTC it prints a negative age for
+        # every reporter east of Greenwich), and only advances on the HTTP path, so
+        # on a realtime snapshot it would call the freshest data the stalest.
+        self.assertNotIn("poll", self._full_section())
+
+    def test_the_key_set_and_its_order_are_exactly_the_shipped_ones(self):
+        full = self._full_section()
+        self.assertEqual(
+            ["connected", "available", "last_conn_event", "shadow"], list(full)
+        )
+        self.assertEqual(["category", "at", "age_s"], list(full["last_conn_event"]))
+        self.assertEqual(["at", "age_s"], list(full["shadow"]))
+
+    def test_a_thin_appliance_emits_a_subset_and_never_a_new_name(self):
+        # The conditional keys drop out; nothing else appears in their place.
+        thin = _freshness_of({})
+        self.assertLessEqual(
+            set(thin), {"connected", "available", "last_conn_event", "shadow"}
+        )
+
+
+class FreshnessConnectivityTest(unittest.TestCase):
+    """`connected` and `available`, guarded as booleans or reported as nothing."""
+
+    def test_a_disconnected_appliance_says_so_at_the_top_of_its_block(self):
+        # The one thing P2 was chartered to deliver, and it survives the reduction
+        # intact: "this dump was taken while the appliance was offline".
+        section = _freshness_of(
+            {"available": False, "lastConnEvent": _conn_event()},
+            FakeLinkAppliance(False),
+        )
+        self.assertIs(False, section["connected"])
+        self.assertIs(False, section["available"])
+        self.assertEqual("DISCONNECTED", section["last_conn_event"]["category"])
+
+    def test_a_connected_appliance_says_that_too(self):
+        section = _freshness_of({"available": True}, FakeLinkAppliance(True))
+        self.assertIs(True, section["connected"])
+        self.assertIs(True, section["available"])
+
+    def test_a_non_boolean_connection_is_reported_as_null(self):
+        # The engine writes real bools into both surfaces. A "true" or a 1 arriving
+        # here means something upstream is no longer what this section thinks it
+        # is, and printing it anyway would launder that into an unquestionable fact.
+        for junk in ("true", 1, 0, "", [], {"a": 1}):
+            with self.subTest(junk=junk):
+                section = _freshness_of({}, FakeLinkAppliance(junk))
+                self.assertIsNone(section["connected"])
+
+    def test_an_appliance_with_no_connection_surface_gives_null(self):
+        section = _freshness_of({}, FakeApplianceNoModel(commands={}))
+        self.assertIsNone(section["connected"])
+
+    def test_a_raising_connection_property_does_not_break_the_dump(self):
+        # `_appliance_block` has no try/except around it from either entry point,
+        # so an unguarded read here does not produce a wrong field, it produces no
+        # dump at all.
+        section = _freshness_of({"available": True}, FakeExplodingLinkAppliance())
+        self.assertIsNone(section["connected"])
+        self.assertIs(True, section["available"])
+
+    def test_available_is_read_as_a_boolean_or_not_at_all(self):
+        self.assertIsNone(_freshness_of({})["available"])
+        self.assertIsNone(_freshness_of({"available": "false"})["available"])
+        self.assertIsNone(_freshness_of({"available": FakeWrapper(True)})["available"])
+        self.assertIs(False, _freshness_of({"available": False})["available"])
+
+
+class FreshnessConnEventTest(unittest.TestCase):
+    """The `last_conn_event` row: what the cloud last said, and how long ago."""
+
+    def test_the_row_carries_category_at_and_age(self):
+        row = _freshness_of({"lastConnEvent": _conn_event()})["last_conn_event"]
+        self.assertEqual(
+            {"category": "DISCONNECTED", "at": CONN_STAMP_TEXT, "age_s": CONN_AGE_S},
+            row,
+        )
+
+    def test_the_epoch_field_is_preferred_over_the_iso_string(self):
+        # Not a coin toss: it is the same order, on the same two keys, that
+        # `HonAppliance.load_attributes` uses when deciding whether a REST
+        # disconnect is newer than the last realtime traffic. A dump that quietly
+        # preferred the other key would, on a payload where the two disagree,
+        # explain a decision the engine did not make. Made observable by pointing
+        # the two fields at instants six years apart.
+        row = _freshness_of(
+            {"lastConnEvent": _conn_event(instantTime=OLD_STAMP_ISO)}
+        )["last_conn_event"]
+        self.assertEqual(CONN_STAMP_TEXT, row["at"])
+        self.assertNotEqual(OLD_STAMP_TEXT, row["at"])
+
+    def test_an_unparseable_epoch_falls_back_to_the_iso_string(self):
+        # The engine falls back on PARSE failure, not on absence; mirrored here.
+        row = _freshness_of(
+            {"lastConnEvent": _conn_event(timestampEvent="not-a-time")}
+        )["last_conn_event"]
+        self.assertEqual(CONN_STAMP_TEXT, row["at"])
+
+    def test_a_null_epoch_falls_back_to_the_iso_string(self):
+        row = _freshness_of(
+            {"lastConnEvent": _conn_event(timestampEvent=None)}
+        )["last_conn_event"]
+        self.assertEqual(CONN_STAMP_TEXT, row["at"])
+
+    def test_a_row_with_no_usable_instant_still_reports_its_category(self):
+        # `at` and `age_s` appear together or not at all: an `at` with no age makes
+        # the reader do the arithmetic this section exists to have already done,
+        # and an age with no `at` is a number with nothing to check it against.
+        row = _freshness_of(
+            {
+                "lastConnEvent": _conn_event(
+                    timestampEvent="garbage", instantTime="also-garbage"
+                )
+            }
+        )["last_conn_event"]
+        self.assertEqual({"category": "DISCONNECTED"}, row)
+
+    def test_the_shared_fixture_has_no_conn_event_and_still_builds(self):
+        # ABSENT, not present-and-null. Missing means the appliance carries no such
+        # envelope; present with a null category means it carries one and the field
+        # inside was not usable text. Folding them together would report "never
+        # reported a connection event" and "malformed payload" as one finding.
+        _, blocks = _entry_diag()
+        for app_type, block in blocks.items():
+            self.assertNotIn("last_conn_event", block["freshness"], app_type)
+
+    def test_a_non_mapping_conn_event_is_ignored(self):
+        for junk in ("DISCONNECTED", 1, ["DISCONNECTED"], None):
+            with self.subTest(junk=junk):
+                self.assertNotIn(
+                    "last_conn_event", _freshness_of({"lastConnEvent": junk})
+                )
+
+    def test_a_raising_conn_event_mapping_does_not_break_the_dump(self):
+        # A cloud-supplied Mapping is free to have a `.get` that raises, and from
+        # here that would abort the whole dump rather than one row of it.
+        row = _freshness_of({"lastConnEvent": ExplodingMapping()})["last_conn_event"]
+        self.assertEqual({"category": None}, row)
+
+    def test_a_raising_attributes_mapping_does_not_break_the_dump(self):
+        # The same shape one level up. `_coverage` reaches `.get` only while it
+        # still has unmapped bare keys to classify, so on an appliance whose bare
+        # keys are all mapped this section makes the FIRST such call in the block
+        # and an unguarded read here would be a brand new way to lose the dump.
+        self.assertEqual(
+            {"connected": None, "available": None},
+            _freshness_of(ExplodingMapping({"tempIndoor": 1}), app_type="AC"),
+        )
+
+    def test_a_non_string_category_is_reported_as_null(self):
+        for junk in (1, True, None, ["DISCONNECTED"], FakeWrapper("DISCONNECTED")):
+            with self.subTest(junk=junk):
+                row = _freshness_of({"lastConnEvent": _conn_event(category=junk)})
+                self.assertIsNone(row["last_conn_event"]["category"])
+
+    def test_an_empty_category_reads_as_null_and_the_docstring_says_why(self):
+        # An empty string IS a string, and `_bounded_text` refuses it along with
+        # every other empty scalar -- so this prints null where the ENGINE saw a
+        # decision (`lce.get("category", "") != "DISCONNECTED"` is True for "").
+        # Pinned rather than fixed: `connected` on the line above already carries
+        # the finding, and a bare "" in a dump reads as a rendering bug.
+        row = _freshness_of({"lastConnEvent": _conn_event(category="")})
+        self.assertIsNone(row["last_conn_event"]["category"])
+        # A category that is only whitespace is not empty and survives, which is
+        # what makes the line above a statement about `or None` and not about str.
+        spaced = _freshness_of({"lastConnEvent": _conn_event(category="   ")})
+        self.assertEqual("   ", spaced["last_conn_event"]["category"])
+
+
+class FreshnessShadowAgeTest(unittest.TestCase):
+    """`shadow`: the newest instant the cloud stamped on any parameter."""
+
+    def test_the_shadow_is_the_newest_instant_the_cloud_stamped(self):
+        # Pinned against the wrapped AC fixture: tempSel carries AC_STAMP_NEW,
+        # tempIndoor the older one, machMode none at all. The age is derived from
+        # the two pinned constants rather than typed out, so the assertion says
+        # "the code did this subtraction" and not "the code returned 10892124".
+        with _FrozenClock(FROZEN):
+            _, blocks = _entry_diag()
+        self.assertEqual(
+            {
+                "at": "2026-04-09T05:34:16+00:00",
+                "age_s": int((FROZEN - AC_STAMP_NEW).total_seconds()),
+            },
+            blocks["AC"]["freshness"]["shadow"],
+        )
+
+    def test_the_shadow_matches_the_printed_timestamp_map(self):
+        # The Part 2 requirement made checkable: the two sections are one pass, so
+        # they cannot disagree. If a future edit re-derives the shadow from a
+        # second walk, this is what catches it.
+        with _FrozenClock(FROZEN):
+            _, blocks = _entry_diag()
+        block = blocks["AC"]
+        printed = [v for v in block["attributes_last_update"].values() if v]
+        self.assertTrue(printed, "the fixture would make this vacuous")
+        self.assertEqual(max(printed), block["freshness"]["shadow"]["at"])
+
+    def test_the_shadow_is_absent_when_no_instant_has_ever_arrived(self):
+        # The WD fixture wraps nothing, so no parameter exposes a `last_update`.
+        with _FrozenClock(FROZEN):
+            _, blocks = _entry_diag()
+        self.assertNotIn("shadow", blocks["WD"]["freshness"])
+
+    def test_the_shadow_is_the_instant_it_was_HANDED_not_one_it_recomputes(self):
+        # The invariant that survives a truncated map: `_freshness` is given the
+        # newest instant by the same pass that built the printed rows, including
+        # rows the row cap dropped. Handing it an instant that appears NOWHERE in
+        # `attributes` proves it does not go looking for its own.
+        section = diagnostics._freshness(
+            None,
+            {"tempZ1": FakeShadowAttribute("3", AC_STAMP_OLD)},
+            AC_STAMP_NEW,
+            FROZEN,
+        )
+        self.assertEqual("2026-04-09T05:34:16+00:00", section["shadow"]["at"])
+
+    def test_a_naive_shadow_instant_is_read_as_utc_and_still_paired(self):
+        # `at` and `age_s` appear together or not at all. Handing the section a
+        # naive instant used to print an offset-less `at` beside a null age --
+        # the exact shape this block refuses everywhere else -- so awareness is
+        # decided here rather than trusted from the caller.
+        section = diagnostics._freshness(
+            None, {}, datetime(2026, 8, 13, 7, 0, 0), FROZEN
+        )
+        self.assertEqual(
+            {"at": "2026-08-13T07:00:00+00:00", "age_s": 580}, section["shadow"]
+        )
+
+    def test_a_future_instant_gives_a_negative_age_rather_than_zero(self):
+        # Not clamped, on purpose. The instants here are stamped by the CLOUD while
+        # `now` is stamped by the reporter's host, so a negative age is the dump
+        # saying the two clocks disagree -- itself a finding, and one that explains
+        # connectivity decisions the engine makes by ordering those timestamps.
+        ahead = FROZEN + timedelta(seconds=90)
+        section = diagnostics._freshness(None, {}, ahead, FROZEN)
+        self.assertEqual(-90, section["shadow"]["age_s"])
+
+    def test_a_junk_newest_stamp_produces_no_shadow(self):
+        for junk in ("2026-04-09T05:34:16Z", 1775712856741, object(), True):
+            with self.subTest(junk=junk):
+                self.assertNotIn(
+                    "shadow", diagnostics._freshness(None, {}, junk, FROZEN)
+                )
+
+    def test_an_uncomputable_age_degrades_to_null(self):
+        # The only reason `_age_seconds` carries a guard at all: both its operands
+        # are aware UTC by construction, but a foreign datetime subclass with an
+        # opinion about subtraction would otherwise take the whole dump down from
+        # inside a field that is never more than a convenience.
+        class HostileMoment:
+            def __rsub__(self, other):
+                raise RuntimeError("boom")
+
+        self.assertIsNone(diagnostics._age_seconds(HostileMoment(), FROZEN))
+
+    def test_an_age_is_a_whole_number_of_seconds(self):
+        moment = FROZEN - timedelta(seconds=9, milliseconds=900)
+        section = diagnostics._freshness(None, {}, moment, FROZEN)
+        self.assertEqual(9, section["shadow"]["age_s"])
+        self.assertIsInstance(section["shadow"]["age_s"], int)
+
+
+class FreshnessPrivacyTest(unittest.TestCase):
+    """Nothing identity-shaped may reach the section, by any route."""
+
+    def test_the_conn_event_mac_never_reaches_the_section(self):
+        section = _freshness_of({"lastConnEvent": _conn_event()})
+        encoded = json.dumps(section)
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", encoded)
+        self.assertNotIn("macAddress", encoded)
+
+    def test_a_mac_straddling_the_category_cap_is_masked(self):
+        # THE regression the shared `_bounded_text` exists for, exercised through
+        # THIS field: the address starts at offset 30 with the cap at 40, so a
+        # helper that cut before masking would hand `_MAC_RE` ten characters of a
+        # seventeen-character address -- no longer six groups, no longer a match --
+        # and ship the remains to a public issue.
+        category = "x" * 30 + MAC_IN_THE_CLEAR
+        section = _freshness_of({"lastConnEvent": _conn_event(category=category)})
+        self.assertEqual("x" * 30 + "***", section["last_conn_event"]["category"])
+        # Not vacuous: cutting first really does leak on this exact input, and it
+        # leaks the plan's measured fragment -- three and a half octets.
+        self.assertEqual("x" * 30 + "3c:71:bf:b", category[:40])
+
+    def test_a_category_that_is_the_envelope_itself_is_refused(self):
+        # `str()` on the Mapping would flatten the sibling `macAddress` into one
+        # string filed under `category`, where `_redact` -- which matches by exact
+        # key NAME -- can never reach it again.
+        event = _conn_event()
+        event["category"] = dict(event)
+        section = _freshness_of({"lastConnEvent": event})
+        self.assertIsNone(section["last_conn_event"]["category"])
+        encoded = json.dumps(section)
+        self.assertNotIn("macAddress", encoded)
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", encoded)
+
+    def test_a_cloud_string_instant_is_never_echoed(self):
+        # `instantTime` is cloud-chosen text. The only way it reaches the dump is
+        # by being PARSED into a datetime and re-rendered from that datetime's own
+        # fields, so a payload smuggled into the slot yields no `at` at all.
+        section = _freshness_of(
+            {
+                "lastConnEvent": _conn_event(
+                    timestampEvent=None, instantTime="user@example.com"
+                )
+            }
+        )
+        self.assertNotIn("at", section["last_conn_event"])
+        self.assertNotIn("user@example.com", json.dumps(section))
+
+    def test_the_category_is_bounded(self):
+        section = _freshness_of({"lastConnEvent": _conn_event(category="z" * 400)})
+        self.assertEqual(40, len(section["last_conn_event"]["category"]))
+
+    def test_the_whole_section_carries_no_identity(self):
+        # A whole-dump scan over the shared fixture, which carries a plaintext
+        # serial, a plaintext MAC and a nested commandHistory, plus an ad-hoc
+        # appliance whose conn event carries a MAC of its own.
+        _, blocks = _entry_diag()
+        ad_hoc = _freshness_of({"lastConnEvent": _conn_event()})
+        # Anti-vacuity FIRST: a scan over a section that lost its conn event
+        # passes for the wrong reason, which is how leak tests rot.
+        self.assertEqual("DISCONNECTED", ad_hoc["last_conn_event"]["category"])
+        sections = [json.dumps(b["freshness"]) for b in blocks.values()]
+        sections.append(json.dumps(ad_hoc))
+        for encoded in sections:
+            self.assertNotIn("PLAINTEXT", encoded)
+            self.assertNotIn("AA:BB:CC:DD:EE:FF", encoded)
+            self.assertNotIn("11:22:33:44:55:66", encoded)
+            self.assertNotIn("SN-", encoded)
+
+    def test_an_emitted_instant_cannot_look_like_a_mac(self):
+        # A sub-minute offset makes an ISO instant match `_MAC_RE`. Everything this
+        # section emits goes through `_stamp_text`, which normalises to UTC first,
+        # so the offset is always "+00:00" and the field survives the mask intact.
+        for section in (
+            _freshness_of({"lastConnEvent": _conn_event()}),
+            diagnostics._freshness(None, {}, AC_STAMP_NEW, FROZEN),
+        ):
+            stamps = list(_iter_stamps(section))
+            self.assertTrue(stamps, "the fixture would make this vacuous")
+            for text in stamps:
+                self.assertTrue(text.endswith("+00:00"), text)
+                self.assertEqual(text, debug_utils._MAC_RE.sub("***", text))
+
+
+class FreshnessDegradationTest(unittest.TestCase):
+    """A dump degrades, never raises. `_appliance_block` has no net under it."""
+
+    def test_a_foreign_appliance_object_still_produces_a_section(self):
+        section = _freshness_of({}, object())
+        self.assertEqual({"connected": None, "available": None}, section)
+
+    def test_an_appliance_with_no_attributes_at_all_still_produces_a_section(self):
+        block = diagnostics._appliance_block(
+            "id1",
+            {"appliance": None, "type": "REF", "attributes": None, "statistics": None},
+            None,
+            FROZEN,
+        )
+        self.assertEqual({"connected": None, "available": None}, block["freshness"])
+
+    def test_the_section_survives_every_malformed_conn_event_shape(self):
+        shapes = (
+            {},
+            {"category": None},
+            {"category": {}},
+            {"category": "OK", "timestampEvent": {}},
+            {"category": "OK", "timestampEvent": [1]},
+            {"category": "OK", "timestampEvent": True},
+            {"category": "OK", "timestampEvent": 10 ** 400},
+            {"category": "OK", "instantTime": ""},
+            {"category": "OK", "instantTime": "2026-13-45T99:99:99Z"},
+            {"instantTime": CONN_STAMP_ISO},
+            ExplodingMapping(),
+        )
+        for shape in shapes:
+            with self.subTest(shape=repr(shape)[:40]):
+                section = _freshness_of({"lastConnEvent": shape})
+                self.assertIsInstance(section["last_conn_event"], dict)
+                self.assertTrue(_json_native(section))
+
+    def test_a_raising_instant_read_does_not_discard_a_category_already_read(self):
+        # Two guards rather than one: the category is read first and kept, so a
+        # `.get` that only breaks on the instant keys costs the instant and not
+        # the finding the reader actually came for.
+        class HalfBroken(dict):
+            def get(self, key, *args):
+                if key == "category":
+                    return "DISCONNECTED"
+                raise RuntimeError("boom")
+
+        row = _freshness_of({"lastConnEvent": HalfBroken()})["last_conn_event"]
+        self.assertEqual({"category": "DISCONNECTED"}, row)
+
+    def test_every_emitted_value_is_json_native(self):
+        # HA's encoder raises on a datetime, and this is the one section of the
+        # dump that handles datetimes at all.
+        section = _freshness_of(
+            {"available": False, "lastConnEvent": _conn_event()},
+            FakeLinkAppliance(False),
+        )
+        self.assertTrue(_json_native(section))
+        _, blocks = _entry_diag()
+        for block in blocks.values():
+            self.assertTrue(_json_native(block["freshness"]))
+            json.dumps(block)  # must not raise
+
+    def test_a_naive_dump_instant_never_reaches_a_subtraction(self):
+        # The TypeError that would take the whole dump down. `_appliance_block`
+        # normalises at its boundary, so a caller handing in a naive datetime gets
+        # the same age as one handing in an aware one.
+        naive = _freshness_of(
+            {"lastConnEvent": _conn_event()},
+            now=datetime(2026, 8, 13, 7, 9, 40),
+        )
+        self.assertEqual(CONN_AGE_S, naive["last_conn_event"]["age_s"])
+
+    def test_a_block_built_with_no_instant_at_all_still_dates_its_ages(self):
+        # The two-positional-argument call site: `now` falls back to the seam.
+        with _FrozenClock(FROZEN):
+            block = diagnostics._appliance_block(
+                "id1",
+                {
+                    "appliance": None,
+                    "type": "REF",
+                    "attributes": {"lastConnEvent": _conn_event()},
+                    "statistics": {},
+                },
+            )
+        self.assertEqual(CONN_AGE_S, block["freshness"]["last_conn_event"]["age_s"])
+
+    def test_an_unusable_cloud_parser_degrades_to_no_instant(self):
+        # The lazy import mirrors `_mapped_sets`: on any import hiccup the row
+        # loses its instant instead of the dump losing everything.
+        with _BrokenModules("client.helpers"):
+            row = _freshness_of({"lastConnEvent": _conn_event()})["last_conn_event"]
+        self.assertEqual({"category": "DISCONNECTED"}, row)
+
+
 if __name__ == "__main__":
     unittest.main()

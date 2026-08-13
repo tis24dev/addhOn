@@ -1491,6 +1491,15 @@ def _appliance_block(
     # incapable of disagreeing.
     mapped = _mapped_sets(app_type)
     coverage = _coverage(app_type, attributes, statistics, appliance, mapped)
+    # Built from `newest_stamp`, the third value of the SAME `_attribute_timestamps`
+    # pass that produced the printed `attributes_last_update` map below, never from a
+    # second walk of `attributes`. Two passes over one mapping is two chances to
+    # disagree, and they WOULD disagree on the dump where it matters most: once the
+    # row cap has dropped the newest parameter from the printed map, a second pass
+    # over the printed rows would report a shadow that is older than the appliance's
+    # real newest reading, in the very document a reader opened to find out how stale
+    # the readings are.
+    freshness = _freshness(appliance, attributes, newest_stamp, now)
     future = _future_capabilities(app_type, attributes, appliance)
     entity_section = _entity_section(entities, app_type, mapped)
 
@@ -1514,7 +1523,20 @@ def _appliance_block(
         "model": data.get("model"),
         "serial": _REDACTED,
         "mac": _REDACTED,
-        # Before `attributes` on purpose: what the model IS, then what it is doing.
+        # Directly under the identity keys, and above everything it qualifies: a
+        # reader who does not know whether the appliance was online cannot safely
+        # interpret a single value below this line, so the answer must arrive before
+        # the values do rather than being hunted for among sixty attribute keys.
+        "freshness": freshness,
+        # The pinned order from here on, which sections are APPENDED into rather than
+        # sorted: what the model IS, then a reserved slot for the per-zone map, then
+        # what it is DOING and when the cloud last moved it, then what can be
+        # COMMANDED, then the analysis sections -- `coverage`, `entities`,
+        # `future_capabilities` -- which are read together and are the reason the
+        # dump exists at all. The reserved slot is real and load bearing: `zone_map`
+        # goes BETWEEN `model_attributes` and `attributes`, and naming it here is
+        # what stops the next section from being dropped wherever its patch happened
+        # to apply cleanly.
         "model_attributes": model_attributes,
         "attributes": dict(attributes),
         # BESIDE the values, never inside them. `attributes` above has one
@@ -1544,6 +1566,287 @@ def _appliance_block(
         "future_capabilities": future,
     }
     return _redact(block)
+
+
+# The bound on the ONE cloud-controlled string this section prints. The vocabulary
+# behind it is closed: the engine decides connectivity by comparing `category`
+# against the single literal "DISCONNECTED" (client/engine/appliance.py,
+# load_attributes), and every live dump captured so far carries either that word or
+# "CONNECTED". Forty characters is therefore already several times more than a real
+# value needs, and no truncation flag is warranted here -- a `category` long enough
+# to be cut is not a category, it is a payload, and the cap exists to stop it from
+# becoming one rather than to summarise it. Placed immediately above its single
+# consumer for the same reason `_STAMP_MAX_CHARS` is, and not in the bounds block
+# near the top of the module.
+_CONN_CATEGORY_MAX_CHARS = 40
+
+
+def _freshness(
+    appliance,
+    attributes: Mapping,
+    newest_stamp: datetime | None,
+    now: datetime,
+) -> dict:
+    """How OLD everything below this key is, stated before the values arrive.
+
+    The misreading this section exists to prevent is the expensive one: a reporter
+    downloads a dump, the maintainer reads `machMode`, `tempZ3` and a wash program
+    out of it as the appliance's CURRENT state, and neither of them notices for two
+    round trips that the cloud stopped updating that shadow days ago and every value
+    in the file is a fossil. `generated_at` at the top of the document says when the
+    dump was taken; this says how far behind the dump the DEVICE was.
+
+    Be exact about what it is not. `available` is ALREADY a top-level scalar under
+    `attributes` today -- the live 2026-06-22 capture carries it as `false` on the
+    fridge, the tumble dryer and the washer, next to a `lastConnEvent.category` of
+    "DISCONNECTED" -- so nothing here is a new FACT about the appliance. What the
+    section buys is PROMINENCE (three lines above the values instead of two keys
+    lost among sixty in cloud-chosen order) and an AGE, which is the part no
+    existing key carries: `lastConnEvent` prints an instant, and turning an instant
+    into "six minutes" or "eleven days" needs a second instant that this document
+    did not contain at all until `generated_at` landed.
+
+    THREE FIELDS WERE DESIGNED FOR THIS BLOCK AND ARE DELIBERATELY ABSENT.
+    `decided_by`, `realtime` and `realtime_ttl_s` must not come back without an
+    engine change, for three independent reasons, each of which makes them print a
+    claim this same dump disproves a line later:
+      * the engine keys connectivity on `"category" in lce` and then on
+        `lce["category"] != "DISCONNECTED"`, so a category that is PRESENT and null
+        makes it declare the appliance CONNECTED, while any mirror written from the
+        same values reads a null as "unknown". The block would contradict the
+        connectivity it printed one line above, on precisely the malformed payload
+        it was added to explain.
+      * `mark_realtime_disconnected` sets connection False and CLEARS both realtime
+        marks, while leaving the cached `lastConnEvent` at its last REST value. The
+        block would then print `connected: false` beside a "CONNECTED" category and
+        two empty realtime marks: every printed input saying online, the engine
+        saying offline, and the evidence that reconciles them already erased from
+        the object. "Derived only from the values printed above it, so a reader can
+        check it by hand" is false exactly there, and no amount of patching makes it
+        true from inside this module.
+      * whether an MQTT delta advances a parameter's `lastUpdate` is genuinely
+        unresolved, so "the shadow has not moved, therefore nothing under
+        `attributes` is live" is an inference this code is not entitled to draw.
+    A field that is right most of the time and confidently wrong on the one failure
+    it was built for is worse than no field at all.
+
+    `poll` is absent for a plainer reason: there is no honest source for it here.
+    Every input reachable from this function was checked. The coordinator entry
+    (`hon_client._build_appliance_entry`) carries appliance, type, name, model,
+    serial, mac, attributes, statistics and settings, and no fetch instant. The
+    coordinator itself is not passed to `_appliance_block` and must not be, since
+    nothing here may grow a fifth parameter. And the only poll-ish datetime the
+    engine holds, `HonAppliance._last_update`, is disqualified three times over: it
+    is private; it is `datetime.now()`, hence NAIVE and in the HOST's zone, so read
+    as UTC it prints a NEGATIVE age for every reporter east of Greenwich and read as
+    local it needs a third naive policy that `_as_utc` deliberately refuses to have;
+    and it only advances on the HTTP path, so on a realtime MQTT snapshot it would
+    report the freshest data in the whole dump as the stalest. An `age_s` nobody can
+    trust is the mistake above in a smaller font. If a fetch instant is wanted here,
+    the honest fix is for the coordinator to record one and for
+    `_build_appliance_entry` to carry it; until then the key stays out rather than
+    being sourced from the nearest datetime that happens to be in scope.
+
+    `newest_stamp` is handed in, not recomputed: see the comment at the call site.
+    `now` arrives already normalised to an aware UTC instant by `_appliance_block`,
+    so every subtraction below is aware-against-aware and cannot raise the
+    `TypeError` that would take the entire dump down -- this function is reached
+    with no try/except around it from either entry point.
+
+    A section that could not be established is ABSENT, never present-and-null.
+    `last_conn_event` missing means the appliance carries no such envelope at all;
+    `last_conn_event` present with a null `category` means it carries one and the
+    field inside it was not USABLE text -- not a string at all, or the empty
+    string, which `_bounded_text` refuses along with every other empty scalar. Note
+    what that second case costs, because it is the same ambiguity that sank
+    `decided_by`: the engine compares `lce.get("category", "") != "DISCONNECTED"`
+    and therefore reads an EMPTY category as CONNECTED, so on that one payload this
+    row prints a null where the engine saw a decision. It is reported as null anyway
+    rather than as "", because a bare empty string in a dump reads as a rendering
+    bug and the finding a reader needs is already carried by `connected` on the line
+    above. Folding the two shapes together altogether would report "this device has
+    never reported a connection event" and "this payload is malformed" as the same
+    finding, which is the None-versus-[] collapse `_registry_entries` documents a
+    few functions below.
+    """
+    # A raising property is not hypothetical here: `connection` IS a property on
+    # HonAppliance, and a foreign or half-constructed appliance object is exactly
+    # what this dump is most often built from when something has gone wrong.
+    try:
+        connected = getattr(appliance, "connection", None)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug(
+            "Diagnostics debug: appliance connection unreadable", exc_info=True
+        )
+        connected = None
+    # One try around BOTH attribute reads, for the same reason `_conn_event_row`
+    # guards its own: `attributes` arrives as whatever the coordinator entry
+    # carried, and a Mapping whose `.get` raises would abort the ENTIRE dump from
+    # inside a section that is only ever a convenience. There is nothing upstream
+    # to have failed first on every appliance: `_coverage` reaches `.get` only
+    # while it still has unmapped bare keys left to classify, and
+    # `_future_capabilities` only for the air purifier.
+    try:
+        available = attributes.get("available")
+        event = attributes.get("lastConnEvent")
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: attributes unreadable", exc_info=True)
+        available = event = None
+    # Both are booleans or they are nothing. The engine writes real `bool`s into
+    # both surfaces, so a string "true" or a 1 arriving here means something
+    # upstream is no longer what this section thinks it is, and printing it anyway
+    # would launder that into a fact the reader cannot question.
+    section: dict = {
+        "connected": connected if isinstance(connected, bool) else None,
+        "available": available if isinstance(available, bool) else None,
+    }
+
+    if isinstance(event, Mapping):
+        section["last_conn_event"] = _conn_event_row(event, now)
+
+    # Normalised here even though the only supported producer of `newest_stamp`
+    # already returns an aware UTC datetime. `_conn_event_row` decides awareness
+    # for its own instant rather than trusting another module to keep a promise it
+    # could quietly stop keeping, and this half must do the same: a naive value
+    # reaching `_stamp_text` alone would print an `at` with no offset next to a
+    # null `age_s`, which is exactly the "an age with no `at`, an `at` with no age"
+    # shape this section refuses everywhere else. `_stamp_text` still refuses
+    # anything that is not a datetime, so junk simply produces no shadow.
+    moment = _as_utc(newest_stamp, True)
+    text = _stamp_text(moment)
+    if text is not None:
+        section["shadow"] = {"at": text, "age_s": _age_seconds(moment, now)}
+    return section
+
+
+def _conn_event_row(event: Mapping, now: datetime) -> dict:
+    """What the CLOUD last said about this appliance's link, and how long ago.
+
+    `category` is type-guarded as `str` before anything else touches it, and that
+    guard carries the whole privacy weight of this section. The live capture shows
+    the envelope as `{macAddress, category, instantTime, timestampEvent}`: applying
+    `str(...)` or `_scalar_text(...)` to the ENVELOPE instead of to the field
+    flattens the entire dict into one string filed under the key `category`, and
+    `_redact` matches by exact key NAME, so the `macAddress` sitting inside that
+    string is permanently out of its reach. The value that survives the guard then
+    goes through `_bounded_text`, which masks before it cuts, so an address
+    straddling the cap cannot leave a readable fragment behind either. Be honest
+    about what the cap is and is not: it is a SIZE bound. `_MAC_RE` is the only
+    value-shaped mask in the dump, so up to forty characters of arbitrary cloud
+    text would still reach the reader here; what makes the field safe is the closed
+    CONNECTED/DISCONNECTED vocabulary behind it, and a firmware that started
+    putting free text in this slot would need this decision revisited, not just
+    this number.
+
+    The instant is read from `timestampEvent` FIRST and only then from
+    `instantTime`, which is not a coin toss: it is the same order, on the same two
+    keys, that `HonAppliance.load_attributes` uses when it decides whether a REST
+    disconnect is newer than the last realtime traffic. Printing the instant the
+    ENGINE ordered on is the point -- a dump that quietly preferred the other key
+    would, on a payload where the two disagree, explain a decision the engine did
+    not make. `timestampEvent` is epoch milliseconds, so its rendering can carry a
+    sub-second tail; that is the real precision of the field and it is not rounded
+    away.
+
+    Neither raw value is ever echoed. `instantTime` is a cloud-chosen STRING, and
+    the only way it reaches the dump is by being parsed into a datetime and then
+    re-rendered by `_stamp_text` from that datetime's own fields, so a `category`-
+    shaped payload smuggled into an instant slot yields no `at` key at all rather
+    than a verbatim copy.
+
+    `at` and `age_s` appear together or not at all. An `at` with no age would make
+    the reader do the arithmetic this section exists to have already done, and an
+    age with no `at` would be a number with nothing to check it against.
+    """
+    # Read in TWO guards rather than one, so that a `.get` which raises on the
+    # instant keys does not throw away a category this function has already read.
+    # `event` is a cloud-supplied Mapping and a foreign implementation of `.get`
+    # is free to raise, which from here would abort the entire dump.
+    try:
+        category = event.get("category")
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: lastConnEvent unreadable", exc_info=True)
+        category = None
+    row: dict = {
+        "category": (
+            _bounded_text(category, _CONN_CATEGORY_MAX_CHARS)
+            if isinstance(category, str)
+            else None
+        )
+    }
+    try:
+        candidates = (event.get("timestampEvent"), event.get("instantTime"))
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug(
+            "Diagnostics debug: lastConnEvent instant unreadable", exc_info=True
+        )
+        return row
+    for raw in candidates:
+        # `assume_naive_utc=True` mirrors the parser's own documented assumption
+        # ("the cloud stamps UTC, hence the trailing Z"). It is belt and braces
+        # today, since `parse_cloud_timestamp` already returns aware UTC; it is here
+        # so this section keeps deciding awareness for itself instead of trusting
+        # another module to keep a promise it could quietly stop keeping.
+        moment = _as_utc(_parse_cloud_moment(raw), True)
+        text = _stamp_text(moment)
+        if text is not None:
+            row["at"] = text
+            row["age_s"] = _age_seconds(moment, now)
+            break
+    return row
+
+
+def _parse_cloud_moment(value) -> datetime | None:
+    """A cloud-stamped instant (epoch milliseconds OR ISO text) as a datetime.
+
+    Delegates to the client's `parse_cloud_timestamp` rather than reimplementing
+    it, and the reason is correctness rather than economy: that function is what
+    the engine itself orders `lastConnEvent` with, it is already total (it returns
+    None for None, for a bool, for garbage, for an arbitrary-precision int that
+    overflows `float()`, and for an out-of-range epoch), and it handles the two
+    cloud spellings this dump meets -- a trailing "Z" that Python 3.10's
+    `fromisoformat` rejects, and a VARIABLE number of fractional digits. A local
+    reimplementation would have to rediscover all of that, and would then be free
+    to drift away from the engine it is supposed to be reporting on.
+
+    The import is function-local, mirroring `_mapped_sets` and `_registry_entries`:
+    diagnostics.py keeps a tiny top-level import surface so it cannot be caught in
+    an import cycle, and this parser is only ever needed while a dump is being
+    built. It costs one `sys.modules` lookup per call after the first, and it is
+    called at most twice per appliance.
+    """
+    try:
+        from .client.helpers import parse_cloud_timestamp
+
+        return parse_cloud_timestamp(value)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: cloud timestamp unreadable", exc_info=True)
+        return None
+
+
+def _age_seconds(moment, now: datetime) -> int | None:
+    """Whole seconds from `moment` to `now`. NEGATIVE when `moment` is ahead.
+
+    The negative is deliberate and must not be clamped to zero. Both instants a
+    reader sees here are stamped by the CLOUD while `now` is stamped by the
+    reporter's host, so a negative age is not nonsense: it is the dump saying the
+    two clocks disagree, which is itself a finding, and one that explains
+    connectivity decisions the engine makes by ordering those very timestamps
+    against each other. Clamping would erase the evidence and leave behind a
+    plausible-looking `0` that reads as "just now".
+
+    Truncated toward zero rather than rounded, so the number never claims a second
+    that has not fully elapsed. `moment` is deliberately UNANNOTATED: both callers
+    hand it an aware UTC datetime, but the try/except exists precisely for the
+    thing that is not one -- a foreign datetime subclass with an opinion about
+    subtraction, which would otherwise take down the whole dump from inside a
+    field that is only ever a convenience.
+    """
+    try:
+        return int((now - moment).total_seconds())
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: age not computable", exc_info=True)
+        return None
 
 
 def _entity_section(entities: Mapping | None, app_type, mapped=None) -> dict | None:
