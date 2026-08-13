@@ -21,6 +21,7 @@ import json
 import sys
 import types
 import unittest
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -660,13 +661,20 @@ class DiagnosticsDeviceTest(unittest.TestCase):
         coord = _build_coordinator()
         hass = FakeHass(coord)
         device = FakeDevice(identifiers={(DOMAIN, "does-not-exist")})
-        self.assertEqual(_run(diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device)), {})
+        result = _run(diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device))
+        # No appliance resolved -- and the dump is dated anyway. Both halves
+        # matter: nothing about the device leaks into the degraded document,
+        # and the document still says when it was taken.
+        self.assertEqual(["generated_at"], list(result))
 
     def test_device_diagnostics_foreign_identifier_ignored(self):
         coord = _build_coordinator()
         hass = FakeHass(coord)
         device = FakeDevice(identifiers={("some_other_domain", WD_ID)})
-        self.assertEqual(_run(diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device)), {})
+        result = _run(diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device))
+        # A foreign integration's identifier resolves nothing here, and the
+        # degraded dump is still dated (see the test above).
+        self.assertEqual(["generated_at"], list(result))
 
 
 class DiagnosticsDriftGuardTest(unittest.TestCase):
@@ -1692,6 +1700,529 @@ class EntityInventoryIdentityTest(unittest.TestCase):
         # side is the code-authored unique_id suffix, never the nickname slug.
         self.assertNotIn("switch.purificatore", encoded)
         self.assertIn("child_lock", encoded)
+
+
+# --- step 1: the shared clock, the shared text bound, the coverage mirror ----
+#
+# `_FrozenClock`, `FROZEN` and `FROZEN_TEXT` below are MODULE-LEVEL and SHARED:
+# the freshness section further down reuses all three. A second `class
+# _FrozenClock` or a second `FROZEN =` later in this file would silently shadow
+# these with no import error and quietly stop patching what the tests above it
+# think it patches, which is the same failure Part 2 describes for `REF_ID`.
+
+
+class _FrozenClock:
+    """Freeze `diagnostics._utcnow` for the duration of a `with` block.
+
+    `_utcnow` exists to be exactly this seam, so an age assertion never has to be
+    written against the wall clock. It also counts its calls, which is how the
+    "one instant for the whole document" claim below is checked rather than
+    assumed. Later sections that assert an age patch the same seam.
+    """
+
+    def __init__(self, moment):
+        self.moment = moment
+        self.calls = 0
+        self._saved = None
+
+    def __enter__(self):
+        self._saved = diagnostics._utcnow
+
+        def _fake():
+            self.calls += 1
+            return self.moment
+
+        diagnostics._utcnow = _fake
+        return self
+
+    def __exit__(self, *exc_info):
+        diagnostics._utcnow = self._saved
+        return False
+
+
+FROZEN = datetime(2026, 8, 13, 7, 9, 40, tzinfo=timezone.utc)
+FROZEN_TEXT = "2026-08-13T07:09:40+00:00"
+
+
+class BoundedTextTest(unittest.TestCase):
+    """`_bounded_text` masks BEFORE it cuts, which is the whole point of it."""
+
+    def test_a_mac_straddling_the_cap_is_still_masked(self):
+        # THE regression this helper exists for, and the one shape every previous
+        # "the MAC is masked" test structurally could not catch: the address does
+        # not start at offset 0, it starts at 70 with the cap at 80. A helper that
+        # cut first would hand `_MAC_RE` ten characters of a seventeen-character
+        # address -- three and a half octets, no longer matching the six-group
+        # pattern -- and ship them to a public issue in cleartext.
+        value = "x" * 70 + "3c:71:bf:bd:32:2c"
+        self.assertEqual("x" * 70 + "***", diagnostics._bounded_text(value, 80))
+        # Not vacuous: cutting first really does leak, on this exact input.
+        self.assertIn("3c:71:bf:b", value[:80])
+
+    def test_no_cut_position_leaks_a_fragment(self):
+        # The one offset above could be a lucky alignment; sweep the whole window
+        # in which the address straddles the boundary.
+        for offset in range(60, 85):
+            value = "x" * offset + "3c:71:bf:bd:32:2c"
+            bounded = diagnostics._bounded_text(value, 80)
+            self.assertNotIn(":", bounded, f"leaked at offset {offset}")
+
+    def test_the_bound_is_still_a_bound(self):
+        self.assertEqual("abcde", diagnostics._bounded_text("abcdefghij", 5))
+        self.assertEqual("abc", diagnostics._bounded_text("abc", 40))
+
+    def test_a_container_is_refused_rather_than_flattened(self):
+        # Not redundant with `_scalar_text`'s own container check: that one runs
+        # AFTER `_jsonable`, which turns a dict into its repr, so it never fires
+        # for a real Mapping. Without the guard in `_bounded_text` the whole
+        # envelope would be flattened into one string under the caller's key,
+        # permanently out of reach of key-based redaction.
+        conn_event = {"macAddress": "AA:BB:CC:DD:EE:FF", "category": "CONNECTED"}
+        self.assertEqual(
+            "{'macAddress': '***', 'category': 'CONNECTED'}",
+            diagnostics._scalar_text(conn_event),
+        )
+        self.assertIsNone(diagnostics._bounded_text(conn_event, 40))
+        self.assertIsNone(diagnostics._bounded_text(["a"], 40))
+        self.assertIsNone(diagnostics._bounded_text(None, 40))
+
+    def test_a_container_inside_a_wrapper_is_refused_too(self):
+        # The shape an outer-only isinstance check cannot see: `_jsonable`
+        # unwraps `.value` before stringifying, and the merged attributes
+        # mapping is made almost entirely of such wrappers, so the guard has to
+        # look through one level as well as at the object itself. Measured with
+        # the outer guard alone, this returned the whole envelope as a string
+        # with `mobileId` in cleartext beside a masked MAC.
+        conn_event = {
+            "macAddress": "AA:BB:CC:DD:EE:FF",
+            "category": "CONNECTED",
+            "mobileId": "phone-install-xyz",
+        }
+        self.assertIsNone(diagnostics._bounded_text(FakeWrapper(conn_event), 200))
+        self.assertIsNone(diagnostics._bounded_text(FakeWrapper(["a"]), 200))
+        self.assertIsNone(diagnostics._bounded_text({"a", "b"}, 200))
+
+    def test_a_wrapper_is_unwrapped_like_any_other_scalar(self):
+        # It routes through _scalar_text, so a HonAttribute-shaped object is
+        # unwrapped rather than stringified as "<object at 0x...>".
+        self.assertEqual("7", diagnostics._bounded_text(FakeWrapper(7), 40))
+
+    def test_a_raising_wrapper_is_refused_rather_than_propagated(self):
+        class Exploding:
+            @property
+            def value(self):
+                raise RuntimeError("boom")
+
+        self.assertIsNone(diagnostics._bounded_text(Exploding(), 40))
+
+
+class StampTextTest(unittest.TestCase):
+    """The single datetime -> ISO text conversion, and what it refuses."""
+
+    def test_an_aware_instant_is_normalised_to_utc(self):
+        moment = datetime(2026, 4, 9, 12, 34, 56, tzinfo=timezone(timedelta(hours=2)))
+        self.assertEqual("2026-04-09T10:34:56+00:00", diagnostics._stamp_text(moment))
+
+    def test_utc_normalisation_is_what_saves_the_field_from_the_mac_mask(self):
+        # A sub-minute offset makes an ISO instant look exactly like a MAC address
+        # to `_MAC_RE`, which runs over every string in the block. This is the
+        # measured reason `astimezone` is correctness and not tidiness.
+        raw = "2026-04-09T12:34:56-05:30:15"
+        self.assertEqual("2026-04-09T***", debug_utils._MAC_RE.sub("***", raw))
+        odd = timezone(-timedelta(hours=5, minutes=30, seconds=15))
+        moment = datetime(2026, 4, 9, 12, 34, 56, tzinfo=odd)
+        text = diagnostics._stamp_text(moment)
+        self.assertEqual("2026-04-09T18:05:11+00:00", text)
+        self.assertEqual(text, debug_utils._MAC_RE.sub("***", text))
+
+    def test_a_naive_instant_is_emitted_as_it_stands(self):
+        # Never shifted onto the host's zone: a reader can reason about an instant
+        # with no offset, but not about one that was quietly moved by however far
+        # the reporter's machine happens to be from UTC.
+        moment = datetime(2020, 9, 29, 10, 1, 26)
+        self.assertEqual("2020-09-29T10:01:26", diagnostics._stamp_text(moment))
+
+    def test_a_tzinfo_with_no_offset_is_treated_as_naive(self):
+        # CPython does NOT raise here: it falls back to the host's local zone and
+        # then labels the result "+00:00". A wrong time wearing an authoritative
+        # offset is worse than a time with no offset at all.
+        class NoOffset(tzinfo):
+            def utcoffset(self, dt):
+                return None
+
+            def tzname(self, dt):
+                return None
+
+            def dst(self, dt):
+                return None
+
+        moment = datetime(2020, 9, 29, 10, 1, 26, tzinfo=NoOffset())
+        self.assertEqual("2020-09-29T10:01:26", diagnostics._stamp_text(moment))
+
+    def test_a_tzinfo_that_raises_yields_nothing(self):
+        class Exploding(tzinfo):
+            def utcoffset(self, dt):
+                raise RuntimeError("boom")
+
+        moment = datetime(2020, 9, 29, 10, 1, 26, tzinfo=Exploding())
+        self.assertIsNone(diagnostics._stamp_text(moment))
+
+    def test_a_datetime_subclass_cannot_smuggle_a_string(self):
+        # `isinstance` admits subclasses and a subclass may override isoformat, so
+        # the OUTPUT is validated too. Without that, this string would be copied
+        # verbatim into a document about to be attached to a public issue.
+        class Smuggler(datetime):
+            def isoformat(self, *args, **kwargs):
+                return "user@example.com"
+
+        self.assertIsNone(diagnostics._stamp_text(Smuggler(2026, 4, 9)))
+
+    def test_an_over_long_output_is_refused(self):
+        class Verbose(datetime):
+            def isoformat(self, *args, **kwargs):
+                return "2026-04-09T05:34:16+00:00" + "!" * 40
+
+        self.assertIsNone(diagnostics._stamp_text(Verbose(2026, 4, 9)))
+
+    def test_a_digits_only_shape_is_refused_too(self):
+        # `_ISO_RE` is narrow on purpose: it requires the 'T' separator, which a
+        # real `isoformat()` always produces, so the only shapes it admits are
+        # the ones a datetime can actually make. A subclass returning something
+        # that merely looks date-ish does not get through.
+        class Loose(datetime):
+            def isoformat(self, *args, **kwargs):
+                return "1234-56-78 90:12:34"
+
+        self.assertIsNone(diagnostics._stamp_text(Loose(2026, 4, 9)))
+
+    def test_a_cloud_string_instant_is_refused_by_design(self):
+        # `lastConnEvent.instantTime` is a cloud-chosen STRING. This helper's whole
+        # promise is that its output came out of datetime.isoformat; echoing a
+        # cloud string here would break that promise and look identical in the dump.
+        self.assertIsNone(diagnostics._stamp_text("2026-04-09T05:34:16Z"))
+        self.assertIsNone(diagnostics._stamp_text(1775712856741))
+        self.assertIsNone(diagnostics._stamp_text(None))
+
+
+class AsUtcTest(unittest.TestCase):
+    """`_as_utc` is the one place awareness is decided, so ages cannot raise."""
+
+    def test_an_aware_instant_is_converted(self):
+        moment = datetime(2026, 4, 9, 12, 0, tzinfo=timezone(timedelta(hours=2)))
+        self.assertEqual(
+            datetime(2026, 4, 9, 10, 0, tzinfo=timezone.utc),
+            diagnostics._as_utc(moment, False),
+        )
+
+    def test_a_naive_instant_follows_the_stated_policy(self):
+        naive = datetime(2026, 4, 9, 12, 0)
+        self.assertIsNone(diagnostics._as_utc(naive, False))
+        self.assertEqual(
+            datetime(2026, 4, 9, 12, 0, tzinfo=timezone.utc),
+            diagnostics._as_utc(naive, True),
+        )
+
+    def test_a_non_datetime_is_refused(self):
+        self.assertIsNone(diagnostics._as_utc("2026-04-09T12:00:00Z", True))
+        self.assertIsNone(diagnostics._as_utc(None, True))
+        self.assertIsNone(diagnostics._as_utc(1775712856741, True))
+
+    def test_a_subclass_that_refuses_to_be_normalised_is_refused(self):
+        # Everything that touches the value is inside the one guard, including
+        # the `replace` on the naive branch: the callers downstream feed this
+        # helper cloud-supplied objects, and an unguarded call there does not
+        # produce a wrong age, it produces no dump at all.
+        class Hostile(datetime):
+            def replace(self, *args, **kwargs):
+                raise RuntimeError("boom")
+
+        self.assertIsNone(diagnostics._as_utc(Hostile(2026, 4, 9), True))
+
+    def test_the_result_can_always_be_subtracted_from_now(self):
+        # The property the helper exists for: whatever it returns is aware, so the
+        # subtraction every age is built on cannot raise TypeError.
+        for value in (
+            datetime(2026, 4, 9, 12, 0),
+            datetime(2026, 4, 9, 12, 0, tzinfo=timezone(timedelta(hours=-3))),
+        ):
+            converted = diagnostics._as_utc(value, True)
+            self.assertIsNotNone(converted)
+            (FROZEN - converted).total_seconds()  # must not raise
+
+
+class DumpTimestampTest(unittest.TestCase):
+    """Every document this module produces says when it was taken."""
+
+    def test_the_entry_dump_is_dated_and_dated_first(self):
+        with _FrozenClock(FROZEN):
+            result, _ = _entry_diag()
+        self.assertEqual("generated_at", next(iter(result)))
+        self.assertEqual(FROZEN_TEXT, result["generated_at"])
+
+    def test_the_stamp_is_aware_utc(self):
+        result, _ = _entry_diag()
+        self.assertTrue(result["generated_at"].endswith("+00:00"))
+
+    def test_the_whole_document_shares_one_instant(self):
+        # Two appliances, one clock read. A per-block read would let two ages in
+        # one document disagree by however long the dump took to build.
+        with _FrozenClock(FROZEN) as clock:
+            result, blocks = _entry_diag()
+        self.assertEqual(2, len(blocks))
+        self.assertEqual(1, clock.calls)
+
+    def test_the_device_dump_is_dated_and_dated_first(self):
+        coord = _build_coordinator()
+        hass = FakeHass(coord)
+        device = FakeDevice(identifiers={(DOMAIN, WD_ID)})
+        with _FrozenClock(FROZEN):
+            result = _run(
+                diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device)
+            )
+        self.assertEqual(["generated_at", "appliance"], list(result))
+        self.assertEqual(FROZEN_TEXT, result["generated_at"])
+
+    def test_a_degraded_device_dump_is_still_dated(self):
+        # The dump most likely to be pasted into an issue as "the download gave me
+        # nothing" used to be the only undated one in the integration.
+        coord = _build_coordinator()
+        hass = FakeHass(coord)
+        device = FakeDevice(identifiers={(DOMAIN, "does-not-exist")})
+        with _FrozenClock(FROZEN):
+            result = _run(
+                diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device)
+            )
+        self.assertEqual({"generated_at": FROZEN_TEXT}, result)
+
+    def test_a_device_dump_with_no_coordinator_data_is_still_dated(self):
+        # The second early return: the appliance id resolves but the coordinator
+        # holds nothing for it.
+        hass = FakeHass(FakeCoordinator({WD_ID: "not-a-mapping"}))
+        device = FakeDevice(identifiers={(DOMAIN, WD_ID)})
+        with _FrozenClock(FROZEN):
+            result = _run(
+                diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device)
+            )
+        self.assertEqual({"generated_at": FROZEN_TEXT}, result)
+
+    def test_no_identity_reaches_a_degraded_dump(self):
+        # A dated degraded dump must still be a degraded dump: the identifier that
+        # failed to resolve is not echoed back as evidence of what was looked for.
+        coord = _build_coordinator()
+        hass = FakeHass(coord)
+        device = FakeDevice(identifiers={(DOMAIN, "PLAINTEXT-SERIAL")})
+        result = _run(
+            diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device)
+        )
+        self.assertNotIn("PLAINTEXT-SERIAL", json.dumps(result))
+
+    def test_a_block_built_with_no_clock_is_still_dated_downstream(self):
+        # The two-positional-argument call site still works, and falls back to the
+        # seam rather than to a naive value.
+        with _FrozenClock(FROZEN) as clock:
+            diagnostics._appliance_block(
+                "id1",
+                {"appliance": None, "type": "AC", "attributes": {}, "statistics": {}},
+            )
+        self.assertEqual(1, clock.calls)
+
+    def test_a_naive_clock_is_promoted_not_refused(self):
+        # A caller handing in a naive datetime gets a block, not a TypeError:
+        # `_appliance_block` normalises at its boundary. Regression against the
+        # aware/naive subtraction that would take the whole dump down.
+        block = diagnostics._appliance_block(
+            "id1",
+            {"appliance": None, "type": "AC", "attributes": {}, "statistics": {}},
+            None,
+            datetime(2026, 8, 13, 7, 9, 40),
+        )
+        self.assertEqual("AC", block["type"])
+
+    def test_a_junk_clock_does_not_break_the_block(self):
+        for junk in ("2026-08-13", 0, object()):
+            block = diagnostics._appliance_block(
+                "id1",
+                {"appliance": None, "type": "AC", "attributes": {}, "statistics": {}},
+                None,
+                junk,
+            )
+            self.assertEqual("AC", block["type"])
+
+
+class CoverageExpectedAbsentTest(unittest.TestCase):
+    """The mirror axis: what this code maps and the device does not have."""
+
+    def test_a_mapped_attribute_the_device_omits_is_named(self):
+        # The WD fixture publishes machMode but neither bare key the mean-water
+        # consumption sensor reads, so the sensor exists and can never have a
+        # value. That is the "why is the control I expected not there" question.
+        _, blocks = _entry_diag()
+        absent = blocks["WD"]["coverage"]["attributes_expected_absent"]
+        self.assertIn("totalWashCycle", absent)
+        self.assertIn("totalWaterUsed", absent)
+        self.assertNotIn("machMode", absent)
+
+    def test_a_mapped_command_param_the_device_omits_is_named(self):
+        _, blocks = _entry_diag()
+        absent = blocks["WD"]["coverage"]["command_params_expected_absent"]
+        self.assertIn("prCode", absent)
+        self.assertNotIn("program", absent)
+
+    def test_the_lists_are_sorted_and_are_plain_strings(self):
+        _, blocks = _entry_diag()
+        for block in blocks.values():
+            for key in ("attributes_expected_absent", "command_params_expected_absent"):
+                names = block["coverage"][key]
+                self.assertIsInstance(names, list)
+                self.assertEqual(sorted(names), names)
+                for name in names:
+                    self.assertIsInstance(name, str)
+
+    def test_the_mirror_never_names_something_the_device_publishes(self):
+        # The invariant in one assertion, over every appliance in the fixture: a
+        # name in either list must not be findable anywhere else in the same
+        # block. A reader who can disprove a finding by scrolling down stops
+        # trusting the section. Note this one is a DRIFT GUARD rather than a
+        # behaviour test -- it restates the set difference the code performs, so
+        # it cannot fail while the implementation is that difference. The test
+        # below it is the one that discriminates.
+        _, blocks = _entry_diag()
+        for app_type, block in blocks.items():
+            bare = {k for k in block["attributes"] if "." not in k}
+            declared = set()
+            for params in block["commands"].values():
+                declared.update(params)
+            for name in block["coverage"]["attributes_expected_absent"]:
+                self.assertNotIn(name, bare, f"{app_type}: {name} is published")
+            for name in block["coverage"]["command_params_expected_absent"]:
+                self.assertNotIn(name, declared, f"{app_type}: {name} is declared")
+
+    def test_a_param_under_a_non_settings_command_is_not_reported_absent(self):
+        # The specific shape the invariant above exists to catch, and the ONLY
+        # test in this class that discriminates: measured against the settings
+        # params alone, the mirror named `program` and `prCode` on every wash
+        # appliance and `onOffStatus` on the air purifier, while the same dump
+        # printed them under `commands` a few lines below. Do not delete this as
+        # redundant with the invariant above -- the shared fixture has no
+        # `startProgram` command, so the invariant passes even when the mirror
+        # is measured against the wrong universe.
+        appliance = FakeAppliance(
+            commands={
+                "settings": FakeCommand({"spinSpeed": FakeParam(value="1000")}),
+                "startProgram": FakeCommand({
+                    "program": FakeParam(value="9"),
+                    "prCode": FakeParam(value="14"),
+                }),
+            }
+        )
+        block = diagnostics._appliance_block(
+            "id1",
+            {
+                "appliance": appliance,
+                "type": "WD",
+                "attributes": {},
+                "statistics": {},
+            },
+        )
+        absent = block["coverage"]["command_params_expected_absent"]
+        self.assertEqual([], absent)
+
+    def test_a_device_that_publishes_everything_it_maps_reports_nothing(self):
+        # The empty case, derived rather than hand-listed so it cannot rot when a
+        # table gains a row: ask the block what it expected, hand exactly that
+        # back as the device's shadow, and the mirror must fall silent.
+        def _block(attributes):
+            return diagnostics._appliance_block(
+                "id1",
+                {
+                    "appliance": FakeApplianceNoModel(commands={}),
+                    "type": "HO",
+                    "attributes": attributes,
+                    "statistics": {},
+                },
+            )
+
+        expected = _block({})["coverage"]["attributes_expected_absent"]
+        self.assertTrue(expected, "the empty case would be vacuous")
+        complete = _block({name: "0" for name in expected})
+        self.assertEqual([], complete["coverage"]["attributes_expected_absent"])
+        self.assertEqual([], complete["coverage"]["command_params_expected_absent"])
+
+    def test_the_mirror_survives_an_appliance_with_no_commands_at_all(self):
+        # A dump must degrade, never raise: a foreign appliance object with no
+        # `commands` surface still produces both lists.
+        block = diagnostics._appliance_block(
+            "id1",
+            {"appliance": object(), "type": "WD", "attributes": {}, "statistics": {}},
+        )
+        cov = block["coverage"]
+        self.assertIn("prCode", cov["command_params_expected_absent"])
+        self.assertIn("program", cov["command_params_expected_absent"])
+
+    def test_a_raising_parameters_property_is_skipped_not_propagated(self):
+        # `_command_param_names` walks commands that nothing else in the dump
+        # reads first, so it is asserted here directly rather than through a
+        # block.
+        #
+        # Scope note, verified on HEAD: this guard is a BACKSTOP, not the dump's
+        # protection. `_command_schema` reads `.parameters` on EVERY command --
+        # settings and startProgram alike -- above `_coverage` in
+        # `_appliance_block`, so through the real call path a raising property
+        # kills the dump before this helper runs. Confirmed on this same
+        # appliance: `_appliance_block` propagates RuntimeError. That exposure
+        # predates this change and is not fixed here; what the guard buys is
+        # that the helper cannot ADD a way to fail.
+        class Exploding:
+            @property
+            def parameters(self):
+                raise RuntimeError("boom")
+
+        appliance = FakeAppliance(
+            commands={
+                "startProgram": Exploding(),
+                "settings": FakeCommand({"spinSpeed": FakeParam(value="1")}),
+            }
+        )
+        self.assertEqual({"spinSpeed"}, diagnostics._command_param_names(appliance))
+
+    def test_a_commands_mapping_whose_values_view_raises_is_survived(self):
+        # The one way this helper could have ADDED a crash: `_command_schema`
+        # walks the same mapping with `.items()` and `_settings_param_names`
+        # with `.get(name)`, so an object that only breaks on `.values()` gets
+        # past both of them and would have died here.
+        class RaisingValues(dict):
+            def values(self):
+                raise RuntimeError("boom")
+
+        appliance = FakeAppliance(
+            commands=RaisingValues({"settings": FakeCommand({"spinSpeed": FakeParam(value="1")})})
+        )
+        self.assertEqual(set(), diagnostics._command_param_names(appliance))
+        block = diagnostics._appliance_block(
+            "id1",
+            {"appliance": appliance, "type": "WD", "attributes": {}, "statistics": {}},
+        )
+        self.assertEqual("WD", block["type"])
+
+    def test_the_mirror_carries_no_identity(self):
+        # Both lists are differences taken FROM the static tables, so nothing the
+        # cloud chose can reach them. Pinned, because a future edit that started
+        # listing device-side names would be a silent privacy change.
+        _, blocks = _entry_diag()
+        for block in blocks.values():
+            encoded = json.dumps(
+                {
+                    k: block["coverage"][k]
+                    for k in (
+                        "attributes_expected_absent",
+                        "command_params_expected_absent",
+                    )
+                }
+            )
+            self.assertNotIn("PLAINTEXT", encoded)
+            self.assertNotIn("AA:BB:CC:DD:EE:FF", encoded)
+            for name in json.loads(encoded)["attributes_expected_absent"]:
+                self.assertRegex(name, r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 if __name__ == "__main__":

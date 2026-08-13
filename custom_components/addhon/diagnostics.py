@@ -54,6 +54,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping
+from datetime import datetime, timezone
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -412,6 +413,66 @@ def _settings_param_names(appliance) -> set[str]:
     return names
 
 
+def _command_param_names(appliance) -> set[str]:
+    """Names of every parameter under ANY command, writable through it or not.
+
+    `_settings_param_names` above answers 'what can be written through the
+    settings command', which is the universe the `command_params_unmapped` axis
+    is measured against and must stay measured against. This helper answers a
+    different question -- 'does this device's schema know this parameter AT
+    ALL' -- and exists for `command_params_expected_absent`, where the
+    settings-only universe manufactures false positives: `program` and `prCode`
+    are mapped for every wash appliance and live under `startProgram`, and
+    `onOffStatus` is mapped for the air purifier and lives under
+    `startProgram`/`stopProgram`. Measured on the live 2026-06-22 dump,
+    subtracting only the settings params reported all three as missing from
+    devices whose `commands` section printed them a few lines further down.
+
+    Only KEYS are read. Iterating a parameter mapping's VALUES would reach
+    `HonParameterRange.values`, which materialises the entire grid (the trap
+    documented in `_param_schema`), so this walk stays proportional to the
+    number of parameters the device declares and never to their ranges.
+
+    Every read is guarded, and the guards are a BACKSTOP rather than the dump's
+    protection - be exact about that, because the tempting claim is the wrong
+    one. `_command_schema` already walks EVERY command and reads the same
+    `.parameters` surface, and `_appliance_block` calls it one line above
+    `_coverage`, so an appliance whose `startProgram.parameters` raises has
+    already taken the dump down before this helper is reached; measured,
+    building the block for such an appliance propagates RuntimeError out of
+    `_command_schema`. That exposure predates this change and is not fixed
+    here. What the guards below DO buy is that this helper cannot ADD a way to
+    fail. The loop setup is inside the guard as well as the loop body, and that
+    part is not theoretical: `_command_schema` iterates the commands mapping
+    with `.items()` and `_settings_param_names` with `.get(name)`, so a foreign
+    `commands` object whose `.values()` view alone raises survives both of them
+    and would die here, in new code, on the one axis this module treats as
+    inviolable.
+    """
+    commands = getattr(appliance, "commands", None)
+    if not isinstance(commands, Mapping):
+        return set()
+    names: set[str] = set()
+    try:
+        entries = list(commands.values())
+    except Exception:  # pragma: no cover - diagnostics must never crash
+        _LOGGER.debug(
+            "Diagnostics debug: command list unreadable", exc_info=True
+        )
+        return names
+    for cmd in entries:
+        try:
+            params = getattr(cmd, "parameters", None)
+            if isinstance(params, Mapping):
+                names.update(str(k) for k in params)
+        except Exception:  # pragma: no cover - diagnostics must never crash
+            _LOGGER.debug(
+                "Diagnostics debug: command parameters unreadable",
+                exc_info=True,
+            )
+    return names
+
+
 def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> dict:
     """What the device exposes with no addhon entity (the gold signal).
 
@@ -425,9 +486,24 @@ def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> 
                                              + scalar debug/protocol noise + program slots.
     The command-param axis is split the same way (``command_params_unmapped`` vs
     ``command_params_unmapped_meta``).
+
+    Both axes are then reported once more in MIRROR image.
+    ``attributes_expected_absent`` and ``command_params_expected_absent`` are
+    the keys this integration maps for the TYPE and this DEVICE does not have
+    at all. The unmapped lists answer 'what should we add'; the mirror answers
+    'why is the control I expected not in Home Assistant', which until now was
+    the one coverage question a dump could not answer. Issue #75 is the worked
+    example: its reporter established for himself, across two dumps four days
+    apart and a decompiler pass, that his fridge declares a vtRoom2 zone and
+    publishes no ``tempZ4``. On the live REF dump this line prints thirteen
+    names on the first download, and ``tempZ4`` is one of them.
     """
     mapped_attrs, mapped_params = _mapped_sets(app_type)
     settings_params = _settings_param_names(appliance)
+    # A SECOND, wider universe, used only by the expected-absent mirror below:
+    # every parameter of every command, not just the settings ones. The two are
+    # deliberately different sets; see the comment on the mirror keys.
+    command_params = _command_param_names(appliance)
 
     # The device shadow exposes writable params ALSO as bare attribute keys (e.g. a
     # fridge reports `tempSelZ1` both bare and as `settings.tempSelZ1`). Those belong
@@ -474,6 +550,37 @@ def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> 
         "command_params_total": len(settings_params) - len(params_meta),
         "command_params_unmapped": params_signal,
         "command_params_unmapped_meta": params_meta,
+        # The mirror of the two unmapped axes, and the only part of this block
+        # that reads the tables against the device rather than the device
+        # against the tables. Neither list needs a cap or a truncation flag:
+        # both are differences taken FROM the static per-type tables, so their
+        # length is bounded by what this repository ships and not by anything
+        # the cloud sends. Measured worst case per type today: 37 short names
+        # (WD and AC), 27 (REF), 5 (HO).
+        #
+        # The attribute side subtracts the BARE keys and nothing else, because
+        # that is how the entity actually reads: `base_entity._get_attr` looks
+        # its key up whole, then in statistics, and strips a `settings.` prefix
+        # only when the key ITSELF carries one. So a mapped bare name that the
+        # device publishes only as `startProgram.delayTime` genuinely is
+        # unreadable and belongs in this list -- the live WM is exactly that
+        # case, and treating the dotted spelling as coverage would hide it.
+        #
+        # The command side subtracts EVERY command's parameters, which is where
+        # it stops mirroring `command_params_total` above. Restricted to the
+        # settings params it reported `program` and `prCode` on every wash
+        # appliance and `onOffStatus` on the air purifier -- all of them
+        # present, under `startProgram`/`stopProgram`, in the same dump. An
+        # axis sold as pure signal cannot open with three names the reader can
+        # disprove by scrolling down. Say plainly what that costs, because the
+        # two command axes are now measured against DIFFERENT universes:
+        # `command_params_unmapped` asks whether the entity can WRITE the
+        # parameter through the settings command, this asks only whether the
+        # schema KNOWS the name at all, so a mapped param the entity writes
+        # through settings while the device declares it only under
+        # `startProgram` is reported by neither.
+        "attributes_expected_absent": sorted(mapped_attrs - bare),
+        "command_params_expected_absent": sorted(mapped_params - command_params),
     }
 
 
@@ -511,6 +618,178 @@ def _scalar_text(value) -> str | None:
         return str(int(plain))
     text = str(plain)
     return text or None
+
+
+def _bounded_text(value, limit: int) -> str | None:
+    """A cloud-controlled string, MASKED first and only then cut to `limit`.
+
+    The order is the whole safety property, not a style preference. Both masks
+    in this module run LATE: `_redact` walks the finished block at the end of
+    `_appliance_block`, and the only VALUE-shaped mask anywhere in the dump is
+    `_MAC_RE` inside `_jsonable`, which recognises a MAC address only when all
+    six octet groups are present. A helper that slices its input to a cap
+    BEFORE that mask therefore hands the mask a three-and-a-half octet fragment
+    that no longer matches the pattern, and the remains of the address travel
+    to a public GitHub issue in cleartext. Measured, with a MAC straddling the
+    boundary of an 80 character cap:
+
+        cut first, then mask  ->  'xxxxx3c:71:bf:b'   (3.5 octets, readable)
+        mask first, then cut  ->  'xxxxx***'
+
+    `_future_capabilities` already bounds its state values in this order
+    (`_scalar_text`, which masks, and only then the slice at the call site).
+    This helper exists so that the next section needing a bounded cloud string
+    does not have to rediscover why, and so that reviewing the order is a
+    matter of checking the call site uses it at all.
+
+    Containers are refused OUTRIGHT, and the guard has to run TWICE - once on
+    the object and once on what it wraps. `_scalar_text` cannot be relied upon
+    for this: it tests the value AFTER `_jsonable` has run, and `_jsonable`
+    turns a dict into its repr, so its isinstance guard never fires for a real
+    Mapping. `_jsonable` also unwraps a `.value` one level, and the merged
+    attributes mapping this module reads is made almost entirely of such
+    wrappers (HonAttribute from the shadow, HonParameter from
+    `appliance.settings`), so a wrapper holding a cloud dict is the ordinary
+    shape here rather than an exotic one. Measured, with only the outer guard a
+    wrapped lastConnEvent came through as "{'macAddress': '***', 'category':
+    'CONNECTED', 'mobileId': 'm-123'}": the MAC masked, `mobileId` in
+    cleartext, and the whole envelope collapsed into one string under whatever
+    key the caller chose, which is exactly where key-based redaction can no
+    longer reach it (see the `mobileId`/`transactionId` note on `_TO_REDACT`).
+    A caller holding a cloud CONTAINER must still type-guard the field it wants
+    before calling; this is the backstop for when it forgets, not a licence to
+    pass the container in.
+
+    What this helper does NOT do is make an arbitrary string safe. The only
+    value-shaped mask it applies is `_MAC_RE`; an email, a serial, a nickname
+    or a mobileId inside a cloud string passes through untouched, and `_redact`
+    cannot help because it matches on KEY names. Bounding is a size property,
+    not a privacy one. A caller is still responsible for the argument that its
+    field is either a closed vocabulary or emitted under a name `_TO_REDACT`
+    already knows.
+
+    Returns None for anything `_scalar_text` refuses too: a character bound
+    only means something for a scalar.
+    """
+    if isinstance(value, (Mapping, list, tuple, set, frozenset)):
+        return None
+    try:
+        inner = value.value if hasattr(value, "value") else value
+    except Exception:  # pragma: no cover - a raising wrapper must not kill it
+        return None
+    if isinstance(inner, (Mapping, list, tuple, set, frozenset)):
+        return None
+    text = _scalar_text(value)
+    return None if text is None else text[:limit]
+
+
+def _as_utc(value, assume_naive_utc: bool) -> datetime | None:
+    """A datetime as an AWARE UTC datetime, or None when it cannot be one.
+
+    Every age this dump prints is a subtraction, and Python raises TypeError
+    when the two operands disagree about awareness. `_appliance_block` is
+    called with no try/except around it from both entry points, so one naive
+    datetime reaching one subtraction does not produce a wrong age, it produces
+    no dump at all. This is the single place that settles awareness, so that no
+    caller has to reason about it twice.
+
+    What is guarded is `utcoffset()`, NOT `tzinfo`. A tzinfo object whose
+    `utcoffset()` returns None does not raise: CPython falls back to the HOST's
+    local zone, silently shifting the instant and then labelling it '+00:00' --
+    a wrong time wearing an authoritative offset, which is worse than no time.
+    Such a value is treated as naive here. A `utcoffset()` that raises (a
+    foreign tzinfo, a broken subclass) yields None rather than propagating, and
+    so does a subclass that raises from `astimezone` or `replace`: everything
+    that touches the value at all is inside the one guard, because the callers
+    downstream are fed cloud-supplied objects.
+
+    `assume_naive_utc` deliberately has NO default. A naive instant is a guess
+    whichever way it is read, and making every call site spell out its policy
+    keeps that guess on the record instead of hiding it in this signature.
+    """
+    if not isinstance(value, datetime):
+        return None
+    try:
+        if value.utcoffset() is not None:
+            return value.astimezone(timezone.utc)
+        if not assume_naive_utc:
+            return None
+        return value.replace(tzinfo=timezone.utc)
+    except Exception:  # pragma: no cover - a foreign tzinfo must not kill it
+        return None
+
+
+# What an emitted instant must look like, and how long it may be. These sit
+# here rather than in the bounds block near the top of the module because the
+# rule in this file is that a constant lives immediately above its single
+# consumer (see `_ZONE_SUFFIX_RE`): a reader meeting `_STAMP_MAX_CHARS` in
+# `_stamp_text` should not have to scroll 300 lines to learn what it bounds.
+# The separator is 'T' and nothing else: `_stamp_text` calls `isoformat()` with
+# no `sep` argument, so a genuine datetime can never produce a space, and every
+# shape this pattern accepts is a shape a datetime SUBCLASS could smuggle
+# through the output validation below. The narrower it is, the less it admits.
+_ISO_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:[+-]\d{2}:\d{2})?"
+)
+_STAMP_MAX_CHARS = 40
+
+
+def _stamp_text(value) -> str | None:
+    """The one datetime -> ISO text conversion in the whole dump.
+
+    An AWARE value is converted to UTC first, and that conversion is load
+    bearing for CORRECTNESS, not merely for comparability: `_MAC_RE` runs over
+    every string in the block and a sub-minute offset makes an ISO instant look
+    exactly like a MAC address. Measured, '2026-04-09T12:34:56-05:30:15'
+    survives `_jsonable` as '2026-04-09T***'. Normalising to UTC always yields
+    '+00:00', which cannot match, which is the only reason this field reaches
+    the reader intact. A future simplification that 'preserves the original
+    offset' would silently mangle the section.
+
+    A NAIVE value is emitted as it is, never shifted onto the host's zone: the
+    cloud does hand back stamps with no offset, and a reader can reason about
+    an instant with no zone, but not about one that has been quietly moved by
+    however many hours the reporter's machine happens to be from UTC.
+
+    Anything that is not a datetime yields None, on purpose and by contract. A
+    cloud STRING instant such as `lastConnEvent.instantTime` must NOT be routed
+    through here: this helper's promise is that its output was built by
+    `datetime.isoformat`, and echoing a cloud-chosen string would break that
+    promise while looking identical in the dump.
+
+    Finally the OUTPUT is validated, not just the input type. `isinstance`
+    admits SUBCLASSES, and a datetime subclass is free to override `isoformat`
+    and return any string at all; without the length and shape check, an
+    attacker-or-accident-supplied value would be copied verbatim into a
+    document the user is about to attach to a public issue.
+    """
+    if not isinstance(value, datetime):
+        return None
+    try:
+        if value.utcoffset() is not None:
+            value = value.astimezone(timezone.utc)
+        text = value.isoformat()
+    except Exception:  # pragma: no cover - foreign subclass or tzinfo
+        return None
+    if not isinstance(text, str) or len(text) > _STAMP_MAX_CHARS:
+        return None
+    return text if _ISO_RE.fullmatch(text) else None
+
+
+def _utcnow() -> datetime:
+    """Now, as an aware UTC datetime.
+
+    One line on purpose. `homeassistant.util.dt.now(tz)` is defined as
+    `datetime.now(tz or DEFAULT_TIME_ZONE)`, so asking it for UTC makes the
+    whole Home Assistant branch an identity function: a lazy import, a fallback
+    path and a comment, all to produce what the line below produces.
+
+    What this function is actually FOR is being a seam. Every test that asserts
+    an age patches `diagnostics._utcnow`, and a dump that read the clock inline
+    could only be tested against the wall clock, which is how age assertions
+    turn into tests that fail once a year on a slow machine.
+    """
+    return datetime.now(timezone.utc)
 
 
 def _enum_deltas(appliance, handled: Mapping[str, frozenset[str]]) -> tuple[dict, bool]:
@@ -577,13 +856,27 @@ def _future_capabilities(app_type, attributes: Mapping, appliance) -> dict:
 
 
 def _appliance_block(
-    appliance_id: str, data: Mapping, entities: Mapping | None = None
+    appliance_id: str,
+    data: Mapping,
+    entities: Mapping | None = None,
+    now: datetime | None = None,
 ) -> dict:
     """Build the (redacted) diagnostics block for a single appliance.
 
     `entities` is the registry-derived inventory for THIS appliance, already
     computed once for the whole dump. It defaults to None so the helper stays
     hass-less and pure, and so a caller with no registry still produces a block.
+
+    `now` is the instant the WHOLE dump was taken, threaded in from the entry
+    point instead of read here, so that the `generated_at` at the top of the
+    document and every age inside every appliance block describe one moment.
+    Reading the clock per block would let two ages in one document disagree by
+    however long the dump took to build -- a small inconsistency, and exactly
+    the kind that costs a maintainer an hour before it is recognised as noise.
+    It is TRAILING and defaults to None so that the existing callers passing
+    only the first arguments keep working and still get a dated block, and it
+    is normalised on the first line of the body: see the comment there for why
+    nothing downstream may be handed a naive datetime.
     """
     appliance = data.get("appliance")
     app_type = data.get("type")
@@ -591,6 +884,16 @@ def _appliance_block(
     attributes = attributes if isinstance(attributes, Mapping) else {}
     statistics = data.get("statistics")
     statistics = statistics if isinstance(statistics, Mapping) else {}
+    # Normalised HERE and nowhere else. A caller may pass nothing, a naive
+    # datetime, or something that is not a datetime at all; below this line
+    # `now` is always an aware UTC instant, so every age is a subtraction that
+    # cannot raise TypeError and take the entire dump down with it -- this
+    # function is called with no try/except around it from both entry points.
+    # `assume_naive_utc=True` is the honest reading AT THIS BOUNDARY: the only
+    # naive value that can arrive here comes from a caller that meant 'now', so
+    # trusting it is wrong by the host's offset at worst, where refusing it
+    # would be wrong by the whole age.
+    now = _as_utc(now, True) or _utcnow()
 
     commands = _command_schema(appliance)
     model_attributes = _model_attributes(appliance)
@@ -899,6 +1202,10 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict:
     """Return diagnostics for a config entry (all appliances)."""
+    # Read ONCE, before anything else is built. `generated_at` and every age in
+    # every appliance block below must all describe the same instant, or the
+    # document contains numbers that disagree for a reason no reader can see.
+    now = _utcnow()
     coordinator = _coordinator(hass, entry)
     _LOGGER.debug(
         "Diagnostics debug: diagnostics requested entry=%s title=%s coordinator_present=%s",
@@ -920,10 +1227,24 @@ async def async_get_config_entry_diagnostics(
     for appliance_id, data in coord_data.items():
         if isinstance(data, Mapping):
             appliances.append(
-                _appliance_block(appliance_id, data, inventory.get(appliance_id))
+                _appliance_block(
+                    appliance_id, data, inventory.get(appliance_id), now=now
+                )
             )
 
     return {
+        # The FIRST key of the document on purpose: 'when was this taken' is the
+        # first thing a maintainer needs and the last thing a reporter thinks to
+        # say, and an issue thread routinely carries two downloads days apart
+        # with nothing in the files to tell them apart. Aware UTC, so it always
+        # ends in '+00:00' and never has to be reconciled with the zone the
+        # reporter's machine happened to be in. Like `last_error` and
+        # `platforms` below, this key sits OUTSIDE `_redact` -- only
+        # `_appliance_block` redacts -- so it is leak-proof by construction
+        # instead: `_stamp_text` refuses every non-datetime and then validates
+        # its own output against `_ISO_RE` and a 40 character bound, so the
+        # only thing that can appear here is an instant.
+        "generated_at": _stamp_text(now),
         "entry": {
             "title": _redact_title(entry.title),
             "data": {
@@ -952,6 +1273,11 @@ async def async_get_device_diagnostics(
     registers ``{(DOMAIN, appliance_id)}``, so the appliance_id is recovered directly.
     The raw identifier (which may BE the serial) is never echoed into the output.
     """
+    # Read BEFORE the two early returns below, not after. A device dump that
+    # resolves no appliance is precisely the one that gets pasted into an issue
+    # as 'the download gave me nothing', and an undated empty object cannot
+    # even be placed in time relative to the entry dump beside it.
+    now = _utcnow()
     coordinator = _coordinator(hass, entry)
     coord_data = getattr(coordinator, "data", None)
 
@@ -963,11 +1289,18 @@ async def async_get_device_diagnostics(
         ),
         None,
     )
+    # Both degraded paths still return a DATED document rather than a bare {}.
+    # They are the two dumps most likely to be attached to an issue, because
+    # they are what a user gets when the thing they are reporting is that
+    # nothing works, and 'the file was empty' is a materially different report
+    # from 'the file said it was taken at 07:09 and had nothing in it'. Like
+    # the entry dump's own `generated_at`, these bypass `_redact` and are
+    # leak-proof by construction rather than by masking.
     if appliance_id is None or not isinstance(coord_data, Mapping):
-        return {}
+        return {"generated_at": _stamp_text(now)}
     data = coord_data.get(appliance_id)
     if not isinstance(data, Mapping):
-        return {}
+        return {"generated_at": _stamp_text(now)}
     # The inventory is built over EVERY appliance id, not just this one: attribution
     # is by unique_id prefix and those prefixes nest, so hiding the siblings would
     # let a longer id's rows fall into this block.
@@ -978,7 +1311,8 @@ async def async_get_device_diagnostics(
         _states_getter(hass),
     )
     return {
+        "generated_at": _stamp_text(now),
         "appliance": _appliance_block(
-            appliance_id, data, inventory.get(appliance_id)
-        )
+            appliance_id, data, inventory.get(appliance_id), now=now
+        ),
     }
