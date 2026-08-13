@@ -51,6 +51,33 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -q
 
+  commit-trailers:
+    name: commit trailers
+    # PRs only: the check needs a base to diff against, and a push to `dev`
+    # arrives after the PR that carried it has already been gated here.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          # Full history: the check walks base..head, and a shallow clone has
+          # neither end of that range.
+          fetch-depth: 0
+
+      - name: Reject AI-assistant authorship trailers
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # The server-side half of the guard. The local `commit-msg` hook
+          # (scripts/hooks/commit-msg) catches this before the object exists,
+          # but every client-side hook is bypassable with --no-verify and a
+          # contributor may not have installed it at all. Same matcher on both
+          # sides, so they cannot disagree about what is forbidden.
+          git log --format='%B' "$BASE..$HEAD" | ./scripts/no-assistant-trailer.sh
+
   hassfest:
     name: hassfest
     runs-on: ubuntu-latest

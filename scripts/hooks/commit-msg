@@ -1,0 +1,25 @@
+#!/bin/sh
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Local guard: refuse a commit whose message credits an AI assistant.
+#
+# Catches the trailer BEFORE the object exists, which is the whole point --
+# once a commit is written the only cures are amend (if it is still the tip) or
+# a history rewrite, and unreachable copies survive in the reflog for 90 days
+# regardless. Five such commits already exist in this repository's reflog; the
+# rule was written down in docs/ and relied on the committer remembering it.
+#
+# INSTALL (once per clone):
+#     git config core.hooksPath scripts/hooks
+#
+# `core.hooksPath` rather than a copy into .git/hooks so the hook is versioned
+# and every clone gets fixes to it. .git/hooks is untracked, so a copy there
+# would silently rot.
+#
+# Bypassable with `git commit --no-verify`, like every client-side hook. That is
+# why the same check also runs in CI, where it cannot be skipped.
+
+set -eu
+
+exec "$(git rev-parse --show-toplevel)/scripts/no-assistant-trailer.sh" < "$1"
