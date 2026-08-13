@@ -4122,5 +4122,117 @@ class FreshnessDegradationTest(unittest.TestCase):
         self.assertEqual({"category": "DISCONNECTED"}, row)
 
 
+# --- step 3b (optional): dropping the duplicated `parameters` sub-map --------
+
+
+class AttributeValuesDedupTest(unittest.TestCase):
+    """The nested `parameters` sub-map goes only when it is provably a copy."""
+
+    def test_a_redundant_nested_map_is_dropped(self):
+        shadow = FakeShadowAttribute("4", AC_STAMP_OLD)
+        block = _stamp_block({"tempZ1": shadow, "parameters": {"tempZ1": shadow}})
+        self.assertNotIn("parameters", block["attributes"])
+        self.assertEqual("4", block["attributes"]["tempZ1"])
+        # The one bit the sub-map carried -- which keys are shadow parameters --
+        # is still in the document, now with the instant as well.
+        self.assertEqual(
+            {"tempZ1": "2026-04-09T05:31:02+00:00"},
+            block["attributes_last_update"],
+        )
+
+    def test_coverage_and_the_echo_describe_the_same_mapping(self):
+        # The dedupe runs above EVERY consumer, so `attributes_unmapped_meta`
+        # cannot name a key the `attributes` section no longer prints. On all
+        # four live appliances that key is exactly `parameters`.
+        shadow = FakeShadowAttribute("4", AC_STAMP_OLD)
+        block = _stamp_block({"tempZ1": shadow, "parameters": {"tempZ1": shadow}})
+        self.assertNotIn(
+            "parameters", block["coverage"]["attributes_unmapped_meta"]
+        )
+        for name in block["coverage"]["attributes_unmapped_meta"]:
+            self.assertIn(name, block["attributes"])
+
+    def test_a_nested_map_that_is_the_only_copy_is_kept(self):
+        # The `hon_client.py:192-196` path: `dict(params)` raised, so NOTHING was
+        # flattened and this sub-map holds the only copy of the values. Dropping
+        # it here would delete data, not duplication.
+        block = _stamp_block(
+            {"parameters": {"tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD)}}
+        )
+        self.assertEqual({"tempZ1": "4"}, block["attributes"]["parameters"])
+
+    def test_a_none_valued_nested_row_is_not_mistaken_for_a_flattened_one(self):
+        # `dict.get` answers None for "absent" and for "present and None" alike,
+        # so the lookup uses the module sentinel instead. Nothing here was
+        # flattened: the sub-map is the only copy and both names would otherwise
+        # have vanished from the document entirely.
+        block = _stamp_block({"parameters": {"tempZ1": None, "tempZ3": None}})
+        self.assertIn("parameters", block["attributes"])
+
+    def test_an_empty_nested_map_is_kept(self):
+        # `all([])` is True. "The shadow container was empty" and "there is no
+        # shadow container" are different statements and stay different.
+        block = _stamp_block({"x": 1, "parameters": {}})
+        self.assertEqual({}, block["attributes"]["parameters"])
+
+    def test_a_partially_flattened_map_is_kept_whole(self):
+        # One missing bare key is enough: the section never guesses which half
+        # of a half-merged shadow is the real one.
+        shadow = FakeShadowAttribute("4", AC_STAMP_OLD)
+        other = FakeShadowAttribute("5", AC_STAMP_NEW)
+        block = _stamp_block(
+            {"tempZ1": shadow, "parameters": {"tempZ1": shadow, "tempZ3": other}}
+        )
+        self.assertIn("parameters", block["attributes"])
+
+    def test_a_bare_key_rebound_to_another_object_keeps_the_map(self):
+        # Identity, not equality: a bare key that no longer IS the nested object
+        # means the merge this optimisation relies on did not happen the way it
+        # is documented, so the copy stays. Equality would also mean calling an
+        # `__eq__` this module does not control.
+        block = _stamp_block(
+            {
+                "tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD),
+                "parameters": {"tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD)},
+            }
+        )
+        self.assertIn("parameters", block["attributes"])
+
+    def test_a_non_mapping_parameters_value_is_left_alone(self):
+        block = _stamp_block({"parameters": "not-a-map", "x": 1})
+        self.assertEqual("not-a-map", block["attributes"]["parameters"])
+
+    def test_a_truncated_instant_map_keeps_the_sub_map(self):
+        # The justification for deleting the copy is that
+        # `attributes_last_update` now carries the shadow-parameter set. Once
+        # the row cap has fired it does not carry it for the dropped rows, so
+        # the copy stays and the dump keeps saying which keys were shadow.
+        shadows = {
+            "p%03d" % i: FakeShadowAttribute(str(i), AC_STAMP_OLD)
+            for i in range(250)
+        }
+        attributes = dict(shadows)
+        attributes["parameters"] = shadows
+        block = _stamp_block(attributes)
+        self.assertTrue(block["attributes_last_update_truncated"])
+        self.assertIn("parameters", block["attributes"])
+
+    def test_an_uncomparable_nested_map_is_kept(self):
+        # On the helper rather than on a whole block, and for a reason worth
+        # recording: verified on HEAD, a Mapping whose `__getitem__` raises
+        # already takes the entire dump down at `_redact(block)`, which walks it
+        # with `.items()` and has no guard. This change neither creates that
+        # exposure nor fixes it -- it only guarantees that a sub-map which
+        # cannot be shown redundant is never deleted.
+        nested = _BrokenNested({"a": FakeShadowAttribute("1", AC_STAMP_OLD)}, broken="a")
+        kept = diagnostics._attribute_values({"parameters": nested})
+        self.assertIs(nested, kept["parameters"])
+
+    def test_an_appliance_with_no_nested_map_is_untouched(self):
+        _, blocks = _entry_diag()
+        self.assertEqual(6, blocks["AC"]["coverage"]["attributes_total"])
+        self.assertEqual(22.5, blocks["AC"]["attributes"]["tempIndoor"])
+
+
 if __name__ == "__main__":
     unittest.main()

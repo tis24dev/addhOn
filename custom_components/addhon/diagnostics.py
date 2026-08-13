@@ -1438,6 +1438,82 @@ def _attribute_timestamps(
     return dict(sorted(rows.items())), truncated, newest
 
 
+def _attribute_values(attributes: Mapping) -> Mapping:
+    """The attribute mapping the block uses, minus the sub-map that repeats it.
+
+    `attributes["parameters"]` is the device shadow's own container, and
+    `hon_client._get_attributes` flattens it over the top level one line after
+    merging it (`hon_client.py:187-191`), so every one of its keys is normally
+    ALSO a bare key pointing at the very same object. Measured on
+    diagnostics/live-2026-06-22/, across all four appliances and all 243
+    parameters (REF 16, AC 74, TD 41, WM 112): zero mismatches. The nested map
+    is a verbatim second copy, and it costs 7624 bytes and 251 lines of the
+    entry dump at the indent=2 Home Assistant serves.
+
+    The one thing it carried that the bare keys did not is WHICH keys are shadow
+    parameters -- and `attributes_last_update` beside it now carries exactly
+    that set, with the instant as well. Dropping it is therefore not a loss of
+    information, which is the only reason it is dropped at all.
+
+    The result replaces `attributes` for the WHOLE block, not just for the
+    emitted echo, and that is not a convenience. `_coverage` classifies
+    `parameters` as an envelope blob and lists it in
+    ``attributes_unmapped_meta`` -- it does so on all four live appliances --
+    so deduplicating only the copy the reader sees would ship a document whose
+    coverage section names a key the section beside it no longer prints. Two
+    parts of one dump contradicting each other is the failure this dump exists
+    to expose, not to commit.
+
+    It is dropped ONLY when it is provably redundant, and never merely because
+    it is present. The check is identity (`is`), not equality, for two reasons:
+    equality on a cloud object calls an `__eq__` this module does not control
+    and cannot afford to have raise, and identity is what the merge above
+    actually establishes. The lookup uses the module sentinel rather than
+    `.get(name)`, because `.get` answers None both for "absent" and for
+    "present and None", and a nested value of None would otherwise read as
+    redundant against a bare key that is not there at all. An EMPTY sub-map is
+    kept for the same conservatism: `all([])` is True, and "the shadow
+    container was empty" is a different statement from "there is no shadow
+    container". When even one nested key is missing from the top level the whole
+    sub-map is kept, because that is the signature of the degraded path at
+    `hon_client.py:192-196` -- a `parameters` Mapping whose `dict()` coercion
+    raised, leaving NOTHING flattened and this sub-map as the only carrier of
+    both the values and their instants. Deleting it there would delete the only
+    copy of the data.
+    """
+    try:
+        nested = attributes.get("parameters")
+    except Exception:  # pragma: no cover - a Mapping that refuses one key
+        return attributes
+    if not isinstance(nested, Mapping):
+        return attributes
+    try:
+        redundant = bool(nested) and all(
+            attributes.get(name, _NO_LAST_UPDATE) is value
+            for name, value in nested.items()
+        )
+    except Exception:  # pragma: no cover - a Mapping that cannot be walked
+        # The same object that made `dict(params)` raise upstream. If it cannot
+        # be compared it cannot be shown to be redundant, so it stays.
+        _LOGGER.debug(
+            "Diagnostics debug: nested parameters not comparable", exc_info=True
+        )
+        return attributes
+    if not redundant:
+        return attributes
+    try:
+        return {
+            name: value for name, value in attributes.items() if name != "parameters"
+        }
+    except Exception:  # pragma: no cover - a Mapping that cannot be copied
+        # The last unguarded read of `attributes` in this helper. Losing the
+        # dedupe costs bytes; raising here costs the reporter the whole file.
+        _LOGGER.debug(
+            "Diagnostics debug: attributes not copyable", exc_info=True
+        )
+        return attributes
+
+
 def _appliance_block(
     appliance_id: str,
     data: Mapping,
@@ -1470,6 +1546,15 @@ def _appliance_block(
     # pass so that anything reporting freshness from it can never disagree with
     # the map the reader is looking at, even after the row cap has fired.
     stamps, stamps_truncated, newest_stamp = _attribute_timestamps(attributes)
+    # De-duplicated ONCE, above every consumer, and only after the instants have
+    # been read -- the sub-map is their fallback source on the degraded merge
+    # path, so dropping it first would throw away the very rows it exists to
+    # rescue. Skipped entirely when the row cap fired: the justification for
+    # deleting the sub-map is that `attributes_last_update` now carries the one
+    # bit it held (which keys are shadow parameters), and a truncated map does
+    # not carry it for the rows it dropped.
+    if not stamps_truncated:
+        attributes = _attribute_values(attributes)
     statistics = data.get("statistics")
     statistics = statistics if isinstance(statistics, Mapping) else {}
     # Normalised HERE and nowhere else. A caller may pass nothing, a naive
