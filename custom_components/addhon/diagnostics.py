@@ -62,7 +62,12 @@ from homeassistant.core import HomeAssistant
 from .const import (
     APPLIANCE_AC,
     APPLIANCE_AP,
+    APPLIANCE_FR,
+    APPLIANCE_FRE,
+    APPLIANCE_REF,
     APPLIANCE_WASH_GROUP,
+    APPLIANCE_WD,
+    APPLIANCE_WM,
     DOMAIN,
     PROGRAM_PARAM_NAMES,
 )
@@ -125,6 +130,125 @@ _CUSTOM_MAPPED_ATTRS: dict[str, frozenset[str]] = {
 # description table). AC only.
 _AC_CLIMATE_PARAMS = frozenset(
     {"onOffStatus", "machMode", "tempSel", "windSpeed", "windDirectionVertical"}
+)
+
+# The entities this integration builds with NO description table behind them.
+# `_mapped_sets` walks the per-type registries to learn which parameter each
+# entity speaks to; these classes are not in any registry, so without a row here
+# they would be the only entities in the inventory with nothing to say, and they
+# include the two most-asked-about controls on a washer (start and stop).
+#
+# THE RULE, and it is the same one the registry walk follows: a row names a
+# parameter only when a STATIC table in this repository names it. Where the code
+# discovers the name from the DEVICE's own schema at runtime, the row stays empty
+# and the section emits `null` -- which reads as "this entity exists and this dump
+# cannot say what it speaks to". That is an honest gap; a guess would be a finding
+# the reader can act on and be wrong about, which is worse than no finding.
+#
+# The two program selects are exactly that case. `HonProgramSelect` and
+# `HonRefProgramSelect` walk the appliance's OWN commands for whichever of
+# `PROGRAM_PARAM_NAMES` it happens to carry (select.py), so the answer is a
+# property of the device, not of this repository, and the same select is
+# `program` on one washer and `prCode` on the next. `button.start_program` is the
+# same shape seen from the other end: it sends a whole command and fixes no
+# parameter at all, so there is nothing to name. Its sibling `stop_program` DOES
+# fix one -- `command_parameters={"onOffStatus": "0"}` in button.py, applied to
+# the command's parameters before the send -- and that write appears in no other
+# section of the dump, which is precisely why it is worth a row.
+#
+# `climate.climate` is the row where the rule is least comfortable, and it is
+# followed anyway. All five writes are named because `_AC_CLIMATE_PARAMS` names
+# them; but an air conditioner whose `settings` command has no `onOffStatus`
+# drives power and mode through startProgram/stopProgram instead (see
+# `climate._is_program_based`), so on that model two of these five are written
+# somewhere other than where a reader would look first. Nothing is hidden to
+# paper over it: `commands` a few lines below says which command really carries
+# each parameter, and `coverage.command_params_expected_absent` says when the
+# device carries it nowhere. Going silent instead would cost every reader of
+# every other AC the remaining three names to spare one reader a second look.
+#
+# The write half is spelled out here as its own literal rather than reusing
+# `_AC_CLIMATE_PARAMS`, so that the drift test comparing the two compares two
+# independent statements instead of asserting a value against itself.
+_CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
+    {
+        "tag": "climate.climate",
+        "types": (APPLIANCE_AC,),
+        "read": (
+            "settings.onOffStatus",
+            "settings.machMode",
+            "settings.tempSel",
+            "tempIndoor",
+            "settings.windSpeed",
+            "settings.windDirectionVertical",
+        ),
+        "write": (
+            "onOffStatus",
+            "machMode",
+            "tempSel",
+            "windSpeed",
+            "windDirectionVertical",
+        ),
+    },
+    # Derived from TWO attributes, which is why it can never be a description row
+    # (those read a single attr_key) and why it is the entity most likely to be
+    # reported as "stuck on unknown": it needs both, and a washer publishing only
+    # one of them produces exactly that.
+    {
+        "tag": "sensor.mean_water_consumption",
+        "types": (APPLIANCE_WM, APPLIANCE_WD),
+        "read": ("totalWaterUsed", "totalWashCycle"),
+    },
+    # Reads machMode (3 = paused) but writes the `pause` parameter of the
+    # pauseProgram/resumeProgram commands -- the one row in this table whose two
+    # halves name different parameters, and a reader who assumed they matched
+    # would go looking for a writable machMode that does not exist.
+    {
+        "tag": "switch.pause",
+        "types": APPLIANCE_WASH_GROUP,
+        "read": ("machMode",),
+        "write": ("pause",),
+    },
+    {"tag": "button.start_program", "types": APPLIANCE_WASH_GROUP},
+    {
+        "tag": "button.stop_program",
+        "types": APPLIANCE_WASH_GROUP,
+        "write": ("onOffStatus",),
+    },
+    {"tag": "select.program", "types": APPLIANCE_WASH_GROUP},
+    {
+        "tag": "select.ref_program",
+        "types": (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE),
+    },
+    # The air purifier's three fixed-key entities. Their parameters are already in
+    # `AP_ENTITY_PARAMS` (which is why coverage sees them), but that frozenset says
+    # only THAT the integration uses them, never WHICH entity uses which.
+    #
+    # The fan READS `onOffStatus` (fan.py) and does not write it: power is a whole
+    # COMMAND action -- `ap_patch` returns startProgram with a machMode for
+    # turn_on and stopProgram with no values at all for turn_off -- and the
+    # dispatcher fills `onOffStatus` from the schema at its existing value. Naming
+    # it as a write would send a reader looking for a writable onOffStatus on the
+    # AP settings command that this integration never touches, which is the same
+    # misdirection `button.start_program` stays null to avoid.
+    {
+        "tag": "fan.purifier",
+        "types": (APPLIANCE_AP,),
+        "read": ("onOffStatus", "machMode"),
+        "write": ("machMode",),
+    },
+    {
+        "tag": "select.aroma",
+        "types": (APPLIANCE_AP,),
+        "read": ("aromaStatus",),
+        "write": ("aromaStatus",),
+    },
+    {
+        "tag": "select.panel_light",
+        "types": (APPLIANCE_AP,),
+        "read": ("lightStatus",),
+        "write": ("lightStatus",),
+    },
 )
 
 # Coverage noise: keys that are technically "unmapped" but are never mappable
@@ -350,43 +474,213 @@ def _command_schema(appliance) -> dict:
     return out
 
 
-def _mapped_sets(app_type) -> tuple[set[str], set[str]]:
-    """(mapped attribute keys, mapped writable command params) for a type.
+def _read_chain(key) -> list[str]:
+    """The attribute keys `base_entity._get_attr` really tries, in order.
+
+    A description names ONE key, and when that key carries the `settings.` prefix
+    the name is only the first thing the entity looks at: `_get_attr` tries the
+    key whole, then the statistics container, and then -- only for a key that
+    itself carries the prefix -- the BARE spelling underneath it. Emitting just
+    the dotted name would hide exactly the fallback chain this section exists to
+    reveal. A reader asking why the climate entity shows no temperature would
+    search the `attributes` map for `settings.tempSel`, find nothing, and never
+    learn that the entity would equally have accepted the bare `tempSel` printed
+    a few lines above it -- which is the same chain-hiding that made
+    `actualWeight` -> `weight` invisible until someone read sensor.py.
+
+    The statistics container is deliberately NOT listed as a third link.
+    `hon_client._get_attributes` merges it into `attributes` before this dump ever
+    sees either, so naming it would point the reader at a place that does not
+    appear in the document.
+    """
+    text = str(key)
+    prefix = "settings."
+    if text.startswith(prefix):
+        return [text, text[len(prefix):]]
+    return [text]
+
+
+def _source_row(read=(), write=()) -> dict[str, list[str]] | None:
+    """One `entities.sources` value: what an entity reads, what it writes.
+
+    An EMPTY half is omitted rather than emitted as `[]`, so a read-only sensor is
+    visibly read-only instead of carrying a `"write": []` the reader has to
+    interpret; and a row with NEITHER half is `null`, which is how this section
+    says "the entity exists and this dump cannot name its parameter" without
+    inventing one.
+
+    Order is preserved and duplicates dropped (`dict.fromkeys`, never `sorted`):
+    for a read chain the SEQUENCE is the information, because it is the order
+    `_get_attr` tries the keys in, and sorting it would turn a fallback chain into
+    an unordered set of equally-plausible names.
+    """
+    # A bare string is ONE name, not a sequence of characters. A row written
+    # `write="onOffStatus"` instead of `write=("onOffStatus",)` -- the missing
+    # trailing comma -- would otherwise be emitted as nine invented one-character
+    # parameter names under a real entity tag.
+    if isinstance(read, (str, bytes)):
+        read = (read,)
+    if isinstance(write, (str, bytes)):
+        write = (write,)
+    row: dict[str, list[str]] = {}
+    reads = [str(name) for name in read if name]
+    if reads:
+        row["read"] = list(dict.fromkeys(reads))
+    writes = [str(name) for name in write if name]
+    if writes:
+        row["write"] = list(dict.fromkeys(writes))
+    return row or None
+
+
+def _mapped_sets(
+    app_type,
+) -> tuple[set[str], set[str], dict[str, dict[str, list[str]] | None] | None]:
+    """(mapped attribute keys, mapped writable command params, entity sources).
 
     Registries are imported lazily so diagnostics.py keeps a tiny top-level import
     surface and cannot be caught in an import cycle; on any import hiccup it degrades
     to the documented custom set rather than crashing the dump.
+
+    The THIRD value is the static per-type index behind `entities.sources`: which
+    raw parameter each entity of this type reads and writes, keyed by the same
+    ``<domain>.<unique_id suffix>`` tag that ``by_domain``, ``disabled``,
+    ``hidden`` and ``not_created`` already speak, so the five views join on one
+    key. It is built HERE, in the same traversal that produces the two coverage
+    sets, rather than in a helper of its own, and that is a correctness
+    requirement rather than a tidiness one: a second lazy-import block with
+    DIFFERENT membership means a single broken platform module makes one dump
+    contradict itself. With `select` imported only by the sources half, a
+    `select.py` that fails to import would produce a dump whose `coverage`
+    confidently reports `tempSelZ3` as mapped while `entities.sources` is a lone
+    null claiming nothing could be looked at. One walk, one degradation decision,
+    and the two sections can never disagree about whether the tables were read.
+
+    The price of that is stated plainly: this block now imports `select` and
+    `program_options` as well, so a break in either degrades the COVERAGE axes
+    too, where before it could not. That is the intended trade -- a dump that
+    under-reports both axes is diagnosable, a dump whose two halves disagree is
+    not -- and it is why `_coverage` prints `registries_unavailable` on that
+    path: the sources half announces the degradation with a null, but there is
+    no sources half at all in a device dump or on an appliance with no registry
+    inventory, and a coverage section that under-reports in silence would be
+    read as fact.
+
+    A None third value (never an empty dict) is what the degraded path returns, so
+    that one unreadable registry costs the reader ONE null instead of a null per
+    entity, which would read as "every entity was looked up and none was found".
     """
     mapped_attrs: set[str] = set(_CUSTOM_MAPPED_ATTRS.get(app_type, ()))
     mapped_params: set[str] = set()
+    sources: dict[str, dict[str, list[str]] | None] = {}
     try:
         from .air_purifier import AP_ENTITY_PARAMS
         from .binary_sensor import BINARY_SENSORS, _CONNECTIVITY, _UNIVERSAL_GATED
-        from .number import NUMBERS
+        from .number import NUMBERS, _AP_TIMING_NUMBERS, _PROGRAM_OPTION_NUMBERS
+        from .program_options import STARTPROGRAM_COMMAND
+        from .select import _AC_DIRECTION_SELECTS, _PROGRAM_OPTION_SELECTS
         from .sensor import SENSORS
-        from .switch import _SETTINGS_SWITCHES
+        from .switch import (
+            _AIR_PURIFIER_SWITCHES,
+            _PROGRAM_OPTION_SWITCHES,
+            _SETTINGS_SWITCHES,
+        )
     except Exception:  # pragma: no cover - diagnostics must never crash
         _LOGGER.debug(
             "Diagnostics debug: coverage registries unavailable", exc_info=True
         )
-        return mapped_attrs, mapped_params
+        return mapped_attrs, mapped_params, None
 
+    # ONE pass per table: the coverage sets get the DECLARED names (unchanged --
+    # `mapped_attrs` is the attribute axis' numerator and moving it would silently
+    # restate every published coverage figure), while the source rows get the
+    # declared name EXPANDED through `_read_chain`, which is the reader-facing
+    # question and a different one.
     for desc in SENSORS.get(app_type, ()):
-        mapped_attrs.add(desc.attr_key)
-        mapped_attrs.update(getattr(desc, "attr_fallbacks", ()) or ())
+        declared = [desc.attr_key, *(getattr(desc, "attr_fallbacks", ()) or ())]
+        mapped_attrs.update(declared)
+        sources[f"sensor.{desc.key}"] = _source_row(
+            read=[key for name in declared for key in _read_chain(name)]
+        )
     for desc in BINARY_SENSORS.get(app_type, ()):
         mapped_attrs.add(desc.attr_key)
+        sources[f"binary_sensor.{desc.key}"] = _source_row(
+            read=_read_chain(desc.attr_key)
+        )
     mapped_attrs.add(_CONNECTIVITY.attr_key)
+    sources[f"binary_sensor.{_CONNECTIVITY.key}"] = _source_row(
+        read=_read_chain(_CONNECTIVITY.attr_key)
+    )
     for desc in _UNIVERSAL_GATED:
         mapped_attrs.add(desc.attr_key)
+        sources[f"binary_sensor.{desc.key}"] = _source_row(
+            read=_read_chain(desc.attr_key)
+        )
 
     for desc in NUMBERS.get(app_type, ()):
         mapped_params.add(desc.param)
+        sources[f"number.{desc.key}"] = _source_row(
+            read=_read_chain(desc.param), write=[desc.param]
+        )
     # Settings-command switches (AC toggles + wine-cooler light) map their write param.
     for desc in _SETTINGS_SWITCHES.get(app_type, ()):
         mapped_params.add(desc.param)
+        sources[f"switch.{desc.key}"] = _source_row(
+            read=_read_chain(desc.param), write=[desc.param]
+        )
+    # A program option is BUFFERED, not sent: it is written to the pending store
+    # and applied to `startProgram` when the start button fires. That is why its
+    # read chain has a second link nothing else in this walk has -- the option is
+    # read bare first and then under `startProgram.<param>`, because unlike
+    # `settings` the startProgram command is not mirrored into the device shadow
+    # (`program_options.HonProgramOptionEntity._current_raw`). These params are
+    # deliberately NOT added to `mapped_params`: they live on startProgram, which
+    # `_settings_param_names` never reads, so adding them would put names in the
+    # coverage numerator that its denominator can never contain.
+    for prefix, table in (
+        ("number.opt_", _PROGRAM_OPTION_NUMBERS),
+        ("select.opt_", _PROGRAM_OPTION_SELECTS),
+        ("switch.opt_", _PROGRAM_OPTION_SWITCHES),
+    ):
+        for desc in table:
+            if app_type not in (getattr(desc, "types", None) or ()):
+                continue
+            # BOTH numerators, not just `sources`. The stated reason for leaving
+            # them out -- "they live on startProgram, which `_settings_param_names`
+            # never reads" -- is false on the live TD, whose `settings` command
+            # carries `tumblingStatus`, and does not apply at all on the attribute
+            # axis, where the option IS a bare shadow key (live TD:
+            # `antiCreaseTime`, `sterilizationStatus`). Leaving them out ships one
+            # block whose `coverage` calls a name unmapped while `entities.sources`
+            # twenty lines below names the switch that reads and writes it -- the
+            # exact failure the `_AC_DIRECTION_SELECTS` correction exists to avoid.
+            mapped_attrs.add(desc.param)
+            mapped_params.add(desc.param)
+            sources[f"{prefix}{desc.key}"] = _source_row(
+                read=[desc.param, f"{STARTPROGRAM_COMMAND}.{desc.param}"],
+                write=[desc.param],
+            )
     if app_type == APPLIANCE_AC:
         mapped_params |= _AC_CLIMATE_PARAMS
+        # The manual louver selects. `desc.attr` is the DOTTED read path and
+        # `desc.param` the settings parameter written, and they differ, which is
+        # the whole reason this section is worth its bytes.
+        #
+        # `mapped_params.add` is here and not only in `sources`, and it is a
+        # deliberate correction rather than an oversight repeated. Before this
+        # section existed, `windDirectionHorizontal` sat in
+        # `command_params_unmapped` -- "the device has it and no addhon entity
+        # maps it" -- and nothing in the dump disproved it. `sources` now names
+        # `select.fan_direction_horizontal` as its writer ten lines below, so
+        # leaving the coverage line alone would ship one block making two
+        # statements the reader can see contradict each other, on the list this
+        # module calls the gold signal. Nothing published moves:
+        # `command_params_total` is `len(settings_params) - len(params_meta)`,
+        # which never reads `mapped_params`, and this name is not a meta param.
+        for desc in _AC_DIRECTION_SELECTS:
+            mapped_params.add(desc.param)
+            sources[f"select.{desc.key}"] = _source_row(
+                read=_read_chain(desc.attr), write=[desc.param]
+            )
     if app_type in APPLIANCE_WASH_GROUP:
         mapped_params.update(PROGRAM_PARAM_NAMES)
     if app_type == APPLIANCE_AP:
@@ -396,7 +690,37 @@ def _mapped_sets(app_type) -> tuple[set[str], set[str]]:
         # written as a command field, hence both axes.
         mapped_attrs |= AP_ENTITY_PARAMS
         mapped_params |= AP_ENTITY_PARAMS
-    return mapped_attrs, mapped_params
+        for prefix, table in (
+            ("number.", _AP_TIMING_NUMBERS),
+            ("switch.", _AIR_PURIFIER_SWITCHES),
+        ):
+            for desc in table:
+                sources[f"{prefix}{desc.key}"] = _source_row(
+                    read=_read_chain(desc.param), write=[desc.param]
+                )
+
+    # Last, the entities no registry knows about. Guarded field by field even
+    # though the table three hundred lines above is a literal in this same file:
+    # this loop is OUTSIDE the try above, and `_appliance_block` is called with no
+    # try/except around it from either entry point, so one malformed row added
+    # later -- a missing `types`, a tag with no dot -- would not cost a section, it
+    # would cost the reporter the entire dump.
+    for entry in _CUSTOM_ENTITY_SOURCES:
+        tag = str(entry.get("tag") or "")
+        domain, _dot, suffix = tag.partition(".")
+        if not domain or not suffix:
+            continue
+        if app_type not in (entry.get("types") or ()):
+            continue
+        sources[tag] = _source_row(
+            read=[
+                key
+                for name in (entry.get("read") or ())
+                for key in _read_chain(name)
+            ],
+            write=entry.get("write") or (),
+        )
+    return mapped_attrs, mapped_params, sources
 
 
 def _settings_param_names(appliance) -> set[str]:
@@ -473,7 +797,9 @@ def _command_param_names(appliance) -> set[str]:
     return names
 
 
-def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> dict:
+def _coverage(
+    app_type, attributes: Mapping, statistics: Mapping, appliance, mapped=None
+) -> dict:
     """What the device exposes with no addhon entity (the gold signal).
 
     Attribute axis: only BARE keys (no dot) are considered; dotted ``settings.*``
@@ -498,7 +824,9 @@ def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> 
     publishes no ``tempZ4``. On the live REF dump this line prints thirteen
     names on the first download, and ``tempZ4`` is one of them.
     """
-    mapped_attrs, mapped_params = _mapped_sets(app_type)
+    mapped_attrs, mapped_params, sources_index = (
+        mapped if mapped is not None else _mapped_sets(app_type)
+    )
     settings_params = _settings_param_names(appliance)
     # A SECOND, wider universe, used only by the expected-absent mirror below:
     # every parameter of every command, not just the settings ones. The two are
@@ -510,10 +838,21 @@ def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> 
     # to the command-param axis, not the attribute axis, so subtract every writable
     # settings-param name as well - otherwise controlled setpoints (number/climate/AC
     # switch) would be falsely listed as unmapped read-only attributes.
-    bare = {k for k in attributes if isinstance(k, str) and "." not in k}
+    published = {k for k in attributes if isinstance(k, str)}
+    bare = {k for k in published if "." not in k}
     # Read-only telemetry is the attribute axis: writable param mirrors live on the
     # command-param axis, so exclude them from BOTH the unmapped list and the total
     # (otherwise `total` overstates this axis' denominator).
+    # A mapped name is ABSENT only when no spelling its OWN read chain reaches is
+    # published. A buffered program option is read bare and then under
+    # `startProgram.<name>`, and the live TD publishes `tumblingStatus` only
+    # there; a single-link chain (`sensor.delay_time` -> `delayTime`) keeps the
+    # strict bare test, because that entity really cannot see a dotted spelling.
+    reachable = set(bare)
+    for _row in (sources_index or {}).values():
+        _chain = (_row or {}).get("read") or ()
+        if len(_chain) > 1 and any(link in published for link in _chain[1:]):
+            reachable.add(_chain[0])
     read_only_bare = bare - settings_params
     unmapped = read_only_bare - mapped_attrs
     stats_keys = set(statistics) if isinstance(statistics, Mapping) else set()
@@ -579,8 +918,19 @@ def _coverage(app_type, attributes: Mapping, statistics: Mapping, appliance) -> 
         # schema KNOWS the name at all, so a mapped param the entity writes
         # through settings while the device declares it only under
         # `startProgram` is reported by neither.
-        "attributes_expected_absent": sorted(mapped_attrs - bare),
+        "attributes_expected_absent": sorted(mapped_attrs - reachable),
         "command_params_expected_absent": sorted(mapped_params - command_params),
+        # Emitted ONLY when the lazy import above failed, because every number
+        # in this dict is then measured against tables that could not be read:
+        # the two unmapped lists swell to the whole device and both
+        # expected_absent lists collapse to empty, which reads as "this
+        # integration maps nothing on your appliance". `entities.sources`
+        # carries the same null -- but that section is absent entirely whenever
+        # there is no registry inventory for this appliance (the device dump, or
+        # a registry that could not be read), and a reader cannot tell that null
+        # apart from "there was nothing to decorate". A coverage section that
+        # under-reports in silence is the one thing this dump may not do.
+        **({"registries_unavailable": True} if sources_index is None else {}),
     }
 
 
@@ -897,8 +1247,14 @@ def _appliance_block(
 
     commands = _command_schema(appliance)
     model_attributes = _model_attributes(appliance)
-    coverage = _coverage(app_type, attributes, statistics, appliance)
+    # ONE walk of the per-type tables, ONE lazy-import decision, shared by both
+    # consumers -- which is what the `_mapped_sets` docstring claims and what
+    # makes `coverage.registries_unavailable` and `entities.sources` structurally
+    # incapable of disagreeing.
+    mapped = _mapped_sets(app_type)
+    coverage = _coverage(app_type, attributes, statistics, appliance, mapped)
     future = _future_capabilities(app_type, attributes, appliance)
+    entity_section = _entity_section(entities, app_type, mapped)
 
     _LOGGER.debug(
         "Diagnostics debug: appliance id=%s name=%s type=%s attrs=%d model_attrs=%d "
@@ -928,10 +1284,76 @@ def _appliance_block(
         # Next to coverage on purpose: one says what the code could map for this
         # type, the other what Home Assistant actually holds. Reading them together
         # is the whole point, and a disagreement between them IS the finding.
-        "entities": dict(entities) if isinstance(entities, Mapping) else None,
+        "entities": entity_section,
         "future_capabilities": future,
     }
     return _redact(block)
+
+
+def _entity_section(entities: Mapping | None, app_type, mapped=None) -> dict | None:
+    """The registry inventory for one appliance, plus what each entity speaks to.
+
+    `by_domain` and its siblings answer WHICH entities Home Assistant holds.
+    `sources` answers the question that used to need the source tree: which raw
+    parameter each of them reads, and which one it writes. On issue #75 those are
+    two adjacent rows -- `sensor.temp_zone3` reads `tempZ3` while
+    `number.target_temp_zone4` writes `tempSelZ4` -- and reading them together is
+    what removes the round trip that otherwise costs the reporter another dump.
+
+    Appended LAST so that every key a reader already knows keeps its position; a
+    section that reshuffles between releases is a section people stop skimming.
+
+    THE PRIVACY ARGUMENT, stated precisely because the obvious version of it is
+    wrong. Registry rows ARE an input here: every key of `sources` is a tag built
+    in `_entity_inventory` from `_entity_row(row.unique_id, appliance_id)`, so
+    cloud-derived text reaches this map's KEYS. What makes that safe is not that
+    the registry is untouched, it is `_entity_row`'s prefix slice (the appliance
+    id is removed by construction, having already been proven a prefix) plus the
+    closed vocabulary of unique_id suffixes, every one of which is a constant
+    written in this repository. The VALUES are safe for a stronger reason: they
+    are copied out of the static per-type tables and never out of the device, so
+    no cloud string can reach them at all. Both halves are pinned by tests, and
+    the first is the one to re-check whenever a new entity class lands -- a class
+    that built its unique_id out of a device-supplied name would break it.
+
+    A non-Mapping inventory yields None, which is today's behaviour for "there was
+    nothing to decorate", unchanged. A section with no `by_domain` is returned as
+    a plain copy: that shape is the degraded `{"status": "unavailable"}` marker,
+    whose whole meaning is that the registry could not be read, and hanging a
+    `sources` key off it would claim a lookup that never happened. The test that
+    guards it asserts EXACT dict equality, on purpose.
+    """
+    if not isinstance(entities, Mapping):
+        return None
+    section = dict(entities)
+    by_domain = section.get("by_domain")
+    if not isinstance(by_domain, Mapping):
+        return section
+    _mapped_attrs, _mapped_params, index = (
+        mapped if mapped is not None else _mapped_sets(app_type)
+    )
+    if index is None:
+        # ONE null for the whole section, not one per entity. A map of nulls would
+        # read as "every entity was looked up and none of them is known", which is
+        # a finding; "this dump could not look" is the absence of one, and the
+        # sibling `_registry_entries` docstring spells out why the two must never
+        # be folded together.
+        section["sources"] = None
+        return section
+    sources: dict[str, dict[str, list[str]] | None] = {}
+    for domain, keys in by_domain.items():
+        if not isinstance(keys, (list, tuple)):
+            continue
+        for key in keys:
+            # `index.get` and not `index[...]`: a registry row left over from an
+            # older release names a suffix no current table knows, and that row
+            # must still appear here as an explicit null. Dropping it would make
+            # `sources` disagree with `by_domain` about how many entities exist,
+            # which is the one thing a join key must never do.
+            tag = f"{domain}.{key}"
+            sources[tag] = index.get(tag)
+    section["sources"] = sources
+    return section
 
 
 def _registry_entries(hass: HomeAssistant, entry: ConfigEntry) -> list | None:

@@ -557,7 +557,9 @@ class DiagnosticsCoverageTest(unittest.TestCase):
     def test_unmapped_writable_params(self):
         _, blocks = _entry_diag()
         self.assertIn("mysteryParam", blocks["AC"]["coverage"]["command_params_unmapped"])
-        self.assertIn("spinSpeed", blocks["WD"]["coverage"]["command_params_unmapped"])
+        # `spinSpeed` is NOT unmapped: `select.opt_spin_speed` writes it, and
+        # `entities.sources` names it. Pinning it here pinned the contradiction.
+        self.assertNotIn("spinSpeed", blocks["WD"]["coverage"]["command_params_unmapped"])
 
     def test_mapped_writable_params_not_reported(self):
         _, blocks = _entry_diag()
@@ -822,7 +824,7 @@ class WcSettingsSwitchCoverageTest(unittest.TestCase):
         })})
 
     def test_lightstatus_in_mapped_params(self):
-        _, mapped_params = diagnostics._mapped_sets("WC")
+        _, mapped_params, _sources = diagnostics._mapped_sets("WC")
         self.assertIn("lightStatus", mapped_params)
 
     def test_lightstatus_not_reported_unmapped(self):
@@ -2125,7 +2127,12 @@ class CoverageExpectedAbsentTest(unittest.TestCase):
             },
         )
         absent = block["coverage"]["command_params_expected_absent"]
-        self.assertEqual([], absent)
+        # The three names this test exists for. The list is no longer empty:
+        # the program options this WD maps and this fake appliance does not
+        # declare are genuinely absent, which is what the axis is for.
+        self.assertNotIn("program", absent)
+        self.assertNotIn("prCode", absent)
+        self.assertNotIn("spinSpeed", absent)
 
     def test_a_device_that_publishes_everything_it_maps_reports_nothing(self):
         # The empty case, derived rather than hand-listed so it cannot rot when a
@@ -2223,6 +2230,637 @@ class CoverageExpectedAbsentTest(unittest.TestCase):
             self.assertNotIn("AA:BB:CC:DD:EE:FF", encoded)
             for name in json.loads(encoded)["attributes_expected_absent"]:
                 self.assertRegex(name, r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+# --- step 2: the entity source map (issue #75) ------------------------------
+
+
+REF_ID = "ref-unique"
+
+# One registry row per entity the fridge fixture below produces, in the same
+# (unique_id, entity_id) shape as AP_ROWS so the existing `_rows()` idiom works
+# unchanged. The entity_ids carry a NICKNAME-derived object_id on purpose: the
+# identity test at the end of this section proves it never reaches the dump.
+REF_ROWS = (
+    (f"{REF_ID}_temp_zone3", "sensor.mario_fridge_temp_zone3"),
+    (f"{REF_ID}_target_temp_zone3", "number.mario_fridge_target_temp_zone3"),
+    (f"{REF_ID}_target_temp_zone4", "number.mario_fridge_target_temp_zone4"),
+    (f"{REF_ID}_ref_program", "select.mario_fridge_ref_program"),
+    (f"{REF_ID}_door_zone1", "binary_sensor.mario_fridge_door_zone1"),
+    (f"{REF_ID}_connectivity", "binary_sensor.mario_fridge_connectivity"),
+)
+
+
+def _build_ref_coordinator() -> FakeCoordinator:
+    """The issue-75 fridge: four zone setpoints declared, three zones reported.
+
+    Its `settings` command carries tempSelZ1/Z2/Z3/Z4 while the shadow publishes
+    tempZ1/Z2/Z3 only, which is the exact asymmetry the reporter spent two dumps
+    and a decompiler pass establishing by hand.
+
+    DO NOT REDEFINE THIS FUNCTION LOWER IN THE FILE. A second `def` of the same
+    name silently shadows this one at import time -- no error, no warning -- and
+    every assertion above it starts testing the other fixture. The deferred
+    zone-map work needs a variant whose tempSelZ3 is not writable; it must add a
+    KEYWORD-ONLY parameter here (`def _build_ref_coordinator(*, writable_z3: bool
+    = True)`) and branch inside, so there stays exactly one definition.
+    """
+    ref = FakeAppliance(
+        commands={
+            "settings": FakeCommand({
+                "tempSelZ1": FakeParam(value="4", typology="range", rng=(2, 8, 1)),
+                "tempSelZ2": FakeParam(
+                    value="-18", typology="enum", values=["-24", "-18"]
+                ),
+                "tempSelZ3": FakeParam(
+                    value="5", typology="enum", values=["0", "2", "5"]
+                ),
+                "tempSelZ4": FakeParam(
+                    value="5", typology="enum", values=["0", "2", "5"]
+                ),
+            }),
+            # A fridge program select resolves its parameter off THIS command at
+            # runtime, which is why `select.ref_program` has to read as null.
+            "startProgram": FakeCommand({
+                "program": FakeParam(value="1", typology="enum", values=["1", "2"]),
+            }),
+            "stopProgram": FakeCommand({
+                "onOffStatus": FakeParam(value="0", typology="fixed"),
+            }),
+        },
+        model_attributes={"zones": "fridge|freezer|vtRoom2", "doorNumber": 3},
+    )
+    return FakeCoordinator({
+        REF_ID: {
+            "appliance": ref,
+            "type": "REF",
+            "name": "Mario Fridge",
+            "model": "HTF-540",
+            "serial": "REF-PLAINTEXT-SERIAL",
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "attributes": {
+                "tempZ1": 4,
+                "tempZ2": -18,
+                "tempZ3": 5,
+                "doorStatusZ1": "0",
+                "available": True,
+                "tempSelZ1": "4",
+                "tempSelZ2": "-18",
+                "tempSelZ3": "5",
+            },
+            "statistics": {},
+        },
+    })
+
+
+_ABSENT = object()
+
+
+class _BrokenModules:
+    """Make `from .<name> import ...` fail the way a broken platform module does.
+
+    `sys.modules[name] = None` is what CPython itself leaves behind for a module
+    whose import failed, and it makes the next import raise rather than silently
+    re-running the module body. Restoring is done against a sentinel, not against
+    `sys.modules[name]`: a module the suite has never imported is ABSENT rather
+    than None, and putting a None back for it would break every later test.
+    """
+
+    def __init__(self, *names):
+        self._names = [f"custom_components.addhon.{name}" for name in names]
+        self._saved: dict = {}
+
+    def __enter__(self):
+        for name in self._names:
+            self._saved[name] = sys.modules.get(name, _ABSENT)
+            sys.modules[name] = None
+        return self
+
+    def __exit__(self, *exc_info):
+        for name, saved in self._saved.items():
+            if saved is _ABSENT:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = saved
+        return False
+
+
+def _ref_dump(rows=REF_ROWS, states=None, raises=False, entries=None):
+    """The fridge's `entities` section, built through the real registry path."""
+    if entries is None:
+        entries = [FakeRegistryEntry(uid, eid) for uid, eid in rows]
+    if states is None:
+        states = FakeStates(live=[row.entity_id for row in entries])
+    hass = RegistryHass(_build_ref_coordinator(), rows=entries, states=states)
+    _install_registry(hass, raises=raises)
+    result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+    return result, result["appliances"][0]["entities"]
+
+
+def _static_parameter_names() -> set[str]:
+    """Every parameter name the platform tables declare, harvested independently.
+
+    Built here by walking the tables directly instead of asking `_mapped_sets`,
+    so the drift assertions compare the emitted section against the tables and
+    not against the very walk that produced it.
+    """
+    from custom_components.addhon.air_purifier import AP_ENTITY_PARAMS
+    from custom_components.addhon.binary_sensor import (
+        BINARY_SENSORS,
+        _CONNECTIVITY,
+        _UNIVERSAL_GATED,
+    )
+    from custom_components.addhon.const import PROGRAM_PARAM_NAMES
+    from custom_components.addhon.number import (
+        NUMBERS,
+        _AP_TIMING_NUMBERS,
+        _PROGRAM_OPTION_NUMBERS,
+    )
+    from custom_components.addhon.select import (
+        _AC_DIRECTION_SELECTS,
+        _PROGRAM_OPTION_SELECTS,
+    )
+    from custom_components.addhon.sensor import SENSORS
+    from custom_components.addhon.switch import (
+        _AIR_PURIFIER_SWITCHES,
+        _PROGRAM_OPTION_SWITCHES,
+        _SETTINGS_SWITCHES,
+    )
+
+    names: set[str] = set(AP_ENTITY_PARAMS) | set(PROGRAM_PARAM_NAMES)
+    for registry in (SENSORS, BINARY_SENSORS):
+        for descriptions in registry.values():
+            for desc in descriptions:
+                names.add(desc.attr_key)
+                names.update(getattr(desc, "attr_fallbacks", ()) or ())
+    names.add(_CONNECTIVITY.attr_key)
+    for desc in _UNIVERSAL_GATED:
+        names.add(desc.attr_key)
+    for registry in (NUMBERS, _SETTINGS_SWITCHES):
+        for descriptions in registry.values():
+            for desc in descriptions:
+                names.add(desc.param)
+    for table in (
+        _AP_TIMING_NUMBERS,
+        _AIR_PURIFIER_SWITCHES,
+        _PROGRAM_OPTION_NUMBERS,
+        _PROGRAM_OPTION_SELECTS,
+        _PROGRAM_OPTION_SWITCHES,
+        _AC_DIRECTION_SELECTS,
+    ):
+        for desc in table:
+            names.add(desc.param)
+            attr = getattr(desc, "attr", None)
+            if attr:
+                names.add(attr)
+    # The two other STATIC tables in diagnostics.py that name parameters. They
+    # are harvested, and `_CUSTOM_ENTITY_SOURCES` deliberately is NOT: harvesting
+    # the hand-written table into the set that is supposed to police it makes the
+    # guard pass for anything anyone ever types into a custom row, which is the
+    # one half of this section a platform table cannot vouch for. Measured: with
+    # the harvest in place, planting an identity-shaped literal into a custom row
+    # left the whole suite green.
+    names |= set(diagnostics._AC_CLIMATE_PARAMS)
+    for mapped in diagnostics._CUSTOM_MAPPED_ATTRS.values():
+        names |= set(mapped)
+    # `pause` is the single custom-row name no other table in the repository
+    # carries (switch.pause writes the `pause` parameter of pauseProgram /
+    # resumeProgram, and no description table describes those commands). It is
+    # spelled out here so that adding a SECOND such name is a deliberate act
+    # recorded in this test rather than something the harvest absorbs silently.
+    names.add("pause")
+    return names
+
+
+class EntitySourceTest(unittest.TestCase):
+    """`entities.sources`: which raw parameter each registered entity speaks to."""
+
+    def tearDown(self) -> None:
+        _restore_registry()
+
+    def test_a_number_names_the_parameter_it_reads_and_writes(self) -> None:
+        _result, entities = _ref_dump()
+        self.assertEqual(
+            {"read": ["tempSelZ3"], "write": ["tempSelZ3"]},
+            entities["sources"]["number.target_temp_zone3"],
+        )
+
+    def test_a_sensor_is_visibly_read_only(self) -> None:
+        # The empty half is OMITTED, not emitted as []: a reader must be able to
+        # tell "this control cannot be written" from "this dump did not look".
+        _result, entities = _ref_dump()
+        row = entities["sources"]["sensor.temp_zone3"]
+        self.assertEqual({"read": ["tempZ3"]}, row)
+        self.assertNotIn("write", row)
+
+    def test_the_two_rows_that_answer_issue_75_sit_side_by_side(self) -> None:
+        # THE point of the whole section. Establishing that `sensor.temp_zone3`
+        # reads `tempZ3` while `number.target_temp_zone4` writes `tempSelZ4` cost
+        # the original reporter a round trip through sensor.py and number.py.
+        _result, entities = _ref_dump()
+        sources = entities["sources"]
+        self.assertEqual(["tempZ3"], sources["sensor.temp_zone3"]["read"])
+        self.assertEqual(
+            ["tempSelZ4"], sources["number.target_temp_zone4"]["write"]
+        )
+
+    def test_a_runtime_resolved_parameter_is_null_and_not_guessed(self) -> None:
+        # The fridge program select picks whichever of PROGRAM_PARAM_NAMES the
+        # DEVICE happens to carry, so no static table can name it. The key is
+        # present and the value is null: "this entity exists, and this dump
+        # cannot say what it writes" -- which is a different claim from silence.
+        _result, entities = _ref_dump()
+        self.assertIn("select.ref_program", entities["sources"])
+        self.assertIsNone(entities["sources"]["select.ref_program"])
+
+    def test_every_registered_entity_gets_exactly_one_row(self) -> None:
+        # The join contract: `sources` and `by_domain` describe the same set of
+        # entities, or the tag stops being usable as a key between the two.
+        _result, entities = _ref_dump()
+        tagged = {
+            f"{domain}.{key}"
+            for domain, keys in entities["by_domain"].items()
+            for key in keys
+        }
+        self.assertEqual(tagged, set(entities["sources"]))
+        self.assertEqual(len(REF_ROWS), len(entities["sources"]))
+
+    def test_sources_is_appended_after_the_existing_views(self) -> None:
+        # Position is a contract of its own: a section that reshuffles its keys
+        # between releases is one people stop skimming.
+        _result, entities = _ref_dump()
+        self.assertEqual("sources", list(entities)[-1])
+        self.assertEqual("status", list(entities)[0])
+
+    def test_a_disabled_entity_still_names_its_parameter(self) -> None:
+        # A disabled entity is the single most common reason a control is
+        # missing, and it is exactly the case where the reader wants to know
+        # which parameter they would get back by re-enabling it.
+        entries = [FakeRegistryEntry(uid, eid) for uid, eid in REF_ROWS]
+        entries[1].disabled_by = "user"
+        _result, entities = _ref_dump(entries=entries)
+        self.assertEqual(
+            {"number.target_temp_zone3": "user"}, entities["disabled"]
+        )
+        self.assertEqual(
+            {"read": ["tempSelZ3"], "write": ["tempSelZ3"]},
+            entities["sources"]["number.target_temp_zone3"],
+        )
+
+    def test_a_row_from_an_older_release_reads_as_null_not_as_absent(self) -> None:
+        # A registry row whose suffix no current table knows must still appear.
+        # Dropping it would make `sources` and `by_domain` disagree about how
+        # many entities exist, which is the one thing a join key may not do.
+        rows = REF_ROWS + ((f"{REF_ID}_retired_thing", "sensor.mario_fridge_x"),)
+        _result, entities = _ref_dump(rows=rows)
+        self.assertIn("sensor.retired_thing", entities["sources"])
+        self.assertIsNone(entities["sources"]["sensor.retired_thing"])
+
+    def test_the_index_is_per_type_and_never_offers_another_type_s_row(self) -> None:
+        # Asserted against the INDEX, not against a fridge dump: `sources` is a
+        # projection of `by_domain`, so a dump with no climate row could not show
+        # `climate.climate` however broken the index was, and the assertion would
+        # pass for the wrong reason.
+        ref_index = diagnostics._mapped_sets("REF")[2]
+        self.assertNotIn("climate.climate", ref_index)
+        self.assertNotIn("switch.pause", ref_index)
+        self.assertIn("climate.climate", diagnostics._mapped_sets("AC")[2])
+        self.assertIn("switch.pause", diagnostics._mapped_sets("WD")[2])
+
+    def test_a_stop_button_names_the_parameter_it_writes(self) -> None:
+        # `button.stop_program` fixes onOffStatus="0" on the command it sends,
+        # and that write appears in NO other section of the dump. Its sibling
+        # fixes nothing, so it stays null rather than being given the same row.
+        index = diagnostics._mapped_sets("WD")[2]
+        self.assertEqual({"write": ["onOffStatus"]}, index["button.stop_program"])
+        self.assertIsNone(index["button.start_program"])
+
+    def test_the_purifier_fan_reads_power_without_claiming_to_write_it(self) -> None:
+        # Power is a whole-COMMAND action on the AP (startProgram / stopProgram,
+        # the latter with no values at all), so the fan chooses a value for
+        # machMode and never for onOffStatus. Naming it as a write would send a
+        # reader looking for a writable onOffStatus this integration never sets.
+        index = diagnostics._mapped_sets("AP")[2]
+        self.assertEqual(
+            {"read": ["onOffStatus", "machMode"], "write": ["machMode"]},
+            index["fan.purifier"],
+        )
+
+    def test_a_dotted_read_names_its_bare_fallback(self) -> None:
+        # `_get_attr` tries the dotted key and then the bare one, so emitting
+        # only the dotted spelling would hide the chain and send a reader looking
+        # for a key that is not in `attributes` while the bare one is.
+        index = diagnostics._mapped_sets("AC")[2]
+        self.assertEqual(
+            ["settings.windDirectionVertical", "windDirectionVertical"],
+            index["select.fan_direction_vertical"]["read"],
+        )
+        self.assertEqual(
+            ["windDirectionVertical"],
+            index["select.fan_direction_vertical"]["write"],
+        )
+        climate_reads = index["climate.climate"]["read"]
+        for dotted in ("settings.tempSel", "settings.machMode"):
+            bare = dotted.removeprefix("settings.")
+            self.assertIn(dotted, climate_reads)
+            self.assertEqual(
+                climate_reads.index(dotted) + 1, climate_reads.index(bare)
+            )
+
+    def test_a_louver_select_is_also_counted_as_mapped_coverage(self) -> None:
+        # The two sections must not contradict each other. Before this section
+        # existed `windDirectionHorizontal` sat in `command_params_unmapped`
+        # while nothing disproved it; now `sources` names its writer, so the
+        # coverage numerator has to agree.
+        mapped_attrs, mapped_params, index = diagnostics._mapped_sets("AC")
+        self.assertIn("windDirectionHorizontal", mapped_params)
+        self.assertEqual(
+            ["windDirectionHorizontal"],
+            index["select.fan_direction_horizontal"]["write"],
+        )
+
+    def test_a_sensor_fallback_chain_keeps_its_order(self) -> None:
+        # `actualWeight` then `weight`: the ORDER is the information, because it
+        # is the order the entity tries them in. Sorting it would turn a chain
+        # into an unordered set of equally-plausible names.
+        index = diagnostics._mapped_sets("WD")[2]
+        self.assertEqual(
+            ["actualWeight", "weight"], index["sensor.estimated_weight"]["read"]
+        )
+
+    def test_a_program_option_names_both_places_it_is_read_from(self) -> None:
+        # A buffered option is read bare and then under startProgram, because
+        # that command is not mirrored into the shadow the way `settings` is.
+        index = diagnostics._mapped_sets("WD")[2]
+        self.assertEqual(
+            {
+                "read": ["prewash", "startProgram.prewash"],
+                "write": ["prewash"],
+            },
+            index["switch.opt_prewash"],
+        )
+
+    def test_a_derived_sensor_names_both_attributes_it_needs(self) -> None:
+        # The entity most likely to be reported as stuck on unknown: it needs two
+        # keys, and a washer publishing one of them produces exactly that.
+        index = diagnostics._mapped_sets("WD")[2]
+        self.assertEqual(
+            {"read": ["totalWaterUsed", "totalWashCycle"]},
+            index["sensor.mean_water_consumption"],
+        )
+
+    def test_the_pause_switch_reads_and_writes_different_names(self) -> None:
+        # The one row whose halves disagree: it reads machMode but writes the
+        # `pause` parameter of pauseProgram/resumeProgram. A reader assuming the
+        # halves match would go looking for a writable machMode that is not there.
+        index = diagnostics._mapped_sets("WD")[2]
+        self.assertEqual(
+            {"read": ["machMode"], "write": ["pause"]}, index["switch.pause"]
+        )
+
+    def test_the_degraded_section_gains_nothing(self) -> None:
+        # An unreadable registry yields the marker and NOTHING else. Hanging a
+        # `sources` key off it would claim a lookup that never happened.
+        result, degraded = _ref_dump(raises=True)
+        self.assertEqual({"status": "unavailable"}, degraded)
+        self.assertEqual({"status": "unavailable"}, result["platforms"])
+
+    def test_unreadable_registries_give_ONE_null_not_a_null_per_entity(self) -> None:
+        # The lazy import is what fails here, not the entity registry: the
+        # section knows WHICH entities exist and cannot say what any of them
+        # speaks to. A map of nulls would read as "all six were looked up and
+        # none is known", which is a finding; one null is the absence of one.
+        with _BrokenModules("select"):
+            _result, entities = _ref_dump()
+        self.assertIsNone(entities["sources"])
+        self.assertEqual(6, sum(len(v) for v in entities["by_domain"].values()))
+
+    def test_the_two_sections_share_one_degradation_decision(self) -> None:
+        # Correction 6 made real. With the walk folded into `_mapped_sets`, a
+        # broken platform module degrades coverage AND sources together; two
+        # independent import blocks would let one dump report `tempSelZ3` as
+        # confidently mapped while the other half claimed nothing was readable.
+        with _BrokenModules("select"):
+            result, entities = _ref_dump()
+            mapped_attrs, mapped_params, index = diagnostics._mapped_sets("REF")
+        self.assertIsNone(index)
+        self.assertEqual(set(), mapped_params)
+        self.assertEqual(set(), mapped_attrs)
+        # ... and the dump SAYS SO in both halves, which is the actual claim.
+        self.assertIsNone(entities["sources"])
+        coverage = result["appliances"][0]["coverage"]
+        self.assertTrue(coverage["registries_unavailable"])
+        # Positive control: the same calls with the module intact are populated
+        # and carry no marker, so the assertions above cannot pass for the wrong
+        # reason.
+        mapped_attrs, mapped_params, index = diagnostics._mapped_sets("REF")
+        self.assertIsNotNone(index)
+        self.assertIn("tempSelZ3", mapped_params)
+        _result, healthy = _ref_dump()
+        self.assertNotIn(
+            "registries_unavailable", _result["appliances"][0]["coverage"]
+        )
+        self.assertIsNotNone(healthy["sources"])
+
+    def test_a_device_dump_says_when_the_registries_were_unreadable(self) -> None:
+        # The case `entities.sources` structurally cannot cover: there is no
+        # inventory to decorate, so the coverage marker is the only thing in the
+        # document that stops the reader believing the integration maps nothing.
+        with _BrokenModules("select"):
+            block = diagnostics._appliance_block(
+                "id1",
+                {
+                    "appliance": None,
+                    "type": "REF",
+                    "attributes": {"tempZ1": 4},
+                    "statistics": {},
+                },
+            )
+        self.assertIsNone(block["entities"])
+        self.assertTrue(block["coverage"]["registries_unavailable"])
+        self.assertEqual(["tempZ1"], block["coverage"]["attributes_unmapped"])
+
+    def test_a_foreign_inventory_shape_degrades_instead_of_raising(self) -> None:
+        # `_appliance_block` is called with no try/except around it from either
+        # entry point, so every one of these must return rather than raise.
+        self.assertIsNone(diagnostics._entity_section(None, "REF"))
+        self.assertIsNone(diagnostics._entity_section("nonsense", "REF"))
+        self.assertEqual(
+            {"status": "unavailable"},
+            diagnostics._entity_section({"status": "unavailable"}, "REF"),
+        )
+        self.assertEqual(
+            {"status": "ok", "by_domain": "not-a-map"},
+            diagnostics._entity_section(
+                {"status": "ok", "by_domain": "not-a-map"}, "REF"
+            ),
+        )
+        section = diagnostics._entity_section(
+            {"status": "ok", "by_domain": {"sensor": "not-a-list"}}, "REF"
+        )
+        self.assertEqual({}, section["sources"])
+        # An appliance whose type is missing or junk still produces a section:
+        # every tag resolves to null rather than raising on a table lookup.
+        junk = diagnostics._entity_section(
+            {"status": "ok", "by_domain": {"sensor": ["temp_zone3"]}}, None
+        )
+        self.assertEqual({"sensor.temp_zone3": None}, junk["sources"])
+
+    def test_the_caller_s_inventory_is_not_mutated(self) -> None:
+        # It is a copy, like the `dict(entities)` it replaces: the inventory is
+        # built once for the whole dump and shared with the entry-level view.
+        inventory = {"status": "ok", "by_domain": {"sensor": ["temp_zone3"]}}
+        section = diagnostics._entity_section(inventory, "REF")
+        self.assertIn("sources", section)
+        self.assertNotIn("sources", inventory)
+
+
+class EntitySourceDriftGuardTest(unittest.TestCase):
+    """Nothing the cloud chose may reach this section, in either half."""
+
+    def tearDown(self) -> None:
+        _restore_registry()
+
+    def test_every_emitted_name_is_a_static_table_field(self) -> None:
+        # The value axis has NO redactor behind it: `read`/`write` are not in
+        # `_TO_REDACT`, and `_MAC_RE` only catches MAC shapes. What makes the
+        # section safe is that every name is copied out of a table in this
+        # repository, so this asserts exactly that, over every type -- and the
+        # allowed set is harvested from the PLATFORM tables, never from
+        # `_CUSTOM_ENTITY_SOURCES`, so a name typed into a custom row has to be
+        # justified by some other table or by the one-word allowlist.
+        allowed = _static_parameter_names()
+        self.assertIn("tempSelZ3", allowed)  # not vacuous
+        seen = 0
+        for app_type in ("REF", "AC", "WD", "AP", "WC", "OV", "HO", "TD", "WM"):
+            index = diagnostics._mapped_sets(app_type)[2]
+            self.assertIsNotNone(index)
+            for tag, row in index.items():
+                for name in (row or {}).get("read", []) + (row or {}).get("write", []):
+                    seen += 1
+                    bare = name
+                    for prefix in ("settings.", "startProgram."):
+                        if name.startswith(prefix):
+                            bare = name[len(prefix):]
+                    self.assertTrue(
+                        name in allowed or bare in allowed,
+                        f"{app_type} {tag}: {name} is in no static table",
+                    )
+        self.assertGreater(seen, 200, "the sweep found almost nothing to check")
+
+    def test_every_emitted_name_matches_the_closed_shape(self) -> None:
+        # A second, cheaper net under the first: whatever a future edit starts
+        # emitting must at least look like a parameter identifier and not like a
+        # value, a serial or a sentence. A LEADING DIGIT is allowed on purpose --
+        # the air conditioner really does carry `10degreeHeatingStatus` -- so the
+        # pattern is deliberately one character wider than it looks.
+        name_re = r"^[A-Za-z0-9][A-Za-z0-9_]*(\.[A-Za-z0-9][A-Za-z0-9_]*)?$"
+        tag_re = r"^[a-z_]+\.[A-Za-z0-9_]+$"
+        for app_type in ("REF", "AC", "WD", "AP"):
+            for tag, row in diagnostics._mapped_sets(app_type)[2].items():
+                self.assertRegex(tag, tag_re)
+                for name in (row or {}).get("read", []) + (row or {}).get("write", []):
+                    self.assertRegex(name, name_re)
+
+    def test_the_climate_write_half_is_the_coverage_list(self) -> None:
+        # Two INDEPENDENT statements of the same fact: `_AC_CLIMATE_PARAMS` is
+        # what coverage counts as mapped, and the literal in
+        # `_CUSTOM_ENTITY_SOURCES` is what the dump tells the reader the climate
+        # entity writes. They are written out separately on purpose, so that this
+        # comparison is a drift guard rather than a value asserted against itself.
+        row = next(
+            entry
+            for entry in diagnostics._CUSTOM_ENTITY_SOURCES
+            if entry["tag"] == "climate.climate"
+        )
+        self.assertEqual(
+            sorted(diagnostics._AC_CLIMATE_PARAMS), sorted(row["write"])
+        )
+
+    def test_sources_carry_no_identity(self) -> None:
+        # Anti-vacuity FIRST: a leak scan over an empty or absent section passes
+        # for the wrong reason, and that is how this exact test class has failed
+        # to catch things elsewhere.
+        result, entities = _ref_dump()
+        sources = entities["sources"]
+        self.assertIsNotNone(sources)
+        self.assertTrue(any(sources.values()))
+        encoded = json.dumps(sources)
+        self.assertNotIn(REF_ID, encoded)
+        self.assertNotIn("mario_fridge", encoded)
+        self.assertNotIn("REF-PLAINTEXT-SERIAL", encoded)
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", encoded)
+        # And the same over the WHOLE document, which is what the reporter
+        # actually attaches to the issue.
+        self.assertNotIn(REF_ID, json.dumps(result))
+        self.assertNotIn("REF-PLAINTEXT-SERIAL", json.dumps(result))
+
+    def test_no_device_value_can_reach_the_row(self) -> None:
+        # The section describes the SCHEMA, never the reading. A fridge whose
+        # shadow is full of identity-shaped junk must produce byte-identical
+        # rows to one whose shadow is empty.
+        coord = _build_ref_coordinator()
+        clean = diagnostics._appliance_block(REF_ID, coord.data[REF_ID], {
+            "status": "ok", "by_domain": {"sensor": ["temp_zone3"]},
+        })
+        poisoned_data = dict(coord.data[REF_ID])
+        poisoned_data["attributes"] = {
+            "tempZ3": "AA:BB:CC:DD:EE:FF",
+            "serialNumber": "REF-PLAINTEXT-SERIAL",
+        }
+        poisoned = diagnostics._appliance_block(REF_ID, poisoned_data, {
+            "status": "ok", "by_domain": {"sensor": ["temp_zone3"]},
+        })
+        self.assertEqual(clean["entities"], poisoned["entities"])
+        self.assertEqual(
+            {"read": ["tempZ3"]}, clean["entities"]["sources"]["sensor.temp_zone3"]
+        )
+
+    def test_a_custom_row_with_a_broken_tag_is_skipped_not_raised(self) -> None:
+        # The custom-table loop sits OUTSIDE the lazy-import try, and
+        # `_appliance_block` has no try/except around it from either entry point,
+        # so a malformed row added later would cost the whole dump rather than
+        # one section. Each guard is exercised on its own shape.
+        broken = (
+            {"tag": "no-dot-here", "types": ("REF",), "read": ("tempZ3",)},
+            {"tag": ".leading", "types": ("REF",), "read": ("tempZ3",)},
+            {"tag": "trailing.", "types": ("REF",), "read": ("tempZ3",)},
+            {"tag": "sensor.orphan"},
+            {"read": ("tempZ3",), "types": ("REF",)},
+            {"tag": "sensor.no_types", "read": ("tempZ3",)},
+            {"tag": "sensor.null_types", "types": None, "read": ("tempZ3",)},
+        )
+        saved = diagnostics._CUSTOM_ENTITY_SOURCES
+        diagnostics._CUSTOM_ENTITY_SOURCES = broken
+        try:
+            index = diagnostics._mapped_sets("REF")[2]
+        finally:
+            diagnostics._CUSTOM_ENTITY_SOURCES = saved
+        self.assertNotIn("no-dot-here", index)
+        self.assertNotIn("sensor.no_types", index)
+        self.assertNotIn("sensor.null_types", index)
+        # The real table is back and still works, so the swap above cannot leave
+        # the rest of the suite testing a stub.
+        self.assertIn("select.ref_program", diagnostics._mapped_sets("REF")[2])
+
+    def test_the_custom_table_names_only_entities_that_can_exist(self) -> None:
+        # A row for a tag no platform ever creates would be dead weight the
+        # reader can never see, and a row whose domain is not a real platform
+        # would never join with `by_domain`.
+        domains = {"sensor", "binary_sensor", "number", "select", "switch",
+                   "button", "climate", "fan"}
+        for entry in diagnostics._CUSTOM_ENTITY_SOURCES:
+            domain, _dot, suffix = entry["tag"].partition(".")
+            self.assertIn(domain, domains, entry["tag"])
+            self.assertTrue(suffix, entry["tag"])
+            # TUPLES, not bare strings. `app_type not in "REF"` is a SUBSTRING
+            # test that quietly matches "R", and the same trap turns a one-name
+            # `read` into a row naming every letter of the parameter.
+            self.assertIsInstance(entry.get("types"), tuple, entry["tag"])
+            self.assertTrue(entry["types"], entry["tag"])
+            for half in ("read", "write"):
+                if half in entry:
+                    self.assertIsInstance(entry[half], tuple, entry["tag"])
 
 
 if __name__ == "__main__":
