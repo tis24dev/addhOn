@@ -856,7 +856,7 @@ class WcSettingsSwitchCoverageTest(unittest.TestCase):
         })})
 
     def test_lightstatus_in_mapped_params(self):
-        _, mapped_params, _sources = diagnostics._mapped_sets("WC")
+        _, mapped_params, _sources, _missing = diagnostics._mapped_sets("WC")
         self.assertIn("lightStatus", mapped_params)
 
     def test_lightstatus_not_reported_unmapped(self):
@@ -2454,6 +2454,21 @@ class _BrokenModules:
         return False
 
 
+# Every platform module `_mapped_sets` imports, in the order it imports them.
+# Written out here rather than derived, so that a module dropped from the walk
+# leaves a test breaking on a name nothing reads instead of a sweep that quietly
+# checks six things.
+_PLATFORM_MODULES = (
+    "air_purifier",
+    "binary_sensor",
+    "number",
+    "program_options",
+    "select",
+    "sensor",
+    "switch",
+)
+
+
 def _ref_dump(rows=REF_ROWS, states=None, raises=False, entries=None):
     """The fridge's `entities` section, built through the real registry path."""
     if entries is None:
@@ -2712,7 +2727,7 @@ class EntitySourceTest(unittest.TestCase):
         # existed `windDirectionHorizontal` sat in `command_params_unmapped`
         # while nothing disproved it; now `sources` names its writer, so the
         # coverage numerator has to agree.
-        mapped_attrs, mapped_params, index = diagnostics._mapped_sets("AC")
+        mapped_attrs, mapped_params, index, _missing = diagnostics._mapped_sets("AC")
         self.assertIn("windDirectionHorizontal", mapped_params)
         self.assertEqual(
             ["windDirectionHorizontal"],
@@ -2766,34 +2781,63 @@ class EntitySourceTest(unittest.TestCase):
         self.assertEqual({"status": "unavailable"}, result["platforms"])
 
     def test_unreadable_registries_give_ONE_null_not_a_null_per_entity(self) -> None:
-        # The lazy import is what fails here, not the entity registry: the
+        # The lazy imports are what fail here, not the entity registry: the
         # section knows WHICH entities exist and cannot say what any of them
         # speaks to. A map of nulls would read as "all six were looked up and
         # none is known", which is a finding; one null is the absence of one.
-        with _BrokenModules("select"):
+        # It takes the TOTAL collapse to reach that now. One broken module
+        # leaves most of the walk readable, and the honest statement is then per
+        # entity -- see the test below, which is the other half of this one.
+        with _BrokenModules(*_PLATFORM_MODULES):
             _result, entities = _ref_dump()
         self.assertIsNone(entities["sources"])
         self.assertEqual(6, sum(len(v) for v in entities["by_domain"].values()))
+
+    def test_one_broken_module_names_the_entities_it_did_not_lose(self) -> None:
+        # The other half, and the reason the per-import guards exist. With
+        # `select` unimportable the fridge's select row is the only one that
+        # cannot be named; blanking the map would throw away five rows that were
+        # read correctly, and it used to travel with a coverage block accusing
+        # the integration of not mapping tempSelZ1/Z2/Z3.
+        with _BrokenModules("select"):
+            result, entities = _ref_dump()
+        sources = entities["sources"]
+        self.assertIsNotNone(sources)
+        self.assertEqual(
+            {"read": ["tempSelZ3"], "write": ["tempSelZ3"]},
+            sources["number.target_temp_zone3"],
+        )
+        self.assertEqual({"read": ["tempZ3"]}, sources["sensor.temp_zone3"])
+        coverage = result["appliances"][0]["coverage"]
+        self.assertEqual(["select"], coverage["registries_unavailable"])
+        for name in ("tempSelZ1", "tempSelZ2", "tempSelZ3"):
+            self.assertNotIn(name, coverage["command_params_unmapped"])
 
     def test_the_two_sections_share_one_degradation_decision(self) -> None:
         # Correction 6 made real. With the walk folded into `_mapped_sets`, a
         # broken platform module degrades coverage AND sources together; two
         # independent import blocks would let one dump report `tempSelZ3` as
         # confidently mapped while the other half claimed nothing was readable.
+        # What is shared is the DECISION, not its blast radius: each import
+        # fails on its own, so `select` costs the select tag on BOTH sides and
+        # leaves `tempSelZ3` mapped on both sides.
         with _BrokenModules("select"):
             result, entities = _ref_dump()
-            mapped_attrs, mapped_params, index = diagnostics._mapped_sets("REF")
-        self.assertIsNone(index)
-        self.assertEqual(set(), mapped_params)
-        self.assertEqual(set(), mapped_attrs)
+            mapped_attrs, mapped_params, index, missing = diagnostics._mapped_sets(
+                "REF"
+            )
+        self.assertEqual(["select"], missing)
+        self.assertIn("tempSelZ3", mapped_params)
+        self.assertIn("tempZ3", mapped_attrs)
         # ... and the dump SAYS SO in both halves, which is the actual claim.
-        self.assertIsNone(entities["sources"])
         coverage = result["appliances"][0]["coverage"]
-        self.assertTrue(coverage["registries_unavailable"])
-        # Positive control: the same calls with the module intact are populated
-        # and carry no marker, so the assertions above cannot pass for the wrong
+        self.assertEqual(["select"], coverage["registries_unavailable"])
+        self.assertIsNotNone(entities["sources"])
+        # Positive control: the same calls with the module intact carry no
+        # marker at all, so the assertions above cannot pass for the wrong
         # reason.
-        mapped_attrs, mapped_params, index = diagnostics._mapped_sets("REF")
+        mapped_attrs, mapped_params, index, missing = diagnostics._mapped_sets("REF")
+        self.assertEqual([], missing)
         self.assertIsNotNone(index)
         self.assertIn("tempSelZ3", mapped_params)
         _result, healthy = _ref_dump()
@@ -2806,7 +2850,10 @@ class EntitySourceTest(unittest.TestCase):
         # The case `entities.sources` structurally cannot cover: there is no
         # inventory to decorate, so the coverage marker is the only thing in the
         # document that stops the reader believing the integration maps nothing.
-        with _BrokenModules("select"):
+        # `sensor` is the module broken here, because it is the one that owns
+        # `tempZ1`: the marker has to be shown naming a loss that actually moved
+        # a number, or the test would pass on a module whose absence is free.
+        with _BrokenModules("sensor"):
             block = diagnostics._appliance_block(
                 "id1",
                 {
@@ -2817,7 +2864,7 @@ class EntitySourceTest(unittest.TestCase):
                 },
             )
         self.assertIsNone(block["entities"])
-        self.assertTrue(block["coverage"]["registries_unavailable"])
+        self.assertEqual(["sensor"], block["coverage"]["registries_unavailable"])
         self.assertEqual(["tempZ1"], block["coverage"]["attributes_unmapped"])
 
     def test_a_foreign_inventory_shape_degrades_instead_of_raising(self) -> None:
@@ -2853,6 +2900,188 @@ class EntitySourceTest(unittest.TestCase):
         section = diagnostics._entity_section(inventory, "REF")
         self.assertIn("sources", section)
         self.assertNotIn("sources", inventory)
+
+
+class RegistryDegradationTest(unittest.TestCase):
+    """One unimportable platform module costs its own tables and nothing else.
+
+    Before the per-import guards, ANY of the seven brought the whole walk down:
+    on the four archived live appliances a single broken module roughly doubled
+    or tripled `attributes_unmapped`, and the REF's three declared setpoints
+    turned into `command_params_unmapped` entries -- an accusation, on the list
+    this dump calls the gold signal, about controls the integration ships and
+    the reporter is using. These tests pin the blast radius and not the figures,
+    which move whenever a table gains a row and differ again depending on how an
+    appliance is rebuilt from an archived dump.
+
+    Five of the seven are leaves and genuinely degrade alone: `binary_sensor`,
+    `number`, `select`, `sensor`, `switch`. `air_purifier` is imported by all
+    five and `program_options` by three, so breaking either takes its importers
+    with it however these guards are arranged -- `setUp` explains why. The
+    worked example for what this rescues is `sensor` on a fridge or `select` on
+    an AC, not the air purifier.
+    """
+
+    def setUp(self) -> None:
+        # Each guard in `_mapped_sets` is per-IMPORT, and an import only fails
+        # ALONE when the module is already in `sys.modules`. Five of the seven
+        # import `air_purifier` and three import `program_options`, so on a cold
+        # interpreter breaking either takes its importers down with it. Home
+        # Assistant has loaded all seven at platform setup long before anyone
+        # downloads a dump, so the cached tree is the state this class measures
+        # -- import them HERE instead of inheriting whichever test ran first, or
+        # `pytest -k RegistryDegradation` turns green into red on correct code.
+        for module in _PLATFORM_MODULES:
+            importlib.import_module(f"custom_components.addhon.{module}")
+
+    def tearDown(self) -> None:
+        _restore_registry()
+
+    def test_no_single_break_empties_the_walk(self) -> None:
+        # The contract in one place, over every module and five types: nothing
+        # is invented (each broken set is a subset of the healthy one) and
+        # nothing is wiped (an index survives), and the marker names exactly the
+        # module that failed.
+        for app_type in ("REF", "AC", "WD", "TD", "AP"):
+            healthy_attrs, healthy_params, healthy_index, healthy_missing = (
+                diagnostics._mapped_sets(app_type)
+            )
+            self.assertEqual([], healthy_missing)
+            for module in _PLATFORM_MODULES:
+                with self.subTest(app_type=app_type, module=module):
+                    with _BrokenModules(module):
+                        attrs, params, index, missing = diagnostics._mapped_sets(
+                            app_type
+                        )
+                    self.assertEqual([module], missing)
+                    self.assertIsNotNone(index)
+                    self.assertTrue(index)
+                    self.assertLessEqual(attrs, healthy_attrs)
+                    self.assertLessEqual(params, healthy_params)
+                    self.assertLessEqual(set(index), set(healthy_index))
+
+    def test_a_broken_module_stops_accusing_the_fridge_of_its_own_setpoints(
+        self,
+    ) -> None:
+        # The defect this follow-up exists for, on the appliance it was measured
+        # on. `NUMBERS["REF"]` is what maps tempSelZ1/Z2/Z3, so `number` losing
+        # them is truthful and is asserted as such; the other six modules used to
+        # lose them too, and the dump then told the reporter to go and add three
+        # controls they were already using.
+        for module in _PLATFORM_MODULES:
+            with self.subTest(module=module):
+                with _BrokenModules(module):
+                    result, _entities = _ref_dump()
+                coverage = result["appliances"][0]["coverage"]
+                self.assertEqual([module], coverage["registries_unavailable"])
+                unmapped = coverage["command_params_unmapped"]
+                for name in ("tempSelZ1", "tempSelZ2", "tempSelZ3"):
+                    if module == "number":
+                        self.assertIn(name, unmapped)
+                    else:
+                        self.assertNotIn(name, unmapped)
+
+    def test_only_a_total_collapse_blanks_the_whole_map(self) -> None:
+        # `_CUSTOM_ENTITY_SOURCES` is a literal in diagnostics.py and its rows
+        # survive any import failure, so the None decision cannot be taken on
+        # the size of the finished map -- REF keeps `select.ref_program` even
+        # with all seven modules gone. It is taken on whether any PLATFORM table
+        # produced a row, which is the question the null answers.
+        with _BrokenModules(*_PLATFORM_MODULES):
+            attrs, params, index, missing = diagnostics._mapped_sets("REF")
+        self.assertIsNone(index)
+        self.assertEqual(list(_PLATFORM_MODULES), missing)
+        self.assertEqual(
+            set(diagnostics._CUSTOM_MAPPED_ATTRS.get("REF", ())), attrs
+        )
+        self.assertEqual(set(), params)
+
+    def test_a_lost_table_gives_its_entities_one_null_each(self) -> None:
+        # The AC louvers are the case that shows the difference: `select` gone,
+        # and only the two select rows lose their names while the climate row
+        # beside them keeps every one of its reads.
+        inventory = {
+            "status": "ok",
+            "by_domain": {
+                "select": ["fan_direction_vertical", "fan_direction_horizontal"],
+                "climate": ["climate"],
+            },
+        }
+        with _BrokenModules("select"):
+            section = diagnostics._entity_section(inventory, "AC")
+        self.assertEqual(
+            {
+                "select.fan_direction_vertical": None,
+                "select.fan_direction_horizontal": None,
+            },
+            {k: v for k, v in section["sources"].items() if k.startswith("select.")},
+        )
+        self.assertTrue(section["sources"]["climate.climate"]["read"])
+        # Positive control on the same inventory: healthy, both selects are named.
+        healthy = diagnostics._entity_section(inventory, "AC")
+        self.assertEqual(
+            ["windDirectionVertical"],
+            healthy["sources"]["select.fan_direction_vertical"]["write"],
+        )
+
+    def test_a_lost_startprogram_name_never_invents_an_absence(self) -> None:
+        # `program_options` owns one string in this walk: the command the
+        # buffered options are read under. Emitting the read chain without it
+        # would leave a one-link chain, and `_coverage` would then report every
+        # option the device publishes only under `startProgram` as a control the
+        # device does not have -- while `entities.sources` named its writer two
+        # sections below. Measured on the live TD, that is `tumblingStatus`.
+        # Skipping the loop costs coverage and states nothing false, and the
+        # discriminator is that the option's TAG is gone from the index too.
+        appliance = FakeAppliance(
+            commands={
+                "settings": FakeCommand({"tumblingStatus": FakeParam(value="1")}),
+                "startProgram": FakeCommand(
+                    {"tumblingStatus": FakeParam(value="1")}
+                ),
+            }
+        )
+        entry = {
+            "appliance": appliance,
+            "type": "TD",
+            "attributes": {"startProgram.tumblingStatus": "1"},
+            "statistics": {},
+        }
+        with _BrokenModules("program_options"):
+            index = diagnostics._mapped_sets("TD")[2]
+            coverage = diagnostics._appliance_block("id1", entry)["coverage"]
+        self.assertEqual(["program_options"], coverage["registries_unavailable"])
+        self.assertNotIn("switch.opt_tumbling", index)
+        self.assertNotIn("tumblingStatus", coverage["attributes_expected_absent"])
+        # Positive control: healthy, the tag is there and the name is mapped, so
+        # the two assertions above cannot be passing on an empty walk.
+        self.assertIn("switch.opt_tumbling", diagnostics._mapped_sets("TD")[2])
+        healthy = diagnostics._appliance_block("id1", entry)["coverage"]
+        self.assertNotIn("registries_unavailable", healthy)
+        self.assertNotIn("tumblingStatus", healthy["attributes_expected_absent"])
+        self.assertNotIn("tumblingStatus", healthy["command_params_unmapped"])
+
+    def test_the_walk_degrades_and_never_raises(self) -> None:
+        # `_appliance_block` is called with no try/except around it from either
+        # entry point, and seven guards are seven more places to raise from --
+        # `_CONNECTIVITY` in particular is the one table entry with no type gate
+        # and nothing to be empty, so it is a None and not a `()`. Every
+        # one-missing and the all-missing case, on a real block.
+        entry = {
+            "appliance": FakeAppliance(commands={}),
+            "type": "WD",
+            "attributes": {"machMode": "1"},
+            "statistics": {},
+        }
+        cases = [(module,) for module in _PLATFORM_MODULES]
+        cases.append(_PLATFORM_MODULES)
+        for modules in cases:
+            with self.subTest(modules=modules):
+                with _BrokenModules(*modules):
+                    block = diagnostics._appliance_block("id1", entry)
+                self.assertEqual(
+                    list(modules), block["coverage"]["registries_unavailable"]
+                )
 
 
 class EntitySourceDriftGuardTest(unittest.TestCase):

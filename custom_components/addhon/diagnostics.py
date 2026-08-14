@@ -532,14 +532,32 @@ def _source_row(read=(), write=()) -> dict[str, list[str]] | None:
     return row or None
 
 
+def _note_missing_registry(module: str, failed: list[str]) -> None:
+    """Record one platform module that would not import, and log why.
+
+    Separate from the `except` bodies that call it so that each of them stays two
+    statements long: the seven of them are already the widest thing in
+    `_mapped_sets`, and a walk of tables reads badly when two thirds of it is
+    error handling. `exc_info` is passed HERE and not once at the end, because
+    the traceback a maintainer needs is the one from the import that failed and
+    not from whichever ran last.
+    """
+    failed.append(module)
+    _LOGGER.debug(
+        "Diagnostics debug: registry module %s unavailable", module, exc_info=True
+    )
+
+
 def _mapped_sets(
     app_type,
-) -> tuple[set[str], set[str], dict[str, dict[str, list[str]] | None] | None]:
-    """(mapped attribute keys, mapped writable command params, entity sources).
+) -> tuple[
+    set[str], set[str], dict[str, dict[str, list[str]] | None] | None, list[str]
+]:
+    """(mapped attribute keys, mapped params, entity sources, missing modules).
 
     Registries are imported lazily so diagnostics.py keeps a tiny top-level import
-    surface and cannot be caught in an import cycle; on any import hiccup it degrades
-    to the documented custom set rather than crashing the dump.
+    surface and cannot be caught in an import cycle, and each import is guarded on
+    its OWN, so an import hiccup costs that module's tables and never the dump.
 
     The THIRD value is the static per-type index behind `entities.sources`: which
     raw parameter each entity of this type reads and writes, keyed by the same
@@ -555,40 +573,103 @@ def _mapped_sets(
     null claiming nothing could be looked at. One walk, one degradation decision,
     and the two sections can never disagree about whether the tables were read.
 
-    The price of that is stated plainly: this block now imports `select` and
-    `program_options` as well, so a break in either degrades the COVERAGE axes
-    too, where before it could not. That is the intended trade -- a dump that
-    under-reports both axes is diagnosable, a dump whose two halves disagree is
-    not -- and it is why `_coverage` prints `registries_unavailable` on that
-    path: the sources half announces the degradation with a null, but there is
-    no sources half at all in a device dump or on an appliance with no registry
-    inventory, and a coverage section that under-reports in silence would be
-    read as fact.
+    One walk, however, must NOT mean one failure. Each import therefore gets its
+    OWN `try` and its own empty stand-in, so a module that will not import costs
+    its own tables and nothing else. Rebuilt on the four archived live
+    appliances, a single unimportable module used to roughly double or triple
+    `attributes_unmapped` on every one of them, and to invent three
+    `command_params_unmapped` entries (`tempSelZ1`, `tempSelZ2`, `tempSelZ3`)
+    about setpoints that exist and work. The exact pairs are deliberately not
+    quoted: they move with every table row added, and reconstructing an appliance
+    from an archived dump gives a different denominator than the live object did,
+    so three mutually inconsistent sets of them were produced while this was
+    being written. The blast radius is the claim; the figures are not. Fabricating
+    entries on the list this module calls the gold signal is the one thing that
+    list may not do, and it is a strictly worse failure than the silence the
+    single `try` was chosen over: silence is unhelpful, an accusation is wrong.
+    Per import, `select` costs the REF nothing measurable at all and the AC one
+    name (`windDirectionHorizontal`), which is what it actually owns there.
 
-    A None third value (never an empty dict) is what the degraded path returns, so
-    that one unreadable registry costs the reader ONE null instead of a null per
-    entity, which would read as "every entity was looked up and none was found".
+    The benefit is real for FIVE of the seven, not all of them, and the two
+    exceptions are worth naming because the obvious worked example is one of
+    them. `binary_sensor`, `number`, `select`, `sensor` and `switch` are leaves:
+    nothing else here imports them, so each really does degrade alone.
+    `air_purifier` is imported by all five and `program_options` by three, and
+    Home Assistant loads the platform modules at platform setup -- so a genuinely
+    broken `air_purifier.py` means its five importers never loaded either, they
+    are absent from `sys.modules`, this walk re-imports them and they fail again.
+    Breaking it costs six of the seven tables no matter how the guards are
+    arranged. Take `sensor` on a fridge, or `select` on an AC, as the case this
+    isolation actually rescues.
+
+    `registries_unavailable` NAMES the modules that failed instead of saying
+    `True`, because with per-import degradation the flag no longer means "every
+    number in this dict was measured against nothing". It means "the tables these
+    modules own are missing from the numerators", and only the list tells the
+    reader whether that touches the axis they came to read: `sensor` missing
+    invalidates `attributes_unmapped`, `air_purifier` missing invalidates
+    nothing at all on a fridge.
+
+    A None third value is reserved for the TOTAL collapse -- nothing at all could
+    be named -- so that a dump which could not look at any table costs the reader
+    ONE null instead of a null per entity, which would read as "every entity was
+    looked up and none was found". A partial failure returns the rows it did
+    read, and the entities whose table was lost take their own explicit null in
+    `entities.sources`: that is the narrower and truer statement, and it names
+    them one by one instead of blanking the whole map.
     """
     mapped_attrs: set[str] = set(_CUSTOM_MAPPED_ATTRS.get(app_type, ()))
     mapped_params: set[str] = set()
     sources: dict[str, dict[str, list[str]] | None] = {}
+    unavailable: list[str] = []
+    # Seven imports, seven guards. Written out rather than driven by a table of
+    # module/name strings on purpose: `from .sensor import SENSORS` is a spelling
+    # a linter, a grep and `rename` all understand, and this walk is already one
+    # rename away from silently collapsing a numerator (there is no test that can
+    # see a table nobody added here).
     try:
         from .air_purifier import AP_ENTITY_PARAMS
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        AP_ENTITY_PARAMS = frozenset()
+        _note_missing_registry("air_purifier", unavailable)
+    try:
         from .binary_sensor import BINARY_SENSORS, _CONNECTIVITY, _UNIVERSAL_GATED
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        BINARY_SENSORS, _CONNECTIVITY, _UNIVERSAL_GATED = {}, None, ()
+        _note_missing_registry("binary_sensor", unavailable)
+    try:
         from .number import NUMBERS, _AP_TIMING_NUMBERS, _PROGRAM_OPTION_NUMBERS
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        NUMBERS, _AP_TIMING_NUMBERS, _PROGRAM_OPTION_NUMBERS = {}, (), ()
+        _note_missing_registry("number", unavailable)
+    try:
         from .program_options import STARTPROGRAM_COMMAND
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        STARTPROGRAM_COMMAND = ""
+        _note_missing_registry("program_options", unavailable)
+    try:
         from .select import _AC_DIRECTION_SELECTS, _PROGRAM_OPTION_SELECTS
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _AC_DIRECTION_SELECTS, _PROGRAM_OPTION_SELECTS = (), ()
+        _note_missing_registry("select", unavailable)
+    try:
         from .sensor import SENSORS
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        SENSORS = {}
+        _note_missing_registry("sensor", unavailable)
+    try:
         from .switch import (
             _AIR_PURIFIER_SWITCHES,
             _PROGRAM_OPTION_SWITCHES,
             _SETTINGS_SWITCHES,
         )
-    except Exception:  # pragma: no cover - diagnostics must never crash
-        _LOGGER.debug(
-            "Diagnostics debug: coverage registries unavailable", exc_info=True
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _AIR_PURIFIER_SWITCHES, _PROGRAM_OPTION_SWITCHES, _SETTINGS_SWITCHES = (
+            (),
+            (),
+            {},
         )
-        return mapped_attrs, mapped_params, None
+        _note_missing_registry("switch", unavailable)
 
     # ONE pass per table: the coverage sets get the DECLARED names (unchanged --
     # `mapped_attrs` is the attribute axis' numerator and moving it would silently
@@ -606,10 +687,14 @@ def _mapped_sets(
         sources[f"binary_sensor.{desc.key}"] = _source_row(
             read=_read_chain(desc.attr_key)
         )
-    mapped_attrs.add(_CONNECTIVITY.attr_key)
-    sources[f"binary_sensor.{_CONNECTIVITY.key}"] = _source_row(
-        read=_read_chain(_CONNECTIVITY.attr_key)
-    )
+    # The only row in this walk with no type gate and no table to be empty, so
+    # it is also the only one that needs a None check rather than an empty
+    # stand-in: `binary_sensor` failing leaves nothing to read `.attr_key` off.
+    if _CONNECTIVITY is not None:
+        mapped_attrs.add(_CONNECTIVITY.attr_key)
+        sources[f"binary_sensor.{_CONNECTIVITY.key}"] = _source_row(
+            read=_read_chain(_CONNECTIVITY.attr_key)
+        )
     for desc in _UNIVERSAL_GATED:
         mapped_attrs.add(desc.attr_key)
         sources[f"binary_sensor.{desc.key}"] = _source_row(
@@ -632,14 +717,47 @@ def _mapped_sets(
     # read chain has a second link nothing else in this walk has -- the option is
     # read bare first and then under `startProgram.<param>`, because unlike
     # `settings` the startProgram command is not mirrored into the device shadow
-    # (`program_options.HonProgramOptionEntity._current_raw`). These params are
-    # deliberately NOT added to `mapped_params`: they live on startProgram, which
-    # `_settings_param_names` never reads, so adding them would put names in the
-    # coverage numerator that its denominator can never contain.
+    # (`program_options.HonProgramOptionEntity._current_raw`). These params were
+    # once left out of both coverage numerators, on the argument that they live
+    # on startProgram, which `_settings_param_names` never reads. That argument
+    # is false and the loop below says where; the sentence is corrected here
+    # rather than deleted, because it is the belief a reader arrives with and
+    # the code makes no sense while they still hold it.
+    #
+    # `program_options` contributes exactly one thing to this walk: the command
+    # name those options are read under. Without it the second link cannot be
+    # spelled: with the stand-in `STARTPROGRAM_COMMAND = ""` the loop would emit
+    # `read: ['tumblingStatus', '.tumblingStatus']` -- a fabricated key name no
+    # device ever publishes, under a real entity tag -- which is worse than no
+    # row at all. Both
+    # halves of that were measured on the live TD: emitting the chain truncated
+    # makes `_coverage`'s `reachable` test find no published spelling for
+    # `tumblingStatus` and drop it into `attributes_expected_absent` -- telling
+    # the reader the dryer does not have a control it does have, since the TD
+    # publishes it only as `startProgram.tumblingStatus` -- WHILE `sources` two
+    # sections below still names the switch that reads and writes it. That is
+    # the contradiction shape this whole section exists to remove. Skipping the
+    # loop drops both halves back to what they said before this walk read the
+    # option tables: three names return to the unmapped lists -- so `coverage` is
+    # not silent, it still accuses `tumblingStatus`, exactly as it did at
+    # 5d12cb2 -- but `sources` no longer contradicts it, and
+    # `registries_unavailable` names the module that caused it. Nor does the
+    # skip cover every module that can produce this shape: with only `number`
+    # broken, the live WM gains `delayTime` in `attributes_expected_absent`
+    # while `sensor.delay_time` two sections below still reads it. That one is
+    # not fixed here; the list in `registries_unavailable` is what tells the
+    # reader to distrust that axis. Little is lost
+    # in practice either way: number.py, select.py and switch.py each import
+    # `program_options` themselves, so a real break in it empties all three
+    # tables anyway and this branch changes nothing.
     for prefix, table in (
-        ("number.opt_", _PROGRAM_OPTION_NUMBERS),
-        ("select.opt_", _PROGRAM_OPTION_SELECTS),
-        ("switch.opt_", _PROGRAM_OPTION_SWITCHES),
+        (
+            ("number.opt_", _PROGRAM_OPTION_NUMBERS),
+            ("select.opt_", _PROGRAM_OPTION_SELECTS),
+            ("switch.opt_", _PROGRAM_OPTION_SWITCHES),
+        )
+        if STARTPROGRAM_COMMAND
+        else ()
     ):
         for desc in table:
             if app_type not in (getattr(desc, "types", None) or ()):
@@ -699,6 +817,14 @@ def _mapped_sets(
                     read=_read_chain(desc.param), write=[desc.param]
                 )
 
+    # How many rows the PLATFORM tables produced, counted before the literal
+    # ones below join them. Nothing below this line can fail to import --
+    # `_CUSTOM_ENTITY_SOURCES` is written out three hundred lines above, in this
+    # file -- so the SIZE of the finished map cannot say whether this walk was
+    # able to look at anything. This count can, and a healthy walk always makes
+    # it non-zero: `_CONNECTIVITY` above is added with no type gate.
+    platform_rows = len(sources)
+
     # Last, the entities no registry knows about. Guarded field by field even
     # though the table three hundred lines above is a literal in this same file:
     # this loop is OUTSIDE the try above, and `_appliance_block` is called with no
@@ -720,7 +846,19 @@ def _mapped_sets(
             ],
             write=entry.get("write") or (),
         )
-    return mapped_attrs, mapped_params, sources
+    # No platform row at all is the TOTAL collapse, and the only thing the None
+    # third value is for: the reader gets ONE null instead of a null per entity,
+    # which would read as "every entity was looked up and none was found".
+    # Anything the walk DID read is returned as it stands, and the entities
+    # behind a lost table then take one explicit null each in `entities.sources`
+    # -- the narrower and truer statement, naming them one at a time instead of
+    # blanking a map that is mostly correct.
+    return (
+        mapped_attrs,
+        mapped_params,
+        sources if platform_rows else None,
+        unavailable,
+    )
 
 
 def _settings_param_names(appliance) -> set[str]:
@@ -824,7 +962,7 @@ def _coverage(
     publishes no ``tempZ4``. On the live REF dump this line prints thirteen
     names on the first download, and ``tempZ4`` is one of them.
     """
-    mapped_attrs, mapped_params, sources_index = (
+    mapped_attrs, mapped_params, sources_index, registries_unavailable = (
         mapped if mapped is not None else _mapped_sets(app_type)
     )
     settings_params = _settings_param_names(appliance)
@@ -920,17 +1058,25 @@ def _coverage(
         # `startProgram` is reported by neither.
         "attributes_expected_absent": sorted(mapped_attrs - reachable),
         "command_params_expected_absent": sorted(mapped_params - command_params),
-        # Emitted ONLY when the lazy import above failed, because every number
-        # in this dict is then measured against tables that could not be read:
-        # the two unmapped lists swell to the whole device and both
-        # expected_absent lists collapse to empty, which reads as "this
-        # integration maps nothing on your appliance". `entities.sources`
-        # carries the same null -- but that section is absent entirely whenever
-        # there is no registry inventory for this appliance (the device dump, or
-        # a registry that could not be read), and a reader cannot tell that null
-        # apart from "there was nothing to decorate". A coverage section that
-        # under-reports in silence is the one thing this dump may not do.
-        **({"registries_unavailable": True} if sources_index is None else {}),
+        # Emitted ONLY when a platform module would not import, and it NAMES
+        # the ones that did not, because every number in this dict is then
+        # measured against tables that are missing pieces: the unmapped lists
+        # swell by whatever those modules mapped and both expected_absent lists
+        # shrink by the same names. Naming them is what keeps the marker worth
+        # reading now that each import degrades on its own -- `sensor` missing
+        # invalidates `attributes_unmapped`, `air_purifier` missing invalidates
+        # nothing at all on a fridge, and a bare `true` cannot tell the two
+        # apart. `entities.sources` carries the matching per-entity nulls -- but
+        # that section is absent entirely whenever there is no registry
+        # inventory for this appliance (the device dump, or a registry that
+        # could not be read), and a reader cannot tell that absence apart from
+        # "there was nothing to decorate". A coverage section that under-reports
+        # in silence is the one thing this dump may not do.
+        **(
+            {"registries_unavailable": list(registries_unavailable)}
+            if registries_unavailable
+            else {}
+        ),
     }
 
 
@@ -2030,7 +2176,7 @@ def _entity_section(entities: Mapping | None, app_type, mapped=None) -> dict | N
     by_domain = section.get("by_domain")
     if not isinstance(by_domain, Mapping):
         return section
-    _mapped_attrs, _mapped_params, index = (
+    _mapped_attrs, _mapped_params, index, _unavailable = (
         mapped if mapped is not None else _mapped_sets(app_type)
     )
     if index is None:
@@ -2038,7 +2184,10 @@ def _entity_section(entities: Mapping | None, app_type, mapped=None) -> dict | N
         # read as "every entity was looked up and none of them is known", which is
         # a finding; "this dump could not look" is the absence of one, and the
         # sibling `_registry_entries` docstring spells out why the two must never
-        # be folded together.
+        # be folded together. Reached only when NO table could be read at all:
+        # a single broken platform module leaves the rest of the index intact,
+        # and its own entities fall through to the per-entity null below, which
+        # is that same distinction drawn one entity at a time.
         section["sources"] = None
         return section
     sources: dict[str, dict[str, list[str]] | None] = {}
