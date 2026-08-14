@@ -1443,17 +1443,50 @@ def _attribute_timestamps(
     and the OUTPUT is validated, because `isinstance(x, datetime)` admits
     subclasses and a subclass may return anything at all from `isoformat`.
 
-    The `parameters` sub-map is walked as a SECOND source, and the reason is not
-    the obvious one. `hon_client._get_attributes` merges `raw` -- which carries
-    that sub-map under its own key -- at :187, and only then flattens the
-    parameters over the top at :191, so on a healthy device the `HonAttribute`
-    IS already the bare value and the nested copy is pure duplication (all four
-    live dumps agree on every key, zero mismatches in 243 parameters). The
-    reachable failure is :192-196: when `parameters` is a Mapping that is not a
-    `dict`, the merge goes through `dict(params)`, whose argument is evaluated
-    in full before anything is merged, so a Mapping whose iteration or
-    `__getitem__` misbehaves leaves NOTHING flattened and the nested object as
-    the only surviving carrier of the instants.
+    The `parameters` sub-map is walked as a SECOND source, and the honest
+    statement about that walk is that it is INERT.
+    `hon_client._get_attributes` merges `raw` -- which carries that sub-map
+    under its own key -- at :187, and only then flattens the parameters over
+    the top at :191, so on a healthy device the `HonAttribute` IS already the
+    bare value and the nested copy is pure duplication (all four live dumps
+    agree on every key, zero mismatches in 243 parameters). Measured on the
+    real REF capture driven through the real engine, and on AC and WM rebuilt
+    from it: the nested source contributes ZERO rows the flattened top level
+    did not already carry.
+
+    An earlier version of this paragraph named `hon_client.py:192-196` -- the
+    `except` around `dict(params)` -- as the reachable failure this walk
+    rescues. That was WRONG, and it is corrected here rather than quietly
+    deleted, because the guards below read as evidence for it and the next
+    reader would otherwise re-derive the same belief from them. The producer
+    chain was traced end to end. Only three sites in this integration ever
+    write a `parameters` key, all in `client/engine/appliance.py`: :277 and
+    :385 mutate a VALUE inside the container, and :279 CREATES the container as
+    a literal `{}`. The one wholesale replacement is `self._attributes |=
+    attributes` at :280, whose right-hand side is the `/commands/v1/context`
+    payload straight out of `response.json()` (`client/transport/api.py:170`),
+    so it is a plain `dict`, a `list`, a `str`, a number, a bool or None --
+    never a Mapping SUBCLASS. The per-type layer at :330 returns the object it
+    was given and never touches the key, and the MQTT handler
+    (`client/transport/mqtt.py:434`) only calls `.update()` on values already
+    inside it. Both coordinator producers reach this module through the one
+    `hon_client._build_appliance_entry` (:975) -- the REST poll at :1104 and
+    `build_realtime_snapshot` at :1004 alike -- so the realtime push introduces
+    no fourth shape. And `dict(x)` cannot raise on a plain `dict`, nor on a
+    dict SUBCLASS: CPython takes the `PyDict_Merge` fast path and never calls
+    an overridden `keys()`. So :192-196 can only fire for a value that is NOT a
+    Mapping, and `test_diagnostics.py` pins that invariant on the real engine
+    so this paragraph cannot go stale in silence.
+
+    That is what ties the correction to the paragraph below rather than leaving
+    it as trivia: the only shapes `dict(params)` can actually choke on are
+    exactly the shapes this map refuses to read, so on every input a producer
+    can deliver there is nothing for the fallback to fall back to. The walk is
+    kept anyway -- it costs one `isinstance` and one `seen` lookup per
+    parameter, and it is the only thing that would keep the instants in the
+    document if the engine ever stopped building that container itself (a
+    `MappingProxyType`, a lazy view, a cache object). Keep it as insurance; do
+    not read it as a report that a half-broken Mapping arrives here today.
 
     Only a Mapping is followed there. A non-Mapping iterable under that key (a
     generator, a list) is deliberately NOT walked: this runs on the event loop,
@@ -1505,11 +1538,15 @@ def _attribute_timestamps(
         try:
             names = sorted(source, key=str)
         except Exception:  # pragma: no cover - a Mapping that cannot list keys
-            # Honest scope: for the NESTED map this is the reachable guard, and
-            # it is what keeps a half-broken Mapping from taking the document
-            # down. For `attributes` itself it is a formality -- `_coverage`
+            # Honest scope, corrected: NEITHER source can reach this today.
+            # For `attributes` it was always a formality -- `_coverage`
             # iterates the same object a few lines below with no guard at all,
             # so a mapping that cannot list its keys ends the dump regardless.
+            # For the NESTED map this was called the reachable guard, and the
+            # producer trace in the docstring above shows it is not: that key
+            # holds a plain `dict`, which lists its keys, or a non-Mapping,
+            # which is never appended to `sources`. Kept as the cheap half of
+            # "degrade, never raise", not as evidence of a live failure.
             _LOGGER.debug(
                 "Diagnostics debug: attribute names unreadable", exc_info=True
             )
@@ -1521,8 +1558,9 @@ def _attribute_timestamps(
             try:
                 value = source[name]
             except Exception:
-                # A key that enumerates and then refuses to resolve is exactly
-                # the object that made `dict(params)` raise upstream. Skip the
+                # A key that enumerates and then refuses to resolve is the
+                # object that WOULD have made `dict(params)` raise upstream; no
+                # producer builds one today (traced in the docstring). Skip the
                 # one key rather than the whole source, so a single bad entry
                 # costs one row and not the entire section.
                 continue
@@ -1678,11 +1716,23 @@ def _attribute_values(attributes: Mapping) -> Mapping:
     kept for the same conservatism: `all([])` is True, and "the shadow
     container was empty" is a different statement from "there is no shadow
     container". When even one nested key is missing from the top level the whole
-    sub-map is kept, because that is the signature of the degraded path at
-    `hon_client.py:192-196` -- a `parameters` Mapping whose `dict()` coercion
-    raised, leaving NOTHING flattened and this sub-map as the only carrier of
-    both the values and their instants. Deleting it there would delete the only
-    copy of the data.
+    sub-map is kept, on the plain principle that a map which cannot be SHOWN to
+    be a copy is not deleted: deleting it would delete data rather than
+    duplication.
+
+    The reason this branch used to give for itself is retracted. It cited "the
+    signature of the degraded path at `hon_client.py:192-196` -- a `parameters`
+    Mapping whose `dict()` coercion raised", and `_attribute_timestamps`'
+    docstring above now traces every producer of this key and shows it holds
+    either a plain `dict`, which `dict()` cannot refuse, or a value that is not
+    a Mapping at all, which the `isinstance` below returns on before this check
+    is reached. Measured over the real REF capture through the real engine,
+    over AC and WM rebuilt from it, and over every JSON shape a cloud payload
+    can put under the key: `redundant` is True for every NON-EMPTY sub-map that
+    gets this far, so that half of the branch has no reachable input. The EMPTY
+    half does have one -- a payload carrying its own top-level `parameters`
+    replaces the shadow container, and `{}` then fails `bool(nested)` -- and
+    the principle above is reason enough for both halves to stay.
     """
     try:
         nested = attributes.get("parameters")
@@ -1749,10 +1799,14 @@ def _appliance_block(
     # pass so that anything reporting freshness from it can never disagree with
     # the map the reader is looking at, even after the row cap has fired.
     stamps, stamps_truncated, newest_stamp = _attribute_timestamps(attributes)
-    # De-duplicated ONCE, above every consumer, and only after the instants have
-    # been read -- the sub-map is their fallback source on the degraded merge
-    # path, so dropping it first would throw away the very rows it exists to
-    # rescue. Skipped entirely when the row cap fired: the justification for
+    # De-duplicated ONCE, above every consumer, and only after the instants
+    # have been read. The ordering is kept for the reason it was written -- the
+    # sub-map is the instants' fallback source -- even though that fallback is
+    # inert on every input a producer can deliver, which
+    # `_attribute_timestamps`' docstring traces in full. Two helpers whose
+    # combined result depends on call order is a trap either way, and one that
+    # holds only while the fallback is dead is the worse of the two.
+    # Skipped entirely when the row cap fired: the justification for
     # deleting the sub-map is that `attributes_last_update` now carries the one
     # bit it held (which keys are shadow parameters), and a truncated map does
     # not carry it for the rows it dropped.

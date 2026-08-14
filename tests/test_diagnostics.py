@@ -3741,10 +3741,13 @@ class _Raising:
 class _BrokenNested(Mapping):
     """A Mapping that is NOT a dict and refuses one of the keys it enumerates.
 
-    This is the object behind `hon_client.py:192-196`: the merge there goes
-    through `dict(params)`, whose argument is evaluated in full before anything
-    is merged, so one refusing key means NOTHING is flattened and the nested map
-    is the only surviving carrier of the instants.
+    Shaped like what `hon_client.py:192-196` would see, but NO producer builds
+    one: `_attribute_timestamps`' docstring traces every write of that key and
+    finds a plain `dict` or a non-Mapping, and `dict()` refuses neither. So
+    this is a witness that the guards degrade instead of raising, not evidence
+    that the degraded flatten happens in the field. See
+    `TheNestedParametersContainerIsAlwaysAPlainDictTest` at the end of this
+    file, which fails if that stops being true.
     """
 
     def __init__(self, rows, broken):
@@ -4267,9 +4270,11 @@ class AttributeTimestampNestedSourceTest(unittest.TestCase):
     """The `parameters` sub-map, and why it is read at all."""
 
     def test_the_nested_map_is_the_fallback_when_nothing_was_flattened(self):
-        # `hon_client.py:192-196`: `dict(params)` is evaluated in full before
-        # anything is merged, so one refusing key leaves NO bare parameter and
-        # the nested object as the only carrier of the instants.
+        # The fallback works. It is also inert against every producer this
+        # repository has: no write of `attributes["parameters"]` can yield a
+        # Mapping that `dict()` refuses (traced in `_attribute_timestamps`'
+        # docstring). So this pins a guard kept as insurance against a future
+        # producer, not a path a user can reach today.
         nested = _BrokenNested(
             {
                 "tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD),
@@ -5103,9 +5108,12 @@ class AttributeValuesDedupTest(unittest.TestCase):
             self.assertIn(name, block["attributes"])
 
     def test_a_nested_map_that_is_the_only_copy_is_kept(self):
-        # The `hon_client.py:192-196` path: `dict(params)` raised, so NOTHING was
-        # flattened and this sub-map holds the only copy of the values. Dropping
-        # it here would delete data, not duplication.
+        # A sub-map whose names are absent from the top level is kept because
+        # it cannot be SHOWN to be duplication, and dropping it would delete
+        # data. The reachable version of that input is a cloud payload whose
+        # own top-level `parameters` replaced the shadow container; the
+        # "`dict(params)` raised" story this comment used to tell is retracted
+        # in `_attribute_values`' docstring.
         block = _stamp_block(
             {"parameters": {"tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD)}}
         )
@@ -5235,6 +5243,100 @@ class AttributeValuesDedupTest(unittest.TestCase):
         _, blocks = _entry_diag()
         self.assertEqual(6, blocks["AC"]["coverage"]["attributes_total"])
         self.assertEqual(22.5, blocks["AC"]["attributes"]["tempIndoor"])
+
+
+class TheNestedParametersContainerIsAlwaysAPlainDictTest(unittest.TestCase):
+    """The invariant the two nested-`parameters` docstrings now rest on.
+
+    `_attribute_timestamps` walks that sub-map as a fallback source and
+    `_attribute_values` refuses to delete it unless it is provably a copy; both
+    now state that no producer can put a Mapping there that `dict()` would
+    refuse, which is what makes the fallback inert. A docstring that says so
+    goes stale in silence, so the claim is pinned here instead. It drives the
+    REAL engine appliance over the REAL fridge capture on purpose: the claim is
+    about what the engine builds, not about what a fake can be made to build.
+    """
+
+    _INFO = {
+        "applianceTypeName": "REF",
+        "applianceModelId": "10136",
+        "macAddress": "11-22-33-44-55-66",
+        "modelName": "HDPW5620CNPK",
+        "brand": "haier",
+        "nickName": "Frigo",
+        "code": "ABC123",
+        "serialNumber": "0123456789",
+    }
+
+    @staticmethod
+    def _capture(name):
+        path = REPO_ROOT / "tests" / "fixtures" / "ref_10136" / name
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _appliance(self, app_type="REF", top_level=_ABSENT):
+        from custom_components.addhon.client.engine.appliance import HonAppliance
+
+        capture = self._capture
+
+        class _Api:
+            async def load_commands(self, appliance):
+                return capture("commands.json")
+
+            async def load_favourites(self, appliance):
+                return []
+
+            async def load_command_history(self, appliance):
+                return capture("command_history.json")
+
+            async def load_attributes(self, appliance):
+                payload = capture("attributes.json")
+                if top_level is not _ABSENT:
+                    payload["parameters"] = top_level
+                return payload
+
+        appliance = HonAppliance(
+            _Api(), dict(self._INFO, applianceTypeName=app_type)
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(appliance.load_commands())
+            try:
+                loop.run_until_complete(appliance.load_attributes())
+            except (KeyError, ValueError, IndexError, TypeError, AttributeError):
+                # Exactly client/session.py::_APPLIANCE_BUILD_ERRORS, which KEEPS
+                # the half-loaded appliance instead of dropping it -- so whatever
+                # it is left holding still reaches a dump through
+                # `build_realtime_snapshot`, and the invariant has to hold on the
+                # failed path too, not only on the happy one.
+                pass
+        finally:
+            loop.close()
+        return appliance
+
+    def test_the_engine_builds_the_shadow_container_as_a_plain_dict(self):
+        # `client/engine/appliance.py:279` creates it with a literal `{}`. Not
+        # `isinstance`: a dict SUBCLASS would pass that and still be the thing
+        # the docstrings say cannot arrive, because `dict()` takes the
+        # `PyDict_Merge` fast path on subclasses and would keep flattening.
+        params = self._appliance().attributes["parameters"]
+        self.assertIs(type(params), dict)
+
+    def test_no_cloud_payload_can_put_a_refusing_mapping_under_parameters(self):
+        # `client/engine/appliance.py:280` merges the context payload wholesale,
+        # so the TYPE of this key is cloud-controlled -- but the payload comes
+        # from `response.json()`, and JSON decodes to plain containers only.
+        # Every shape it can produce is either exactly `dict` (which `dict()`
+        # cannot refuse, so nothing degrades) or not a Mapping at all (which
+        # both helpers decline to walk). AC is used because it has no per-type
+        # layer in `client/engine/appliances/registry.py`, so nothing rejects
+        # the value before it lands: it is the most permissive path there is.
+        for value in ([], "abc", 5, 1.5, True, None, {}, {"x": "1"}):
+            with self.subTest(value=value):
+                landed = self._appliance("AC", value).attributes.get("parameters")
+                self.assertTrue(
+                    type(landed) is dict or not isinstance(landed, Mapping),
+                    f"a {type(landed).__name__} reached the dead fallback",
+                )
 
 
 if __name__ == "__main__":
