@@ -3156,20 +3156,68 @@ class AttributeTimestampTest(unittest.TestCase):
         _, blocks = _entry_diag()
         self.assertEqual({}, blocks["WD"]["attributes_last_update"])
 
-    def test_the_rows_are_sorted_across_both_sources(self):
-        # Sorted ONCE at the end and not per source: the nested `parameters` map
-        # is walked second, so a per-source sort would emit a map whose second
-        # half restarts the alphabet.
+    def test_the_rows_follow_the_map_they_are_read_beside(self):
+        # The map is never read alone: "when did tempZ3 last move" is asked with
+        # `attributes` already open at tempZ3. Sorting this one alphabetically
+        # while the sibling keeps the cloud's merge order put the same name at
+        # two unrelated ranks -- a mean 42.4 rows apart on the live WM, worst
+        # case 100, with 66 backward jumps (diagnostics/live-2026-06-22).
         _, blocks = _entry_diag()
-        rows = list(blocks["AC"]["attributes_last_update"])
-        self.assertEqual(sorted(rows), rows)
+        block = blocks["AC"]
+        rows = list(block["attributes_last_update"])
+        self.assertEqual([k for k in block["attributes"] if k in set(rows)], rows)
+        self.assertNotEqual(
+            sorted(rows), rows, "an already-sorted fixture would make this vacuous"
+        )
+
+    def test_a_row_the_sibling_cannot_rank_falls_back_to_sorted(self):
+        # `sorted` is still what orders the rows `attributes` does not enumerate:
+        # the nested-only keys of the degraded merge path. Ordered ONCE and not
+        # per source, so they land together AFTER everything the sibling ranks --
+        # a map whose second half restarts the alphabet reads as a rendering bug,
+        # and so would one that interleaved unrankable names at rank zero.
         mixed, _, _ = diagnostics._attribute_timestamps(
             {
                 "zzz": FakeShadowAttribute("1", AC_STAMP_OLD),
-                "parameters": {"aaa": FakeShadowAttribute("1", AC_STAMP_NEW)},
+                "mmm": FakeShadowAttribute("1", AC_STAMP_OLD),
+                "parameters": {
+                    "bbb": FakeShadowAttribute("1", AC_STAMP_NEW),
+                    "aaa": FakeShadowAttribute("1", AC_STAMP_NEW),
+                },
             }
         )
-        self.assertEqual(["aaa", "zzz"], list(mixed))
+        self.assertEqual(["zzz", "mmm", "aaa", "bbb"], list(mixed))
+
+    def test_a_sibling_that_cannot_be_ranked_costs_the_order_not_the_dump(self):
+        # The `order` build is a SECOND enumeration of `attributes`, and the walk
+        # above has already proved that a mapping which refuses to list its keys
+        # is survivable -- its rows can come entirely from the nested sub-map. An
+        # unguarded enumeration here would turn that survivable input into a dump
+        # that never reaches the reporter.
+        class _Unlistable(dict):
+            def __iter__(self):
+                raise RuntimeError("keys refused")
+
+        source = _Unlistable()
+        old = FakeShadowAttribute("1", AC_STAMP_OLD)
+        new = FakeShadowAttribute("1", AC_STAMP_NEW)
+        # The bare keys too, pointing at the SAME objects. That is the input the
+        # guard is load-bearing on: `_attribute_values` proves the sub-map
+        # redundant over `.items()`, which never calls `__iter__`, and hands
+        # `_coverage` a plain dict, so the block really does reach the reporter.
+        # Without them the fixture is killed by `_coverage`'s own unguarded
+        # enumeration on HEAD too, and would prove the guard exists rather than
+        # that it is worth anything.
+        source["zzz"] = old
+        source["aaa"] = new
+        source["parameters"] = {"zzz": old, "aaa": new}
+        rows, truncated, newest = diagnostics._attribute_timestamps(source)
+        block = _stamp_block(source)
+        self.assertEqual(["aaa", "zzz"], list(block["attributes_last_update"]))
+        # Unranked, so the alphabetical fallback is what is emitted.
+        self.assertEqual(["aaa", "zzz"], list(rows))
+        self.assertFalse(truncated)
+        self.assertEqual(AC_STAMP_NEW, newest)
 
     def test_every_stamp_is_aware_utc_iso_text(self):
         # The shape guard. `read`/`write`-style free text is not in `_TO_REDACT`

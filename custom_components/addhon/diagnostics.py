@@ -1254,7 +1254,9 @@ def _attribute_timestamps(
     Three values are returned, deliberately out of ONE pass:
 
       [0] `{parameter name: ISO text or None}`, one row for each value that
-          exposes a `last_update` surface. That set is also the only honest
+          exposes a `last_update` surface, in `attributes`' own key order --
+          the map this one is emitted beside and the only map it is ever read
+          with; the return statement says why. That set is also the only honest
           answer to "which of these keys are shadow parameters", a bit the dump
           carries today only by duplicating the whole `attributes["parameters"]`
           sub-map.
@@ -1431,11 +1433,66 @@ def _attribute_timestamps(
                 truncated = True
                 continue
             rows[key] = _stamp_text(raw)
-    # Sorted ONCE, at the end, and not per source: the two sources are each
+    # Ordered ONCE, at the end, and not per source: the two sources are each
     # walked in sorted order but a bare key and a nested one can both be
     # productive, and a map whose second half restarts the alphabet reads as a
     # rendering bug.
-    return dict(sorted(rows.items())), truncated, newest
+    #
+    # The order taken is `attributes`' OWN enumeration and not the alphabet,
+    # because this map is never read alone. The one question it exists to answer
+    # -- "when did tempZ3 last move" -- is asked with `attributes` already open
+    # at tempZ3, and the sibling keeps the cloud's merge order, so an
+    # alphabetical map made the reader find one name at two unrelated ranks in
+    # two adjacent sections. Measured on the four archived live dumps
+    # (diagnostics/live-2026-06-22), same name, both maps: mean displacement 4.5
+    # rows on the REF, 15.7 on the TD, 24.6 on the AC, 42.4 on the WM, worst
+    # case 100, and 66 places where reading the rows top to bottom sent the eye
+    # BACKWARDS up the sibling. Following the sibling makes every one of those
+    # zero, and it is free here: the shadow parameters are a CONTIGUOUS run
+    # inside `attributes` on all four appliances (`hon_client._get_attributes`
+    # flattens them in one update), so the map is now that same run, reprinted
+    # with the instants.
+    #
+    # `sorted` survives as the FALLBACK, for rows `attributes` does not
+    # enumerate at all: the nested-only keys of the degraded merge path, where
+    # `dict(params)` raised and nothing was flattened. There are none on any
+    # archived appliance -- zero across all four dumps and entry.json -- so this
+    # is the corner and not the case. They keep the order they have today and
+    # land together after everything ranked, rather than being interleaved at
+    # rank zero among names they have no relationship to.
+    #
+    # WHICH rows survive does not move: the cap is applied during the walk, and
+    # the walk is untouched. Only the printing order changes, and it changes for
+    # the better under the cap too -- `_appliance_block` keeps the
+    # `attributes["parameters"]` sub-map whenever this map is truncated, and the
+    # surviving rows are now a SUBSEQUENCE of it, so the dropped names show up
+    # as holes in an aligned scan instead of having to be diffed across two
+    # different orders.
+    try:
+        order = {str(name): position for position, name in enumerate(attributes)}
+    except Exception:
+        # Not the same formality as the guard on the walk above. That one had
+        # already decided this mapping could not be listed and CONTINUED, so the
+        # rows in hand may have come entirely from the nested sub-map and be
+        # perfectly good; an unguarded second enumeration here would throw them
+        # away along with the whole dump, from the helper that makes the FIRST
+        # read of `attributes` in the block. Unranked, every row falls into one
+        # bucket and the tiebreaker below emits exactly the alphabetical map
+        # this line returned before.
+        _LOGGER.debug(
+            "Diagnostics debug: attribute order unreadable", exc_info=True
+        )
+        order = {}
+    return (
+        dict(
+            sorted(
+                rows.items(),
+                key=lambda row: (order.get(row[0], len(order)), row[0]),
+            )
+        ),
+        truncated,
+        newest,
+    )
 
 
 def _attribute_values(attributes: Mapping) -> Mapping:
