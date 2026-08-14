@@ -1816,6 +1816,15 @@ class BoundedTextTest(unittest.TestCase):
         )
         self.assertIsNone(diagnostics._bounded_text(conn_event, 40))
         self.assertIsNone(diagnostics._bounded_text(["a"], 40))
+
+        # A bare Mapping is caught by EITHER of the two container guards, so the
+        # assertions above cannot tell them apart and the outer one can be
+        # deleted with the file still green. This envelope also exposes `.value`,
+        # so the inner guard reads a scalar and only the outer guard can refuse it.
+        class _Envelope(dict):
+            value = "CONNECTED"
+
+        self.assertIsNone(diagnostics._bounded_text(_Envelope(conn_event), 40))
         self.assertIsNone(diagnostics._bounded_text(None, 40))
 
     def test_a_container_inside_a_wrapper_is_refused_too(self):
@@ -1940,10 +1949,36 @@ class AsUtcTest(unittest.TestCase):
     """`_as_utc` is the one place awareness is decided, so ages cannot raise."""
 
     def test_an_aware_instant_is_converted(self):
+        # Aware datetimes compare by ABSOLUTE INSTANT, so an assertEqual against
+        # the converted value is satisfied whether or not the conversion happened.
+        # The representation is what has to be asserted: tzinfo and isoformat are
+        # the only observations that can tell `astimezone(utc)` from `return value`.
         moment = datetime(2026, 4, 9, 12, 0, tzinfo=timezone(timedelta(hours=2)))
+        converted = diagnostics._as_utc(moment, False)
+        self.assertEqual(datetime(2026, 4, 9, 10, 0, tzinfo=timezone.utc), converted)
+        self.assertEqual(timezone.utc, converted.tzinfo)
+        self.assertEqual("2026-04-09T10:00:00+00:00", converted.isoformat())
+
+    def test_a_tzinfo_with_no_offset_is_treated_as_naive(self):
+        # The half of the documented policy nothing exercised. A tzinfo whose
+        # `utcoffset()` returns None does NOT raise: CPython falls back to the
+        # HOST zone, so guarding on `tzinfo is not None` would move the instant
+        # by however far the reporter is from UTC and then label it '+00:00'.
+        class NoOffset(tzinfo):
+            def utcoffset(self, dt):
+                return None
+
+            def tzname(self, dt):
+                return None
+
+            def dst(self, dt):
+                return None
+
+        moment = datetime(2020, 9, 29, 10, 1, 26, tzinfo=NoOffset())
+        self.assertIsNone(diagnostics._as_utc(moment, False))
         self.assertEqual(
-            datetime(2026, 4, 9, 10, 0, tzinfo=timezone.utc),
-            diagnostics._as_utc(moment, False),
+            datetime(2020, 9, 29, 10, 1, 26, tzinfo=timezone.utc),
+            diagnostics._as_utc(moment, True),
         )
 
     def test_a_naive_instant_follows_the_stated_policy(self):
@@ -2120,14 +2155,56 @@ class CoverageExpectedAbsentTest(unittest.TestCase):
         # below it is the one that discriminates.
         _, blocks = _entry_diag()
         for app_type, block in blocks.items():
-            bare = {k for k in block["attributes"] if "." not in k}
+            published = set(block["attributes"])
+            bare = {k for k in published if "." not in k}
+            # The attribute axis does NOT subtract bare keys, it subtracts
+            # `reachable`: bare keys PLUS every mapped name whose multi-link read
+            # chain reaches a DOTTED spelling the device publishes. Filtering
+            # every dotted key out of the comparison is exactly where the false
+            # positives live -- the live TD publishes `tumblingStatus` only as
+            # `settings.tumblingStatus`/`startProgram.tumblingStatus`, the live
+            # WM `delayTime` only as `startProgram.delayTime`.
+            #
+            # `settings.<name>` is excluded: it is the COMMAND-parameter mirror,
+            # which no entity reads and which the attribute axis subtracts on
+            # purpose (a writable param is absent from the READ axis even when
+            # its settings twin is printed -- `spinSpeed` on the WD fixture).
+            dotted_tails = {
+                k.split(".", 1)[1]
+                for k in published
+                if "." in k and not k.startswith("settings.")
+            }
             declared = set()
             for params in block["commands"].values():
                 declared.update(params)
             for name in block["coverage"]["attributes_expected_absent"]:
                 self.assertNotIn(name, bare, f"{app_type}: {name} is published")
+                self.assertNotIn(
+                    name,
+                    dotted_tails,
+                    f"{app_type}: {name} is published as a dotted spelling",
+                )
             for name in block["coverage"]["command_params_expected_absent"]:
                 self.assertNotIn(name, declared, f"{app_type}: {name} is declared")
+
+    def test_a_mapped_name_published_only_under_a_dotted_spelling_is_not_absent(self):
+        # The behaviour test behind the `reachable` rule, which nothing pinned.
+        # On the live 2026-06-22 TD `tumblingStatus` exists ONLY as
+        # `settings.tumblingStatus` / `startProgram.tumblingStatus`, and the
+        # option switch reads it through that chain, so it is present, not
+        # absent. A single-link chain keeps the strict bare test.
+        block = diagnostics._appliance_block(
+            "id1",
+            {
+                "appliance": FakeApplianceNoModel(commands={}),
+                "type": "TD",
+                "attributes": {"startProgram.tumblingStatus": "1"},
+                "statistics": {},
+            },
+        )
+        absent = block["coverage"]["attributes_expected_absent"]
+        self.assertNotIn("tumblingStatus", absent)
+        self.assertTrue(absent, "the empty case would be vacuous")
 
     def test_a_param_under_a_non_settings_command_is_not_reported_absent(self):
         # The specific shape the invariant above exists to catch, and the ONLY
@@ -2556,6 +2633,37 @@ class EntitySourceTest(unittest.TestCase):
         self.assertNotIn("switch.pause", ref_index)
         self.assertIn("climate.climate", diagnostics._mapped_sets("AC")[2])
         self.assertIn("switch.pause", diagnostics._mapped_sets("WD")[2])
+        # Both tags above come from ONE code path -- the `_CUSTOM_ENTITY_SOURCES`
+        # type filter. The registry walk builds type-scoped rows through three
+        # OTHER mechanisms (the `app_type == APPLIANCE_AC` louver block, the
+        # `app_type == APPLIANCE_AP` fixed-key block, and the per-desc `types`
+        # filter), and a general-sounding name over a single-path check is how a
+        # leak from one of the others ships unnoticed. Assert the property over
+        # every type instead of sampling it.
+        owners: dict[str, set[str]] = {}
+        for app_type in ("REF", "AC", "WD", "AP", "WC", "OV", "HO", "TD", "WM"):
+            for tag in diagnostics._mapped_sets(app_type)[2]:
+                owners.setdefault(tag, set()).add(app_type)
+        self.assertEqual({"AC"}, owners["select.fan_direction_vertical"])
+        self.assertEqual({"AC"}, owners["select.fan_direction_horizontal"])
+        self.assertEqual({"AC"}, owners["climate.climate"])
+        self.assertEqual({"AP"}, owners["fan.purifier"])
+        self.assertEqual({"WM", "WD", "TD"}, owners["switch.pause"])
+
+    def test_the_binary_sensor_rows_name_the_parameters_they_read(self) -> None:
+        # 63 of the 381 names this section emits are binary_sensor rows, and
+        # nothing asserted a single one: the whole walk could be deleted, or
+        # `binary_sensor.connectivity` pointed at another parameter, and the
+        # suite stayed green. One row from each of the three tables that build
+        # them -- the per-type registry, the universal connectivity row, and the
+        # gated universal row.
+        ref_index = diagnostics._mapped_sets("REF")[2]
+        self.assertEqual({"read": ["doorStatusZ1"]}, ref_index["binary_sensor.door_zone1"])
+        self.assertEqual({"read": ["available"]}, ref_index["binary_sensor.connectivity"])
+        self.assertEqual(
+            {"read": ["remoteCtrValid"]},
+            diagnostics._mapped_sets("WD")[2]["binary_sensor.remote_control"],
+        )
 
     def test_a_stop_button_names_the_parameter_it_writes(self) -> None:
         # `button.stop_program` fixes onOffStatus="0" on the command it sends,
@@ -2762,10 +2870,12 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         allowed = _static_parameter_names()
         self.assertIn("tempSelZ3", allowed)  # not vacuous
         seen = 0
+        swept_domains: dict[str, set[str]] = {}
         for app_type in ("REF", "AC", "WD", "AP", "WC", "OV", "HO", "TD", "WM"):
             index = diagnostics._mapped_sets(app_type)[2]
             self.assertIsNotNone(index)
             for tag, row in index.items():
+                swept_domains.setdefault(app_type, set()).add(tag.split(".")[0])
                 for name in (row or {}).get("read", []) + (row or {}).get("write", []):
                     seen += 1
                     bare = name
@@ -2776,7 +2886,28 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
                         name in allowed or bare in allowed,
                         f"{app_type} {tag}: {name} is in no static table",
                     )
-        self.assertGreater(seen, 200, "the sweep found almost nothing to check")
+        # A floor of 200 against a real count of 381 lets an ENTIRE table stop
+        # being walked unnoticed: the sensor.* rows alone are 113 names and
+        # binary_sensor.* 63, so deleting either leaves the count above the
+        # floor. A union floor is also blind to a table that stops being walked
+        # for ONE type, because the other eight keep the domain in the union.
+        # Pin the SHAPE of the sweep, per type, and not only a number.
+        self.assertGreater(seen, 375, f"the sweep shrank to {seen} names")
+        self.assertEqual(
+            {
+                "REF": {"binary_sensor", "number", "select", "sensor"},
+                "AC": {"binary_sensor", "climate", "select", "sensor", "switch"},
+                "WD": {"binary_sensor", "button", "number", "select", "sensor", "switch"},
+                "AP": {"binary_sensor", "fan", "number", "select", "sensor", "switch"},
+                "WC": {"binary_sensor", "number", "sensor", "switch"},
+                "OV": {"binary_sensor", "number", "sensor"},
+                "HO": {"binary_sensor", "sensor"},
+                "TD": {"binary_sensor", "button", "number", "select", "sensor", "switch"},
+                "WM": {"binary_sensor", "button", "number", "select", "sensor", "switch"},
+            },
+            swept_domains,
+            "a table stopped being walked for some appliance type",
+        )
 
     def test_every_emitted_name_matches_the_closed_shape(self) -> None:
         # A second, cheaper net under the first: whatever a future edit starts
@@ -2869,6 +3000,14 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         self.assertNotIn("no-dot-here", index)
         self.assertNotIn("sensor.no_types", index)
         self.assertNotIn("sensor.null_types", index)
+        # Seven broken shapes go in; assert all of them, not three. The tag guard
+        # is a TWO-clause condition (`not domain or not suffix`) and only the
+        # suffix half was covered -- `if not domain` could be deleted and nothing
+        # in the suite noticed, so a row tagged '.leading' shipped with an empty
+        # domain that joins with no `by_domain` entry.
+        self.assertNotIn(".leading", index)
+        self.assertNotIn("trailing.", index)
+        self.assertNotIn("sensor.orphan", index)
         # The real table is back and still works, so the swap above cannot leave
         # the rest of the suite testing a stub.
         self.assertIn("select.ref_program", diagnostics._mapped_sets("REF")[2])
@@ -3157,15 +3296,18 @@ class AttributeTimestampNewestTest(unittest.TestCase):
         (FROZEN - newest).total_seconds()  # must not raise
 
     def test_a_subclass_that_refuses_to_compare_does_not_kill_the_dump(self):
-        # The one unguarded expression this helper could have shipped: the first
-        # instant is short-circuited by `newest is None`, so the comparison only
-        # runs on the SECOND stamped parameter -- which is why a single-value
-        # test would have missed it entirely.
+        # A hostile `__gt__` is NOT what this guard catches: production rebuilds
+        # the instant into a plain `datetime` from its integer fields one line
+        # earlier, so by the comparison both operands are ordinary datetimes and
+        # an overridden `__gt__` is never invoked (measured: zero calls). What
+        # CAN raise inside the guard is the rebuild itself, so the subclass has
+        # to be hostile on a field the rebuild reads.
         class Hostile(datetime):
-            def __gt__(self, other):
+            @property
+            def year(self):
                 raise RuntimeError("boom")
 
-        block = _stamp_block(
+        stamps, _, newest = diagnostics._attribute_timestamps(
             {
                 "a": FakeShadowAttribute("1", AC_STAMP_OLD),
                 "b": FakeShadowAttribute(
@@ -3173,9 +3315,12 @@ class AttributeTimestampNewestTest(unittest.TestCase):
                 ),
             }
         )
-        self.assertEqual(
-            "2026-04-09T05:31:02+00:00", block["attributes_last_update"]["a"]
-        )
+        # The hostile value is skipped for the newest, not fatal ...
+        self.assertEqual(AC_STAMP_OLD, newest)
+        # ... and its own ROW still prints, because `_stamp_text` is a separate
+        # path that never touches the comparison.
+        self.assertEqual("2026-04-09T06:00:00+00:00", stamps["b"])
+        self.assertEqual("2026-04-09T05:31:02+00:00", stamps["a"])
 
     def test_the_newest_is_none_when_no_instant_ever_arrived(self):
         stamps, _, newest = diagnostics._attribute_timestamps(
@@ -3184,10 +3329,49 @@ class AttributeTimestampNewestTest(unittest.TestCase):
         self.assertEqual({"a": None}, stamps)
         self.assertIsNone(newest)
 
+    def test_a_shadow_stamped_only_with_the_epoch_sentinel_has_no_newest(self):
+        # The route a real appliance actually takes. Every one of the 33
+        # `lastUpdate` values in the only REF capture this repository holds is
+        # exactly '1970-01-01T00:00:00.0Z', so a real fridge arrives with every
+        # shadow parameter carrying a PARSED, aware, non-None datetime. The
+        # `instant > _NEVER_STAMPED` clause is the only thing between that and a
+        # freshness header reading "56 years stale" on a connected appliance.
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        stamps, _, newest = diagnostics._attribute_timestamps(
+            {"a": FakeShadowAttribute("1", epoch), "b": FakeShadowAttribute("2", epoch)}
+        )
+        # The rows still PRINT what the cloud sent -- the map is an echo ...
+        self.assertEqual(
+            {"a": "1970-01-01T00:00:00+00:00", "b": "1970-01-01T00:00:00+00:00"},
+            stamps,
+        )
+        # ... but the sentinel is not an instant, so no age is derivable from it.
+        self.assertIsNone(newest)
+        self.assertIsNone(diagnostics._freshness(None, {}, newest, FROZEN).get("shadow"))
+
     def test_the_newest_is_never_emitted_from_here(self):
-        # It is a datetime, which HA's JSON encoder raises on. Nothing in the
-        # block may carry it: only `_stamp_text` output reaches the document.
+        # `json.dumps` CANNOT see this on its own: `_appliance_block` returns
+        # `_redact(block)`, and `_jsonable` stringifies any datetime it meets, so
+        # a leaked instant arrives as '2026-04-09 05:31:02+00:00' -- the
+        # space-separated shape `_ISO_RE` exists to reject -- without raising.
+        # Assert the type and the shape, then keep the serialisation check.
         _, blocks = _entry_diag()
+
+        def _leaves(node):
+            if isinstance(node, dict):
+                for value in node.values():
+                    yield from _leaves(value)
+            elif isinstance(node, (list, tuple)):
+                for value in node:
+                    yield from _leaves(value)
+            else:
+                yield node
+
+        for stamp in blocks["AC"]["attributes_last_update"].values():
+            if stamp is not None:
+                self.assertIsNotNone(diagnostics._ISO_RE.fullmatch(stamp), stamp)
+        for leaf in _leaves(blocks["AC"]):
+            self.assertNotIsInstance(leaf, datetime)
         json.dumps(blocks["AC"])  # must not raise
 
 
@@ -3693,6 +3877,19 @@ class FreshnessShippedFieldsTest(unittest.TestCase):
         )
         self.assertEqual(["category", "at", "age_s"], list(full["last_conn_event"]))
         self.assertEqual(["at", "age_s"], list(full["shadow"]))
+        # `_full_section` calls `_freshness` DIRECTLY, so the order it measures is
+        # the one the helper returns, not the one the document prints. Order is
+        # decided by the LAST writer of the dict -- the block assembly and
+        # `_redact` -- so assert it again on the shipped path or a reordering
+        # introduced downstream leaves this test green.
+        shipped = _freshness_of(
+            {"available": False, "lastConnEvent": _conn_event()},
+            FakeLinkAppliance(False),
+        )
+        self.assertEqual(["connected", "available", "last_conn_event"], list(shipped))
+        self.assertEqual(["category", "at", "age_s"], list(shipped["last_conn_event"]))
+        _, blocks = _entry_diag()
+        self.assertEqual("shadow", list(blocks["AC"]["freshness"])[-1])
 
     def test_a_thin_appliance_emits_a_subset_and_never_a_new_name(self):
         # The conditional keys drop out; nothing else appears in their place.
@@ -4026,6 +4223,15 @@ class FreshnessPrivacyTest(unittest.TestCase):
             for text in stamps:
                 self.assertTrue(text.endswith("+00:00"), text)
                 self.assertEqual(text, debug_utils._MAC_RE.sub("***", text))
+        # Both fixtures above are ALREADY UTC, so neither can observe the
+        # normalisation the comment credits. Straddle the hazard: a sub-minute
+        # offset is what makes an ISO instant match `_MAC_RE`, and the contract
+        # is that the instant is SHIFTED to UTC, not dropped.
+        odd = timezone(timedelta(hours=-5, minutes=-30, seconds=-15))
+        skewed = diagnostics._freshness(
+            None, {}, datetime(2026, 4, 9, 12, 34, 56, tzinfo=odd), FROZEN
+        )
+        self.assertEqual("2026-04-09T18:05:11+00:00", skewed["shadow"]["at"])
 
 
 class FreshnessDegradationTest(unittest.TestCase):
@@ -4089,6 +4295,17 @@ class FreshnessDegradationTest(unittest.TestCase):
         for block in blocks.values():
             self.assertTrue(_json_native(block["freshness"]))
             json.dumps(block)  # must not raise
+        # Everything above is observed AFTER `_redact`/`_jsonable`, which
+        # stringify any datetime they meet -- so the defect this test is named
+        # for is erased by the pipeline used to look for it. Assert it on the
+        # UNREDACTED return value too, which is the only place it is visible.
+        raw = diagnostics._freshness(
+            FakeLinkAppliance(False),
+            {"available": False, "lastConnEvent": _conn_event()},
+            AC_STAMP_NEW,
+            FROZEN,
+        )
+        self.assertTrue(_json_native(raw))
 
     def test_a_naive_dump_instant_never_reaches_a_subtraction(self):
         # The TypeError that would take the whole dump down. `_appliance_block`
@@ -4190,13 +4407,66 @@ class AttributeValuesDedupTest(unittest.TestCase):
         # means the merge this optimisation relies on did not happen the way it
         # is documented, so the copy stays. Equality would also mean calling an
         # `__eq__` this module does not control.
+        #
+        # The fixture has to be an object for which `is` and `==` DISAGREE.
+        # `FakeShadowAttribute` inherits `object.__eq__`, so on it `==` degenerates
+        # to `is` and the assertion below cannot tell the two operators apart.
+        class _AlwaysEqual:
+            def __init__(self, value):
+                self.value = value
+                self.last_update = AC_STAMP_OLD
+
+            def __eq__(self, other):
+                return True
+
+            __hash__ = None
+
         block = _stamp_block(
             {
-                "tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD),
-                "parameters": {"tempZ1": FakeShadowAttribute("4", AC_STAMP_OLD)},
+                "tempZ1": _AlwaysEqual("4"),
+                "parameters": {"tempZ1": _AlwaysEqual("4")},
             }
         )
         self.assertIn("parameters", block["attributes"])
+
+    def test_the_redundancy_check_never_calls_a_foreign_eq(self):
+        # The other half of the docstring's reason for `is`: an `__eq__` this
+        # module does not control is free to raise, and the dedupe must not be
+        # the thing that costs the reporter the file.
+        class _HostileEq:
+            def __init__(self, value):
+                self.value = value
+                self.last_update = AC_STAMP_OLD
+
+            def __eq__(self, other):
+                raise RuntimeError("boom")
+
+            __hash__ = None
+
+        shared = _HostileEq("4")
+        block = _stamp_block({"tempZ1": shared, "parameters": {"tempZ1": shared}})
+        # Same object bare and nested -> redundant -> dropped, and `__eq__` was
+        # never consulted (it would have raised).
+        self.assertNotIn("parameters", block["attributes"])
+
+    def test_the_live_merge_binds_the_same_object_bare_and_nested(self):
+        # The cross-module premise the whole optimisation rests on, stated in the
+        # production docstring and, until now, in no test. `_attribute_values`
+        # decides redundancy with `is`; that is only ever True because
+        # `_get_attributes` merges the shadow with `attributes.update(params)`,
+        # binding the SAME objects bare and nested. Rewrite that merge to copy and
+        # the dedupe silently stops firing on every real appliance.
+        from custom_components.addhon.hon_client import _get_attributes
+
+        shadow = FakeShadowAttribute("4", AC_STAMP_OLD)
+
+        class _App:
+            attributes = {"parameters": {"tempZ1": shadow}}
+
+        merged = _get_attributes(_App())
+        self.assertIs(shadow, merged["tempZ1"])
+        self.assertIs(shadow, merged["parameters"]["tempZ1"])
+        self.assertNotIn("parameters", diagnostics._attribute_values(merged))
 
     def test_a_non_mapping_parameters_value_is_left_alone(self):
         block = _stamp_block({"parameters": "not-a-map", "x": 1})
