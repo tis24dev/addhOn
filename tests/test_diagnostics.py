@@ -15,8 +15,10 @@ registries can be imported for the coverage axis). No real Home Assistant instal
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import dataclasses
+import importlib
 import json
 import sys
 import types
@@ -3030,6 +3032,460 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
             for half in ("read", "write"):
                 if half in entry:
                     self.assertIsInstance(entry[half], tuple, entry["tag"])
+
+
+# --- the walk is complete: no platform table is invisible to it -------------
+
+
+# The integration modules whose description tables `_mapped_sets` is expected to
+# account for. This IS a whitelist, and a whitelist is the defect this section
+# exists to close -- so it is not trusted:
+# `test_no_other_module_grew_a_description_table` below derives the same set from
+# the SOURCE of every file under custom_components/addhon and fails if the two
+# disagree. The chain therefore bottoms out in something no contributor has to
+# remember to update.
+_TABLE_MODULES = ("binary_sensor", "number", "select", "sensor", "switch")
+
+# Tables that deliberately contribute no parameter the dump should account for.
+#
+# EMPTY, and that is the honest state: every description table in the five
+# modules above is reached by the walk today. An entry here is a promise that a
+# reader of a dump is not misled by the absence of these parameters from
+# `coverage` and `entities.sources`, so the reason must say what the dump prints
+# for them INSTEAD and why that is right -- not that the table is new, internal,
+# experimental or special. `test_every_exemption_is_still_needed` deletes the
+# entry for you the day it stops being true, by failing.
+_TABLES_OUTSIDE_COVERAGE: dict[str, str] = {}
+
+# Planted into a clone of every table at once, then looked for in the tags
+# `_mapped_sets` emits. The counter appended to it is fixed width, so no probe
+# key can be a suffix of another; the prefix is spelled unlike any real
+# translation key so a leak into a real dump would be unmistakable.
+_PROBE_KEY = "zz_completeness_probe_"
+
+
+def _is_entity_description(obj) -> bool:
+    """True for a description INSTANCE of any of the ten description classes.
+
+    Duck-typed rather than isinstance-checked against a base: the ten classes
+    have no common ancestor. Four extend Home Assistant's `EntityDescription`
+    (itself stubbed differently by conftest and by this file) and six --
+    `HonSettingsSwitchDescription`, `HonProgramOptionSelectDescription` and their
+    siblings -- are plain local dataclasses that extend nothing. What all ten
+    share, and what the walk actually reads, is that they are dataclass instances
+    carrying a `key`.
+    """
+    return (
+        dataclasses.is_dataclass(obj)
+        and not isinstance(obj, type)
+        and any(field.name == "key" for field in dataclasses.fields(obj))
+    )
+
+
+def _descriptions_in(value, seen=None) -> list:
+    """Every description reachable from one module-level binding.
+
+    The real tables are not one shape. `SENSORS` and `_SETTINGS_SWITCHES` are
+    dicts keyed by appliance type; `_PROGRAM_OPTION_SWITCHES` and `_WASH_EXTRA`
+    are flat tuples; `_CONNECTIVITY` is a single description with no container at
+    all. Recursing over containers instead of matching a shape means a table
+    added in a shape nobody anticipated is still found, and the `seen` set means
+    a table that appears twice (`_REMOTE_CONTROL` is also inside
+    `_UNIVERSAL_GATED`) cannot loop or double-count.
+    """
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        return []
+    seen.add(id(value))
+    if _is_entity_description(value):
+        return [value]
+    found: list = []
+    if isinstance(value, Mapping):
+        for item in value.values():
+            found.extend(_descriptions_in(item, seen))
+    elif isinstance(value, (tuple, list, set, frozenset)):
+        for item in value:
+            found.extend(_descriptions_in(item, seen))
+    return found
+
+
+def _with_probe_row(value, probe):
+    """`value` plus one extra description, or None if it cannot be built.
+
+    Returning None rather than guessing is deliberate: a table shape this cannot
+    augment is a table whose reachability cannot be MEASURED, and the guard says
+    so out loud instead of reporting the silence as a pass.
+    """
+    if _is_entity_description(value):
+        augmented = probe
+    elif isinstance(value, Mapping):
+        augmented = dict(value)
+        for key, item in list(augmented.items()):
+            if isinstance(item, tuple):
+                augmented[key] = item + (probe,)
+            elif isinstance(item, list):
+                augmented[key] = [*item, probe]
+            elif _is_entity_description(item):
+                augmented[key] = probe
+    elif isinstance(value, tuple):
+        augmented = value + (probe,)
+    elif isinstance(value, list):
+        augmented = [*value, probe]
+    elif isinstance(value, frozenset):
+        augmented = value | {probe}
+    elif isinstance(value, set):
+        augmented = set(value) | {probe}
+    else:
+        return None
+    # Prove the probe really landed. A Mapping of some future shape could come
+    # back unchanged, and an unchanged clone would report a walked table as
+    # unwalked -- a failure the maintainer could not act on.
+    if not any(item is probe for item in _descriptions_in(augmented)):
+        return None
+    return augmented
+
+
+def _appliance_types() -> tuple[str, ...]:
+    """Every appliance type the integration knows, harvested from `const`.
+
+    Read off the module rather than listed here so a type added next year is
+    probed the day it is added.
+    """
+    from custom_components.addhon import const
+
+    return tuple(sorted({
+        value
+        for name, value in vars(const).items()
+        if name.startswith("APPLIANCE_") and isinstance(value, str)
+    }))
+
+
+def _description_tables() -> dict:
+    """{"<module>.<NAME>": (module, attr, value, {id of each description})}."""
+    tables: dict = {}
+    for name in _TABLE_MODULES:
+        try:
+            module = importlib.import_module(f"custom_components.addhon.{name}")
+        except Exception as err:  # pragma: no cover - a missing stub, not drift
+            raise AssertionError(
+                f"custom_components/addhon/{name}.py could not be imported under "
+                f"this file's Home Assistant stubs ({err!r}), so its description "
+                "tables cannot be checked against the diagnostics walk. Add what "
+                "it needs to `_install_stubs` at the top of this file."
+            ) from err
+        for attr, value in list(vars(module).items()):
+            if attr.startswith("__"):
+                continue
+            rows = _descriptions_in(value)
+            if rows:
+                tables[f"{name}.{attr}"] = (module, attr, value, {id(r) for r in rows})
+    return tables
+
+
+# Marks a table the probe could not be planted in, so `_completeness_failure`
+# can say "not measured" instead of "not walked". The distinction is not
+# pedantry: a per-zone `dict[str, dict[str, Description]]` wired correctly into
+# `_mapped_sets` is unprobeable, and reporting it as invisible to the dump would
+# print a falsehood and then ask the contributor to write it down.
+_UNMEASURED = "unmeasured: "
+
+
+def _unwalked_description_tables() -> dict:
+    """{"<module>.<NAME>": why} for every table the dump cannot see.
+
+    MEASURED, not read off a list: one extra description with a unique key is
+    planted in a clone of every table, `_mapped_sets` is run for every appliance
+    type, and a table counts as walked when its planted key comes back as an
+    `entities.sources` tag. Asking the walk what it read -- instead of listing
+    what it is supposed to read -- is the whole point; a second hand-kept list
+    would have exactly the blind spot of the first.
+
+    A table whose probe never surfaces still passes when every description in it
+    is also inside a table that did surface. That is not a loophole, it is the
+    normal case: `_WASH_CONSUMPTION` and the other thirty per-type tuples are
+    concatenated into `SENSORS` at import, so replacing the tuple afterwards
+    cannot reach the walk, while the descriptions themselves are read every time.
+    Containment is by object identity, so a tuple that only LOOKS like part of
+    `SENSORS` is not excused.
+    """
+    tables = _description_tables()
+    order = sorted(tables)
+    probes: dict[str, str] = {}
+    unprobeable: dict[str, str] = {}
+    restore = [(tables[qname][0], tables[qname][1], tables[qname][2])
+               for qname in order]
+    try:
+        for position, qname in enumerate(order):
+            module, attr, value, _ids = tables[qname]
+            key = f"{_PROBE_KEY}{position:03d}"
+            try:
+                probe = dataclasses.replace(_descriptions_in(value)[0], key=key)
+                augmented = _with_probe_row(value, probe)
+            except Exception as err:
+                augmented = None
+                unprobeable[qname] = (
+                    _UNMEASURED + f"it could not be cloned to probe it: {err!r}"
+                )
+            if augmented is None:
+                unprobeable.setdefault(
+                    qname,
+                    _UNMEASURED + "`_with_probe_row` has no rule for its shape",
+                )
+                continue
+            probes[key] = qname
+            setattr(module, attr, augmented)
+        walked: set[str] = set()
+        for app_type in _appliance_types():
+            for tag in diagnostics._mapped_sets(app_type)[2] or {}:
+                _before, marker, position = str(tag).partition(_PROBE_KEY)
+                planted = probes.get(marker + position) if marker else None
+                if planted:
+                    walked.add(planted)
+    finally:
+        for module, attr, value in restore:
+            setattr(module, attr, value)
+
+    if probes and not walked:
+        # Restore first, then complain. `_mapped_sets` returns a None index when
+        # any of the platform modules it lazily imports fails to import, and on
+        # that path EVERY table would be reported unwalked at once -- sixty-odd
+        # lines of consequence hiding one cause.
+        raise AssertionError(
+            "`_mapped_sets` produced no `entities.sources` index for any of the "
+            f"{len(_appliance_types())} appliance types, so nothing could be "
+            "measured. That is its documented degraded path: one of the platform "
+            "modules it imports lazily raised on import. Fix that first."
+        )
+
+    reached: set[int] = set()
+    for qname in walked:
+        if qname in tables:
+            reached |= tables[qname][3]
+    unwalked = dict(unprobeable)
+    for qname, (_module, _attr, _value, ids) in tables.items():
+        if qname in walked or qname in unwalked or ids <= reached:
+            continue
+        unwalked[qname] = (
+            f"{len(ids)} description(s), and no table the walk reads contains them"
+        )
+    return unwalked
+
+
+def _modules_declaring_descriptions() -> set[str]:
+    """Every integration module whose SOURCE constructs an entity description.
+
+    Parsed, never imported: this is the check that has to keep working for a
+    module the stubs in this file cannot import (climate.py needs a
+    `homeassistant.components.climate` nobody stubs today), which is exactly the
+    module a table could be added to without any of this noticing.
+    """
+    package = REPO_ROOT / "custom_components" / "addhon"
+    found: set[str] = set()
+    for path in sorted(package.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if isinstance(name, str) and name.endswith("Description"):
+                found.add(path.relative_to(package).with_suffix("").as_posix())
+                break
+    return found
+
+
+def _completeness_failure(unwalked: dict) -> str:
+    """The whole value of this guard is that whoever trips it knows what to do.
+
+    Two populations, and telling them apart is the point. A table the probe
+    reached and the walk did not is PROVEN invisible to the dump. A table the
+    probe could not be planted in is merely UNMEASURED -- the walk may well read
+    it. Rendering the second under the first's headline would print a false
+    statement and then offer, as remedy, writing that false statement down as an
+    exemption. A dict-of-dict per-zone table wired correctly into `_mapped_sets`
+    is exactly that case, and it is the shape the worked example uses.
+    """
+    if not unwalked:
+        return ""
+    unmeasured = {
+        q: why[len(_UNMEASURED):]
+        for q, why in unwalked.items()
+        if str(why).startswith(_UNMEASURED)
+    }
+    unwalked = {q: why for q, why in unwalked.items() if q not in unmeasured}
+    lines: list[str] = []
+    if unmeasured:
+        lines += ["", "Entity description tables this guard could not MEASURE:", ""]
+        for qname in sorted(unmeasured):
+            module, _dot, attr = qname.rpartition(".")
+            lines.append(
+                f"    custom_components/addhon/{module}.py :: {attr}"
+                f"   ({unmeasured[qname]})"
+            )
+        lines += [
+            "",
+            "This guard plants one extra description row in a clone of every",
+            "table and looks for it in the tags `_mapped_sets` emits. It says",
+            "nothing about whether the walk reads these -- it may well. Teach",
+            "`_with_probe_row` the shape (about four lines per container kind)",
+            "rather than exempting the table: an exemption here would record a",
+            "promise about the dump that is probably false.",
+        ]
+    if not unwalked:
+        return "\n".join(lines)
+    lines += ["", "Entity description tables the diagnostics dump cannot see:", ""]
+    for qname in sorted(unwalked):
+        module, _dot, attr = qname.rpartition(".")
+        lines.append(
+            f"    custom_components/addhon/{module}.py :: {attr}"
+            f"   ({unwalked[qname]})"
+        )
+    example = sorted(unwalked)[0]
+    lines += [
+        "",
+        "`diagnostics._mapped_sets` never reads them, so on an appliance that has",
+        "these entities the dump makes two statements the reader can see",
+        "contradict each other, a few lines apart: `entities.by_domain` lists the",
+        "entity, and then `coverage` reports the parameter it reads and writes as",
+        "unmapped, with no row in `entities.sources` to disprove it. The walk and",
+        "the test-side harvest are both whitelists, which is why a table neither",
+        "was told about is invisible to both.",
+        "",
+        "Do ONE of these:",
+        "",
+        "1. Have the walk read it. Add the name to the lazy-import block in",
+        "   `_mapped_sets` (custom_components/addhon/diagnostics.py), give it a",
+        "   loop that puts its parameters into `mapped_attrs` and/or",
+        "   `mapped_params` and writes an `entities.sources` row, and add it to",
+        "   `_static_parameter_names` in this file -- the drift guard over the",
+        "   emitted names, which fails until it is told about the new table.",
+        "",
+        "2. If the table genuinely contributes no parameter the dump should",
+        "   account for, record why, next to this test:",
+        "",
+        "       _TABLES_OUTSIDE_COVERAGE = {",
+        f'           "{example}":',
+        '               "<what the dump prints for these parameters instead,',
+        '                and why that is right>",',
+        "       }",
+        "",
+        "   'It is new', 'it is internal' and 'it is experimental' are not",
+        "   reasons: a dump is read by whoever is debugging the appliance, and",
+        "   none of those three changes what it says about the parameter.",
+    ]
+    return "\n".join(lines)
+
+
+class DescriptionTableCompletenessTest(unittest.TestCase):
+    """Every platform description table is either walked, or excused in writing.
+
+    `_mapped_sets` names twelve description tables in an explicit import list of
+    fourteen names -- the other two, `AP_ENTITY_PARAMS` and
+    `STARTPROGRAM_COMMAND`, are a set of parameter names and a string, not
+    tables -- and `_static_parameter_names` re-lists the same twelve by hand.
+    Both are
+    whitelists, so neither can notice a table nobody added to it: a contributor
+    who adds `_REF_ZONE_SELECTS` to select.py gets a green suite and a dump that
+    accuses the integration of not mapping the parameter while `by_domain` lists
+    the entity two sections above -- the dump lying by omission, silently, on the
+    one section a maintainer reads to decide whether to write an entity that
+    already exists.
+
+    The two whitelists do police EACH OTHER in one direction: a table added to
+    the walk but not to the harvest fails
+    `test_every_emitted_name_is_a_static_table_field`, because the walk starts
+    emitting names the harvest has never heard of. The direction neither covers
+    is a table added to NEITHER, and that is the direction this class measures.
+    """
+
+    def test_no_other_module_grew_a_description_table(self) -> None:
+        # `_TABLE_MODULES` is itself a whitelist; this is what stops it being one
+        # more thing to remember. Source, not imports, so a module the stubs here
+        # cannot load is still checked.
+        declared = _modules_declaring_descriptions()
+        scanned = set(_TABLE_MODULES)
+        self.assertEqual(
+            scanned,
+            declared,
+            "\nModules that construct entity descriptions: "
+            f"{sorted(declared)}\nModules this guard checks:              "
+            f"{sorted(scanned)}\n"
+            "\nA module in the first list and not the second has description "
+            "tables nothing compares against the diagnostics walk: add its name "
+            "to `_TABLE_MODULES` above (and whatever stub it needs to "
+            "`_install_stubs`). A module in the second and not the first no "
+            "longer has any: drop it, so this guard keeps meaning what it says.",
+        )
+
+    def test_every_description_table_reaches_the_dump(self) -> None:
+        unwalked = _unwalked_description_tables()
+        surprises = {
+            qname: why
+            for qname, why in unwalked.items()
+            if qname not in _TABLES_OUTSIDE_COVERAGE
+        }
+        self.assertEqual({}, surprises, _completeness_failure(surprises))
+
+    def test_every_exemption_is_still_needed(self) -> None:
+        # An exemption that has stopped being true is worse than none: it is a
+        # written promise about a dump nobody re-reads. The day the table is
+        # deleted, or wired into the walk, this fails and the entry goes.
+        unwalked = _unwalked_description_tables()
+        for qname, reason in _TABLES_OUTSIDE_COVERAGE.items():
+            self.assertIn(
+                qname,
+                unwalked,
+                f"`{qname}` is exempted from the coverage walk but is now either "
+                "walked or gone. Delete the entry from `_TABLES_OUTSIDE_COVERAGE`.",
+            )
+            self.assertGreaterEqual(
+                len(reason.split()),
+                8,
+                f"`{qname}`'s exemption is not a reason: {reason!r}. It has to say "
+                "what the dump prints for these parameters instead and why that "
+                "is right, in a sentence the next reader can check.",
+            )
+
+    def test_the_guard_notices_a_table_nobody_walks(self) -> None:
+        # A completeness guard that cannot fail is a completeness guard that is
+        # not there. `select` is the module the worked example uses, and the
+        # table is planted on the module OBJECT rather than in the file so this
+        # proves the measurement rather than a fixture. The name is one no
+        # platform would ever use, and it is restored through `_ABSENT` rather
+        # than deleted, so that planting it on a module that later grows a real
+        # attribute of the same name cannot delete the real one.
+        from custom_components.addhon import select as select_module
+
+        name = "_COMPLETENESS_SELF_TEST_TABLE"
+        planted = (
+            dataclasses.replace(
+                select_module._PROGRAM_OPTION_SELECTS[0],
+                key="zone_temperature",
+                param="tempSelZ9",
+            ),
+        )
+        before = _unwalked_description_tables()
+        previous = getattr(select_module, name, _ABSENT)
+        setattr(select_module, name, planted)
+        try:
+            unwalked = _unwalked_description_tables()
+        finally:
+            if previous is _ABSENT:
+                delattr(select_module, name)
+            else:
+                setattr(select_module, name, previous)
+        # Differential, not absolute: the one thing that changed is the table
+        # this test invented. Asserting an empty result instead would turn one
+        # real unwalked table into TWO failures, the second of them accusing
+        # this test of leaking when it had not.
+        self.assertEqual({f"select.{name}"}, set(unwalked) - set(before))
+        message = _completeness_failure(unwalked)
+        self.assertIn(f"select.py :: {name}", message)
+        self.assertIn("_static_parameter_names", message)
+        self.assertIn("_TABLES_OUTSIDE_COVERAGE", message)
+        self.assertEqual(
+            before, _unwalked_description_tables(), "the plant leaked past this test"
+        )
 
 
 # --- step 3: the per-parameter cloud instants (P1) ---------------------------
