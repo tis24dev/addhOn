@@ -2556,6 +2556,24 @@ def _static_parameter_names() -> set[str]:
     return names
 
 
+def _stop_button_section(commands: dict | None) -> dict:
+    """The `entities` section for a dryer carrying `commands`, or an unread one.
+
+    `commands` maps a command name to the parameter names the DEVICE declares
+    under it -- the shape `_declared_command_params` returns. `None` stands for
+    "the schema could not be read", which must not be confused with "the device
+    declares nothing".
+    """
+    inventory = {
+        "status": "ok",
+        "by_domain": {"button": ["stop_program"], "switch": ["pause"]},
+    }
+    declared = (
+        None if commands is None else {name: set(p) for name, p in commands.items()}
+    )
+    return diagnostics._entity_section(inventory, "TD", None, declared)
+
+
 class EntitySourceTest(unittest.TestCase):
     """`entities.sources`: which raw parameter each registered entity speaks to."""
 
@@ -2686,9 +2704,48 @@ class EntitySourceTest(unittest.TestCase):
         # `button.stop_program` fixes onOffStatus="0" on the command it sends,
         # and that write appears in NO other section of the dump. Its sibling
         # fixes nothing, so it stays null rather than being given the same row.
+        # This is the TYPE-level claim; whether the device declares the name is
+        # decided per appliance, in `_entity_section` -- see the two tests below.
         index = diagnostics._mapped_sets("WD")[2]
         self.assertEqual({"write": ["onOffStatus"]}, index["button.stop_program"])
         self.assertIsNone(index["button.start_program"])
+
+    def test_a_stop_button_keeps_the_write_the_device_declares(self) -> None:
+        # The live washer: `stopProgram` carries `onOffStatus`, so the button
+        # really does fix it and the row is true as it stands.
+        section = _stop_button_section({"stopProgram": ("onOffStatus",)})
+        self.assertEqual(
+            {"write": ["onOffStatus"]}, section["sources"]["button.stop_program"]
+        )
+
+    def test_a_stop_button_claims_no_write_the_device_cannot_perform(self) -> None:
+        # The live dryer: `stopProgram` carries `returnStandby` and nothing
+        # else, and `button.py` applies a fixed parameter only `if name in
+        # params`, so the button fixes NOTHING there. `onOffStatus` is published
+        # as a bare attribute on that dryer, so a reader chasing the row would
+        # find the name and conclude the button works. Null is the same
+        # statement `select.program` already makes: the entity exists and this
+        # dump cannot name a parameter for it.
+        section = _stop_button_section({"stopProgram": ("returnStandby",)})
+        self.assertIsNone(section["sources"]["button.stop_program"])
+        # The narrowing is surgical: a sibling row on the same appliance is
+        # untouched, so this cannot be mistaken for the whole index degrading.
+        self.assertEqual(
+            {"read": ["machMode"], "write": ["pause"]},
+            section["sources"]["switch.pause"],
+        )
+
+    def test_a_stop_button_row_is_never_narrowed_on_a_lookup_that_did_not_happen(
+        self,
+    ) -> None:
+        # `declared=None` means the caller could not read the command schema.
+        # Narrowing there would turn "not looked" into "the device does not
+        # declare it", which is the one substitution every section of this dump
+        # refuses to make.
+        section = _stop_button_section(None)
+        self.assertEqual(
+            {"write": ["onOffStatus"]}, section["sources"]["button.stop_program"]
+        )
 
     def test_the_purifier_fan_reads_power_without_claiming_to_write_it(self) -> None:
         # Power is a whole-COMMAND action on the AP (startProgram / stopProgram,

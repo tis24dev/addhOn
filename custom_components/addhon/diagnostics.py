@@ -210,10 +210,20 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "write": ("pause",),
     },
     {"tag": "button.start_program", "types": APPLIANCE_WASH_GROUP},
+    # The one row whose truth is per-APPLIANCE, not per-type. `button.py` hands
+    # the stop button `command_parameters={"onOffStatus": "0"}` and applies each
+    # only `if name in params`, so on a device whose `stopProgram` does not carry
+    # the name the button fixes nothing. The live washer's stopProgram carries
+    # `onOffStatus`; the live dryer's carries `returnStandby` and nothing else,
+    # so shipping this row for the whole wash group states a write that cannot
+    # happen on a real TD. `write_command` names the command the fixed parameters
+    # have to be declared under, and `_entity_section` drops the ones the device
+    # does not declare.
     {
         "tag": "button.stop_program",
         "types": APPLIANCE_WASH_GROUP,
         "write": ("onOffStatus",),
+        "write_command": "stopProgram",
     },
     {"tag": "select.program", "types": APPLIANCE_WASH_GROUP},
     {
@@ -859,6 +869,36 @@ def _mapped_sets(
         sources if platform_rows else None,
         unavailable,
     )
+
+
+# Custom rows whose `write` half is a set of FIXED parameters the entity only
+# gets to apply when the device declares them under a named command. Built from
+# the table above rather than repeated, so a row cannot grow the key and be
+# forgotten here.
+_FIXED_WRITE_COMMANDS: dict[str, str] = {
+    str(entry.get("tag") or ""): str(entry["write_command"])
+    for entry in _CUSTOM_ENTITY_SOURCES
+    if entry.get("write_command")
+}
+
+
+def _declared_command_params(appliance) -> dict[str, set[str]]:
+    """Parameter names the appliance declares, per command.
+
+    Distinct from `_settings_param_names` (writables, settings commands only)
+    and from `_command_param_names` (every command flattened into one set): the
+    question here is which command a name is declared UNDER, because a fixed
+    parameter applied by an entity is only applied when that command carries it.
+    """
+    commands = getattr(appliance, "commands", None)
+    if not isinstance(commands, Mapping):
+        return {}
+    out: dict[str, set[str]] = {}
+    for cmd_name, cmd in commands.items():
+        params = getattr(cmd, "parameters", None)
+        if isinstance(params, Mapping):
+            out[str(cmd_name)] = {str(name) for name in params}
+    return out
 
 
 def _settings_param_names(appliance) -> set[str]:
@@ -1843,7 +1883,9 @@ def _appliance_block(
     # the readings are.
     freshness = _freshness(appliance, attributes, newest_stamp, now)
     future = _future_capabilities(app_type, attributes, appliance)
-    entity_section = _entity_section(entities, app_type, mapped)
+    entity_section = _entity_section(
+        entities, app_type, mapped, _declared_command_params(appliance)
+    )
 
     _LOGGER.debug(
         "Diagnostics debug: appliance id=%s name=%s type=%s attrs=%d model_attrs=%d "
@@ -2191,7 +2233,38 @@ def _age_seconds(moment, now: datetime) -> int | None:
         return None
 
 
-def _entity_section(entities: Mapping | None, app_type, mapped=None) -> dict | None:
+def _declared_write_only(row, tag: str, declared) -> dict | None:
+    """Drop fixed writes the DEVICE does not declare, from the rows that have them.
+
+    Only `_FIXED_WRITE_COMMANDS` rows are touched, and only when the caller could
+    read the appliance's command schema -- `declared=None` means "not looked", and
+    a row is never narrowed on the strength of a lookup that did not happen.
+
+    A row left with no half at all becomes an explicit `null`, which is the same
+    statement `select.program` already makes: the entity exists and this dump
+    cannot name a parameter for it. That is the honest reading for a dryer, whose
+    stop button really does apply nothing -- and it is more useful than the
+    alternative of printing a write the device cannot perform, because a reader
+    chasing `onOffStatus` there finds it published as a bare attribute and
+    concludes the button works.
+    """
+    if not isinstance(row, Mapping) or not isinstance(declared, Mapping):
+        return row
+    command = _FIXED_WRITE_COMMANDS.get(tag)
+    if command is None:
+        return row
+    keep = [
+        name for name in (row.get("write") or ()) if name in declared.get(command, ())
+    ]
+    narrowed = {half: value for half, value in row.items() if half != "write"}
+    if keep:
+        narrowed["write"] = keep
+    return narrowed or None
+
+
+def _entity_section(
+    entities: Mapping | None, app_type, mapped=None, declared=None
+) -> dict | None:
     """The registry inventory for one appliance, plus what each entity speaks to.
 
     `by_domain` and its siblings answer WHICH entities Home Assistant holds.
@@ -2255,7 +2328,7 @@ def _entity_section(entities: Mapping | None, app_type, mapped=None) -> dict | N
             # `sources` disagree with `by_domain` about how many entities exist,
             # which is the one thing a join key must never do.
             tag = f"{domain}.{key}"
-            sources[tag] = index.get(tag)
+            sources[tag] = _declared_write_only(index.get(tag), tag, declared)
     section["sources"] = sources
     return section
 
