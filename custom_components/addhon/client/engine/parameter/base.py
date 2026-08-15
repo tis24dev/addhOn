@@ -36,6 +36,25 @@ class HonParameter:
         return self._key
 
     @property
+    def declares_value(self) -> bool:
+        """True when the schema itself said what this parameter should carry.
+
+        Some nodes are pure descriptors: they list `enumValues` so a client can render
+        a control, and state no `defaultValue`/`fixedValue` because there is nothing to
+        send. The subclasses still materialize a value (see HonParameterEnum, which
+        falls back to "0" so reads never return None), so the fallback is
+        indistinguishable from a real one once you only look at `intern_value`. This
+        keeps the distinction available to the payload builder.
+
+        A declared "0" counts, hence the comparison against None/"" rather than a
+        truthiness test -- a numeric 0 default is a value the schema asked for.
+        """
+        return any(
+            self._attributes.get(name) not in (None, "")
+            for name in ("defaultValue", "fixedValue")
+        )
+
+    @property
     def value(self) -> str | float:
         return self._value if self._value is not None else "0"
 

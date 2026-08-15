@@ -950,6 +950,86 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(c.parameters["windDirectionVertical"].value, "3")
 
 
+# REAL AC IOT_COOL ancillary block (apk/dump/ac_live), minus programRules which has its
+# own coverage. Four of the five keys carry a value the schema itself states; the fifth,
+# windDirectionVerticalPositionSequence, declares neither defaultValue nor fixedValue --
+# it is a pure descriptor, and the app drops such keys instead of inventing a value.
+_AC_ANCILLARY_REAL = {
+    "description": "d",
+    "protocolType": "MQTT",
+    "parameters": {
+        "onOffStatus": {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": "1"},
+    },
+    "ancillaryParameters": {
+        "ecoMode": {"typology": "range", "category": "general", "mandatory": 1,
+                    "defaultValue": "0", "minimumValue": "0", "maximumValue": "1", "incrementValue": "1"},
+        "programFamily": {"typology": "enum", "category": "cluster", "mandatory": 1,
+                          "defaultValue": "[dashboard|standard]", "enumValues": ["dashboard", "standard"]},
+        "remoteActionable": {"typology": "fixed", "category": "general", "mandatory": 0, "fixedValue": "1"},
+        "remoteVisible": {"typology": "fixed", "category": "general", "mandatory": 0, "fixedValue": "1"},
+        "windDirectionVerticalPositionSequence": {"typology": "enum", "category": "general",
+                                                  "mandatory": 0, "enumValues": [2, 4, 5, 6, 8]},
+    },
+}
+
+
+class _SendingAppliance(FakeAppliance):
+    def __init__(self) -> None:
+        super().__init__()
+        self.api = FakeApi()
+
+    def sync_command_to_params(self, name: str) -> None:
+        pass
+
+
+class AncillaryPayloadTest(unittest.TestCase):
+    """What leaves in `ancillaryParameters`.
+
+    An enum whose schema states no defaultValue has nothing to send. The engine still
+    materializes one, because HonParameterEnum falls back to "0" so that reads never
+    return None -- but "0" is not even among that parameter's own enumValues, and on
+    windDirectionVerticalPositionSequence the app expects the louvre position sequence
+    there, not a scalar. Sending a fabricated value writes noise into a slot the real
+    client leaves untouched, so the payload builder drops keys the schema never valued.
+
+    The four keys that DO carry a schema value stay, verbatim -- including
+    programFamily's bracketed "[dashboard|standard]", which is the cloud's own way of
+    writing that option list and not a value to be normalized.
+    """
+
+    def _send(self, schema: dict) -> dict:
+        appliance = _SendingAppliance()
+        command = NaCommand(
+            "startProgram",
+            json.loads(json.dumps(schema)),
+            appliance,
+            category_name="PROGRAMS.AC.IOT_COOL",
+        )
+        asyncio.run(command.send())
+        _, _, ancillary, _ = appliance.api.sent[0]
+        return ancillary
+
+    def test_valued_keys_survive_verbatim(self) -> None:
+        ancillary = self._send(_AC_ANCILLARY_REAL)
+        self.assertEqual("[dashboard|standard]", ancillary["programFamily"])
+        self.assertEqual("1", ancillary["remoteActionable"])
+        self.assertEqual("1", ancillary["remoteVisible"])
+        self.assertIn("ecoMode", ancillary)
+
+    def test_key_the_schema_never_valued_is_dropped(self) -> None:
+        ancillary = self._send(_AC_ANCILLARY_REAL)
+        self.assertNotIn("windDirectionVerticalPositionSequence", ancillary)
+
+    def test_a_zero_the_schema_asked_for_still_goes(self) -> None:
+        # Discriminates "dropped because valueless" from "dropped because falsy": ecoMode
+        # defaults to "0" by declaration and must survive, exactly as the app sends it.
+        schema = json.loads(json.dumps(_AC_ANCILLARY_REAL))
+        schema["ancillaryParameters"] = {"ecoMode": schema["ancillaryParameters"]["ecoMode"]}
+        ancillary = self._send(schema)
+        self.assertEqual(["ecoMode"], list(ancillary))
+        self.assertEqual(0.0, float(ancillary["ecoMode"]))
+
+
 class NativeEnumEdgeBehaviorTest(unittest.TestCase):
     """Pin of the BABYCARE fix that the cluster exposes on favourites/recover/rule-default:
     the native side accepts a re-cased enum and keeps the raw value in intern_value."""

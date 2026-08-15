@@ -224,10 +224,25 @@ class HonCommand:
             and params.command is self
         ):
             params = self.canonical_exact_payload(params)
-        ancillary_params = dict(
-            self.parameter_groups.get("ancillaryParameters", {})
-        )
-        ancillary_params.pop("programRules", None)
+        # Built from the parameters rather than from `parameter_groups`, which has
+        # already collapsed everything to `intern_value` and so cannot tell a value the
+        # schema asked for from one a subclass invented to keep reads non-None. Only
+        # the former belongs on the wire: a descriptor-only node such as the AC's
+        # windDirectionVerticalPositionSequence would otherwise travel as "0", a value
+        # outside its own enumValues, into the slot the app reads the louvre position
+        # sequence from. See `HonParameter.declares_value`.
+        #
+        # programRules is dropped deliberately, NOT for parity: the app does send it
+        # back on an AC startProgram. It is the constraint set the cloud handed us, we
+        # have already applied it locally, and echoing it risks re-pinning parameters
+        # the user has since moved.
+        ancillary_params = {
+            name: parameter.intern_value
+            for name, parameter in self._parameters.items()
+            if parameter.group == "ancillaryParameters"
+            and name != "programRules"
+            and parameter.declares_value
+        }
         if sync_shadow:
             self.appliance.sync_command_to_params(self.name)
         result = await self.api.send_command(
