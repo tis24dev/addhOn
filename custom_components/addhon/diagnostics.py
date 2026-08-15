@@ -2645,9 +2645,20 @@ def _entry_options(options: Mapping) -> dict:
     dropping the key would hide the very thing worth reporting. Sorted like the
     other mappings in the dump, so two downloads of the same install differ only
     where the install does.
+
+    Admitting a key admits a SHAPE with it. What makes these three safe to print
+    is not their names but the fact that the Configure screen coerces each to a
+    bool before storing it (config_flow.py: `bool(user_input.get(...))`), so a
+    string under `enable_debug` was not written by the form this whitelist
+    trusts, and nothing vouches for what it holds. It is masked like any
+    stranger, and the name still reports that the install carries it.
     """
     return {
-        key: (options[key] if key in _KNOWN_OPTIONS else _REDACTED)
+        key: (
+            options[key]
+            if key in _KNOWN_OPTIONS and isinstance(options[key], bool)
+            else _REDACTED
+        )
         for key in sorted(options, key=str)
     }
 

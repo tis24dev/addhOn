@@ -813,6 +813,19 @@ class EntryOptionsRedactionTest(unittest.TestCase):
             _dump_options({CONF_AUTH_DIAGNOSTICS: True}),
         )
 
+    def test_an_admitted_key_holding_a_non_boolean_is_masked_too(self):
+        # The whitelist admits a name, but what makes that name safe to print is
+        # the shape behind it: the Configure screen stores `bool(...)`, so a
+        # string here was written by something else and nothing vouches for it.
+        options = _dump_options(
+            {CONF_ENABLE_DEBUG: "https://bob:hunter2@hon.example", CONF_ENABLE_MQTT_DEBUG: True}
+        )
+        self.assertEqual("***", options[CONF_ENABLE_DEBUG])
+        self.assertNotIn("hunter2", json.dumps(options))
+        # positive control: the mask is keyed on the value's shape, not applied
+        # to every admitted key once one of them looks wrong.
+        self.assertEqual(True, options[CONF_ENABLE_MQTT_DEBUG])
+
     def test_no_options_render_as_no_options(self):
         self.assertEqual({}, _dump_options({}))
 
