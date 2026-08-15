@@ -620,6 +620,16 @@ class DiagnosticsCoverageTest(unittest.TestCase):
         # (tempSel, machMode) and 1 meta (commandHistory, dict-valued) -> 6.
         self.assertEqual(cov["attributes_total"], 6)
         self.assertLessEqual(len(cov["attributes_unmapped"]), cov["attributes_total"])
+        # The AC fixture is built with `statistics: {}`, so the `- len(statistics)`
+        # term in the formula is identically 0 here and dropping it leaves the whole
+        # suite green. WD is the only block carrying a statistics key, and every real
+        # washer, dryer and fridge has them (the live REF has four).
+        wd = blocks["WD"]["coverage"]
+        # WD bare keys: available, weirdNewSensor, serialNumber, programsCounter,
+        # deviceInfo (5); minus 1 statistics (programsCounter) and 1 meta
+        # (deviceInfo, dict-valued) -> 3.
+        self.assertEqual(wd["attributes_total"], 3)
+        self.assertEqual(["programsCounter"], wd["attributes_unmapped_statistics"])
 
 
 class DiagnosticsSerializationTest(unittest.TestCase):
@@ -644,14 +654,42 @@ class DiagnosticsRedactionTest(unittest.TestCase):
             self.assertEqual(block["id"], "***")
             self.assertEqual(block["serial"], "***")
             self.assertEqual(block["mac"], "***")
+        # The fixture MAC is canonical, so `_MAC_RE` alone masks it and the clause
+        # above cannot see the key-name path die. Pin the key-name path on shapes
+        # the six-octet regex CANNOT match -- unseparated, and the placeholder the
+        # engine itself substitutes (tests/fixtures/ref_10136/attributes.json).
+        self.assertEqual("***", diagnostics._redact({"mac": "AABBCCDDEEFF"})["mac"])
+        self.assertEqual(
+            "***", diagnostics._redact({"macAddress": "xx-xx-xx-xx-xx-xx"})["macAddress"]
+        )
 
     def test_identity_keys_redacted_recursively(self):
         _, blocks = _entry_diag()
         self.assertEqual(blocks["AC"]["attributes"]["macAddress"], "***")
+        # As above: isolate the key-name path from `_MAC_RE` so this clause measures
+        # the mapping it is named for rather than the value regex.
+        self.assertEqual(
+            "***", diagnostics._redact({"MacAddress": "AABBCCDDEEFF"})["MacAddress"]
+        )
         self.assertEqual(blocks["WD"]["attributes"]["serialNumber"], "***")
         # nested dict: `code` (serial fallback) redacted, sibling preserved
         self.assertEqual(blocks["WD"]["attributes"]["deviceInfo"]["code"], "***")
         self.assertEqual(blocks["WD"]["attributes"]["deviceInfo"]["label"], "ok")
+
+    def test_credential_key_names_are_redacted_anywhere_they_appear(self):
+        """The entry envelope redacts with explicit literals, so the CREDENTIAL half
+        of `_TO_REDACT` is reachable only through this generic path: a credential
+        arriving under one of these names inside an appliance's attributes or a
+        nested cloud payload. Deleting all nine names left the full suite green.
+        """
+        for key in ("password", "token", "access_token", "refresh_token",
+                    "authorization", "secret", "email", "nickname", "nick_name"):
+            self.assertEqual(
+                "***", diagnostics._redact({key: "s3cret"})[key], key
+            )
+            # and one level down, where a cloud payload actually carries them
+            nested = diagnostics._redact({"attributes": {key: "s3cret"}})
+            self.assertEqual("***", nested["attributes"][key], key)
 
     def test_command_history_value_borne_identity_redacted(self):
         _, blocks = _entry_diag()
@@ -705,10 +743,16 @@ class DiagnosticsDeviceTest(unittest.TestCase):
         coord = _build_coordinator()
         hass = FakeHass(coord)
         device = FakeDevice(identifiers={("some_other_domain", WD_ID)})
-        result = _run(diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device))
-        # A foreign integration's identifier resolves nothing here, and the
-        # degraded dump is still dated (see the test above).
-        self.assertEqual(["generated_at"], list(result))
+        with _FrozenClock(FROZEN):
+            result = _run(
+                diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device)
+            )
+        # A foreign integration's identifier resolves nothing here, and the degraded
+        # dump is still dated. Exact-dict on the VALUE, not `list(result)`: this is
+        # the only test reaching the FIRST early return (appliance_id is None), so
+        # the stamp there has no other guard -- DumpTimestampTest's two degraded
+        # cases both resolve a DOMAIN identifier and land on the SECOND return.
+        self.assertEqual({"generated_at": FROZEN_TEXT}, result)
 
 
 class DiagnosticsDriftGuardTest(unittest.TestCase):
@@ -724,6 +768,32 @@ class DiagnosticsDriftGuardTest(unittest.TestCase):
                 "AC": frozenset({"tempIndoor"}),
             },
         )
+
+    def test_custom_mapped_attrs_are_not_reported_unmapped(self):
+        """The behavioural half of the pin above: the EFFECT the comment there claims,
+        stated independently of which mechanism delivers it.
+
+        The pin is a literal-vs-literal comparison, so it fires only when someone
+        edits the constant -- exactly when they already remembered it -- and says
+        nothing about whether the constant still does anything. Measured: it does
+        not. Every one of the eight entries is already supplied by the registry walk
+        on all four types, so `_CUSTOM_MAPPED_ATTRS` currently contributes NOTHING
+        and emptying its only consumer (diagnostics.py:631) leaves the whole suite
+        green. It is a safety net for a table change that has not happened; this test
+        pins the guarantee it exists to provide, and so keeps holding whether the net
+        is load-bearing or redundant.
+        """
+        for app_type, attrs in diagnostics._CUSTOM_MAPPED_ATTRS.items():
+            cov = diagnostics._coverage(
+                app_type,
+                {attr: "1" for attr in attrs},
+                {},
+                FakeAppliance(commands={}),
+            )
+            for attr in attrs:
+                self.assertNotIn(
+                    attr, cov["attributes_unmapped"], f"{app_type}.{attr}"
+                )
 
     def test_ac_climate_params_pinned(self):
         self.assertEqual(
@@ -764,6 +834,12 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
         app = FakeAppliance(commands={"settings": FakeCommand({
             # genuine writable control (no entity) -> command-param signal
             "humiditySel": FakeParam(value="50", typology="range", rng=(30, 70, 5)),
+            # a MAPPED control (climate owns tempSel): counted into the denominator
+            # but never into the signal. Without one, `total` and `len(signal)`
+            # collapse to the same number and the denominator's mapped half is
+            # unfalsifiable -- redefining it as the signal count alone, so every dump
+            # reads 100% covered, leaves the class green.
+            "tempSel": FakeParam(value="22", typology="range", rng=(16, 30, 1)),
             # command plumbing -> command-param meta
             "category": FakeParam(value="setParameters", typology="enum", values=["setConfig", "setParameters"]),
             "httpEndpoint": FakeParam(value="x", typology="fixed"),
@@ -824,6 +900,22 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
         self.assertEqual(signal & meta, set())
         self.assertEqual(signal & stats, set())
         self.assertEqual(meta & stats, set())
+        # LOSSLESS, the half the name promises and the body never checked: every bare
+        # key of the fixture lands in exactly one of the three lists. A key that falls
+        # out of all three is a device capability the maintainer never learns exists,
+        # which is silent and permanent -- whereas a double count is visible noise.
+        # Dropping a row from the meta list without re-homing it leaves the three
+        # disjointness assertions above green.
+        self.assertEqual(
+            {
+                "errors", "programName", "weirdSensor", "programsCounter",
+                "programClass", "commandHistory", "lastConnEvent",
+                "mostUsedPrograms", "debugEnabled", "transMode", "resultCode",
+                "highTransRate", "programStats", "cloudProgId", "forceDelete",
+                "program7", "program19",
+            },
+            signal | meta | stats,
+        )
 
     def test_command_param_meta_split(self):
         cov = self._coverage_ac()
@@ -834,11 +926,16 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
 
     def test_command_param_total_excludes_meta(self):
         # Symmetric with attributes_total: denominator = mapped controls + signal, not
-        # inflated by meta params. settings has 4 params (humiditySel + 3 meta), none
-        # mapped -> total 4 - 3 meta = 1, equal to the signal count.
+        # inflated by meta params. settings has 5 params (humiditySel + tempSel + 3
+        # meta) -> total 5 - 3 meta = 2: one mapped control (tempSel) plus one signal
+        # (humiditySel). The two summands are deliberately different numbers so the
+        # denominator cannot be satisfied by the signal count alone.
         cov = self._coverage_ac()
-        self.assertEqual(cov["command_params_total"], 1)
-        self.assertEqual(len(cov["command_params_unmapped"]), cov["command_params_total"])
+        self.assertEqual(cov["command_params_total"], 2)
+        self.assertEqual(["humiditySel"], cov["command_params_unmapped"])
+        self.assertLess(
+            len(cov["command_params_unmapped"]), cov["command_params_total"]
+        )
 
 
 class WcSettingsSwitchCoverageTest(unittest.TestCase):
@@ -960,7 +1057,18 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
         class _Client:
             last_error_code = ec.MFA_REQUIRED
             last_error_phase = "mfa_challenge"
-            last_mfa_summary = {"challenge_kind": "email", "can_resend": True}
+            # A summary carrying MORE than the two published keys, so the assertion
+            # below measures the WHITELIST PROJECTION rather than restating the
+            # fixture. `_last_error` bypasses `_redact` by design, so this projection
+            # is the only filter on the path; MfaContext (client/transport/oauth.py)
+            # holds the JS-Remoting csrf and a signed authorization in exactly these
+            # shapes, and masks them in its own __repr__ to keep them out of LOGS.
+            last_mfa_summary = {
+                "challenge_kind": "email",
+                "can_resend": True,
+                "host": "eu-login.haier.example",
+                "verify": {"csrf": "c-123", "authorization": "signed-blob"},
+            }
             _refresh_token = "rt"
 
         hass = FakeHass(_build_coordinator())
@@ -971,6 +1079,30 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
         self.assertTrue(le["requires_reauth"])
         self.assertTrue(le["had_refresh_token"])
         self.assertEqual({"challenge_kind": "email", "can_resend": True}, le["mfa"])
+        blob = json.dumps(result)
+        for secret in ("csrf", "c-123", "authorization", "signed-blob",
+                       "eu-login.haier.example"):
+            self.assertNotIn(secret, blob, secret)
+
+    def test_last_error_suppresses_a_stale_mfa_summary_outside_the_band(self) -> None:
+        """hon_client's submit/resend except-branches (hon_client.py:748, :775) set a
+        NON-MFA code without clearing `last_mfa_summary` -- the clears at :753-755 are
+        on the success path. The 160-169 band gate is the only thing stopping a 2FA
+        challenge summary from being attached to a network fault, which would send a
+        triager down the 2FA path for a timeout.
+        """
+        from custom_components.addhon import error_codes as ec
+
+        class _Client:
+            last_error_code = ec.NETWORK_TIMEOUT       # 400, outside the band
+            last_error_phase = "mfa_send"
+            last_mfa_summary = {"challenge_kind": "email", "can_resend": True}
+            _refresh_token = ""
+
+        hass = FakeHass(_build_coordinator())
+        hass.data[DOMAIN]["e1"]["client"] = _Client()
+        result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+        self.assertNotIn("mfa", result["last_error"])
 
 
 # --- Task 10: air purifier coverage and passive future-capability capture -----
@@ -1104,8 +1236,17 @@ class AirPurifierCoverageTest(unittest.TestCase):
 
         declared = {d.param for d in switch._AIR_PURIFIER_SWITCHES}
         declared |= {d.param for d in number._AP_TIMING_NUMBERS}
+        # The four AP controls that are hardcoded entity classes with no description
+        # table, so they contribute nothing to the walk above: a fifth one -- the
+        # SHAPE these already use -- would otherwise land with no guard at all.
+        declared |= {"machMode", "onOffStatus"}      # fan.HonAirPurifierFan
+        declared |= {"aromaStatus", "lightStatus"}   # select.HonAirPurifier{Aroma,PanelLight}Select
         self.assertTrue(declared)
-        self.assertTrue(declared <= AP_ENTITY_PARAMS, declared - AP_ENTITY_PARAMS)
+        # assertEqual, not a subset: coverage SUBTRACTS this set from both axes, so a
+        # name left here after its entity is removed silently deletes that parameter
+        # from the gold signal and the dump reports full coverage of a control the
+        # integration does not have. Adding a bogus name left the whole suite green.
+        self.assertEqual(declared, set(AP_ENTITY_PARAMS))
 
 
 class FutureCapabilityCaptureTest(unittest.TestCase):
@@ -1128,6 +1269,21 @@ class FutureCapabilityCaptureTest(unittest.TestCase):
     def test_future_capability_reports_an_unhandled_live_state(self) -> None:
         future = _ap_block()["future_capabilities"]
         self.assertEqual({"machMode": "3"}, future["state_values_unhandled"])
+
+    def test_a_stopped_purifier_is_not_a_future_capability(self) -> None:
+        """The ordinary case, which the exact-dict test above was positioned never to
+        see: machMode=0 is the documented off-state sentinel (air_purifier.py's own
+        comment, and fan.py: "never a preset"), so an idle purifier must not be
+        reported as running a mode nobody handles.
+
+        `AP_HANDLED_VALUES[machMode]` reused AP_WRITABLE_MODES {1,2,4}, and writable
+        is not the same as handled -- so every dump from a switched-off purifier
+        announced a phantom firmware capability. The real AP capture
+        (tests/fixtures/ap/schema.json) declares only ["1","2","4"], which makes 0 the
+        ONLY value that ever reaches this branch on the hardware this repo has seen.
+        """
+        future = _ap_block({"machMode": "0"})["future_capabilities"]
+        self.assertEqual({}, future["state_values_unhandled"])
 
     def test_an_unhandled_state_value_is_length_capped(self) -> None:
         """The section is passive EVIDENCE, not a report: a firmware answering with a
@@ -1169,12 +1325,25 @@ class FutureCapabilityCaptureTest(unittest.TestCase):
         self.assertEqual({"machMode": exact}, future["state_values_unhandled"])
 
     def test_future_capability_carries_no_identity(self) -> None:
+        """Identity must be masked BEFORE the value is cut to _FUTURE_MAX_VALUE_CHARS.
+
+        The fixture's mac/serial/model live under keys this section never reads, so
+        searching the default block for them asserts that a section containing no
+        identity contains no identity. Put the identity where the section actually
+        looks -- a live state value -- and put one ACROSS the cap, because a MAC
+        sliced through the middle no longer matches `_MAC_RE` and a mask applied
+        after the slice publishes the OUI verbatim.
+        """
         import json
 
-        future = _ap_block()["future_capabilities"]
+        mac = "AA:BB:CC:DD:EE:FF"
+        straddling = "x" * (diagnostics._FUTURE_MAX_VALUE_CHARS - 10) + mac
+        future = _ap_block({"machMode": straddling})["future_capabilities"]
         encoded = json.dumps(future)
-        for identity in ("AA:BB:CC:DD:EE:FF", "AP-PLAINTEXT-SERIAL", "SYNTHETIC-AP",
-                         "ap-unique"):
+        self.assertNotIn(mac, encoded, encoded)
+        # a MAC cut by the cap is still a MAC: the OUI alone identifies the vendor
+        self.assertNotIn("AA:BB:CC", encoded, encoded)
+        for identity in ("AP-PLAINTEXT-SERIAL", "SYNTHETIC-AP", "ap-unique"):
             self.assertNotIn(identity, encoded, identity)
 
     def test_future_capability_is_absent_for_a_type_with_no_registry(self) -> None:
@@ -1193,6 +1362,43 @@ class FutureCapabilityCaptureTest(unittest.TestCase):
         future = result["appliances"][0]["future_capabilities"]
         delta = future["enum_deltas"]["settings.aromaStatus"]
         self.assertEqual(diagnostics._FUTURE_MAX_VALUES, len(delta))
+        self.assertTrue(future["truncated"])
+
+    def test_future_capability_row_count_is_bounded(self) -> None:
+        """The OTHER bound. `_enum_deltas` caps VALUES per parameter
+        (_FUTURE_MAX_VALUES) and ROWS overall (_FUTURE_MAX_ENTRIES); the test above
+        drives only the first. The row cap is the one that matters for a device with
+        many PARAMETERS rather than many values on one -- the AC in
+        diagnostics/live-2026-06-22/ carries 74 shadow parameters, so a type whose
+        registry listed them all would cross 40 rows on real hardware while never
+        approaching 20 values on any single parameter. Deleting the row cap left the
+        entire suite green.
+        """
+        from custom_components.addhon import air_purifier
+
+        coord = _build_ap_coordinator()
+        params = coord.data[AP_ID]["appliance"].commands["settings"].parameters
+        overflow = diagnostics._FUTURE_MAX_ENTRIES + 10
+        for n in range(overflow):
+            params[f"futureParam{n}"] = FakeParam(
+                value="0", typology="enum", values=["0", "9"]
+            )
+        patched = dict(air_purifier.AP_HANDLED_VALUES)
+        patched.update({f"futureParam{n}": frozenset({"0"}) for n in range(overflow)})
+        original = air_purifier.AP_HANDLED_VALUES
+        air_purifier.AP_HANDLED_VALUES = patched
+        try:
+            result = _run(
+                diagnostics.async_get_config_entry_diagnostics(
+                    FakeHass(coord), FakeEntry()
+                )
+            )
+        finally:
+            air_purifier.AP_HANDLED_VALUES = original
+        future = result["appliances"][0]["future_capabilities"]
+        self.assertLessEqual(
+            len(future["enum_deltas"]), diagnostics._FUTURE_MAX_ENTRIES
+        )
         self.assertTrue(future["truncated"])
 
     def test_future_capability_does_not_enumerate_a_range_parameter(self) -> None:
@@ -1357,10 +1563,15 @@ class EntityInventoryTest(unittest.TestCase):
     def test_a_disabled_entity_is_reported_as_disabled_not_as_missing(self) -> None:
         """Home Assistant writes no state for a disabled entity, so a naive live
         check would report every user-disabled control as a platform crash."""
-        rows = self._rows(AP_ROWS[:1], disabled_by="user") + self._rows(AP_ROWS[1:])
+        # A disabler that is NOT "user": the distinction this section exists to make
+        # is a deliberate user choice (harmless) versus the integration disabling its
+        # own entity (a bug). Echoing the fixture's "user" back cannot see the value
+        # path die -- hardcoding the literal survives the whole suite -- and "user" is
+        # the only disabler any fixture in the repo has ever fed.
+        rows = self._rows(AP_ROWS[:1], disabled_by="integration") + self._rows(AP_ROWS[1:])
         live = FakeStates(live=[eid for _uid, eid in AP_ROWS[1:]])
         _result, entities = self._dump(rows, states=live)
-        self.assertEqual({"switch.child_lock": "user"}, entities["disabled"])
+        self.assertEqual({"switch.child_lock": "integration"}, entities["disabled"])
         self.assertNotIn("not_created", entities)
         self.assertIn("child_lock", entities["by_domain"]["switch"])
 
@@ -1421,6 +1632,13 @@ class EntityInventoryTest(unittest.TestCase):
         self.assertEqual({}, result["platforms"]["account"])
         self.assertNotIn("switch", entities["by_domain"])
         self.assertNotIn("switch", result["platforms"]["appliance_totals"])
+        # Positively pin the totals the contrast depends on. The three assertions
+        # above are all absence checks over a fixture built by DELETING exactly what
+        # they assert absent, so a build where appliance_totals is permanently empty
+        # -- or double-counts -- satisfies them unchanged.
+        self.assertEqual(
+            {"fan": 1, "select": 1}, result["platforms"]["appliance_totals"]
+        )
 
     def test_a_leftover_account_row_does_not_clear_a_dead_platform(self) -> None:
         """The harder half of the same case: the platform ran on an EARLIER install,
@@ -1626,6 +1844,27 @@ class EntityInventoryScopeTest(unittest.TestCase):
         self.assertEqual(
             {"switch": 1, "fan": 1}, result["platforms"]["appliance_totals"]
         )
+
+    def test_a_shorter_appliance_id_does_not_swallow_a_longer_one(self) -> None:
+        """The `_` separator is MANDATORY in prefix attribution, and longest-first
+        ordering does not stand in for it when the longer id is absent from the poll.
+
+        Realistic, not theoretical: when the cloud reports the placeholder MAC, the
+        engine builds the id as f"{type}_{applianceModelId}"
+        (client/engine/appliance.py:100-104), so two appliances of one type with
+        model ids 123 and 1234 get `wm_123` and `wm_1234` -- a bare prefix with no
+        separator between them. Without the mandatory `_`, the absent appliance's
+        surviving registry rows are attributed to its shorter-id sibling and emitted
+        under the mangled key `switch._child_lock`.
+        """
+        inventory, platforms = diagnostics._entity_inventory(
+            [FakeRegistryEntry("wm_1234_child_lock", "switch.b_child_lock")],
+            ["wm_123"],
+            "e1",
+            None,
+        )
+        self.assertEqual({}, inventory["wm_123"]["by_domain"])
+        self.assertEqual(1, platforms["unattributed"])
 
     def test_the_device_dump_carries_only_its_own_appliance(self) -> None:
         """The device hook builds the inventory over EVERY id on purpose; this pins

@@ -34,6 +34,10 @@ from .hon_commands import (
 # if a schema starts enumerating it.
 AP_WRITABLE_MODES = frozenset({"1", "2", "4"})
 
+# The off-state sentinel itself. Never writable (above), always HANDLED: fan.py's
+# `preset_mode` reads it and reports no active preset.
+AP_MODE_OFF = "0"
+
 AP_MODE_TO_PRESET = {"1": "sleep", "2": "auto", "4": "max"}
 AP_PRESET_TO_MODE = {preset: raw for raw, preset in AP_MODE_TO_PRESET.items()}
 
@@ -140,7 +144,13 @@ AP_ENTITY_PARAMS = frozenset(
 # range has no enumerable "unhandled value".
 AP_HANDLED_VALUES: dict[str, frozenset[str]] = {
     _POWER_ATTR: _TOGGLE_VALUES,
-    _MODE_PARAM: AP_WRITABLE_MODES,
+    # WRITABLE and HANDLED are not the same set. `0` may never be written (it is the
+    # off-state sentinel, see AP_WRITABLE_MODES above) but it is very much handled:
+    # fan.py reads it and reports "no active preset". Reusing AP_WRITABLE_MODES here
+    # made every dump from a switched-off purifier announce machMode=0 as a future
+    # capability -- the gold signal firing on an idle appliance, sending the
+    # maintainer to investigate a mode that already ships.
+    _MODE_PARAM: AP_WRITABLE_MODES | {AP_MODE_OFF},
     _LIGHT_PARAM: frozenset(AP_LIGHT_TO_OPTION),
     _LOCK_PARAM: _TOGGLE_VALUES,
     _TONE_PARAM: _TOGGLE_VALUES,
