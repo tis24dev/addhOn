@@ -27,7 +27,6 @@ from .const import (
     AC_TEMP_PARAM,
     AC_MODE_PARAM,
     AC_FAN_PARAM,
-    AC_ON_OFF_PARAM,
     AC_ATTR_ON_OFF,
     AC_ATTR_CURRENT_TEMP,
     AC_ATTR_FAN_SPEED,
@@ -317,22 +316,25 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
     def _is_program_based(self) -> bool:
         """True for AC models that drive power/mode via startProgram/stopProgram.
 
-        Two AC write models exist (see AC_PROGRAM_MAP in const.py):
-        - settings-based (e.g. AS35PBPHRA-PRE): the `settings` command carries
-          onOffStatus + machMode, so power/mode are written into `settings`.
-        - program-based (e.g. AD71S2SM3FA(H)): the `settings` command has NO
-          onOffStatus; ON goes through startProgram (program enum, onOffStatus fixed
-          "1") and OFF through stopProgram (onOffStatus fixed "0"). Writing
-          onOffStatus/machMode into `settings` on such a model raises
-          "Parameter(s) not found" before the request ever reaches the cloud, which
-          is exactly why every on/off/mode command looked "ignored".
+        The gate is the presence of a startProgram command, and nothing else. On a
+        room AC the official app knows only that surface for power and mode: ON is a
+        startProgram, OFF a stopProgram, and choosing a mode is simply starting the
+        matching program. It never writes machMode through the settings command.
 
-        The gate: NO onOffStatus among the settings params AND a startProgram command
-        exists. Temperature/fan stay on the settings path in BOTH models (tempSel /
-        windSpeed live on `settings` either way), so only power/mode is rerouted.
+        Models such as AS35PBPHRA-PRE also expose onOffStatus/machMode inside
+        `settings`, and that used to demote them to a "settings-based" class written
+        that way. The device obeyed, so the divergence stayed invisible from Home
+        Assistant -- but only a program command moves the cloud's active-program
+        pointer. On a unit driven solely from HA the pointer keeps naming whatever
+        program some other channel started last, and the app renders its program
+        screen from that stale schema node: the fan enum, the temperature range and
+        the vertical louvre position sequence all resolve empty. See
+        apk/analysis/ac-power-mode-and-winddir-rendering.md.
+
+        Temperature and fan stay on the settings path in both models (tempSel /
+        windSpeed live on `settings` either way), so only power/mode is routed here.
+        A model without startProgram keeps the settings path: it has no other surface.
         """
-        if settings_param(self._appliance, AC_ON_OFF_PARAM) is not None:
-            return False
         return startprogram_command(self._appliance) is not None
 
     def _startprogram_programs(self) -> list[str]:

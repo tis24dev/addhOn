@@ -207,8 +207,9 @@ def _program_climate(program_enum: list | None = None, *, with_onoff: bool = Fal
     NOT by onOffStatus/machMode in `settings`. temp/fan still live on `settings`.
 
     ``with_onoff=True`` adds onOffStatus to `settings` to reproduce the AS35-style
-    settings-based model even though startProgram/stopProgram also exist: the gate
-    must then stay on the settings path (regression guard).
+    model that declares BOTH write surfaces. The program path must still win: the
+    official app drives every RAC through startProgram/stopProgram regardless of
+    what `settings` happens to expose (see AcClimateProgramWinsOverSettingsTest).
 
     Returns (entity, settings_cmd, start_cmd, stop_cmd, coordinator).
     """
@@ -724,35 +725,64 @@ class AcClimateProgramWritePathTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, coordinator.refreshes)
 
 
-class AcClimateSettingsRegressionTest(unittest.IsolatedAsyncioTestCase):
-    """Regression: an AS35-style settings-with-onOffStatus model keeps the settings
-    write path for on/off/mode EVEN IF startProgram/stopProgram also exist. The gate
-    keys on onOffStatus being present in `settings`, so it must never reroute here.
+class AcClimateProgramWinsOverSettingsTest(unittest.IsolatedAsyncioTestCase):
+    """A model declaring BOTH surfaces must still drive power/mode via programs.
+
+    The AS35 family exposes onOffStatus/machMode inside `settings` AND a full
+    startProgram/stopProgram pair. The gate used to read that as "settings-based"
+    and route power/mode into `settings`, which the official app never does on a
+    RAC: there, ON is startProgram, OFF is stopProgram and a mode change is just
+    another startProgram.
+
+    The divergence is not cosmetic. The cloud tracks the appliance's active
+    program from the last program command; a `settings` write updates values but
+    leaves that pointer untouched. On a unit driven only from Home Assistant the
+    pointer therefore keeps naming whatever program was last started by some other
+    channel, and the app renders the program screen from that stale schema node --
+    empty fan list, temperature picker collapsed to 0, `Fissa(NaN)` for the vertical
+    louvre. Observed on two units in the wild; see
+    apk/analysis/ac-power-mode-and-winddir-rendering.md.
+
+    temp/fan stay on `settings` in both models and are covered above.
     """
 
-    async def test_turn_on_uses_settings_onoffstatus(self) -> None:
+    async def test_turn_on_uses_startprogram(self) -> None:
         entity, settings, start, stop, coord = _program_climate(with_onoff=True)
         await entity.async_turn_on()
-        self.assertEqual(1, settings.send_calls)
-        self.assertEqual("1", settings.sent["onOffStatus"])
-        self.assertEqual(0, start.send_calls)
+        self.assertEqual(1, start.send_calls)
+        self.assertEqual(
+            {"onOffStatus": "1", "program": "iot_simple_start"}, start.sent
+        )
+        self.assertEqual(0, settings.send_calls)
         self.assertEqual(0, stop.send_calls)
         self.assertEqual(1, coord.refreshes)
 
-    async def test_set_mode_uses_settings_machmode(self) -> None:
+    async def test_set_mode_uses_startprogram(self) -> None:
         entity, settings, start, stop, _ = _program_climate(with_onoff=True)
-        await entity.async_set_hvac_mode(HVACMode.HEAT)  # golden machMode heat=4
-        self.assertEqual("4", settings.sent["machMode"])
-        self.assertEqual("1", settings.sent["onOffStatus"])
-        self.assertEqual(0, start.send_calls)
+        await entity.async_set_hvac_mode(HVACMode.HEAT)
+        self.assertEqual(1, start.send_calls)
+        self.assertEqual({"onOffStatus": "1", "program": "iot_heat"}, start.sent)
+        self.assertEqual(0, settings.send_calls)
         self.assertEqual(0, stop.send_calls)
 
-    async def test_off_uses_settings_onoffstatus(self) -> None:
+    async def test_off_uses_stopprogram(self) -> None:
         entity, settings, start, stop, _ = _program_climate(with_onoff=True)
         await entity.async_set_hvac_mode(HVACMode.OFF)
-        self.assertEqual("0", settings.sent["onOffStatus"])
-        self.assertEqual(0, stop.send_calls)
+        self.assertEqual(1, stop.send_calls)
+        self.assertEqual({"onOffStatus": "0"}, stop.sent)
+        self.assertEqual(0, settings.send_calls)
         self.assertEqual(0, start.send_calls)
+
+    async def test_settings_only_model_keeps_settings_path(self) -> None:
+        # The gate now keys on startProgram alone, so a model WITHOUT it must still
+        # write power/mode into `settings` -- otherwise this change would silently
+        # break every AC that has no program surface at all.
+        entity, settings, _ = _climate(
+            {"onOffStatus": Param("0"), "machMode": Param("0")}
+        )
+        await entity.async_turn_on()
+        self.assertEqual(1, settings.send_calls)
+        self.assertEqual("1", settings.sent["onOffStatus"])
 
 
 class AcClimateReadPathTest(unittest.IsolatedAsyncioTestCase):
