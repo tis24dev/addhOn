@@ -649,6 +649,16 @@ class SetupFailureRecordTest(unittest.TestCase):
         self.assertIsNone(client.last_error_code)
         self.assertIsNone(client.last_error_phase)
 
+    def test_a_fresh_attempt_never_shows_the_previous_session_poll_census(self) -> None:
+        # Cleared in the same block as the three above but for its own reason: the
+        # poll census describes ONE session's cycle, and this attempt builds a new
+        # session. Kept across, it would let a dump answer "how did the last poll go"
+        # with a cycle that ran on a session the client has since thrown away.
+        client = self._client(None)
+        client.last_poll_census = {"returned": 3, "kept": 3, "dropped": []}
+        client.setup_sync()
+        self.assertIsNone(client.last_poll_census)
+
 
 class _FallbackAppliance:
     """No update() attribute -> _do_update takes the load_* fallback path directly.

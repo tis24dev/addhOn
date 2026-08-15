@@ -15,6 +15,7 @@ homeassistant package is not importable in the unit env).
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import types
 import unittest
@@ -285,6 +286,123 @@ class CoordinatorResilienceTest(unittest.TestCase):
         self.assertEqual(calls["reauth"], 1)       # reauth was attempted
         self.assertGreaterEqual(calls["update"], 2)  # and the poll retried
         self.assertIn("ac", data)                  # recovered after reauth
+
+
+class PollCensusTest(unittest.TestCase):
+    """The census the poll records for the downloadable diagnostics.
+
+    A real 5.9.3 field dump reads `"appliances": []` with a null `last_error` both
+    for an account that owns nothing and for a cycle that dropped every appliance
+    the cloud returned. The `Partial update: %d/%d` WARNING is the only place those
+    two are separated today, and a WARNING never reaches the file the reporter
+    attaches, so the two bugs arrive byte-identical.
+    """
+
+    def test_clean_poll_records_every_appliance_as_kept(self) -> None:
+        c = _client([FakeAppliance("g1"), FakeAppliance("g2")])
+        c._update_appliance_sync = lambda appliance: None
+        asyncio.run(c.async_get_appliances_data())
+        self.assertEqual(
+            {"returned": 2, "kept": 2, "dropped": []}, c.last_poll_census
+        )
+
+    def test_zero_appliances_records_a_census_not_a_silence(self) -> None:
+        # The whole point: "returned 0" must be a statement in the dump, not the
+        # absence of one, because the alternative reading of an empty dump is a poll
+        # that returned appliances and kept none.
+        c = _client([])
+        c._update_appliance_sync = lambda appliance: None
+        asyncio.run(c.async_get_appliances_data())
+        self.assertEqual(
+            {"returned": 0, "kept": 0, "dropped": []}, c.last_poll_census
+        )
+
+    def test_partial_failure_names_the_cause_of_each_drop(self) -> None:
+        good, bad = FakeAppliance("g1"), FakeAppliance("bad")
+        c = _client([good, bad])
+        c._first_poll_done = True  # steady state: the failed one is skipped
+
+        def _update(appliance):
+            if appliance is bad:
+                raise RuntimeError("decode error")  # -> DECODE_ERROR, non-retryable
+
+        c._update_appliance_sync = _update
+        asyncio.run(c.async_get_appliances_data())
+        census = c.last_poll_census
+        self.assertEqual(2, census["returned"])
+        self.assertEqual(1, census["kept"])
+        self.assertEqual(
+            [DECODE_ERROR.label], [drop["code"] for drop in census["dropped"]]
+        )
+
+    def test_total_failure_still_records_the_cycle_it_lost(self) -> None:
+        # The branch that raises is the one whose dump needs this most: the
+        # coordinator keeps its previous snapshot (or none at all on the first
+        # cycle), so without a census "returned 2, kept 0" is indistinguishable
+        # from "returned 0" -- two different bugs.
+        b1, b2 = FakeAppliance("b1"), FakeAppliance("b2")
+        c = _client([b1, b2])
+        c._first_poll_done = True
+        c._update_appliance_sync = lambda appliance: (_ for _ in ()).throw(
+            RuntimeError("decode error")
+        )
+        with self.assertRaises(HonCodedError):
+            asyncio.run(c.async_get_appliances_data())
+        census = c.last_poll_census
+        self.assertEqual(2, census["returned"])
+        self.assertEqual(0, census["kept"])
+        self.assertEqual(
+            [DECODE_ERROR.label, DECODE_ERROR.label],
+            [drop["code"] for drop in census["dropped"]],
+        )
+
+    def test_first_poll_abort_records_no_census(self) -> None:
+        # The strict first-poll branch re-raises from INSIDE the loop, so the
+        # appliances after the failing one were never attempted. A census counting
+        # them as survivors would be a false statement, and no census at all is the
+        # honest one: nothing completed.
+        bad, never_reached = FakeAppliance("bad"), FakeAppliance("g1")
+        c = _client([bad, never_reached])  # fresh client -> strict, and bad is first
+
+        def _update(appliance):
+            if appliance is bad:
+                raise RuntimeError("decode error")
+
+        c._update_appliance_sync = _update
+        with self.assertRaises(HonCodedError):
+            asyncio.run(c.async_get_appliances_data())
+        self.assertIsNone(c.last_poll_census)
+
+    def test_census_carries_no_identity_and_no_raw_exception_text(self) -> None:
+        # The redacted name belongs to the WARNING and nowhere else, and an exception
+        # message is not a closed domain: this one carries the nickname and the MAC,
+        # which is what a cloud 5xx body or a URL in a transport error looks like.
+        bad = FakeAppliance("AA:BB:CC:DD:EE:FF")
+        bad.nick_name = "Kitchen Washer"
+        c = _client([FakeAppliance("g1"), bad])
+        c._first_poll_done = True
+
+        def _update(appliance):
+            if appliance is bad:
+                raise RuntimeError(
+                    "decode error for Kitchen Washer at AA:BB:CC:DD:EE:FF"
+                )
+
+        c._update_appliance_sync = _update
+        asyncio.run(c.async_get_appliances_data())
+        blob = json.dumps(c.last_poll_census)
+        for leak in (
+            "Kitchen Washer",
+            "AA:BB:CC:DD:EE:FF",
+            "decode error for",
+            "***",  # not even the redacted name: the census has no name field
+        ):
+            self.assertNotIn(leak, blob, leak)
+        # Positive control: the drop IS reported, so the assertions above are not
+        # passing on an empty census.
+        self.assertEqual(
+            [DECODE_ERROR.label], [drop["code"] for drop in c.last_poll_census["dropped"]]
+        )
 
 
 if __name__ == "__main__":

@@ -276,6 +276,34 @@ def _must_propagate(err: BaseException) -> bool:
     return _requires_reauth(err) or _is_retryable_server_error(err)
 
 
+def _poll_census(
+    returned: int, kept: int, failures: list[tuple[str, Exception]]
+) -> dict[str, Any]:
+    """Leak-proof account of ONE completed poll cycle, for the downloadable diagnostics.
+
+    A dump of a broken account reads `"appliances": []` whether the cloud returned
+    nothing or the poll dropped every appliance it was handed, and the only thing that
+    ever separated the two is the `Partial update: %d/%d` WARNING below, which no dump
+    carries. The two counts answer that; each drop then carries the ADDHON label of its
+    cause and NOTHING else -- the redacted names in `failures` belong to that WARNING,
+    and an exception message routinely carries a MAC, a nickname or a URL, so neither
+    is read here.
+
+    The label comes from the same picker the total-failure raise uses, so a census and
+    the `last_error` beside it in the dump can never name one failure two ways. `kept`
+    plus the drops normally account for `returned`; a shortfall is a finding of its own
+    (two appliances sharing an id collapse into a single snapshot entry).
+    """
+    dropped: list[dict[str, Any]] = []
+    for _name, err in failures:
+        # The name is dropped on the floor rather than forwarded: the picker never
+        # reads it, and passing "" keeps identity out of this call by construction
+        # instead of by trusting a helper never to grow a use for it.
+        code, _cause = _representative_failure([("", err)])
+        dropped.append({"code": code.label, "reason": code.reason_en})
+    return {"returned": returned, "kept": kept, "dropped": dropped}
+
+
 class HonClient:
     """Manages the connection to the Haier hOn APIs via the native client.
 
@@ -319,6 +347,11 @@ class HonClient:
         # phase names, rounded seconds, ok/error/timeout). This is the artefact that
         # makes a report like #76 diagnosable without a live probe.
         self.last_phase_ledger: list[dict] | None = None
+        # Census of the last COMPLETED poll cycle (see _poll_census): how many
+        # appliances the cloud returned, how many survived, one catalog label per
+        # drop. None until a cycle finishes, which is the third state the dump has
+        # to distinguish -- no poll ever ran.
+        self.last_poll_census: dict | None = None
         self._hon_instance = None
         self._api = None
         self._hon_loop: asyncio.AbstractEventLoop | None = None
@@ -620,6 +653,11 @@ class HonClient:
             self.last_error_phase = None
             self.last_mfa_summary = None
             self.last_phase_ledger = None
+            # Not part of that failure record: a census is a statement about ONE
+            # session's poll, and this attempt builds a new session. Carrying it over
+            # would let a dump answer "how did the last poll go" with a cycle that ran
+            # on a session this client has since thrown away.
+            self.last_poll_census = None
             try:
                 if self._hon_loop is None or not self._hon_loop.is_running():
                     self._start_hon_loop()
@@ -1168,6 +1206,17 @@ class HonClient:
 
             if retry_after_reauth:
                 continue
+
+            # Every appliance has been attempted, so THIS is the cycle the census
+            # describes -- including the total failure just below, which raises and
+            # would otherwise leave the dump with nothing but a stale snapshot to
+            # explain itself. Deliberately not recorded on the strict first-poll
+            # re-raise above: that one aborts mid-loop, and counting the appliances
+            # the loop never reached as survivors would be a false statement about
+            # exactly the dump this exists to explain.
+            self.last_poll_census = _poll_census(
+                len(appliances), len(data), failed_appliances
+            )
 
             if appliances and not data and failed_appliances:
                 # Every appliance failed this cycle: surface a failed update (the

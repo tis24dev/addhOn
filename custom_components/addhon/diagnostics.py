@@ -68,6 +68,9 @@ from .const import (
     APPLIANCE_WASH_GROUP,
     APPLIANCE_WD,
     APPLIANCE_WM,
+    CONF_ENABLE_DEBUG,
+    CONF_ENABLE_EXPERIMENTAL,
+    CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
     PROGRAM_PARAM_NAMES,
 )
@@ -2566,10 +2569,24 @@ def _coordinator(hass: HomeAssistant, entry: ConfigEntry):
 def _last_error(hass: HomeAssistant, entry: ConfigEntry) -> dict | None:
     """The last classified setup/update error code, for issue triage.
 
-    Static code+reason (no device identity), pulled from the client. None when no
-    failure has been recorded (or the client is absent, e.g. a failed setup)."""
+    Static code+reason (no device identity), pulled from the client. None when the
+    client was asked and had recorded no failure; ``{"status": "client_absent"}``
+    when there was no client to ask at all (e.g. a failed setup)."""
     entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
     client = entry_data.get("client")
+    if client is None:
+        # A dump from a failed setup used to be indistinguishable from a healthy
+        # account that simply owns no appliances: both read `"last_error": null,
+        # "appliances": []`, and a real 5.9.3 report was triaged as the second when
+        # it was the first. `null` is now the answer of a client, not the absence of
+        # one. "No entry data" and "entry data without a client" are deliberately
+        # ONE state: async_setup_entry stores the bucket as a single literal that
+        # always carries the client (__init__.py:621) and pops it whole on a failed
+        # setup or unload (__init__.py:651, :662, :680), so a bucket without a
+        # client is not a state this integration can produce -- a second token would
+        # only send a triager hunting a distinction nothing writes. A closed-domain
+        # token like the fields below, so it needs no _redact either.
+        return {"status": "client_absent"}
     code = getattr(client, "last_error_code", None)
     if code is None:
         return None
@@ -2600,6 +2617,52 @@ def _last_error(hass: HomeAssistant, entry: ConfigEntry) -> dict | None:
             "can_resend": mfa.get("can_resend"),
         }
     return out
+
+
+# The option keys the Configure screen writes (config_flow.OptionsFlowHandler),
+# taken from the CONF_ constants so renaming one cannot leave a stale literal
+# here that quietly demotes a live toggle to `***`. CONF_AUTH_DIAGNOSTICS is
+# deliberately absent although it sits with them in const.py: the config flow
+# strips it before anything is validated or persisted, so it is not an option
+# key, and a build that ever left it in `entry.options` should be told so by the
+# mask rather than trusted.
+_KNOWN_OPTIONS = frozenset(
+    {CONF_ENABLE_DEBUG, CONF_ENABLE_EXPERIMENTAL, CONF_ENABLE_MQTT_DEBUG}
+)
+
+
+def _entry_options(options: Mapping) -> dict:
+    """Entry options with every key outside `_KNOWN_OPTIONS` stripped of its value.
+
+    Mask first, admit by name: today all three toggles are booleans and nothing
+    here can leak, but this block is copied out of storage unread, so the FOURTH
+    option ships whatever its author put in it -- a token, an endpoint, a user
+    string -- into every dump pasted into an issue. A whitelist is what makes
+    that a deliberate act instead of the default.
+
+    An unrecognised key keeps its NAME and loses only its VALUE: "this install
+    carries an option this build knows nothing about" is itself a finding, and
+    dropping the key would hide the very thing worth reporting. Sorted like the
+    other mappings in the dump, so two downloads of the same install differ only
+    where the install does.
+    """
+    return {
+        key: (options[key] if key in _KNOWN_OPTIONS else _REDACTED)
+        for key in sorted(options, key=str)
+    }
+
+
+def _last_poll(hass: HomeAssistant, entry: ConfigEntry) -> dict | None:
+    """The census the client recorded for its last completed poll cycle.
+
+    Passed through as the client built it (`hon_client._poll_census`), which is
+    where the leak-proof shape is enforced. None when no cycle has ever completed
+    -- no client, a setup that never got that far, or a first poll that aborted --
+    and `last_error` is what speaks for those.
+    """
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    census = getattr(entry_data.get("client"), "last_poll_census", None)
+    return dict(census) if isinstance(census, Mapping) else None
 
 
 async def async_get_config_entry_diagnostics(
@@ -2655,7 +2718,7 @@ async def async_get_config_entry_diagnostics(
                 "email": _redact_email(entry.data.get("email")),
                 "password": _REDACTED,
             },
-            "options": dict(entry.options),
+            "options": _entry_options(entry.options),
         },
         "last_error": _last_error(hass, entry),
         # Entry-wide, next to last_error rather than inside an appliance: a failed
@@ -2664,6 +2727,12 @@ async def async_get_config_entry_diagnostics(
         # primitives only (platform domains, counts, a status token), so like
         # last_error it is leak-proof by construction and skips _redact.
         "platforms": platforms,
+        # What separates "this account owns nothing" from "the cloud returned three
+        # and the poll dropped all three": both render as `"appliances": []` with a
+        # null last_error, and until now only the `Partial update` WARNING -- which
+        # no dump carries -- told them apart. Counts plus ADDHON catalog labels, so
+        # like the two keys above it is leak-proof by construction and skips _redact.
+        "last_poll": _last_poll(hass, entry),
         "appliances": appliances,
     }
 

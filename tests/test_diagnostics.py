@@ -191,7 +191,14 @@ _install_stubs()
 
 from custom_components.addhon import diagnostics  # noqa: E402
 from custom_components.addhon import debug_utils  # noqa: E402
+from custom_components.addhon import const  # noqa: E402
 from custom_components.addhon.const import DOMAIN  # noqa: E402
+from custom_components.addhon.const import (  # noqa: E402
+    CONF_AUTH_DIAGNOSTICS,
+    CONF_ENABLE_DEBUG,
+    CONF_ENABLE_EXPERIMENTAL,
+    CONF_ENABLE_MQTT_DEBUG,
+)
 
 
 def _run(coro):
@@ -750,6 +757,119 @@ class DiagnosticsRedactionTest(unittest.TestCase):
         self.assertNotIn("user@example.com", result["entry"]["title"] or "")
 
 
+def _dump_options(options: dict) -> dict:
+    """`entry.options` as the entry dump renders it."""
+    entry = FakeEntry()
+    entry.options = options
+    return _run(
+        diagnostics.async_get_config_entry_diagnostics(
+            FakeHass(_build_coordinator()), entry
+        )
+    )["entry"]["options"]
+
+
+class EntryOptionsRedactionTest(unittest.TestCase):
+    """`entry.options` reaches the dump straight out of storage, and the dump is
+    the file users paste into a GitHub issue. The three toggles that exist today
+    are booleans and leak nothing, so what is pinned here is what happens to the
+    FOURTH option: whoever adds it, whatever it ends up carrying."""
+
+    def test_the_known_toggles_keep_their_real_values(self):
+        self.assertEqual(
+            {
+                CONF_ENABLE_DEBUG: True,
+                CONF_ENABLE_EXPERIMENTAL: True,
+                CONF_ENABLE_MQTT_DEBUG: False,
+            },
+            _dump_options(
+                {
+                    CONF_ENABLE_DEBUG: True,
+                    CONF_ENABLE_MQTT_DEBUG: False,
+                    CONF_ENABLE_EXPERIMENTAL: True,
+                }
+            ),
+        )
+
+    def test_an_unknown_option_is_named_but_never_shown(self):
+        options = _dump_options(
+            {CONF_ENABLE_DEBUG: True, "api_endpoint": "https://bob:hunter2@hon.example"}
+        )
+        # The NAME survives on purpose: an option this build does not recognise is
+        # worth reporting, and a dropped key reports nothing.
+        self.assertIn("api_endpoint", options)
+        self.assertEqual("***", options["api_endpoint"])
+        self.assertNotIn("hunter2", json.dumps(options))
+        # positive control: the mask is keyed on the whitelist, not applied to the
+        # whole block, so the clauses above cannot pass by redacting everything.
+        self.assertEqual(True, options[CONF_ENABLE_DEBUG])
+
+    def test_the_sign_in_trace_flag_is_not_an_option(self):
+        """`CONF_AUTH_DIAGNOSTICS` sits beside the three toggles in const.py, which is
+        exactly why it is worth stating: the config flow strips it before anything is
+        persisted, so it never IS an option, and an entry that somehow carries one is
+        a stranger like any other."""
+        self.assertEqual(
+            {CONF_AUTH_DIAGNOSTICS: "***"},
+            _dump_options({CONF_AUTH_DIAGNOSTICS: True}),
+        )
+
+    def test_no_options_render_as_no_options(self):
+        self.assertEqual({}, _dump_options({}))
+
+    def test_the_keys_come_out_sorted(self):
+        # Same install, two downloads: an issue thread routinely carries both, and a
+        # storage-order mapping makes them diff on nothing that happened.
+        self.assertEqual(
+            ["alpha", CONF_ENABLE_DEBUG, "zulu"],
+            list(_dump_options({"zulu": 1, CONF_ENABLE_DEBUG: True, "alpha": 2})),
+        )
+
+
+def _options_flow_conf_names() -> set[str]:
+    """The `CONF_*` constants `OptionsFlowHandler` names inside its own body.
+
+    Parsed, never imported: config_flow reaches the transport auth chain (and
+    `yarl`, which the stubs in this file do not provide), and the module whose
+    next toggle this guard exists to catch is precisely the one it must not fail
+    to read. Scoped to the class because `CONF_AUTH_DIAGNOSTICS` is named
+    elsewhere in the same file by the credentials flow, which writes `entry.data`
+    and not `entry.options`.
+    """
+    source = (REPO_ROOT / "custom_components" / "addhon" / "config_flow.py").read_text(
+        encoding="utf-8"
+    )
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ClassDef) and node.name == "OptionsFlowHandler":
+            return {
+                child.id
+                for child in ast.walk(node)
+                if isinstance(child, ast.Name) and child.id.startswith("CONF_")
+            }
+    raise AssertionError(
+        "config_flow.OptionsFlowHandler was not found, so the option keys the "
+        "Configure screen writes could not be read. If the handler was renamed, "
+        "point this guard at the new name -- do not delete it."
+    )
+
+
+class EntryOptionsWhitelistGuardTest(unittest.TestCase):
+    """The behavioural tests above prove the mask works on the keys they name. This
+    ties the whitelist to the screen that fills `entry.options`, so an option added
+    to the Configure form later has to be ADMITTED here deliberately instead of
+    riding into every dump because nobody thought about it."""
+
+    def test_the_whitelist_is_exactly_what_the_options_screen_writes(self):
+        offered = {getattr(const, name) for name in _options_flow_conf_names()}
+        self.assertEqual(
+            offered,
+            set(diagnostics._KNOWN_OPTIONS),
+            "diagnostics._KNOWN_OPTIONS and the keys OptionsFlowHandler writes have "
+            "diverged. A new toggle must be added to _KNOWN_OPTIONS only once its "
+            "value is known to be safe to publish; otherwise leave it masked and "
+            "drop it from this comparison with a reason.",
+        )
+
+
 class DiagnosticsDeviceTest(unittest.TestCase):
     def test_device_diagnostics_returns_single_matching_appliance(self):
         coord = _build_coordinator()
@@ -1045,11 +1165,46 @@ class IdentityKeysDriftGuardTest(unittest.TestCase):
 class LastErrorDiagnosticsTest(unittest.TestCase):
     """#30: the config-entry diagnostics expose the last classified error code."""
 
-    def test_last_error_none_without_client(self) -> None:
-        # FakeHass stores only the coordinator -> no recorded error.
+    def test_last_error_says_so_when_there_is_no_client_to_ask(self) -> None:
+        # A 5.9.3 field dump read `"last_error": null, "appliances": []` and was
+        # triaged as an account owning no appliances; it was a failed setup, whose
+        # client never reached hass.data. `null` must not be the answer to a
+        # question nobody could ask.
         result = _run(diagnostics.async_get_config_entry_diagnostics(FakeHass(_build_coordinator()), FakeEntry()))
-        self.assertIn("last_error", result)
-        self.assertIsNone(result["last_error"])
+        self.assertEqual({"status": "client_absent"}, result["last_error"])
+        # And it must not be readable as a recorded failure: a consumer keying on
+        # `code` would otherwise report an error nobody classified.
+        self.assertNotIn("code", result["last_error"])
+
+    def test_last_error_stays_null_when_the_client_recorded_no_failure(self) -> None:
+        # The other half of the pair above: a client that WAS asked and had nothing
+        # keeps returning null, so the marker cannot be produced by simply owning no
+        # appliances. Both dumps carry an empty `appliances`, which is exactly the
+        # pair the field report could not tell apart.
+        class _Client:
+            last_error_code = None
+
+        hass = FakeHass(FakeCoordinator({}))
+        hass.data[DOMAIN]["e1"]["client"] = _Client()
+        healthy = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+        failed_setup = _run(
+            diagnostics.async_get_config_entry_diagnostics(FakeHass(FakeCoordinator({})), FakeEntry())
+        )
+        self.assertIsNone(healthy["last_error"])
+        self.assertEqual([], healthy["appliances"])
+        self.assertEqual([], failed_setup["appliances"])
+        self.assertNotEqual(healthy["last_error"], failed_setup["last_error"])
+
+    def test_last_error_folds_missing_entry_data_into_the_same_marker(self) -> None:
+        # "No entry data for this entry" and "entry data without a client" are ONE
+        # state on purpose (diagnostics.py `_last_error`): __init__ writes the bucket
+        # with the client inside it and pops it whole, so the two cannot be reached
+        # separately, and a second token would be a distinction nothing writes. This
+        # pins the fold: an entry absent from hass.data reports the same marker as
+        # the client-less bucket above.
+        hass = FakeHass(_build_coordinator(), entry_id="other-entry")
+        result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+        self.assertEqual({"status": "client_absent"}, result["last_error"])
 
     def test_last_error_reports_code_and_reason(self) -> None:
         from custom_components.addhon import error_codes as ec
@@ -1178,6 +1333,105 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
                     diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
                 )
                 self.assertNotIn("mfa", result["last_error"])
+
+
+class LastPollCensusDiagnosticsTest(unittest.TestCase):
+    """The entry dump says whether the poll returned nothing or dropped everything.
+
+    A real 5.9.3 field dump reads `"data": {"entry": {...}, "last_error": null,
+    "appliances": []}` in full, and three states produce that exact file: an account
+    with no appliances, a poll that dropped every appliance the cloud returned, and a
+    setup that left no client at all. The `Partial update: %d/%d` WARNING separates
+    the first two on the user's machine and never reaches the file, so `last_poll`
+    carries the same fact into the dump: counts plus ADDHON catalog labels.
+    """
+
+    def _hass_with_census(self, census, coordinator=None):
+        class _Client:
+            last_poll_census = census
+
+        hass = FakeHass(coordinator if coordinator is not None else FakeCoordinator({}))
+        hass.data[DOMAIN]["e1"]["client"] = _Client()
+        return hass
+
+    def test_last_poll_is_null_when_no_cycle_completed(self) -> None:
+        # No client at all (the failed-setup state): the key is still there, so a
+        # reader never has to wonder whether this dump predates the census.
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(
+                FakeHass(_build_coordinator()), FakeEntry()
+            )
+        )
+        self.assertIn("last_poll", result)
+        self.assertIsNone(result["last_poll"])
+
+    def test_an_empty_account_and_a_dropped_one_no_longer_look_alike(self) -> None:
+        empty = _run(
+            diagnostics.async_get_config_entry_diagnostics(
+                self._hass_with_census({"returned": 0, "kept": 0, "dropped": []}),
+                FakeEntry(),
+            )
+        )
+        dropped = _run(
+            diagnostics.async_get_config_entry_diagnostics(
+                self._hass_with_census(
+                    {
+                        "returned": 3,
+                        "kept": 0,
+                        "dropped": [
+                            {"code": "ADDHON-450", "reason": "hOn server error"},
+                            {"code": "ADDHON-450", "reason": "hOn server error"},
+                            {"code": "ADDHON-220", "reason": "Could not load appliance data"},
+                        ],
+                    }
+                ),
+                FakeEntry(),
+            )
+        )
+        # The two dumps still agree on everything the field report carried, which is
+        # the whole reason the census had to be added rather than inferred.
+        self.assertEqual([], empty["appliances"])
+        self.assertEqual([], dropped["appliances"])
+        self.assertIsNone(empty["last_error"])
+        self.assertIsNone(dropped["last_error"])
+        # ...and disagree where it counts.
+        self.assertEqual(0, empty["last_poll"]["returned"])
+        self.assertEqual([], empty["last_poll"]["dropped"])
+        self.assertEqual(3, dropped["last_poll"]["returned"])
+        self.assertEqual(0, dropped["last_poll"]["kept"])
+        self.assertEqual(
+            ["ADDHON-450", "ADDHON-450", "ADDHON-220"],
+            [drop["code"] for drop in dropped["last_poll"]["dropped"]],
+        )
+
+    def test_the_census_the_client_builds_survives_into_the_dump(self) -> None:
+        # Built by the WRITER (hon_client._poll_census) rather than hand-written, so
+        # this pins the whole path: the reader publishes what the poll recorded, and
+        # the two halves cannot drift into agreeing only in this file. The failure
+        # handed to it carries a nickname and a MAC, which is what a cloud error body
+        # or a transport URL looks like; `last_poll` skips `_redact` by design, so the
+        # leak check is run over the finished document.
+        from custom_components.addhon.hon_client import _poll_census
+
+        census = _poll_census(
+            3,
+            2,
+            [("***", RuntimeError("decode error for Kitchen Washer at AA:BB:CC:DD:EE:FF"))],
+        )
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(
+                self._hass_with_census(census, _build_coordinator()), FakeEntry()
+            )
+        )
+        self.assertEqual(census, result["last_poll"])
+        self.assertEqual(3, result["last_poll"]["returned"])
+        self.assertEqual(2, result["last_poll"]["kept"])
+        self.assertEqual(
+            ["ADDHON-470"], [drop["code"] for drop in result["last_poll"]["dropped"]]
+        )
+        blob = json.dumps(result)  # also proves the block is serializable as it stands
+        for leak in ("Kitchen Washer", "AA:BB:CC:DD:EE:FF", "decode error for"):
+            self.assertNotIn(leak, blob, leak)
 
 
 # --- Task 10: air purifier coverage and passive future-capability capture -----
