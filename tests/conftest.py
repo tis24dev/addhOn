@@ -234,11 +234,42 @@ def _install_entity_platform_stubs() -> None:
     light.ColorMode = getattr(light, "ColorMode", ColorMode)
     light.ATTR_BRIGHTNESS = getattr(light, "ATTR_BRIGHTNESS", "brightness")
 
-    # Bare platform bases: the addhon entities define every property themselves,
-    # so nothing beyond the class is needed to subclass them.
     switch = _ensure_module("homeassistant.components.switch")
     components.switch = switch
-    switch.SwitchEntity = getattr(switch, "SwitchEntity", type("SwitchEntity", (), {}))
+
+    @dataclasses.dataclass(frozen=True, kw_only=True)
+    class SwitchEntityDescription:
+        key: str
+        name: str | None = None
+        translation_key: str | None = None
+        icon: str | None = None
+        device_class: object | None = None
+        entity_category: object | None = None
+
+    class SwitchEntity:
+        """Mirror of HA's SwitchEntity, `device_class` included.
+
+        This class was a bare `type("SwitchEntity", (), {})` under the reasoning
+        that the addhon entities define every property themselves. They do not
+        define this one: real HA resolves `device_class` off `entity_description`,
+        and reads it while computing the entity name at add time. The bare stub
+        made an entity whose description lacked the field look perfectly healthy
+        under test while Home Assistant refused to add it (issue #67, four
+        purifier toggles). Kept faithful to HA's precedence -- `_attr_` first,
+        then the description -- so the same class of mismatch fails here first."""
+
+        @property
+        def device_class(self):
+            if hasattr(self, "_attr_device_class"):
+                return self._attr_device_class
+            if hasattr(self, "entity_description"):
+                return self.entity_description.device_class
+            return None
+
+    switch.SwitchEntity = getattr(switch, "SwitchEntity", SwitchEntity)
+    switch.SwitchEntityDescription = getattr(
+        switch, "SwitchEntityDescription", SwitchEntityDescription
+    )
 
     select = _ensure_module("homeassistant.components.select")
     components.select = select

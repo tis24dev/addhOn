@@ -1456,6 +1456,53 @@ class AirPurifierSwitchArchitectureTest(unittest.TestCase):
         self.assertNotIn("async_send_settings", source)
 
 
+class AirPurifierSwitchAddTimeTest(unittest.IsolatedAsyncioTestCase):
+    """What Home Assistant does to the entity BEFORE it exists (issue #67).
+
+    Both toggles were built, logged as built, and then dropped by
+    `entity_platform._async_add_entity`, which reads `entity.name` -> device class
+    -> `entity_description.device_class`. The description was a plain dataclass
+    without that field, so all four (two toggles x two purifiers) died with
+    AttributeError. Every existing test built the entity and then asked it a
+    question of its own -- is_on, unique_id, the write path -- which is the one
+    thing HA does not do first.
+    """
+
+    async def test_the_toggles_survive_the_add_path(self) -> None:
+        entities, _client, _coordinator = await _build_switches(schema=_toggle_schema())
+        for key, entity in _switch_by_key(entities).items():
+            with self.subTest(key=key):
+                # The exact attribute lookup that raised, through HA's own
+                # precedence. No device class is intended: None, not a crash.
+                self.assertIsNone(entity.device_class, key)
+
+    def test_the_description_carries_what_home_assistant_reads(self) -> None:
+        """The description is published as `entity_description`, so it is HA's to
+        read: it must be an actual SwitchEntityDescription, not a look-alike."""
+        from custom_components.addhon import switch
+
+        self.assertTrue(
+            issubclass(
+                switch.HonAirPurifierSwitchDescription, switch.SwitchEntityDescription
+            )
+        )
+        for description in switch._AIR_PURIFIER_SWITCHES:
+            with self.subTest(key=description.key):
+                self.assertIsNone(description.device_class)
+
+    def test_only_the_published_description_needs_the_ha_base(self) -> None:
+        """The sibling description stays a plain dataclass on purpose: its entity
+        keeps it in `_desc`, so HA never reads it. Pinned so a future "make them
+        consistent" pass does not read the fix as a rule about all of them."""
+        import inspect
+
+        from custom_components.addhon import switch
+
+        source = inspect.getsource(switch.HonSettingsSwitch)
+        self.assertIn("self._desc = description", source)
+        self.assertNotIn("self.entity_description", source)
+
+
 class AirPurifierSwitchSkipLoggingTest(unittest.IsolatedAsyncioTestCase):
     """A rejected toggle must say WHY.
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -101,7 +101,7 @@ _SETTINGS_SWITCHES: dict[str, tuple[HonSettingsSwitchDescription, ...]] = {
 
 
 @dataclass(frozen=True, kw_only=True)
-class HonAirPurifierSwitchDescription:
+class HonAirPurifierSwitchDescription(SwitchEntityDescription):
     """Air purifier 0/1 toggle written as a SPARSE settings patch.
 
     Deliberately separate from HonSettingsSwitchDescription: that one drives
@@ -112,13 +112,19 @@ class HonAirPurifierSwitchDescription:
 
     `capability` names the AirPurifierCapabilities property that gates the write
     half; `action` names the `ap_patch` intent that performs it.
+
+    Subclasses SwitchEntityDescription because HonAirPurifierSwitch publishes it as
+    `entity_description`, and Home Assistant reads `entity_description.device_class`
+    while computing the entity's name at ADD time. A plain dataclass has no such
+    field, so every purifier toggle raised AttributeError inside
+    `entity_platform._async_add_entity` and was dropped -- built, logged as built,
+    never registered (issue #67). HonSettingsSwitchDescription stays a plain
+    dataclass because its entity keeps it in `_desc`, out of HA's reach.
     """
 
-    key: str            # translation_key + unique_id suffix
     param: str          # the settings parameter, and the attribute read back
     capability: str
     action: str
-    icon: str | None = None
 
 
 # Confirmed 0/1 purifier toggles (AP_PARAMS_ENUM "Toggles"). `child_lock` reuses the
