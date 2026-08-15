@@ -232,24 +232,69 @@ class RedactTopicTest(unittest.TestCase):
         self.assertIn("redact_topic", debug_utils.__all__)
 
 
-class IdentityKeysPinTest(unittest.TestCase):
-    """Pin the EXACT _IDENTITY_KEYS set: iterating the set in a test would silently
-    stop checking a removed key, so dropping one (e.g. the snake-case transaction_id
-    not covered by the diagnostics drift-guard) must fail here."""
+class IdentityKeysBehaviouralTest(unittest.TestCase):
+    """Every name in _IDENTITY_KEYS must actually MASK A VALUE on the log path.
 
-    _EXPECTED = frozenset(
-        {
-            "serial", "serialnumber", "serial_number",
-            "mac", "macaddress", "mac_address",
-            "code", "nickname", "nick_name", "email",
-            "password", "token", "access_token", "refresh_token",
-            "authorization", "secret",
-            "transactionid", "transaction_id", "mobileid", "mobile_id",
-        }
+    This replaces a set-equality pin that compared _IDENTITY_KEYS to a hand-copied
+    `_EXPECTED` frozenset. That pin held the CONSTANT, not the guarantee, and it was
+    measured to be worth nothing against either realistic regression:
+
+      * Narrow only the MATCHING (leave both constants byte-identical, stop nine names
+        from being looked up) and the pin PASSES -- measured, whole suite green at
+        rc=0 with authorization/nickname/refresh_token and six more emitting cleartext.
+      * Delete a name from the constant AND from the transcription -- which is exactly
+        what the pin's own failure message instructs a developer to do -- and the pin
+        is neutralised by construction. Nine such edits were run; the pin appeared in
+        none of the failure lists, and four of them (mac_address, mobile_id,
+        serial_number, transaction_id) left the WHOLE suite green.
+
+    So the assertions below drive redact_identity itself. Making a retired key green
+    again now requires DELETING a line that says that key must be masked, and watching
+    a canary credential appear in the output -- not syncing a bookkeeping literal.
+    """
+
+    _SECRET = "CANARY-CREDENTIAL-VALUE"
+
+    # NAMED on purpose, NOT `for key in _IDENTITY_KEYS`. A loop over the constant
+    # proves every SURVIVING member still works but goes quiet the moment a member is
+    # removed -- its iteration simply stops visiting the retired key. Measured: with a
+    # derived loop in place, dropping mac_address from the constant still ran green.
+    _MUST_MASK = (
+        "serial", "serialnumber", "serial_number",
+        "mac", "macaddress", "mac_address",
+        "code", "nickname", "nick_name", "email",
+        "password", "token", "access_token", "refresh_token",
+        "authorization", "secret",
+        "transactionid", "transaction_id", "mobileid", "mobile_id",
     )
 
-    def test_identity_keys_exact(self) -> None:
-        self.assertEqual(set(debug_utils._IDENTITY_KEYS), set(self._EXPECTED))
+    def test_named_identity_keys_mask_their_value_on_the_log_path(self) -> None:
+        for key in self._MUST_MASK:
+            # Case variants: the cloud sends camelCase (nickName, macAddress) and the
+            # match is documented as case-insensitive, so the spelling must not matter.
+            for spelling in (key, key.upper(), key.title()):
+                with self.subTest(key=spelling):
+                    flat = debug_utils.redact_identity({spelling: self._SECRET})
+                    self.assertEqual("***", flat[spelling])
+                    # ...and at the depth the sinks actually log: api.py:92 passes the
+                    # whole appliance-list body, mqtt.py:515 the whole broker payload.
+                    nested = debug_utils.redact_identity(
+                        {"payload": [{"attributes": {spelling: self._SECRET}}]}
+                    )
+                    self.assertNotIn(self._SECRET, repr(nested))
+
+    def test_every_identity_key_has_a_behavioural_assertion(self) -> None:
+        # The replacement for the old pin. This is still a set equality, but the
+        # right-hand side is no longer a copy kept only for comparison: _MUST_MASK is
+        # the list that DRIVES the redactor above. So this asserts a real property --
+        # "every member of the constant is behaviourally covered" -- and a key ADDED to
+        # _IDENTITY_KEYS fails here until it is given a real assertion.
+        self.assertEqual(set(self._MUST_MASK), set(debug_utils._IDENTITY_KEYS))
+
+    def test_non_identity_key_value_survives(self) -> None:
+        # Positive control: the assertions above are not passing vacuously because
+        # redact_identity masks everything it is handed.
+        self.assertEqual({"label": "ok"}, debug_utils.redact_identity({"label": "ok"}))
 
 
 redact_store = debug_utils.redact_store

@@ -676,20 +676,51 @@ class DiagnosticsRedactionTest(unittest.TestCase):
         self.assertEqual(blocks["WD"]["attributes"]["deviceInfo"]["code"], "***")
         self.assertEqual(blocks["WD"]["attributes"]["deviceInfo"]["label"], "ok")
 
+    # NAMED on purpose, never `for key in _TO_REDACT`: a loop over the constant proves
+    # every SURVIVING member still works but goes quiet when a member is removed.
+    # Measured: deleting mac_address / mobile_id / serial_number / transaction_id from
+    # _TO_REDACT, _IDENTITY_KEYS and the old test pin together left the WHOLE suite
+    # green -- they were the four names of the twenty that this list did not cover.
+    _MUST_MASK = (
+        "serial", "serialnumber", "serial_number",
+        "mac", "macaddress", "mac_address",
+        "code", "nickname", "nick_name", "email",
+        "password", "token", "access_token", "refresh_token",
+        "authorization", "secret",
+        "transactionid", "transaction_id", "mobileid", "mobile_id",
+    )
+
     def test_credential_key_names_are_redacted_anywhere_they_appear(self):
         """The entry envelope redacts with explicit literals, so the CREDENTIAL half
         of `_TO_REDACT` is reachable only through this generic path: a credential
         arriving under one of these names inside an appliance's attributes or a
         nested cloud payload. Deleting all nine names left the full suite green.
+
+        Widened from nine names to all twenty: the eleven that were missing had no
+        behavioural observer on EITHER redaction path, only a set-equality pin that
+        any consistent edit silences.
         """
-        for key in ("password", "token", "access_token", "refresh_token",
-                    "authorization", "secret", "email", "nickname", "nick_name"):
+        for key in self._MUST_MASK:
             self.assertEqual(
                 "***", diagnostics._redact({key: "s3cret"})[key], key
             )
             # and one level down, where a cloud payload actually carries them
             nested = diagnostics._redact({"attributes": {key: "s3cret"}})
             self.assertEqual("***", nested["attributes"][key], key)
+        # positive control: a non-identity sibling must survive, so the loop above
+        # cannot pass by _redact masking everything it is handed.
+        self.assertEqual("ok", diagnostics._redact({"label": "ok"})["label"])
+
+    def test_every_redacted_key_has_a_behavioural_assertion(self):
+        """Replaces nothing -- this is the assertion the drift guard only approximates.
+
+        `IdentityKeysDriftGuardTest` compares `_TO_REDACT` to `_IDENTITY_KEYS`: one
+        constant against another. Because the two sets are IDENTICAL it fires for all
+        twenty names and separates nothing, and an edit touching both is invisible to
+        it. This ties the constant to the list that actually DRIVES `_redact`, so a
+        name added to `_TO_REDACT` fails here until it is given a real assertion.
+        """
+        self.assertEqual(set(self._MUST_MASK), set(diagnostics._TO_REDACT))
 
     def test_command_history_value_borne_identity_redacted(self):
         _, blocks = _entry_diag()

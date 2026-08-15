@@ -536,5 +536,62 @@ class CommandDiagnosticReviewTest(unittest.TestCase):
         self.assertLessEqual(len(record), 4096)
 
 
+class ExtraIdentityKeysBehaviouralTest(unittest.TestCase):
+    """`command_diagnostics._EXTRA_IDENTITY_KEYS` is the THIRD identity key set, and
+    it was the thinnest-covered constant in the repository: five of its six names
+    (accountid, applianceid, deviceid, uniqueid, userid) could be deleted -- one at a
+    time or all five at once -- with the whole suite green at rc=0. Unlike
+    `_IDENTITY_KEYS` it never even had a set-equality pin. Only `cloudid` had an
+    observer, and only incidentally, because one unrelated test's record carries a
+    `cloud_id` field.
+
+    These names are not decoration: `deviceId` is the key api.py:72-76 posts the phone
+    install id under (`json={"deviceId": device_id}` where device_id is
+    `device.mobile_id`), the same value diagnostics.py:105-107 calls "the phone-install
+    id of whoever issued the last command (often a third party)" when it arrives as
+    `mobileId`.
+    """
+
+    _LOGGER_NAME = "custom_components.addhon.command_diagnostics"
+    _SECRET = "CANARY-IDENTIFIER-VALUE"
+
+    # Named, not derived -- a loop over the constant goes quiet when a member leaves.
+    _MUST_MASK = ("accountid", "applianceid", "cloudid", "deviceid", "uniqueid", "userid")
+
+    def test_named_extra_identity_keys_are_masked_on_the_command_path(self) -> None:
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        for key in self._MUST_MASK:
+            stem = key[: -len("id")]
+            # _identity_key strips every non-alphanumeric before lookup, so ONE entry
+            # is meant to cover all of these spellings. That matching RULE is part of
+            # the guarantee, so it is asserted here rather than assumed.
+            for spelling in (key, key.upper(), f"{stem}_id", f"{stem}Id", f"{stem}-ID"):
+                with self.subTest(key=spelling):
+                    with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+                        emit_command_event("command_payload", {spelling: self._SECRET})
+                    decoded = json.loads(captured.records[0].getMessage())
+                    # Assert the VALUE, not just absence: _encode_record enforces a
+                    # 4096-byte budget by DROPPING whole keys, so an assertNotIn alone
+                    # could pass because the key was budgeted out rather than masked.
+                    self.assertEqual("***", decoded[spelling])
+
+    def test_every_extra_identity_key_has_a_behavioural_assertion(self) -> None:
+        from custom_components.addhon import command_diagnostics
+
+        self.assertEqual(
+            set(self._MUST_MASK), set(command_diagnostics._EXTRA_IDENTITY_KEYS)
+        )
+
+    def test_non_identity_key_survives_the_command_path(self) -> None:
+        # Positive control: the assertions above are not passing because the command
+        # path masks or drops everything it is handed.
+        from custom_components.addhon.command_diagnostics import emit_command_event
+
+        with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
+            emit_command_event("command_payload", {"programName": "ECO40"})
+        self.assertEqual("ECO40", json.loads(captured.records[0].getMessage())["programName"])
+
+
 if __name__ == "__main__":
     unittest.main()
