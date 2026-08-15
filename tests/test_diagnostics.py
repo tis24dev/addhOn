@@ -755,20 +755,28 @@ class DiagnosticsDeviceTest(unittest.TestCase):
         self.assertEqual({"generated_at": FROZEN_TEXT}, result)
 
 
-class DiagnosticsDriftGuardTest(unittest.TestCase):
-    def test_custom_mapped_attrs_pinned(self):
-        # Adding a custom entity class that consumes a new bare attribute must come
-        # with an update here, otherwise the attribute would be reported as unmapped.
-        self.assertEqual(
-            diagnostics._CUSTOM_MAPPED_ATTRS,
-            {
-                "WM": frozenset({"totalWashCycle", "totalWaterUsed", "machMode"}),
-                "WD": frozenset({"totalWashCycle", "totalWaterUsed", "machMode"}),
-                "TD": frozenset({"machMode"}),
-                "AC": frozenset({"tempIndoor"}),
-            },
-        )
+# The bare attributes CUSTOM entity classes consume. They have no description
+# table, so no walk can derive them: `HonMeanWaterConsumption` needs both
+# `totalWaterUsed` and `totalWashCycle`, `HonWashingMachinePauseSwitch` reads
+# `machMode`, `HaierClimateEntity` reads `tempIndoor`.
+#
+# This used to be a constant in diagnostics.py seeded into `mapped_attrs`, plus a
+# literal-vs-literal test pinning it. Both are gone: measured on every type it
+# covered, the registry walk already supplies all eight names, so the seed
+# corrected nothing and the pin fired only when someone edited the constant --
+# exactly when they had already remembered it. What remains is the GUARANTEE,
+# checked below against behaviour: if a description table is ever narrowed so one
+# of these stops being derivable, the dump would start calling it unmapped, and
+# this list is what makes that fail loudly instead of being silently patched.
+_CUSTOM_ENTITY_ATTRS: dict[str, frozenset[str]] = {
+    "WM": frozenset({"totalWashCycle", "totalWaterUsed", "machMode"}),
+    "WD": frozenset({"totalWashCycle", "totalWaterUsed", "machMode"}),
+    "TD": frozenset({"machMode"}),
+    "AC": frozenset({"tempIndoor"}),
+}
 
+
+class DiagnosticsDriftGuardTest(unittest.TestCase):
     def test_custom_mapped_attrs_are_not_reported_unmapped(self):
         """The behavioural half of the pin above: the EFFECT the comment there claims,
         stated independently of which mechanism delivers it.
@@ -783,7 +791,7 @@ class DiagnosticsDriftGuardTest(unittest.TestCase):
         pins the guarantee it exists to provide, and so keeps holding whether the net
         is load-bearing or redundant.
         """
-        for app_type, attrs in diagnostics._CUSTOM_MAPPED_ATTRS.items():
+        for app_type, attrs in _CUSTOM_ENTITY_ATTRS.items():
             cov = diagnostics._coverage(
                 app_type,
                 {attr: "1" for attr in attrs},
@@ -827,6 +835,30 @@ class DiagnosticsDriftGuardTest(unittest.TestCase):
 
 
 class DiagnosticsCoverageMetaTest(unittest.TestCase):
+    def test_a_container_valued_statistics_key_goes_to_statistics_not_meta(self):
+        """Order matters between the two carve-outs, and only a container proves it.
+
+        `_coverage` partitions unmapped keys statistics-first, then meta (a Mapping
+        or list value, or a denylisted name), then signal. A key that is BOTH a
+        statistics key and container-valued satisfies both rules, so which list it
+        lands in is decided purely by which carve-out runs first -- and nothing
+        asserted that until now. It is not hypothetical: the live fridge publishes
+        `mostUsedPrograms` as an empty list AND as a statistics key
+        (diagnostics/live-2026-06-22/device-REF.json), so on real hardware this is
+        the only shape that exercises the precedence.
+        """
+        cov = diagnostics._coverage(
+            "REF",
+            {"mostUsedPrograms": [], "someBlob": {"a": 1}},
+            {"mostUsedPrograms": []},
+            FakeAppliance(commands={}),
+        )
+        self.assertIn("mostUsedPrograms", cov["attributes_unmapped_statistics"])
+        # ... and NOT double-counted into the meta list, which the sibling
+        # container lands in to prove the meta rule is live in the same call.
+        self.assertNotIn("mostUsedPrograms", cov["attributes_unmapped_meta"])
+        self.assertIn("someBlob", cov["attributes_unmapped_meta"])
+
     """Coverage noise partition: value-type envelope + scalar denylist + program slots
     move to *_meta; genuine signal stays in *_unmapped; nothing is dropped."""
 
@@ -1520,6 +1552,26 @@ AP_ROWS = (
 
 
 class EntityInventoryTest(unittest.TestCase):
+    def test_a_registry_flag_is_read_through_its_enum_value(self):
+        """`_enum_text` unwraps `.value` before stringifying, and nothing pinned it.
+
+        Redundant on current Home Assistant, whose `RegistryEntryDisabler` is a
+        `StrEnum` -- `str()` already yields the token. It stops being redundant the
+        moment the flag is a plain Enum or a mixin enum, which is what the helper
+        was written for: `str()` on those yields `ClassName.MEMBER`, and the dump
+        would report a disabled entity as disabled by `RegistryEntryDisabler.USER`.
+        Every fixture in this file passes a bare string, so the unwrap could be
+        deleted with the suite green. This is the test that stops that.
+        """
+        import enum
+
+        class _PlainDisabler(enum.Enum):
+            USER = "user"
+
+        self.assertEqual("user", diagnostics._enum_text(_PlainDisabler.USER))
+        self.assertEqual("user", diagnostics._enum_text("user"))
+        self.assertIsNone(diagnostics._enum_text(None))
+
     def tearDown(self) -> None:
         _restore_registry()
 
@@ -2784,7 +2836,7 @@ def _static_parameter_names() -> set[str]:
     # the harvest in place, planting an identity-shaped literal into a custom row
     # left the whole suite green.
     names |= set(diagnostics._AC_CLIMATE_PARAMS)
-    for mapped in diagnostics._CUSTOM_MAPPED_ATTRS.values():
+    for mapped in _CUSTOM_ENTITY_ATTRS.values():
         names |= set(mapped)
     # `pause` is the single custom-row name no other table in the repository
     # carries (switch.pause writes the `pause` parameter of pauseProgram /
@@ -3287,9 +3339,8 @@ class RegistryDegradationTest(unittest.TestCase):
             attrs, params, index, missing = diagnostics._mapped_sets("REF")
         self.assertIsNone(index)
         self.assertEqual(list(_PLATFORM_MODULES), missing)
-        self.assertEqual(
-            set(diagnostics._CUSTOM_MAPPED_ATTRS.get("REF", ())), attrs
-        )
+        # No seed survives a total collapse: every mapped name comes from a walk.
+        self.assertEqual(set(), attrs)
         self.assertEqual(set(), params)
 
     def test_a_lost_table_gives_its_entities_one_null_each(self) -> None:

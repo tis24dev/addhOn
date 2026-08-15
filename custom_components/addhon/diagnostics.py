@@ -112,19 +112,6 @@ _TO_REDACT = frozenset(
     }
 )
 
-# Bare attributes consumed by CUSTOM entity classes that have NO description table,
-# so a coverage calc based only on the description registries would wrongly report
-# them as unmapped. Kept small and documented; a unit test guards against drift.
-#   HonMeanWaterConsumption (sensor.py): totalWashCycle + totalWaterUsed
-#   HonWashingMachinePauseSwitch (switch.py): machMode
-#   HaierClimateEntity (climate.py): tempIndoor (current temp; its other reads are
-#       dotted settings.* keys, already excluded from the attribute axis)
-_CUSTOM_MAPPED_ATTRS: dict[str, frozenset[str]] = {
-    "WM": frozenset({"totalWashCycle", "totalWaterUsed", "machMode"}),
-    "WD": frozenset({"totalWashCycle", "totalWaterUsed", "machMode"}),
-    "TD": frozenset({"machMode"}),
-    "AC": frozenset({"tempIndoor"}),
-}
 
 # Settings-command params written by HaierClimateEntity (climate.py has no
 # description table). AC only.
@@ -628,7 +615,15 @@ def _mapped_sets(
     `entities.sources`: that is the narrower and truer statement, and it names
     them one by one instead of blanking the whole map.
     """
-    mapped_attrs: set[str] = set(_CUSTOM_MAPPED_ATTRS.get(app_type, ()))
+    # Custom entity classes have no description table, so their bare attributes
+    # used to be listed in a `_CUSTOM_MAPPED_ATTRS` constant and seeded here.
+    # Measured on every type the constant covered: the registry walk below
+    # already supplies all eight names, so the seed contributed nothing and is
+    # gone. The guarantee it existed for -- a custom class's attribute never
+    # reported unmapped -- is pinned behaviourally in the tests, which is the
+    # loud failure a narrowed description table should produce rather than the
+    # silent correction a standing seed would apply.
+    mapped_attrs: set[str] = set()
     mapped_params: set[str] = set()
     sources: dict[str, dict[str, list[str]] | None] = {}
     unavailable: list[str] = []
