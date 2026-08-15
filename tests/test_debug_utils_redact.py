@@ -253,7 +253,7 @@ class IdentityKeysBehaviouralTest(unittest.TestCase):
     a canary credential appear in the output -- not syncing a bookkeeping literal.
     """
 
-    _SECRET = "CANARY-CREDENTIAL-VALUE"
+    _CANARY_VALUE = "CANARY-CREDENTIAL-VALUE"
 
     # NAMED on purpose, NOT `for key in _IDENTITY_KEYS`. A loop over the constant
     # proves every SURVIVING member still works but goes quiet the moment a member is
@@ -274,14 +274,20 @@ class IdentityKeysBehaviouralTest(unittest.TestCase):
             # match is documented as case-insensitive, so the spelling must not matter.
             for spelling in (key, key.upper(), key.title()):
                 with self.subTest(key=spelling):
-                    flat = debug_utils.redact_identity({spelling: self._SECRET})
+                    flat = debug_utils.redact_identity({spelling: self._CANARY_VALUE})
                     self.assertEqual("***", flat[spelling])
                     # ...and at the depth the sinks actually log: api.py:92 passes the
                     # whole appliance-list body, mqtt.py:515 the whole broker payload.
                     nested = debug_utils.redact_identity(
-                        {"payload": [{"attributes": {spelling: self._SECRET}}]}
+                        {"payload": [{"attributes": {spelling: self._CANARY_VALUE}}]}
                     )
-                    self.assertNotIn(self._SECRET, repr(nested))
+                    # The VALUE, not the absence of the canary: `assertNotIn` on
+                    # the repr would also pass if the redactor deleted the field
+                    # instead of masking it, and a dropped key is a different
+                    # bug that this test would then certify as the fix.
+                    self.assertEqual(
+                        "***", nested["payload"][0]["attributes"][spelling]
+                    )
 
     def test_every_identity_key_has_a_behavioural_assertion(self) -> None:
         # The replacement for the old pin. This is still a set equality, but the

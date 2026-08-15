@@ -553,7 +553,7 @@ class ExtraIdentityKeysBehaviouralTest(unittest.TestCase):
     """
 
     _LOGGER_NAME = "custom_components.addhon.command_diagnostics"
-    _SECRET = "CANARY-IDENTIFIER-VALUE"
+    _CANARY_VALUE = "CANARY-IDENTIFIER-VALUE"
 
     # Named, not derived -- a loop over the constant goes quiet when a member leaves.
     _MUST_MASK = ("accountid", "applianceid", "cloudid", "deviceid", "uniqueid", "userid")
@@ -569,7 +569,7 @@ class ExtraIdentityKeysBehaviouralTest(unittest.TestCase):
             for spelling in (key, key.upper(), f"{stem}_id", f"{stem}Id", f"{stem}-ID"):
                 with self.subTest(key=spelling):
                     with self.assertLogs(self._LOGGER_NAME, level="DEBUG") as captured:
-                        emit_command_event("command_payload", {spelling: self._SECRET})
+                        emit_command_event("command_payload", {spelling: self._CANARY_VALUE})
                     decoded = json.loads(captured.records[0].getMessage())
                     # Assert the VALUE, not just absence: _encode_record enforces a
                     # 4096-byte budget by DROPPING whole keys, so an assertNotIn alone

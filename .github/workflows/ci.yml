@@ -76,7 +76,29 @@ jobs:
           # but every client-side hook is bypassable with --no-verify and a
           # contributor may not have installed it at all. Same matcher on both
           # sides, so they cannot disagree about what is forbidden.
-          git log --format='%B' "$BASE..$HEAD" | ./scripts/no-assistant-trailer.sh
+          #
+          # Run the BASE branch's copy of the checker, never the pull request's.
+          # `on: pull_request` builds the workflow from the PR head, so a branch
+          # that edits `scripts/no-assistant-trailer.sh` to exit 0 would grade
+          # its own homework. Taking the script from `$BASE` removes that lever:
+          # neutering the check now requires editing this workflow file, which
+          # is a visible line in the diff a reviewer is already reading.
+          #
+          # It does NOT make the check tamper-proof -- the workflow is part of
+          # the same PR. Only a repository ruleset or a required workflow, which
+          # live in settings rather than in the tree, can close that, and this
+          # step is deliberately cheap rather than a substitute for one.
+          CHECKER="$RUNNER_TEMP/no-assistant-trailer.sh"
+          if git cat-file -e "$BASE:scripts/no-assistant-trailer.sh" 2>/dev/null; then
+            git show "$BASE:scripts/no-assistant-trailer.sh" > "$CHECKER"
+          else
+            # The base predates the checker: only true for the pull request that
+            # introduces it. Say so out loud rather than failing a legitimate
+            # branch or silently using the untrusted copy without a word.
+            echo "::warning::base has no checker yet; using this branch's copy"
+            cp scripts/no-assistant-trailer.sh "$CHECKER"
+          fi
+          git log --format='%B' "$BASE..$HEAD" | sh "$CHECKER"
 
   hassfest:
     name: hassfest
