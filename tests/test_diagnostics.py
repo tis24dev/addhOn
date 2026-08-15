@@ -1125,16 +1125,28 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
         """
         from custom_components.addhon import error_codes as ec
 
-        class _Client:
-            last_error_code = ec.NETWORK_TIMEOUT       # 400, outside the band
-            last_error_phase = "mfa_send"
-            last_mfa_summary = {"challenge_kind": "email", "can_resend": True}
-            _refresh_token = ""
+        # BOTH edges. "Outside the band" is a two-sided statement and only the
+        # upper side used to be sampled, so `160 <= code` could be deleted --
+        # or written `code <= 169` -- with the whole repository green. The lower
+        # half is the reachable one: `classify()`'s auth cascade
+        # (error_codes.py:420-429) answers 100/110/120/130/140 for exactly the
+        # "token-after-verify" failure this docstring names, and hon_client.py:748
+        # assigns it with `last_mfa_summary` still set.
+        for code in (ec.INVALID_CREDENTIALS, ec.NETWORK_TIMEOUT):  # 100 below, 400 above
+            with self.subTest(code=code.code):
 
-        hass = FakeHass(_build_coordinator())
-        hass.data[DOMAIN]["e1"]["client"] = _Client()
-        result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
-        self.assertNotIn("mfa", result["last_error"])
+                class _Client:
+                    last_error_code = code
+                    last_error_phase = "mfa_send"
+                    last_mfa_summary = {"challenge_kind": "email", "can_resend": True}
+                    _refresh_token = ""
+
+                hass = FakeHass(_build_coordinator())
+                hass.data[DOMAIN]["e1"]["client"] = _Client()
+                result = _run(
+                    diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+                )
+                self.assertNotIn("mfa", result["last_error"])
 
 
 # --- Task 10: air purifier coverage and passive future-capability capture -----
@@ -3033,9 +3045,25 @@ class EntitySourceTest(unittest.TestCase):
         # Narrowing there would turn "not looked" into "the device does not
         # declare it", which is the one substitution every section of this dump
         # refuses to make.
+        #
+        # The first assertion is the one that makes the rest reach production.
+        # `_entity_section` has a single caller (diagnostics.py:1882) and it
+        # always passes `_declared_command_params(appliance)`, so the rule is
+        # only held if THAT helper can express "unread". While it answered `{}`
+        # for an unreadable schema the guard below was dead on the only path
+        # that runs: `{}` is a Mapping, so the row was narrowed to null anyway.
+        class _Unreadable:  # an appliance whose command schema cannot be read
+            commands = "not a mapping"
+
+        self.assertIsNone(diagnostics._declared_command_params(_Unreadable()))
         section = _stop_button_section(None)
         self.assertEqual(
             {"write": ["onOffStatus"]}, section["sources"]["button.stop_program"]
+        )
+        # ... and the appliance that WAS read and declares nothing still
+        # narrows, so the two states stay distinguishable in the dump.
+        self.assertIsNone(
+            _stop_button_section({"stopProgram": []})["sources"]["button.stop_program"]
         )
 
     def test_the_purifier_fan_reads_power_without_claiming_to_write_it(self) -> None:
@@ -3339,9 +3367,32 @@ class RegistryDegradationTest(unittest.TestCase):
             attrs, params, index, missing = diagnostics._mapped_sets("REF")
         self.assertIsNone(index)
         self.assertEqual(list(_PLATFORM_MODULES), missing)
-        # No seed survives a total collapse: every mapped name comes from a walk.
+        # REF carries no static seed, so every mapped name it has comes from a
+        # walk and a total collapse leaves nothing.
         self.assertEqual(set(), attrs)
         self.assertEqual(set(), params)
+        # The general sentence "no seed survives a collapse" is FALSE, and
+        # measuring it on REF alone cannot show that: `mapped_params |=
+        # _AC_CLIMATE_PARAMS` and `mapped_params.update(PROGRAM_PARAM_NAMES)`
+        # are unconditional, so AC and the wash group keep names with all seven
+        # modules gone. That is deliberate, and the rule this pins is "nothing
+        # BEYOND the declared seeds" -- an invented one would subtract names
+        # from `command_params_unmapped` in the same block whose
+        # `registries_unavailable` says nothing could be read.
+        for app_type, seed in (
+            ("AC", set(diagnostics._AC_CLIMATE_PARAMS)),
+            ("WM", set(diagnostics.PROGRAM_PARAM_NAMES)),
+            ("TD", set(diagnostics.PROGRAM_PARAM_NAMES)),
+            ("WD", set(diagnostics.PROGRAM_PARAM_NAMES)),
+        ):
+            with self.subTest(app_type=app_type):
+                with _BrokenModules(*_PLATFORM_MODULES):
+                    seeded_attrs, seeded_params, seeded_index, _m = (
+                        diagnostics._mapped_sets(app_type)
+                    )
+                self.assertIsNone(seeded_index)
+                self.assertEqual(set(), seeded_attrs)
+                self.assertEqual(seed, seeded_params)
 
     def test_a_lost_table_gives_its_entities_one_null_each(self) -> None:
         # The AC louvers are the case that shows the difference: `select` gone,
@@ -4006,6 +4057,18 @@ class DescriptionTableCompletenessTest(unittest.TestCase):
         # An exemption that has stopped being true is worse than none: it is a
         # written promise about a dump nobody re-reads. The day the table is
         # deleted, or wired into the walk, this fails and the entry goes.
+        #
+        # Skipped rather than silently green while there is nothing to check.
+        # With an empty whitelist the loop below never runs and NEITHER
+        # assertion is ever evaluated, so the suite reported an enforced rule
+        # that had never executed -- and still paid `_unwalked_description_tables()`,
+        # which plants probes over 62 module globals and runs `_mapped_sets` 17
+        # times, purely to discard the result. The skip is what arms this the
+        # day an entry is added.
+        if not _TABLES_OUTSIDE_COVERAGE:
+            self.skipTest(
+                "`_TABLES_OUTSIDE_COVERAGE` is empty: no exemption to re-check."
+            )
         unwalked = _unwalked_description_tables()
         for qname, reason in _TABLES_OUTSIDE_COVERAGE.items():
             self.assertIn(
@@ -5521,20 +5584,29 @@ class AttributeValuesDedupTest(unittest.TestCase):
         # The other half of the docstring's reason for `is`: an `__eq__` this
         # module does not control is free to raise, and the dedupe must not be
         # the thing that costs the reporter the file.
+        # The call is RECORDED, not inferred from the outcome. Inferring it
+        # does not work: a check that consults `__eq__` and swallows the raise
+        # as "equal" drops the map too, so the assertion below would pass with
+        # the foreign `__eq__` entered on every key -- which is the whole thing
+        # this test exists to forbid, and is also the exact kill the sibling
+        # above already makes.
+        calls = []
+
         class _HostileEq:
             def __init__(self, value):
                 self.value = value
                 self.last_update = AC_STAMP_OLD
 
             def __eq__(self, other):
+                calls.append(other)
                 raise RuntimeError("boom")
 
             __hash__ = None
 
         shared = _HostileEq("4")
         block = _stamp_block({"tempZ1": shared, "parameters": {"tempZ1": shared}})
-        # Same object bare and nested -> redundant -> dropped, and `__eq__` was
-        # never consulted (it would have raised).
+        self.assertEqual([], calls)
+        # Same object bare and nested -> redundant -> dropped.
         self.assertNotIn("parameters", block["attributes"])
 
     def test_the_live_merge_binds_the_same_object_bare_and_nested(self):
@@ -5677,9 +5749,20 @@ class TheNestedParametersContainerIsAlwaysAPlainDictTest(unittest.TestCase):
         # both helpers decline to walk). AC is used because it has no per-type
         # layer in `client/engine/appliances/registry.py`, so nothing rejects
         # the value before it lands: it is the most permissive path there is.
-        for value in ([], "abc", 5, 1.5, True, None, {}, {"x": "1"}):
-            with self.subTest(value=value):
-                landed = self._appliance("AC", value).attributes.get("parameters")
+        # The values come FROM a decode, not from literals. Written as literals
+        # the six non-dict subcases could not fail whatever the engine did with
+        # them -- `not isinstance(landed, Mapping)` was already true of the
+        # tuple this test wrote, and the engine hands the key straight back by
+        # identity -- so they measured the fixture and not the code. Decoding
+        # them here pins the premise the claim actually rests on.
+        for text in ('[]', '"abc"', '5', '1.5', 'true', 'null', '{}', '{"x": "1"}'):
+            with self.subTest(text=text):
+                decoded = json.loads(text)
+                self.assertTrue(
+                    type(decoded) is dict or not isinstance(decoded, Mapping),
+                    f"json.loads produced a {type(decoded).__name__}",
+                )
+                landed = self._appliance("AC", decoded).attributes.get("parameters")
                 self.assertTrue(
                     type(landed) is dict or not isinstance(landed, Mapping),
                     f"a {type(landed).__name__} reached the dead fallback",

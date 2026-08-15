@@ -877,17 +877,27 @@ _FIXED_WRITE_COMMANDS: dict[str, str] = {
 }
 
 
-def _declared_command_params(appliance) -> dict[str, set[str]]:
-    """Parameter names the appliance declares, per command.
+def _declared_command_params(appliance) -> dict[str, set[str]] | None:
+    """Parameter names the appliance declares, per command, or None if unread.
 
     Distinct from `_settings_param_names` (writables, settings commands only)
     and from `_command_param_names` (every command flattened into one set): the
     question here is which command a name is declared UNDER, because a fixed
     parameter applied by an entity is only applied when that command carries it.
+
+    None and `{}` are DIFFERENT answers and must never be folded together, for
+    the same reason `_registry_entries` keeps them apart. `{}` is an appliance
+    whose command schema was read and declares nothing -- the live dryer -- and
+    `_declared_write_only` narrows on it, which is correct. None is a schema
+    this dump could not read at all, and narrowing there would print "not
+    looked" as "the device does not declare it". Returning `{}` for both made
+    that substitution on every unreadable appliance: it is a Mapping, so the
+    guard downstream let it through and `button.stop_program` shipped as null,
+    indistinguishable from the dryer that really applies nothing.
     """
     commands = getattr(appliance, "commands", None)
     if not isinstance(commands, Mapping):
-        return {}
+        return None
     out: dict[str, set[str]] = {}
     for cmd_name, cmd in commands.items():
         params = getattr(cmd, "parameters", None)
