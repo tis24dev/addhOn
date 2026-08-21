@@ -17,6 +17,7 @@ async_setup_entry), matching test_coordinator_config_entry.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import logging
 import unittest
@@ -139,6 +140,60 @@ class WiringTest(unittest.TestCase):
         self.assertIn("SERVICE_SET_MQTT_LOG_LEVEL", src)
         self.assertIn("SERVICE_SET_LOG_LEVEL", src)
         self.assertIn("async_register", src)
+
+
+class AdminOnlyLogServicesTest(unittest.TestCase):
+    """Both log-level services end in logging.getLogger().setLevel(), which is
+    global to the Python process: not scoped to a config entry, not scoped to a
+    user. Registered with a plain hass.services.async_register they would be
+    callable by any authenticated non-admin through the REST/WebSocket API, so the
+    registration must keep going through async_register_admin_service.
+
+    Checked on the AST rather than on raw text: a substring match would still pass
+    if the constant drifted into a different call.
+    """
+
+    ADMIN_ONLY = {"SERVICE_SET_LOG_LEVEL", "SERVICE_SET_MQTT_LOG_LEVEL"}
+
+    def setUp(self) -> None:
+        self.tree = ast.parse(INIT.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _calls(tree: ast.AST, *, name: str = "", attr: str = "") -> list[ast.Call]:
+        found = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if name and isinstance(func, ast.Name) and func.id == name:
+                found.append(node)
+            elif attr and isinstance(func, ast.Attribute) and func.attr == attr:
+                found.append(node)
+        return found
+
+    def _service_names(self, call: ast.Call) -> set[str]:
+        names = {n.id for n in ast.walk(call) if isinstance(n, ast.Name)}
+        return names & self.ADMIN_ONLY
+
+    def test_log_services_are_registered_admin_only(self) -> None:
+        registered: set[str] = set()
+        for call in self._calls(self.tree, name="async_register_admin_service"):
+            registered |= self._service_names(call)
+        self.assertEqual(
+            registered,
+            self.ADMIN_ONLY,
+            "both log-level services must be registered via "
+            "async_register_admin_service",
+        )
+
+    def test_log_services_are_not_registered_plainly(self) -> None:
+        for call in self._calls(self.tree, attr="async_register"):
+            leaked = self._service_names(call)
+            self.assertFalse(
+                leaked,
+                f"{sorted(leaked)} registered without the admin gate: any "
+                "authenticated user could flip process-global log levels",
+            )
 
 
 if __name__ == "__main__":

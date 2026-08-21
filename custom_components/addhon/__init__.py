@@ -57,9 +57,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
     realtime MQTT noise. The service is global to the domain, not per-entry, so it
     is idempotent: if already present it does nothing.
 
-    voluptuous is imported here (not at module level) so the import of __init__
-    does not depend on voluptuous: the test harness imports the package without
-    always providing its stub, while this function only runs in real HA.
+    voluptuous and homeassistant.helpers.service are imported here (not at module
+    level) so the import of __init__ does not depend on them: the test harness
+    imports the package without always providing their stubs, while this function
+    only runs in real HA.
     """
     mqtt_service_exists = hass.services.has_service(DOMAIN, SERVICE_SET_MQTT_LOG_LEVEL)
     log_service_exists = hass.services.has_service(DOMAIN, SERVICE_SET_LOG_LEVEL)
@@ -68,6 +69,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
         return
 
     import voluptuous as vol
+
+    from homeassistant.helpers.service import async_register_admin_service
 
     # First registration (HA start/restart): silence the noise by default.
     # On a reload of a single entry the service stays registered, so a debug level
@@ -128,8 +131,15 @@ def _async_register_services(hass: HomeAssistant) -> None:
         {vol.Required(ATTR_LEVEL, default="debug"): vol.In(tuple(MQTT_LOG_LEVELS))}
     )
 
+    # Admin-only. Both handlers end in logging.getLogger().setLevel(), which is
+    # global to the Python process: not per config entry, not per user. Registered
+    # plainly, any authenticated non-admin could turn integration-wide debug
+    # logging on through the REST/WebSocket API. async_register_admin_service
+    # resolves call.context.user_id and raises Unauthorized for non-admins; calls
+    # with no user attached (automations, internal) keep working.
     if not mqtt_service_exists:
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_MQTT_LOG_LEVEL,
             _handle_set_mqtt_log_level,
@@ -137,7 +147,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
         )
 
     if not log_service_exists:
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_LOG_LEVEL,
             _handle_set_log_level,
