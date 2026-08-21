@@ -461,7 +461,10 @@ def _install_selector_stubs() -> None:
         type(
             "TextSelectorConfig",
             (),
-            {"__init__": lambda self, type=None, **kwargs: setattr(self, "type", type)},
+            # Keyword-only, like the real TypedDict: config_flow builds it as
+            # TextSelectorConfig(type=...). A positional `type` parameter would
+            # shadow the builtin for no gain.
+            {"__init__": lambda self, **kwargs: setattr(self, "type", kwargs.get("type"))},
         ),
     )
     selector.TextSelector = getattr(

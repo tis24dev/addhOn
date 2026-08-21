@@ -28,19 +28,31 @@ class PasswordSelectorTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tree = ast.parse(CONFIG_FLOW.read_text(encoding="utf-8"))
 
+    @staticmethod
+    def _is_required_password_key(key: ast.expr | None) -> bool:
+        """True for a ``vol.Required("password")`` schema key, and only that.
+
+        The marker call is matched too, not just its argument: accepting any call
+        with "password" as first argument would also accept a vol.Optional, or an
+        unrelated helper, and quietly weaken the guard.
+        """
+        return (
+            isinstance(key, ast.Call)
+            and isinstance(key.func, ast.Attribute)
+            and key.func.attr == "Required"
+            and bool(key.args)
+            and isinstance(key.args[0], ast.Constant)
+            and key.args[0].value == "password"
+        )
+
     def _password_schema_values(self) -> list[ast.expr]:
         """Every value bound to a ``vol.Required("password")`` schema key."""
         values: list[ast.expr] = []
         for node in ast.walk(self.tree):
             if not isinstance(node, ast.Dict):
                 continue
-            for key, value in zip(node.keys, node.values):
-                if (
-                    isinstance(key, ast.Call)
-                    and key.args
-                    and isinstance(key.args[0], ast.Constant)
-                    and key.args[0].value == "password"
-                ):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if self._is_required_password_key(key):
                     values.append(value)
         return values
 
@@ -75,12 +87,35 @@ class PasswordSelectorTest(unittest.TestCase):
         ]
         self.assertEqual(len(assigned), 1, f"{SELECTOR_NAME} must be defined once")
 
-        attributes = {
-            f"{node.value.id}.{node.attr}"
-            for node in ast.walk(assigned[0])
-            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
-        }
-        self.assertIn("TextSelectorType.PASSWORD", attributes)
+        # Structure, not presence: TextSelectorType.PASSWORD appearing anywhere in
+        # the assignment would also be satisfied by a selector built the wrong way
+        # round, which is exactly the regression this guard exists to catch.
+        outer = assigned[0].value
+        self.assertTrue(
+            isinstance(outer, ast.Call)
+            and isinstance(outer.func, ast.Name)
+            and outer.func.id == "TextSelector",
+            f"{SELECTOR_NAME} must be a TextSelector(...) call",
+        )
+
+        self.assertTrue(outer.args, "TextSelector must be given a config")
+        config = outer.args[0]
+        self.assertTrue(
+            isinstance(config, ast.Call)
+            and isinstance(config.func, ast.Name)
+            and config.func.id == "TextSelectorConfig",
+            "TextSelector must wrap a TextSelectorConfig(...) call",
+        )
+
+        modes = [kw.value for kw in config.keywords if kw.arg == "type"]
+        self.assertEqual(len(modes), 1, "TextSelectorConfig needs one type= keyword")
+        self.assertTrue(
+            isinstance(modes[0], ast.Attribute)
+            and modes[0].attr == "PASSWORD"
+            and isinstance(modes[0].value, ast.Name)
+            and modes[0].value.id == "TextSelectorType",
+            "the config must ask for TextSelectorType.PASSWORD",
+        )
 
 
 if __name__ == "__main__":
