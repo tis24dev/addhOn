@@ -14,6 +14,11 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .client.transport.auth import MFAChallengeRequired, MFACodeInvalid
 from .const import (
@@ -71,11 +76,17 @@ def _redact_email(email: str | None) -> str | None:
     return f"***@{domain}"
 
 
+# The Haier account password must never render as a plain text field: a bare
+# `str` shows it on screen while it is typed. One instance, reused by both the
+# user and the reauth schema (selectors are stateless).
+_PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
+
 def _step_user_data_schema(auth_diagnostics: bool = False) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required("email"): str,
-            vol.Required("password"): str,
+            vol.Required("password"): _PASSWORD_SELECTOR,
             vol.Optional(
                 CONF_AUTH_DIAGNOSTICS, default=auth_diagnostics
             ): bool,
@@ -86,7 +97,7 @@ def _step_user_data_schema(auth_diagnostics: bool = False) -> vol.Schema:
 def _step_reauth_data_schema(auth_diagnostics: bool = False) -> vol.Schema:
     return vol.Schema(
         {
-            vol.Required("password"): str,
+            vol.Required("password"): _PASSWORD_SELECTOR,
             vol.Optional(
                 CONF_AUTH_DIAGNOSTICS, default=auth_diagnostics
             ): bool,
