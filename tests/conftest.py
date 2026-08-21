@@ -439,7 +439,86 @@ def _ensure_yarl() -> None:
         sys.modules["yarl"] = yarl_stub
 
 
+def _install_selector_stubs() -> None:
+    """config_flow declares the password with a TextSelector in PASSWORD mode (a
+    bare `str` would render it as a plain text field, visible while typed). The CI
+    stub harness does not ship homeassistant.helpers.selector, so importing
+    config_flow -- and thus every config-flow test -- needs a minimal one. Real HA
+    symbols win when present, like the other stub installers here. The selector is
+    made callable because voluptuous invokes schema values as validators: a
+    non-callable would be compared for equality instead."""
+    helpers = _ensure_module("homeassistant.helpers")
+    selector = _ensure_module("homeassistant.helpers.selector")
+    helpers.selector = selector
+    selector.TextSelectorType = getattr(
+        selector,
+        "TextSelectorType",
+        type("TextSelectorType", (), {"PASSWORD": "password"}),
+    )
+    selector.TextSelectorConfig = getattr(
+        selector,
+        "TextSelectorConfig",
+        type(
+            "TextSelectorConfig",
+            (),
+            {"__init__": lambda self, type=None, **kwargs: setattr(self, "type", type)},
+        ),
+    )
+    selector.TextSelector = getattr(
+        selector,
+        "TextSelector",
+        type(
+            "TextSelector",
+            (),
+            {
+                "__init__": lambda self, config=None: setattr(self, "config", config),
+                "__call__": lambda self, value: value,
+            },
+        ),
+    )
+
+
+def _install_service_helper_stubs() -> None:
+    """_async_register_services registers the two log-level services through
+    homeassistant.helpers.service.async_register_admin_service (they flip
+    process-global logger levels, so they must be admin-only). The stub harness
+    does not ship that module, and `homeassistant.helpers` here is a plain
+    ModuleType rather than a package, so the `from ... import` only resolves if the
+    submodule is present in sys.modules. Mirrors the real helper: wrap the handler
+    in an admin check, then delegate to hass.services.async_register, which is what
+    the registration tests observe."""
+    exc = _ensure_module("homeassistant.exceptions")
+    exc.Unauthorized = getattr(
+        exc, "Unauthorized", type("Unauthorized", (Exception,), {})
+    )
+    helpers = _ensure_module("homeassistant.helpers")
+    service = _ensure_module("homeassistant.helpers.service")
+    helpers.service = service
+
+    if hasattr(service, "async_register_admin_service"):
+        return
+
+    def async_register_admin_service(
+        hass, domain, service_name, service_func, schema=None
+    ):
+        async def admin_handler(call):
+            # A call with no user attached (automation, internal) is trusted, same
+            # as in Home Assistant core.
+            user_id = getattr(getattr(call, "context", None), "user_id", None)
+            if user_id:
+                user = await hass.auth.async_get_user(user_id)
+                if user is None or not user.is_admin:
+                    raise exc.Unauthorized()
+            return await service_func(call)
+
+        hass.services.async_register(domain, service_name, admin_handler, schema=schema)
+
+    service.async_register_admin_service = async_register_admin_service
+
+
 _install_homeassistant_error()
 _install_shared_entity_stubs()
 _install_entity_platform_stubs()
+_install_selector_stubs()
+_install_service_helper_stubs()
 _ensure_yarl()
