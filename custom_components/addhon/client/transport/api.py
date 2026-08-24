@@ -30,7 +30,8 @@ from typing import Any
 
 from . import device as _device
 from .connection import HonConnection
-from .parse import parse_appliance_list, probe_appliance_list
+from .parse import APPLIANCE_LIST_PATH, parse_appliance_list, probe_appliance_list
+from .tokens import token_person_account_id
 from .values import API_URL
 from ...debug_utils import redact_identity
 from ...error_codes import APPLIANCE_LIST_EMPTY, classify
@@ -48,6 +49,102 @@ def _command_timestamp() -> str:
     """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     return f"{now.isoformat(timespec='milliseconds')}Z"
+
+
+# The verdicts `account_match` may return. PUBLIC (no leading underscore) for the same
+# reason `parse.APPLIANCE_LIST_PATH` is: a reader outside this module depends on it --
+# `tests/test_diagnostics.py` pins `diagnostics._FETCH_ACCOUNTS` against this tuple, so
+# the domain the dump is allowed to print cannot drift away from the domain the writer
+# produces. A verdict this build does not declare here would reach a document as
+# "other", which for an identity check is the one answer nobody can act on.
+ACCOUNT_TOKENS = ("match", "mismatch", "mixed", "no_appliances", "no_claim", "unknown")
+
+# The account id the cloud stamps on every element of the appliance list. Present on
+# 1/1 entries of the healthy live capture, alongside the DynamoDB `PK`/`SK` markers
+# that make the list a per-identity query rather than a per-account table
+# (apk/analysis/addhon210-healthy-envelope-baseline.md).
+_APPLIANCE_ACCOUNT_KEY = "sfPersonAccountId"
+
+
+def account_match(result: Any, person_account_id: str | None) -> str:
+    """Do the appliances the cloud returned belong to the account WE authenticated as?
+
+    The self-check the ADDHON-210 investigation kept needing and could not make: our
+    id_token carries `custom_attributes.PersonAccountId`, every appliance in the
+    response carries `sfPersonAccountId`, and until now nothing compared the two. A
+    session that silently resolves to a different account answers 200 with a
+    well-formed envelope and a list that is empty or simply not ours -- and every
+    other field of the dump reads like a legitimately empty account.
+
+    RETURNS A TOKEN OF `ACCOUNT_TOKENS`, NEVER AN IDENTIFIER. Both values compared here
+    are account ids; neither is emitted, neither is logged. That is the whole design
+    rule of the census block and the reason this function returns a verdict instead of
+    the two strings that produced it.
+
+    The verdicts, and why each is a different diagnosis:
+      * `no_claim`     -- OUR token has no readable PersonAccountId, so the check could
+                          not be attempted. Takes priority over everything below: it
+                          says the problem may be on our side of the wire.
+      * `unknown`      -- the claim is there but the response could not be read that
+                          far, or no appliance in it declares an owner.
+      * `no_appliances` -- the claim is there and the cloud returned an EMPTY list.
+                          Distinct from `unknown` for the one reason this function
+                          walks the response itself instead of calling
+                          `parse_appliance_list`: that parser returns `[]` for an empty
+                          list AND for a drift our walk cannot follow (its sec9
+                          fail-safe), which is exactly the distinction being made here.
+      * `match`        -- every appliance whose owner we could read is ours.
+      * `mismatch`     -- none of them is: the session resolved to another account.
+      * `mixed`        -- some are and some are not, i.e. the response spans accounts.
+
+    Appliances with no readable owner do not vote and are silent rather than counted
+    as a mismatch: a missing or non-string `sfPersonAccountId` is a schema question,
+    and the schema questions are what `probe_appliance_list` already answers. When
+    they are ALL silent the verdict is `unknown`, so a "match" is never returned by an
+    empty vote. `count` sits beside this field in the same block, so a reader can see
+    how many appliances the verdict was drawn from.
+
+    `type(owner) is str`, not isinstance: this is an equality test against a value
+    chosen by the cloud, and `json.loads` cannot produce a str subclass but a
+    duck-typed response double can -- one with an `__eq__` that returns True would turn
+    a mismatch into a match, which is the single most misleading thing this field could
+    say.
+
+    Never raises, for the reason `probe_appliance_list` gives at length: it runs inside
+    `NativeHon.setup()`, where an exception does not spoil a diagnostic field, it takes
+    the config entry down.
+    """
+    try:
+        if type(person_account_id) is not str or not person_account_id:
+            return "no_claim"
+        node: Any = result
+        for key in APPLIANCE_LIST_PATH:
+            if not isinstance(node, dict) or key not in node:
+                return "unknown"
+            node = node[key]
+        if not isinstance(node, list):
+            return "unknown"
+        if not node:
+            return "no_appliances"
+        ours = 0
+        theirs = 0
+        for entry in node:
+            owner = entry.get(_APPLIANCE_ACCOUNT_KEY) if isinstance(entry, dict) else None
+            if type(owner) is not str or not owner:
+                continue
+            if owner == person_account_id:
+                ours += 1
+            else:
+                theirs += 1
+        if not ours and not theirs:
+            return "unknown"
+        if not theirs:
+            return "match"
+        if not ours:
+            return "mismatch"
+        return "mixed"
+    except Exception:  # noqa: BLE001 - a census field must never abort a setup
+        return "unknown"
 
 
 class HonApi:
@@ -76,6 +173,22 @@ class HonApi:
     def auth(self) -> Any:
         """The connection's auth object."""
         return self._connection.auth
+
+    def _person_account_id(self) -> str | None:
+        """The account id OUR id_token claims, for `account_match`. Never emitted.
+
+        GUARDED, and the guard is not decoration: `HonConnection.auth` RAISES when the
+        connection was never created (connection.py:102-105), and every test double and
+        every duck-typed connection in this transport is free to have no `auth` at all.
+        This value feeds one census field, and the rule the census lives under is the
+        one the `getattr` on `resp.status` follows a few lines below -- a diagnostic
+        field must answer "unknown", never abort a setup.
+        """
+        try:
+            token = self.auth.id_token
+        except Exception:  # noqa: BLE001 - a census field must never abort a setup
+            return None
+        return token_person_account_id(token) if type(token) is str else None
 
     async def load_appliances(self) -> list:
         # The hOn app reads the appliance list from the unified-api aggregator via POST
@@ -124,6 +237,14 @@ class HonApi:
                 "node_type": None,
                 "siblings": None,
                 "count": None,
+                # Every field downstream of a body, written out as null rather than
+                # left off: the census key set must be the same on both paths, or the
+                # reader has to distinguish "the call never got a response" from "this
+                # build did not record that field yet".
+                "envelope_ok": None,
+                "module_ok": None,
+                "auth_keys": None,
+                "account": None,
             }
             raise
         # Recorded BEFORE the parse, and independently of it. "The cloud sent an empty
@@ -137,6 +258,13 @@ class HonApi:
             "status": status,
             "code": None,
             **probe_appliance_list(result),
+            # The identity self-check, and the only census field that needs something
+            # the RESPONSE does not carry -- which is why it is assembled here, where
+            # the connection (and through it our id_token) is in scope, instead of
+            # inside the probe. It walks the response itself for the reason its
+            # docstring gives: `parse_appliance_list` collapses "empty" and "drift"
+            # into the same `[]`, and telling those apart is half of what it answers.
+            "account": account_match(result, self._person_account_id()),
         }
         appliances = parse_appliance_list(result)
         if not appliances:

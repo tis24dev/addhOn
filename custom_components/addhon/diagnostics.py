@@ -2829,6 +2829,15 @@ _FETCH_OUTCOMES = frozenset(
 _FETCH_NODE_TYPES = frozenset(
     {"dict", "list", "str", "int", "float", "bool", "NoneType", "other"}
 )
+# The verdicts of the identity self-check `api.account_match` makes: does the account
+# our id_token names still own the appliances the cloud answered with. Duplicated and
+# drift-tested against `api.ACCOUNT_TOKENS` exactly like the sets above -- and here the
+# duplication matters more than anywhere else in the block, because a verdict this
+# build has not heard of would print as "other", which for an identity question is the
+# one answer a reader cannot act on.
+_FETCH_ACCOUNTS = frozenset(
+    {"match", "mismatch", "mixed", "no_appliances", "no_claim", "unknown"}
+)
 # The reasons a setup may drop an appliance the cloud returned. The counts arrive from
 # the session, which declares the same tokens as `SETUP_DROP_REASONS` and is pinned
 # against this tuple by a drift guard; a reason this build does not know is a reason
@@ -2873,6 +2882,25 @@ def _bounded_int(value, low: int, high: int) -> int | None:
     """An int inside [low, high], else None. `bool` is refused on purpose:
     isinstance(True, int) is True and would render this field as `true`."""
     return value if type(value) is int and low <= value <= high else None
+
+
+def _closed_bool(value) -> bool | None:
+    """`True`, `False` or None -- never the object the writer handed over.
+
+    The mirror image of `_bounded_int` beside it: that one refuses a bool because
+    isinstance(True, int) is True, this one refuses an INT because `1` is not the same
+    statement as `true`. The fields it guards report what the CLOUD said about its own
+    call, so `1`, `"true"` and `"success"` must all come out as null -- "this build
+    could not tell" -- rather than be coerced into the very answer the field exists to
+    establish. `bool(value)` here would make every non-empty string in the document
+    read as a cloud that declared success.
+
+    `type(value) is bool` also makes the output provably one of two singletons of this
+    process: `bool` cannot be subclassed in CPython, so unlike `_closed_token` there is
+    no `__eq__` trick to close and no "other" bucket to keep -- the value is a literal
+    or it is nothing.
+    """
+    return value if type(value) is bool else None
 
 
 def _label_token(value) -> str | None:
@@ -2950,6 +2978,7 @@ def _fetch_empty() -> dict:
     return {
         "at": None, "age_s": None, "status": None, "code": None, "outcome": None,
         "stopped_at": None, "node_type": None, "siblings": None, "count": None,
+        "envelope_ok": None, "module_ok": None, "auth_keys": None, "account": None,
         "expanded": None, "built": None, "skipped": {}, "degraded": {},
     }
 
@@ -2975,10 +3004,16 @@ def _last_fetch(hass: HomeAssistant, entry: ConfigEntry, *, now: datetime) -> di
 
     Leak-proof by construction on the strongest terms in the file: every KEY is a
     literal written above, and every VALUE is either an int this function range-checks,
-    an instant `_stamp_text` validates against `_ISO_RE`, a token `_closed_token` looks
-    up in a frozenset written above, or a label `_label_token` shape-checks. Not one
-    string from the cloud, from the session or from the client is copied into the
-    document -- so `_redact` is not merely skipped here, it would have nothing to do.
+    a boolean `_closed_bool` refuses to coerce, an instant `_stamp_text` validates
+    against `_ISO_RE`, a token `_closed_token` looks up in a frozenset written above,
+    or a label `_label_token` shape-checks. Not one string from the cloud, from the
+    session or from the client is copied into the document -- so `_redact` is not
+    merely skipped here, it would have nothing to do.
+
+    That rule is what shapes `account`, the block's identity self-check: the two
+    account ids it rests on are compared in the transport (`api.account_match`) and
+    only the VERDICT crosses into this file. Same for `auth_keys`, which is a count of
+    the keys in an object whose values include a bearer token, and never their names.
 
     Deliberate divergence from `_last_poll` next door, which passes the census through
     as `dict(census)` and rests entirely on its writer. This one does not trust its
@@ -3076,6 +3111,25 @@ def _fetch_block(raw: Mapping, counters: Mapping, *, now: datetime) -> dict:
         "node_type": _closed_token(raw.get("node_type"), _FETCH_NODE_TYPES),
         "siblings": _bounded_int(raw.get("siblings"), 0, _FETCH_MAX_INT),
         "count": _bounded_int(raw.get("count"), 0, _FETCH_MAX_INT),
+        # The envelope ABOVE the walk, and the question `count: 0` cannot answer on its
+        # own. A `success: false` at either level is a state in which the official app
+        # shows zero appliances too -- neither it nor this integration has ever read
+        # them -- and in which every other field of this block looks exactly like a
+        # legitimately empty account. `null` at either means the cloud sent something
+        # that was not a boolean, which is itself worth seeing.
+        "envelope_ok": _closed_bool(raw.get("envelope_ok")),
+        "module_ok": _closed_bool(raw.get("module_ok")),
+        # How many keys `modules.applianceList.authInfo` carried, never which. That
+        # object is how the cloud hands back a replacement cognito token, and on a
+        # healthy session it is verifiably empty -- so 0 is the baseline and any other
+        # number is a signal. A count is an int and an int carries no identity; a key
+        # NAME here would be a value chosen by the cloud, and one of the values behind
+        # those names is a bearer token.
+        "auth_keys": _bounded_int(raw.get("auth_keys"), 0, _FETCH_MAX_INT),
+        # Whose appliances the cloud answered with, as a verdict and never as an id.
+        # See `api.account_match`: the comparison happens in the transport and only the
+        # token crosses into this document.
+        "account": _closed_token(raw.get("account"), _FETCH_ACCOUNTS),
         "expanded": _bounded_int(counters.get("expanded"), 0, _FETCH_MAX_INT),
         "built": _bounded_int(counters.get("built"), 0, _FETCH_MAX_INT),
         "skipped": _skip_census(counters.get("skipped")),

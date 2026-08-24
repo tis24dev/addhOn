@@ -65,6 +65,84 @@ def _node_type(node: Any) -> str:
     return name if name in _NODE_TYPES else "other"
 
 
+# The envelope ABOVE the payload, and the two keys read there. The path is SLICED from
+# `APPLIANCE_LIST_PATH` instead of being written again, because `success` and
+# `authInfo` are only ever looked up in the module envelope -- if a level of the
+# response is ever renamed, both walks have to move together or the flags would start
+# describing a different node than the one `stopped_at` names.
+_MODULE_PATH = APPLIANCE_LIST_PATH[:2]
+_SUCCESS_KEY = "success"
+# `authInfo` is the channel through which the cloud can hand back a REPLACEMENT cognito
+# token (`cognitoTokenNew`): the hOn app adopts it in its generic request layer
+# (decomp.txt:525784-525805) and this integration has never read it at all. On a
+# freshly authenticated session it is verifiably `{}` (live capture,
+# apk/analysis/addhon210-healthy-envelope-baseline.md), which is what makes a COUNT
+# worth having: a channel that is silent when things are healthy turns any content
+# into a signal. Only the size is taken. Never a key NAME and never a value -- one of
+# those values is a bearer token, and a count carries no identity at all.
+_AUTH_INFO_KEY = "authInfo"
+
+
+def _flag(node: Any) -> bool | None:
+    """`node` when it is a real bool, else None.
+
+    `type(node) is bool`, not isinstance and not `bool(node)`: the point of these two
+    fields is to report what the cloud SAID, so `1`, `"true"` and `"false"` must all
+    read as "this build could not tell", not as True. Coercing would invent the one
+    answer the field exists to establish. `bool` cannot be subclassed in CPython, so
+    the value returned here is `True`, `False` or `None` and nothing else can wear
+    those clothes.
+    """
+    return node if type(node) is bool else None
+
+
+def _envelope_flags(result: Any) -> dict:
+    """The two `success` flags and the SIZE of `authInfo`, above the payload walk.
+
+    Why they are here at all. On the ADDHON-210 report the cloud answered 200 with a
+    well-formed envelope and an empty list, and the dump could say only that. But a
+    live capture of a HEALTHY response (2026-08-24, one appliance) shows the module
+    envelope carries its OWN `success` beside the payload -- and neither this
+    integration NOR the official app reads it. A `modules.applianceList.success` of
+    false is therefore a state in which the app shows zero appliances too, and in
+    which every field the dump already prints looks exactly like a legitimately empty
+    account. Two booleans separate those, and nothing else in the document can.
+
+    Read BEFORE the payload walk and merged into every branch of
+    `probe_appliance_list`, including the ones that stop early. The failure branches
+    are precisely where a reader most needs to know whether the cloud declared the
+    call a success: "our walk stopped at `payload`" and "the module reported failure,
+    so there was no payload to walk" are the same picture until these are in it.
+
+    Same leak-proof contract as the rest of the probe: `_flag` returns one of two
+    singletons of this file or None, and `auth_keys` is `len()` of a mapping -- an
+    int, which cannot carry identity. Not one string from the response is read.
+
+    Never raises, and keeps whatever it managed to read when something does: the guard
+    is `probe_appliance_list`'s (see its docstring) applied one level down, so a
+    hostile mapping cannot cost the caller the flags it had already established.
+    """
+    flags: dict = {"envelope_ok": None, "module_ok": None, "auth_keys": None}
+    try:
+        if not isinstance(result, dict):
+            return flags
+        flags["envelope_ok"] = _flag(result.get(_SUCCESS_KEY))
+        node: Any = result
+        for key in _MODULE_PATH:
+            if not isinstance(node, dict):
+                return flags
+            node = node.get(key)
+        if not isinstance(node, dict):
+            return flags
+        flags["module_ok"] = _flag(node.get(_SUCCESS_KEY))
+        auth_info = node.get(_AUTH_INFO_KEY)
+        if isinstance(auth_info, dict):
+            flags["auth_keys"] = len(auth_info)
+    except Exception:  # noqa: BLE001 - a probe must never abort a setup
+        return flags
+    return flags
+
+
 def probe_appliance_list(result: Any) -> dict:
     """Where the appliance-list walk stopped, as closed-domain primitives.
 
@@ -93,22 +171,33 @@ def probe_appliance_list(result: Any) -> dict:
     inside `NativeHon.setup()` (session.py:450), so "it cannot raise on a json.loads
     output" is not the same claim as "it can never abort a setup" -- the guard makes the
     second one true too, and gives the reserved "other" token its only producer.
+
+    `envelope_ok`/`module_ok`/`auth_keys` describe the envelope ABOVE the walk and are
+    computed by `_envelope_flags` FIRST, then merged into every branch below --
+    including the early returns and the `except`. A flag captured only on the happy
+    path would be missing from exactly the responses that need explaining: see that
+    function for what the three answer.
     """
+    flags = _envelope_flags(result)
     try:
         node: Any = result
         for key in APPLIANCE_LIST_PATH:
             if not isinstance(node, dict):
                 return {"outcome": "not_a_dict", "stopped_at": key,
-                        "node_type": _node_type(node), "siblings": None, "count": None}
+                        "node_type": _node_type(node), "siblings": None,
+                        "count": None, **flags}
             if key not in node:
                 return {"outcome": "missing_key", "stopped_at": key,
-                        "node_type": "dict", "siblings": len(node), "count": None}
+                        "node_type": "dict", "siblings": len(node),
+                        "count": None, **flags}
             node = node[key]
         if isinstance(node, list):
             return {"outcome": "ok", "stopped_at": None,
-                    "node_type": "list", "siblings": None, "count": len(node)}
+                    "node_type": "list", "siblings": None,
+                    "count": len(node), **flags}
         return {"outcome": "not_a_list", "stopped_at": None,
-                "node_type": _node_type(node), "siblings": None, "count": None}
+                "node_type": _node_type(node), "siblings": None,
+                "count": None, **flags}
     except Exception:  # noqa: BLE001 - a probe must never abort a setup
         return {"outcome": "other", "stopped_at": None,
-                "node_type": None, "siblings": None, "count": None}
+                "node_type": None, "siblings": None, "count": None, **flags}

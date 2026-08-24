@@ -1,7 +1,7 @@
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Contract test of the transport's OAuth token parser: parse_token_fragment.
+"""Contract test of the transport's OAuth token readers.
 
 Oracle = the OAuth2 implicit-flow redirect contract (RFC 6749 sec4.2.2), documented
 in docs/protocol/HAIER-HON-TRANSPORT.md sec6 -- NOT a transcription of pyhOn's
@@ -12,10 +12,17 @@ a matrix of redirects, including the deliberate, cloud-safe divergences from a n
 parse_qs: access/id kept RAW, only refresh percent-decoded once, an empty value still
 counts as "present", and -- unlike pyhOn -- a final field with NO trailing `&` IS
 captured (a real fragment need not end in one).
+
+The second half covers the two CLAIM readers, `token_expiry` (RFC 7519 sec4.1.4) and
+`token_person_account_id`, which share one decoder. `token_expiry` shipped without
+tests of its own; it governs when every request in the transport refreshes its token,
+so the extraction of that decoder needed a pin before it could be made -- these are it.
 """
 from __future__ import annotations
 
+import base64
 import importlib.util
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -164,6 +171,165 @@ class ParseTokenFragmentTest(unittest.TestCase):
         t = self.parse(page)
         self.assertEqual(t.access_token, "DECOY_A")  # first match wins (documented)
         self.assertEqual(t.id_token, "DECOY_I")
+
+
+def _jwt(claims, *, header="eyJhbGciOiJIUzI1NiJ9", signature="sig") -> str:
+    """A JWT whose payload section carries `claims`, built the way the IdP does.
+
+    Base64URL with the padding STRIPPED (RFC 7515 sec2), because that is the form the
+    readers have to restore and the one a hand-written fixture would quietly get
+    right. The header and signature are inert: nothing under test verifies either.
+    """
+    body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"{header}.{body}.{signature}"
+
+
+class TokenExpiryTest(unittest.TestCase):
+    """`token_expiry` reads the token's OWN stated lifetime (RFC 7519 sec4.1.4).
+
+    Untested until now, and load-bearing: `HonAuth` stores its result as
+    `_access_expiry` and `token_expires_soon` decides from it whether every request in
+    the transport refreshes first. A None here does not fail loudly -- it falls back to
+    a conservative window -- so a decoder that quietly stopped working would look like
+    a slightly chattier integration and nothing else.
+    """
+
+    def setUp(self) -> None:
+        self.module = _load(_OUR_TOKENS, "addhon_transport_tokens")
+        self.expiry = self.module.token_expiry
+
+    def test_reads_the_exp_claim_as_epoch_seconds(self) -> None:
+        self.assertEqual(1_800_000_000.0, self.expiry(_jwt({"exp": 1_800_000_000})))
+        self.assertIsInstance(self.expiry(_jwt({"exp": 1_800_000_000})), float)
+        # A fractional exp is legal (sec4.1.4 says NumericDate, not integer).
+        self.assertEqual(1.5, self.expiry(_jwt({"exp": 1.5})))
+
+    def test_padding_is_restored_for_every_payload_length(self) -> None:
+        # THE regression this file exists for. Base64URL strips `=` (RFC 7515 sec2), so
+        # the reader has to add it back; the bug only appears at payload lengths whose
+        # remainder mod 4 is not 0, so a single fixture proves nothing. Padding claims
+        # of growing length walks through all three remainders several times over.
+        for filler in range(24):
+            with self.subTest(filler=filler):
+                claims = {"exp": 1_800_000_000, "pad": "x" * filler}
+                self.assertEqual(1_800_000_000.0, self.expiry(_jwt(claims)))
+
+    def test_anything_that_is_not_a_readable_exp_is_none(self) -> None:
+        for junk, why in (
+            (_jwt({}), "no exp claim"),
+            (_jwt({"exp": "1800000000"}), "exp as text"),
+            (_jwt({"exp": None}), "exp null"),
+            (_jwt([1, 2, 3]), "payload is a JSON array, not an object"),
+            (_jwt("plain"), "payload is a JSON string"),
+            ("not-a-jwt", "no dot-separated sections"),
+            ("", "empty"),
+            ("aaa.!!!not-base64!!!.ccc", "payload is not base64"),
+            (f"aaa.{base64.urlsafe_b64encode(b'{not json').decode()}.ccc", "not JSON"),
+            (None, "not a string at all"),
+            (["a.b.c"], "a list"),
+        ):
+            with self.subTest(why=why):
+                self.assertIsNone(self.expiry(junk))
+
+    def test_a_boolean_exp_is_not_an_expiry(self) -> None:
+        # isinstance(True, int) is True, so without the explicit bool refusal an `exp`
+        # of `true` becomes 1.0 -- the epoch -- and the transport would treat the token
+        # as permanently stale and re-authenticate on every single request.
+        self.assertIsNone(self.expiry(_jwt({"exp": True})))
+        self.assertIsNone(self.expiry(_jwt({"exp": False})))
+
+
+class TokenPersonAccountIdTest(unittest.TestCase):
+    """`token_person_account_id` reads the account id OUR id_token claims.
+
+    Its one consumer compares it against the `sfPersonAccountId` the cloud stamps on
+    every appliance, so that a session which silently resolved to a different account
+    stops looking exactly like an account that owns nothing (ADDHON-210). The claim is
+    an identifier: it is compared in the transport and never emitted.
+    """
+
+    def setUp(self) -> None:
+        self.module = _load(_OUR_TOKENS, "addhon_transport_tokens")
+        self.claim = self.module.token_person_account_id
+
+    def test_reads_the_claim_from_the_live_shape(self) -> None:
+        # The claim set of a real id_token of this integration, as captured on
+        # 2026-08-24 (apk/analysis/addhon210-healthy-envelope-baseline.md). The nine
+        # neighbours are not decoration: the reader must find PersonAccountId among
+        # them, and among the top-level claims that also travel in the same payload.
+        token = _jwt({
+            "sub": "SYNTHETIC-SUB", "email": "user@example.com", "iss": "https://idp",
+            "exp": 1_800_000_000,
+            "custom_attributes": {
+                "Country": "IT", "EulaUpdateRequired": "false",
+                "ExternalSource": "hOn", "ExternalSubSource": "app",
+                "OemAppId": "haier", "PersonAccountId": "ACCOUNT-OURS",
+                "PersonContactId": "CONTACT-OURS", "PrivacyUpdated": "true",
+                "UserLanguage": "it",
+            },
+        })
+        self.assertEqual("ACCOUNT-OURS", self.claim(token))
+        # The two readers share a decoder and must not interfere: the same token still
+        # yields its expiry.
+        self.assertEqual(1_800_000_000.0, self.module.token_expiry(token))
+
+    def test_a_missing_or_unreadable_claim_is_none(self) -> None:
+        # None is a DIAGNOSIS, not a failure: "we hold no identity to compare with",
+        # which the census publishes as `no_claim` and which is a different finding
+        # from "the comparison ran and disagreed".
+        for junk, why in (
+            (_jwt({"custom_attributes": {}}), "no PersonAccountId"),
+            (_jwt({"custom_attributes": {"PersonAccountId": ""}}), "empty claim"),
+            (_jwt({"custom_attributes": {"PersonAccountId": 42}}), "claim is a number"),
+            (_jwt({"custom_attributes": {"PersonAccountId": None}}), "claim is null"),
+            (_jwt({"custom_attributes": "ACCOUNT-OURS"}), "attributes is a string"),
+            (_jwt({"custom_attributes": ["ACCOUNT-OURS"]}), "attributes is a list"),
+            (_jwt({"PersonAccountId": "ACCOUNT-OURS"}), "claim at the top level"),
+            (_jwt({}), "no attributes at all"),
+            ("not-a-jwt", "not a token"),
+            ("", "empty"),
+            (None, "not a string at all"),
+        ):
+            with self.subTest(why=why):
+                self.assertIsNone(self.claim(junk))
+
+    def test_the_claim_is_not_searched_for_anywhere_in_the_payload(self) -> None:
+        # A `flat = json.dumps(payload); "PersonAccountId" in flat` shortcut is the
+        # obvious cheap implementation (the investigation probe used one), and it would
+        # find the name inside an unrelated nested object -- reading someone else's id
+        # as ours and turning a mismatch into a match. Only the ONE documented location
+        # counts.
+        decoy = _jwt({
+            "custom_attributes": {"Country": "IT"},
+            "app_metadata": {"custom_attributes": {"PersonAccountId": "ACCOUNT-DECOY"}},
+        })
+        self.assertIsNone(self.claim(decoy))
+
+    def test_a_string_subclass_claim_is_refused(self) -> None:
+        # `json.loads` cannot produce one, but this value is about to be compared for
+        # equality against a string chosen by the cloud, and a subclass with a custom
+        # __eq__ equals whatever it likes. The guard is `type(v) is str`, so a future
+        # caller handing this a claims-shaped object cannot smuggle one through.
+        class Sneaky(str):
+            def __eq__(self, other):  # pragma: no cover - only if the guard fails
+                return True
+
+            def __hash__(self):
+                return hash(str(self))
+
+        # The guard lives in the READER, and `json.loads` will not hand it a subclass,
+        # so the decoder is stood in for over this one call. Standing in for the whole
+        # reader instead would test the double.
+        claims = {"custom_attributes": {"PersonAccountId": Sneaky("ACCOUNT-OURS")}}
+        original = self.module._jwt_claims
+        try:
+            self.module._jwt_claims = lambda _text: claims
+            self.assertIsNone(self.claim("irrelevant"))
+            # The premise: this object satisfies the isinstance check the guard
+            # deliberately does not use.
+            self.assertIsInstance(claims["custom_attributes"]["PersonAccountId"], str)
+        finally:
+            self.module._jwt_claims = original
 
 
 if __name__ == "__main__":

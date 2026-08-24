@@ -14,6 +14,12 @@ it is loaded in isolation.
 The second half of the file covers `probe_appliance_list`, which has no pyhOn
 counterpart at all: it reports WHERE that fail-safe walk stopped, so a diagnostics
 dump can separate the three responses sec9 deliberately collapses into `[]`.
+
+The third covers the envelope ABOVE that walk -- the two `success` flags and the size
+of `authInfo` -- whose oracle is not a spec at all but a live capture of a healthy
+response (apk/analysis/addhon210-healthy-envelope-baseline.md, shared as
+`tests/_envelopes.py`). sec9 never mentions those levels because nothing read them:
+not this integration, and not the official app.
 """
 from __future__ import annotations
 
@@ -22,6 +28,8 @@ import json
 import sys
 import unittest
 from pathlib import Path
+
+from _envelopes import healthy, reporter  # noqa: E402
 
 _ROOT = Path(__file__).resolve().parents[1]
 _OUR_PARSE = _ROOT / "custom_components" / "addhon" / "client" / "transport" / "parse.py"
@@ -126,6 +134,20 @@ class _HostileDict(dict):
         raise RuntimeError("hostile mapping")
 
 
+class _HostileGetDict(dict):
+    """A dict SUBCLASS that raises from `get`.
+
+    The membership test is not the only door. `_envelope_flags` runs BEFORE the walk's
+    try/except and reaches the response through `.get`, so this is the input that
+    decides whether its own guard is load-bearing: without it an exception here
+    propagates out of `probe_appliance_list` entirely and aborts a config entry setup,
+    which is the one thing the whole probe is written not to do.
+    """
+
+    def get(self, key, default=None):
+        raise RuntimeError("hostile mapping")
+
+
 def _deep(depth: int) -> dict:
     node: dict = {}
     for _ in range(depth):
@@ -151,6 +173,9 @@ class ProbeApplianceListTest(unittest.TestCase):
         self.path = module.APPLIANCE_LIST_PATH
 
     def test_probe_reports_ok_and_the_raw_count(self) -> None:
+        # Asserted as a WHOLE dict, so a field added to the probe has to be added here
+        # too: the census this returns is copied verbatim into the diagnostics document
+        # and its key set is the block's key set.
         full = {"modules": {"applianceList": {"payload": {"appliances": _REAL}}}}
         self.assertEqual(
             {
@@ -159,6 +184,12 @@ class ProbeApplianceListTest(unittest.TestCase):
                 "node_type": "list",
                 "siblings": None,
                 "count": 2,
+                # No envelope at all around this fixture: the two `success` flags and
+                # the `authInfo` size are absent, and absent reads as null rather than
+                # as false. See EnvelopeFlagsTest below.
+                "envelope_ok": None,
+                "module_ok": None,
+                "auth_keys": None,
             },
             self.probe(full),
         )
@@ -205,6 +236,9 @@ class ProbeApplianceListTest(unittest.TestCase):
                 "node_type": "int",
                 "siblings": None,
                 "count": None,
+                "envelope_ok": None,
+                "module_ok": None,
+                "auth_keys": None,
             },
             self.probe({"modules": 3}),
         )
@@ -324,6 +358,175 @@ class ProbeApplianceListTest(unittest.TestCase):
         )
         self.assertEqual("not_a_list", foreign["outcome"])
         self.assertEqual("other", foreign["node_type"])
+
+    def test_the_envelope_flags_survive_every_branch_of_the_walk(self) -> None:
+        # The reason `_envelope_flags` runs BEFORE the try and is spread into all five
+        # returns. A failure branch is exactly where a reader needs to know whether the
+        # cloud declared the call a success: "our walk stopped at `payload`" and "the
+        # module said false, so there was no payload" are the same picture otherwise.
+        # Computing them on the happy path only would have left the field null in every
+        # dump that needed it, and every test asserting the ok branch would still pass.
+        broken = healthy()
+        del broken["modules"]["applianceList"]["payload"]
+        broken["modules"]["applianceList"]["success"] = False
+        probe = self.probe(broken)
+        self.assertEqual("missing_key", probe["outcome"])
+        self.assertEqual("payload", probe["stopped_at"])
+        self.assertIs(True, probe["envelope_ok"])
+        self.assertIs(False, probe["module_ok"])
+        self.assertEqual(0, probe["auth_keys"])
+        # ...and on the branch that reaches nothing at all, including the reserved
+        # `other` one, which is reached through the guard rather than through a return.
+        hostile = _HostileDict(healthy())
+        self.assertEqual("other", self.probe(hostile)["outcome"])
+        self.assertIs(True, self.probe(hostile)["envelope_ok"])
+        self.assertIs(True, self.probe(hostile)["module_ok"])
+
+    def test_every_branch_emits_the_same_key_set(self) -> None:
+        # The census this returns IS the diagnostics block's key set (the reader spreads
+        # it into a document whose fields must be comparable between two downloads), so
+        # a branch that forgot `**flags` would silently drop three fields from exactly
+        # the responses that need them.
+        keys = {
+            frozenset(self.probe(response))
+            for response in (
+                healthy(), reporter(), None, {}, {"modules": 3},
+                {"modules": {"applianceList": {"payload": {"appliances": "x"}}}},
+                _HostileDict({"modules": {}}),
+            )
+        }
+        self.assertEqual(1, len(keys), keys)
+        self.assertEqual(
+            {"outcome", "stopped_at", "node_type", "siblings", "count",
+             "envelope_ok", "module_ok", "auth_keys"},
+            next(iter(keys)),
+        )
+
+    def test_the_healthy_capture_reads_as_healthy(self) -> None:
+        # The calibration. Every field of the block, against a response verified on the
+        # wire: without this the flags are asserted only against shapes this file
+        # invented, and "true means the cloud said true" is an assumption.
+        self.assertEqual(
+            {
+                "outcome": "ok", "stopped_at": None, "node_type": "list",
+                "siblings": None, "count": 1,
+                "envelope_ok": True, "module_ok": True, "auth_keys": 0,
+            },
+            self.probe(healthy()),
+        )
+
+    def test_the_reporter_envelope_differs_only_in_the_count(self) -> None:
+        # The null hypothesis, stated as a test. Their log records the two key sets and
+        # both match the healthy capture, so a schema drift at those levels is ruled
+        # out -- and this pins that the fields added on top do NOT invent a difference
+        # where the evidence shows none. The one field that moves is the one their dump
+        # already reported.
+        healthy_probe = self.probe(healthy())
+        reporter_probe = self.probe(reporter())
+        self.assertEqual(1, healthy_probe.pop("count"))
+        self.assertEqual(0, reporter_probe.pop("count"))
+        self.assertEqual(healthy_probe, reporter_probe)
+
+    def test_a_success_that_is_not_a_boolean_is_not_coerced(self) -> None:
+        # `bool("false")` is True and `bool(0)` is False: coercion would let the field
+        # answer the exact question it exists to establish, using a value the cloud
+        # never gave. Null means "this build could not tell", which is the truth.
+        for junk in ("true", "false", 1, 0, [], {}, None):
+            with self.subTest(junk=junk):
+                response = healthy()
+                response["success"] = junk
+                response["modules"]["applianceList"]["success"] = junk
+                probe = self.probe(response)
+                self.assertIsNone(probe["envelope_ok"])
+                self.assertIsNone(probe["module_ok"])
+        # ...and a real boolean still comes through, so the assertions above are not
+        # passing merely because the fields are always null.
+        false = healthy()
+        false["success"] = False
+        false["modules"]["applianceList"]["success"] = False
+        self.assertIs(False, self.probe(false)["envelope_ok"])
+        self.assertIs(False, self.probe(false)["module_ok"])
+
+    def test_auth_info_is_counted_and_never_named(self) -> None:
+        # `authInfo` is empty on a healthy session and can carry `cognitoTokenNew`, a
+        # bearer token the app adopts and we ignore. The COUNT is the whole signal: a
+        # channel that is silent when healthy makes any content meaningful, and a
+        # number cannot carry an identity or a credential.
+        rotated = healthy()
+        rotated["modules"]["applianceList"]["authInfo"] = {
+            "cognitoTokenNew": "eyJhbGciOiJIUzI1NiJ9.SECRET-TOKEN-VALUE.sig",
+            "3C:71:BF:AA:BB:CC": "user@example.com",
+        }
+        probe = self.probe(rotated)
+        self.assertEqual(2, probe["auth_keys"])
+        blob = json.dumps(probe)
+        for leak in ("cognitoTokenNew", "SECRET-TOKEN-VALUE", "3C:71:BF:AA:BB:CC",
+                     "user@example.com"):
+            self.assertNotIn(leak, blob, leak)
+
+    def test_a_foreign_auth_info_is_refused_rather_than_measured(self) -> None:
+        # A list has a len() too, and `len("abcdef")` is 6: without the isinstance
+        # guard the field would report a character count as a key count, which reads
+        # as a rotation that never happened.
+        for junk in ([], ["a", "b"], "abcdef", 7, None, True):
+            with self.subTest(junk=junk):
+                response = healthy()
+                response["modules"]["applianceList"]["authInfo"] = junk
+                self.assertIsNone(self.probe(response)["auth_keys"])
+        # Absent entirely is the same answer as unreadable: null, never 0. 0 is
+        # reserved for "the object was there and it was empty", which is the baseline
+        # the whole field is calibrated against.
+        missing = healthy()
+        del missing["modules"]["applianceList"]["authInfo"]
+        self.assertIsNone(self.probe(missing)["auth_keys"])
+
+    def test_the_flags_are_read_under_the_module_and_nowhere_else(self) -> None:
+        # `success` exists at two levels and the two mean different things, so a walk
+        # that read the wrong one would report the envelope's answer as the module's.
+        # Deliberately opposite values: a confusion between the levels cannot pass.
+        response = healthy()
+        response["success"] = False
+        response["modules"]["applianceList"]["success"] = True
+        probe = self.probe(response)
+        self.assertIs(False, probe["envelope_ok"])
+        self.assertIs(True, probe["module_ok"])
+        # A `success` sitting anywhere else is not either of them.
+        stray = healthy()
+        del stray["success"]
+        del stray["modules"]["applianceList"]["success"]
+        stray["modules"]["success"] = True
+        stray["modules"]["applianceList"]["payload"]["success"] = True
+        self.assertIsNone(self.probe(stray)["envelope_ok"])
+        self.assertIsNone(self.probe(stray)["module_ok"])
+
+    def test_the_flags_never_raise(self) -> None:
+        # Same standard as the walk beside them, and a STRONGER requirement: the flags
+        # are computed before the walk's try/except, so an exception escaping them
+        # escapes `probe_appliance_list` itself and takes a config entry down with it.
+        # `_HostileGetDict` is the input that decides it -- the flags reach the
+        # response through `.get`, which the walk's own hostile double never touches.
+        for response in (
+            _HostileDict({"modules": {}}),
+            _HostileGetDict({"modules": {}}),
+            {"modules": _HostileGetDict({"applianceList": {}})},
+            {"modules": _HostileDict({"applianceList": {}})},
+            {"modules": {"applianceList": _HostileGetDict({"success": True})}},
+            _deep(200),
+            {str(i): i for i in range(10_000)},
+        ):
+            with self.subTest(response=type(response).__name__):
+                probe = self.probe(response)
+                for key in ("envelope_ok", "module_ok"):
+                    self.assertIn(probe[key], (True, False, None))
+                self.assertIn(type(probe["auth_keys"]), (int, type(None)))
+        # ...and what it managed to read before the raise is KEPT rather than thrown
+        # away with it: `envelope_ok` was already established when the module level
+        # exploded, and it is the half that says whether the cloud declared success.
+        partial = self.probe(
+            {"success": True, "modules": _HostileGetDict({"applianceList": {}})}
+        )
+        self.assertIs(True, partial["envelope_ok"])
+        self.assertIsNone(partial["module_ok"])
 
     def test_parse_appliance_list_return_type_is_unchanged(self) -> None:
         # The probe was added beside the parser, not inside it. This is the whole

@@ -18,6 +18,7 @@ into HonApi, so we do not touch the real transport.
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import json
 import logging
@@ -25,6 +26,8 @@ import sys
 import types
 import unittest
 from pathlib import Path
+
+from _envelopes import OTHER_ACCOUNT, OUR_ACCOUNT, healthy, reporter
 
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
@@ -946,6 +949,343 @@ class FetchCensusTest(unittest.TestCase):
                 self.assertTrue(block["at"].endswith("+00:00"), block["at"])
                 self.assertEqual(51_840, block["age_s"])
 
+
+# --------------------------------------------------------------------------- #
+# The identity self-check                                                      #
+# --------------------------------------------------------------------------- #
+def _id_token(person_account_id) -> str:
+    """An id_token shaped like the live one, carrying `person_account_id`.
+
+    The nine `custom_attributes` and the top-level claims are the ones observed on
+    2026-08-24 (apk/analysis/addhon210-healthy-envelope-baseline.md): the reader has to
+    find its claim among neighbours, not alone in an otherwise empty object.
+    """
+    claims = {
+        "sub": "SYNTHETIC-SUB",
+        "email": "user@example.com",
+        "exp": 1_800_000_000,
+        "custom_attributes": {
+            "Country": "IT",
+            "EulaUpdateRequired": "false",
+            "ExternalSource": "hOn",
+            "ExternalSubSource": "app",
+            "OemAppId": "haier",
+            "PersonContactId": "CONTACT-OURS",
+            "PrivacyUpdated": "true",
+            "UserLanguage": "it",
+        },
+    }
+    if person_account_id is not None:
+        claims["custom_attributes"]["PersonAccountId"] = person_account_id
+    body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"eyJhbGciOiJIUzI1NiJ9.{body}.sig"
+
+
+class _AuthedConnection(FakeConnection):
+    """A connection whose `auth` holds an id_token, as the live one does.
+
+    Every other double in this file has NO `auth` at all -- `HonConnection.auth` raises
+    when the connection was never created -- which is exactly the state the census
+    guard is written for, and exactly why a double that does carry one is needed for
+    the verdict to be anything but `no_claim`.
+    """
+
+    def __init__(self, body, id_token, **kwargs) -> None:
+        super().__init__(body, **kwargs)
+        self.auth = types.SimpleNamespace(id_token=id_token)
+
+
+class AccountMatchTest(unittest.TestCase):
+    """`account_match` answers whose appliances these are, as a verdict.
+
+    The question ADDHON-210 kept needing and nothing could answer: a session that
+    silently resolves to another account returns 200, a well-formed envelope, and a
+    list that is empty or simply not ours -- and every other field of the dump reads
+    like an account that owns nothing.
+    """
+
+    def setUp(self) -> None:
+        self.match = api_mod.account_match
+
+    def test_the_healthy_capture_matches(self) -> None:
+        self.assertEqual("match", self.match(healthy(), OUR_ACCOUNT))
+
+    def test_the_reporter_envelope_separates_empty_from_unreadable(self) -> None:
+        # THE acceptance case, and the reason this function walks the response itself
+        # instead of calling `parse_appliance_list`: that parser returns [] for an
+        # empty list AND for a drift its fail-safe cannot follow (sec9), which is the
+        # very distinction between these two verdicts.
+        self.assertEqual("no_appliances", self.match(reporter(), OUR_ACCOUNT))
+        # A level that went missing: the walk never reaches a list at all.
+        drifted = reporter()
+        del drifted["modules"]["applianceList"]["payload"]
+        self.assertEqual("unknown", self.match(drifted, OUR_ACCOUNT))
+        # And the case that separates the two BRANCHES rather than the two responses:
+        # the walk completes and the leaf is not a list. `no_appliances` claims the
+        # cloud said "you own nothing"; only an actual empty list says that, and a
+        # single `not isinstance(node, list) or not node` would quietly report the
+        # cloud's silence as its answer. Both falsy and truthy non-lists, because a
+        # falsy one is what a merged condition swallows.
+        for leaf in ({"x": 1}, "x", 0, None, {}, ""):
+            with self.subTest(leaf=leaf):
+                bent = reporter()
+                bent["modules"]["applianceList"]["payload"]["appliances"] = leaf
+                self.assertEqual("unknown", self.match(bent, OUR_ACCOUNT))
+
+    def test_a_foreign_account_is_a_mismatch_not_an_empty_account(self) -> None:
+        theirs = healthy()
+        theirs["modules"]["applianceList"]["payload"]["appliances"][0][
+            "sfPersonAccountId"
+        ] = OTHER_ACCOUNT
+        self.assertEqual("mismatch", self.match(theirs, OUR_ACCOUNT))
+
+    def test_a_response_spanning_two_accounts_is_mixed(self) -> None:
+        both = healthy()
+        appliances = both["modules"]["applianceList"]["payload"]["appliances"]
+        appliances.append({**appliances[0], "sfPersonAccountId": OTHER_ACCOUNT})
+        self.assertEqual("mixed", self.match(both, OUR_ACCOUNT))
+
+    def test_no_claim_wins_over_every_other_verdict(self) -> None:
+        # "Our own token carries no identity" says the problem may be on our side of
+        # the wire, so it is reported ahead of anything read off the response -- and
+        # ahead of `no_appliances`, which the field report would otherwise show while
+        # the real finding was that no comparison happened at all.
+        for response in (healthy(), reporter(), None, {"modules": 3}):
+            with self.subTest(response=type(response).__name__):
+                for claim in (None, "", 42, b"ACCOUNT-OURS", ["ACCOUNT-OURS"]):
+                    self.assertEqual("no_claim", self.match(response, claim))
+
+    def test_appliances_with_no_readable_owner_do_not_vote(self) -> None:
+        # A missing or non-string `sfPersonAccountId` is a SCHEMA question, and the
+        # schema questions are what the probe already answers. Counting it as a
+        # mismatch would report an identity failure for a renamed key.
+        silent = healthy()
+        appliances = silent["modules"]["applianceList"]["payload"]["appliances"]
+        appliances.append({"macAddress": "AA:BB:CC:DD:EE:FF"})
+        appliances.append({"sfPersonAccountId": {"nested": "object"}})
+        appliances.append({"sfPersonAccountId": ""})
+        appliances.append("not-a-dict")
+        self.assertEqual("match", self.match(silent, OUR_ACCOUNT))
+
+    def test_an_all_silent_list_is_unknown_and_never_a_match(self) -> None:
+        # The vote must not be won by acclamation: with nothing readable the honest
+        # answer is that the check did not run.
+        nameless = healthy()
+        nameless["modules"]["applianceList"]["payload"]["appliances"] = [
+            {"macAddress": "AA:BB:CC:DD:EE:FF"},
+            {"sfPersonAccountId": 42},
+        ]
+        self.assertEqual("unknown", self.match(nameless, OUR_ACCOUNT))
+
+    def test_a_string_subclass_owner_cannot_forge_a_match(self) -> None:
+        # The single most misleading thing this field could say. `isinstance` admits a
+        # str SUBCLASS, and one whose `__eq__` returns True equals our account id while
+        # its characters are someone else's -- turning the mismatch that explains the
+        # whole report into a clean bill of health. The guard is `type(v) is str`.
+        class Sneaky(str):
+            def __eq__(self, other):  # pragma: no cover - only if the guard fails
+                return True
+
+            def __hash__(self):
+                return hash(str(self))
+
+        forged = healthy()
+        forged["modules"]["applianceList"]["payload"]["appliances"][0][
+            "sfPersonAccountId"
+        ] = Sneaky(OTHER_ACCOUNT)
+        self.assertEqual("unknown", self.match(forged, OUR_ACCOUNT))
+
+    def test_every_verdict_is_a_declared_token_and_it_never_raises(self) -> None:
+        # It runs inside NativeHon.setup(): an exception here does not spoil a
+        # diagnostic field, it takes the config entry down. And a verdict outside the
+        # declared tuple would print as "other" in the dump, which for an identity
+        # question is the one answer nobody can act on.
+        class Hostile(dict):
+            def __contains__(self, key):
+                raise RuntimeError("hostile mapping")
+
+        responses = [
+            healthy(), reporter(), None, [], "", 0, {}, {"modules": []},
+            {"modules": {"applianceList": {"payload": {"appliances": "x"}}}},
+            Hostile({"modules": {}}),
+            {"modules": {"applianceList": {"payload": {"appliances": [None, 1, "x"]}}}},
+        ]
+        seen = set()
+        for response in responses:
+            for claim in (OUR_ACCOUNT, OTHER_ACCOUNT, None):
+                with self.subTest(response=type(response).__name__, claim=claim):
+                    verdict = self.match(response, claim)
+                    self.assertIn(verdict, api_mod.ACCOUNT_TOKENS)
+                    seen.add(verdict)
+        # The guard has a producer: without it the hostile mapping raises out of a
+        # setup instead of answering.
+        self.assertEqual("unknown", self.match(Hostile({"modules": {}}), OUR_ACCOUNT))
+        self.assertLessEqual({"match", "mismatch", "no_appliances", "no_claim",
+                              "unknown"}, seen)
+
+    def test_the_verdict_carries_no_identifier(self) -> None:
+        # Both values compared here are account ids. Neither may appear in the answer:
+        # the whole reason the comparison happens in the transport is that only the
+        # verdict is allowed to cross into a document a user pastes into a public issue.
+        hostile = healthy()
+        hostile["modules"]["applianceList"]["payload"]["appliances"][0][
+            "sfPersonAccountId"
+        ] = "3C:71:BF:AA:BB:CC"
+        for claim in (OUR_ACCOUNT, "user@example.com"):
+            verdict = self.match(hostile, claim)
+            self.assertNotIn("3C:71:BF:AA:BB:CC", verdict)
+            self.assertNotIn("example.com", verdict)
+            self.assertNotIn(OUR_ACCOUNT, verdict)
+
+
+class FetchCensusEnvelopeTest(unittest.TestCase):
+    """The census carries the envelope and the identity check, end to end.
+
+    Written against the two envelopes of the investigation (`tests/_envelopes.py`):
+    the healthy one captured live on 2026-08-24, and the reporter's, whose two
+    recorded levels are identical to it. Everything the dump could already say about
+    those two responses was the same; this is the pin that it no longer is.
+    """
+
+    def _census(self, body, claim=OUR_ACCOUNT, **kwargs):
+        api = _call(_AuthedConnection(body, _id_token(claim), **kwargs))
+        _run(api.load_appliances())
+        return api.last_appliance_fetch
+
+    def test_the_healthy_capture_reads_as_healthy(self) -> None:
+        census = self._census(healthy())
+        self.assertEqual(200, census["status"])
+        self.assertEqual("ok", census["outcome"])
+        self.assertEqual(1, census["count"])
+        self.assertIs(True, census["envelope_ok"])
+        self.assertIs(True, census["module_ok"])
+        self.assertEqual(0, census["auth_keys"])
+        self.assertEqual("match", census["account"])
+
+    def test_the_reporter_envelope_is_an_account_that_owns_nothing(self) -> None:
+        # The verdict the field report deserved: the cloud declared success at BOTH
+        # levels, the session resolved to the account we authenticated as, and that
+        # account has no appliances. That is a finished diagnosis, and none of it was
+        # readable from a dump before.
+        with self.assertLogs(
+            "custom_components.addhon.client.transport.api", level="WARNING"
+        ):
+            census = self._census(reporter())
+        self.assertEqual(0, census["count"])
+        self.assertIs(True, census["envelope_ok"])
+        self.assertIs(True, census["module_ok"])
+        self.assertEqual("no_appliances", census["account"])
+
+    def test_a_failed_module_stops_looking_like_an_empty_account(self) -> None:
+        # THE case the two flags exist for. `modules.applianceList.success: false` with
+        # an empty payload is a state in which the official app shows zero appliances
+        # too -- it does not read the flag either -- and in which every other field of
+        # the census is byte-identical to a legitimately empty account.
+        failed = reporter()
+        failed["modules"]["applianceList"]["success"] = False
+        with self.assertLogs(
+            "custom_components.addhon.client.transport.api", level="WARNING"
+        ):
+            broken = self._census(failed)
+        with self.assertLogs(
+            "custom_components.addhon.client.transport.api", level="WARNING"
+        ):
+            legit = self._census(reporter())
+        self.assertNotEqual(
+            {k: v for k, v in broken.items() if k != "at"},
+            {k: v for k, v in legit.items() if k != "at"},
+        )
+        self.assertIs(False, broken["module_ok"])
+        self.assertIs(True, legit["module_ok"])
+
+    def test_a_rotated_cognito_token_shows_up_as_a_key_count(self) -> None:
+        # `authInfo` is empty on every healthy session captured, so it is a channel
+        # that stays silent when things work: any content at all is a signal, and the
+        # count is the whole of what may be published about it.
+        rotating = healthy()
+        rotating["modules"]["applianceList"]["authInfo"] = {
+            "cognitoTokenNew": "eyJhbGciOiJIUzI1NiJ9.SECRET-TOKEN-VALUE.sig"
+        }
+        census = self._census(rotating)
+        self.assertEqual(1, census["auth_keys"])
+        blob = json.dumps(census, default=str)
+        for leak in ("cognitoTokenNew", "SECRET-TOKEN-VALUE"):
+            self.assertNotIn(leak, blob, leak)
+
+    def test_a_session_that_resolved_elsewhere_is_visible(self) -> None:
+        census = self._census(healthy(), claim=OTHER_ACCOUNT)
+        self.assertEqual("mismatch", census["account"])
+        self.assertEqual(1, census["count"])
+
+    def test_a_connection_without_an_auth_object_records_no_claim(self) -> None:
+        # `HonConnection.auth` RAISES when the connection was never created, and no
+        # other double in this file has one. The census must answer, not abort: the
+        # rule the `getattr` on `resp.status` follows, for the same reason.
+        api = _call(FakeConnection(healthy()))
+        self.assertEqual(1, len(_run(api.load_appliances())))
+        self.assertEqual("no_claim", api.last_appliance_fetch["account"])
+        # ...and the rest of the census is unaffected: the guard costs the identity
+        # check, not the fetch.
+        self.assertEqual("ok", api.last_appliance_fetch["outcome"])
+        self.assertIs(True, api.last_appliance_fetch["module_ok"])
+
+    def test_a_raising_auth_property_does_not_abort_the_fetch(self) -> None:
+        class _Exploding(FakeConnection):
+            @property
+            def auth(self):
+                raise RuntimeError("connection not created (create() is missing)")
+
+        api = _call(_Exploding(healthy()))
+        self.assertEqual(1, len(_run(api.load_appliances())))
+        self.assertEqual("no_claim", api.last_appliance_fetch["account"])
+
+    def test_both_census_paths_declare_the_same_keys(self) -> None:
+        # `load_appliances` builds two SEPARATE dict literals, and the reader compares
+        # two downloads of the same issue field by field: a key present on one path and
+        # absent on the other turns "this got worse" into "this file is shaped
+        # differently".
+        served = self._census(healthy())
+        refused = _call(_RaisingConnection(RuntimeError("hOn server error (status 503)")))
+        with self.assertRaises(RuntimeError):
+            _run(refused.load_appliances())
+        self.assertEqual(set(served), set(refused.last_appliance_fetch))
+        for key in ("envelope_ok", "module_ok", "auth_keys", "account"):
+            with self.subTest(key=key):
+                # Nothing downstream of a body can be reported when there was no body.
+                self.assertIsNone(refused.last_appliance_fetch[key])
+
+    def test_the_new_fields_reach_the_diagnostics_block_unchanged(self) -> None:
+        # The whole path in one assertion: the writer here, the reader in
+        # diagnostics.py, and no other file in the suite can exercise both (see the
+        # docstring of test_both_paths_stamp_an_instant_the_dump_can_render above).
+        # Split across two files, a rename on either side leaves both halves green
+        # while the block quietly renders null.
+        from datetime import timedelta
+        from types import SimpleNamespace
+
+        from custom_components.addhon import diagnostics
+        from custom_components.addhon.const import DOMAIN
+
+        rotated = healthy()
+        rotated["modules"]["applianceList"]["authInfo"] = {"cognitoTokenNew": "SECRET"}
+        rotated["modules"]["applianceList"]["success"] = False
+        api = _call(_AuthedConnection(rotated, _id_token(OTHER_ACCOUNT)))
+        _run(api.load_appliances())
+        hass = SimpleNamespace(data={DOMAIN: {"e1": {"client": api}}})
+        block = diagnostics._last_fetch(
+            hass,
+            SimpleNamespace(entry_id="e1"),
+            now=api.last_appliance_fetch["at"] + timedelta(seconds=1),
+        )
+        self.assertEqual("recorded", block["state"])
+        self.assertIs(True, block["envelope_ok"])
+        self.assertIs(False, block["module_ok"])
+        self.assertEqual(1, block["auth_keys"])
+        self.assertEqual("mismatch", block["account"])
+        blob = json.dumps(block, default=str)
+        for leak in ("SECRET", "cognitoTokenNew", OUR_ACCOUNT, OTHER_ACCOUNT,
+                     "AA:BB:CC:DD:EE:FF", "PLAINTEXT-SERIAL", "Kitchen Fridge"):
+            self.assertNotIn(leak, blob, leak)
 
 
 if __name__ == "__main__":
