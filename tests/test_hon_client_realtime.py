@@ -1311,7 +1311,13 @@ class SetupFetchSnapshotTest(unittest.TestCase):
             node for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef) and node.name == "setup_sync"
         )
-        writes = [
+        # SORTED, because ast.walk is breadth first: its output is traversal order,
+        # not line order, and the clear and the snapshot sit at different depths. They
+        # happen to come out in line order today, so indexing the raw list would pass
+        # -- until an edit moved either statement and silently swapped the pair being
+        # asserted. (Reported by a reviewer on PR #86; the same trap this file's twin
+        # in test_diagnostics.py already avoids.)
+        writes = sorted(
             node.lineno
             for node in ast.walk(setup)
             if isinstance(node, ast.Assign)
@@ -1319,14 +1325,14 @@ class SetupFetchSnapshotTest(unittest.TestCase):
                 isinstance(t, ast.Attribute) and t.attr == "last_setup_fetch"
                 for t in node.targets
             )
-        ]
-        closes = [
+        )
+        closes = sorted(
             node.lineno
             for node in ast.walk(setup)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "_close_sync"
-        ]
+        )
         self.assertEqual(2, len(writes), "one clear at the top, one snapshot on failure")
         self.assertTrue(closes, "setup_sync must still close the session it failed on")
         self.assertLess(writes[0], min(closes), "the clear precedes every close")

@@ -324,7 +324,49 @@ def _store_setup_failure(hass: HomeAssistant, entry: ConfigEntry, client) -> Non
     `_last_error`: an ADDHON label, a phase token, the phase ledger, the census
     primitives. No new class of value reaches hass.data, and diagnostics still
     validates each one on the way out rather than trusting this record.
+
+    The reads are GUARDED, and the guard is not symmetry with `diagnostics._last_fetch`
+    -- it costs more here. `getattr(x, name, default)` swallows a MISSING attribute, not
+    an exception raised inside a property body, and `_setup_failure_record` reads four
+    HonClient properties that delegate to `_hon_instance` (`setup_drops` ends in
+    `dict(self._setup_drops)` on a session that setup may still be appending to from the
+    hOn loop thread -- `client/session.py:625-632`, and `_RaisingFetchClient` in the
+    diagnostics tests exists for exactly that). Unguarded, one such raise leaves this
+    helper propagating out of the `except` handler that called it, so
+    `_async_close_client` never runs and the dedicated loop thread and the owned
+    aiohttp session leak -- and in the CancelledError branch it would replace a
+    cancellation with an unrelated error. A dump that cannot say why setup failed is a
+    worse dump; a client nobody closed is a worse process.
+
+    On that path the bucket is still cleared and left EMPTY rather than filled with a
+    half-read record: `_last_error` then answers `client_absent`, which is exactly true
+    (there is no client, and nothing could be read about why).
     """
+    record: dict | None = None
+    try:
+        record = _setup_failure_record(client)
+    except Exception:  # noqa: BLE001 - a diagnostics record must never block teardown
+        _LOGGER.debug(
+            "Setup debug: could not record the setup failure for entry=%s",
+            entry.entry_id,
+            exc_info=True,
+        )
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = (
+        {"setup_failure": record} if record is not None else {}
+    )
+    _LOGGER.debug(
+        "Setup debug: recorded setup failure for entry=%s code=%s phase=%s fetch=%s",
+        entry.entry_id,
+        (record or {}).get("code"),
+        (record or {}).get("phase"),
+        ((record or {}).get("fetch") or {}).get("outcome"),
+    )
+
+
+def _setup_failure_record(client) -> dict:
+    """The record itself. Split from the guard above so that guard is the whole
+    degradation story: four property reads that may raise, none of them allowed to
+    keep a failed setup from closing its client."""
     code = getattr(client, "last_error_code", None)
     census = getattr(client, "last_appliance_fetch", None) or getattr(
         client, "last_setup_fetch", None
@@ -342,7 +384,7 @@ def _store_setup_failure(hass: HomeAssistant, entry: ConfigEntry, client) -> Non
             "skipped": getattr(client, "setup_drops", None),
             "degraded": getattr(client, "degraded_census", None),
         }
-    record = {
+    return {
         # The LABEL only, never the code object: diagnostics resolves the reason from
         # the catalog at read time, so the text in the dump comes from error_codes.py
         # in the running version and cannot be a string that rode in here.
@@ -352,14 +394,6 @@ def _store_setup_failure(hass: HomeAssistant, entry: ConfigEntry, client) -> Non
         "fetch": fetch,
         "at": datetime.now(timezone.utc),
     }
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"setup_failure": record}
-    _LOGGER.debug(
-        "Setup debug: recorded setup failure for entry=%s code=%s phase=%s fetch=%s",
-        entry.entry_id,
-        record["code"],
-        record["phase"],
-        (fetch or {}).get("outcome"),
-    )
 
 
 @callback

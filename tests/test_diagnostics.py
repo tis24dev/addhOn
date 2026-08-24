@@ -6827,6 +6827,34 @@ class SetupFailureRecordTest(unittest.TestCase):
             "ok", hass.data[DOMAIN]["e1"]["setup_failure"]["fetch"]["outcome"]
         )
 
+    def test_a_raising_property_does_not_keep_the_setup_from_closing(self) -> None:
+        # `getattr(x, name, default)` swallows a MISSING attribute, never an exception
+        # raised INSIDE a property body -- and `setup_drops` ends in
+        # `dict(self._setup_drops)` on a session setup may still be appending to from
+        # the hOn loop thread (client/session.py:625-632, the same hazard
+        # `_RaisingFetchClient` above stands in for). Unguarded, that raise propagates
+        # out of the `except` handler in async_setup_entry, `_async_close_client` never
+        # runs, and the dedicated loop thread and the aiohttp session leak.
+        init = _addhon_init()
+
+        class Hostile(_FailedClient):
+            @property
+            def setup_drops(self):
+                raise RuntimeError("session torn down on the hOn loop thread")
+
+        hass = FakeHass(_build_coordinator())
+        hass.data[DOMAIN]["e1"]["client"] = object()
+        init._store_setup_failure(hass, FakeEntry(), Hostile())
+        # No raise -- and the bucket is still CLEARED, because a coordinator or a
+        # client that outlived a failed setup is the one outcome worse than a missing
+        # record. Empty, not half-filled: `last_error` then answers `client_absent`,
+        # which is exactly true.
+        self.assertEqual({}, hass.data[DOMAIN]["e1"])
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+        )
+        self.assertEqual({"status": "client_absent"}, result["last_error"])
+
     def test_removing_the_entry_drops_the_record(self) -> None:
         # The only hook that can: an entry whose setup never succeeded is never
         # unloaded, so without async_remove_entry the record outlives the entry and
@@ -6866,15 +6894,18 @@ class SetupFailureRecordTest(unittest.TestCase):
             # first, and an assertion built on it passes whichever way the two are
             # written. Verified by mutation: swapping the two statements leaves a
             # walk-order assertion green and fails this one.
-            lines = {
-                node.func.id: node.lineno
-                for node in ast.walk(handler)
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id in ("_store_setup_failure", "_async_close_client")
-            }
+            lines: dict[str, list[int]] = {"_store_setup_failure": [], "_async_close_client": []}
+            for node in ast.walk(handler):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    if node.func.id in lines:
+                        lines[node.func.id].append(node.lineno)
+            # max/min, not a single lineno each: ast.walk is breadth first, so a name
+            # appearing twice in one handler would resolve to whichever the traversal
+            # yielded last. This asserts the strongest reading -- EVERY record build
+            # precedes EVERY close -- and cannot be satisfied by traversal luck.
             self.assertLess(
-                lines["_store_setup_failure"],
-                lines["_async_close_client"],
+                max(lines["_store_setup_failure"]),
+                min(lines["_async_close_client"]),
                 "the record must be built while the session is still there",
             )
             # And the pop it replaced must be gone: a pop after the write would delete
