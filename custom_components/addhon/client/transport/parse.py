@@ -34,19 +34,40 @@ def parse_appliance_list(result: Any) -> list:
     Returns the list at `modules.applianceList.payload.appliances`. Any unexpected
     shape (missing key, non-dict intermediate level, non-list final value)
     -> `[]`. A non-list but *truthy* final value = schema drift: log + `[]`.
+
+    The guard makes that promise TRUE rather than merely stated. `isinstance` accepts
+    a dict SUBCLASS, and a subclass is free to raise from `get` -- in production
+    `json.loads` cannot build one, but the input is `await resp.json(content_type=None)`
+    on a duck-typed response, so "a json.loads output cannot raise here" is not the
+    same claim as "this can never abort a setup". It runs inside `NativeHon.setup()`
+    (session.py), where an exception does not spoil a returned list, it takes the
+    config entry down with a bare TypeError that names nothing a reporter can act on.
+
+    NOTHING IS LOST BY SWALLOWING IT. `probe_appliance_list` walks the same response
+    under its own guard and reports `outcome: "other"` for exactly this input, and that
+    token reaches the diagnostics dump, so the difference between "the cloud sent an
+    empty list" and "the body fought back" survives in the one place a reader looks.
+    Returning `[]` also keeps the single documented contract instead of adding a second
+    failure mode that only this call site would know how to handle.
     """
-    node: Any = result
-    for key in APPLIANCE_LIST_PATH:
-        if not isinstance(node, dict):
-            return []
-        node = node.get(key)
-    if isinstance(node, list):
-        return node
-    if node:
-        _LOGGER.warning(
-            "appliance-list response: 'appliances' of unexpected type %s, ignored",
-            type(node).__name__,
-        )
+    try:
+        node: Any = result
+        for key in APPLIANCE_LIST_PATH:
+            if not isinstance(node, dict):
+                return []
+            node = node.get(key)
+        if isinstance(node, list):
+            return node
+        if node:
+            _LOGGER.warning(
+                "appliance-list response: 'appliances' of unexpected type %s, ignored",
+                type(node).__name__,
+            )
+    except Exception:  # noqa: BLE001 - a parse must never abort a setup
+        # Deliberately not logged here: the caller already emits ADDHON-210 with the
+        # response structure when the list comes back empty, and the census carries
+        # `outcome: "other"`. A second warning would say less and repeat more.
+        return []
     return []
 
 

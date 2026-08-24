@@ -100,6 +100,50 @@ class ParseApplianceListTest(unittest.TestCase):
                 self.assertEqual(self.parse(result), [])
 
 
+    def test_a_mapping_that_fights_back_is_still_zero_appliances(self) -> None:
+        """The docstring promised "any unexpected shape -> []" and a subclass broke it.
+
+        `isinstance(x, dict)` is True for a subclass, so a hostile one walks past the
+        type guard and into `.get`, where it raises. Before the guard that TypeError
+        left `parse_appliance_list` and took the config entry down from inside
+        `NativeHon.setup()` -- with a bare exception naming nothing a reporter can act
+        on, which is the opposite of what a fail-safe parser is for.
+
+        Only `get` is a door HERE, and that asymmetry is worth stating: this function
+        walks with `node.get(key)` while `probe_appliance_list` walks with `key in node`
+        followed by `node[key]`, so a subclass raising from `__contains__` stops the
+        probe and leaves this one untouched. The two are pinned to agree on the OUTCOME
+        of a healthy response, never on which hostile input reaches them -- which is why
+        the probe's guard is not evidence that this one was unnecessary.
+        """
+        for level, hostile in (
+            ("top", _HostileGetDict(_REAL_ENVELOPE)),
+            ("modules", {"modules": _HostileGetDict({"applianceList": {}})}),
+            ("applianceList",
+             {"modules": {"applianceList": _HostileGetDict({"payload": {}})}}),
+            ("payload",
+             {"modules": {"applianceList": {"payload": _HostileGetDict({"appliances": []})}}}),
+        ):
+            with self.subTest(level=level):
+                self.assertEqual([], self.parse(hostile))
+
+    def test_a_contains_that_raises_is_not_this_function_s_door(self) -> None:
+        # Documents the asymmetry rather than leaving it to be rediscovered: the same
+        # object that drives the probe to `outcome: "other"` is answered normally here.
+        self.assertEqual(_REAL, self.parse(_HostileDict(_REAL_ENVELOPE)))
+
+    def test_the_healthy_shape_is_untouched_by_the_guard(self) -> None:
+        # The guard must not turn a real answer into a fail-safe one: same object,
+        # not a copy and not an empty list.
+        self.assertIs(
+            _REAL_ENVELOPE["modules"]["applianceList"]["payload"]["appliances"],
+            self.parse(_REAL_ENVELOPE),
+        )
+
+
+_REAL_ENVELOPE = {"modules": {"applianceList": {"payload": {"appliances": _REAL}}}}
+
+
 # (response, "does this payload carry a list at the path") -- the truth is STATED
 # here, not computed from the probe, so the equivalence below compares the probe
 # against an author's claim instead of against itself.

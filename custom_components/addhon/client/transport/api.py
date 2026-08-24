@@ -290,16 +290,35 @@ class HonApi:
             # Request/auth OK but 0 appliances: log the response structure to
             # distinguish a truly empty account from an API change (the
             # unified-api list includes offline ones too).
-            modules = result.get("modules") if isinstance(result, dict) else None
+            # Reading the key NAMES is the last unguarded stretch of this method, and
+            # it is a diagnostic: `.get` and `.keys()` are calls on an object the cloud
+            # supplied, so on the hostile mapping the parse now survives they are what
+            # would still abort the setup -- and abort it while BUILDING the message
+            # that exists to explain the failure. The `n/a` above is the shape-mismatch
+            # answer; `unreadable` is the object-fought-back one, and they are worth
+            # telling apart in the log for the same reason `outcome: "other"` is worth
+            # telling apart in the dump.
+            try:
+                modules = result.get("modules") if isinstance(result, dict) else None
+                result_keys = sorted(result.keys()) if isinstance(result, dict) else "n/a"
+                module_keys = sorted(modules.keys()) if isinstance(modules, dict) else "n/a"
+            except Exception:  # noqa: BLE001 - a log line must never abort a setup
+                result_keys = module_keys = "unreadable"
+            # Emitted OUTSIDE the try so the code the user is told to search for is
+            # emitted whatever the body did: ADDHON-210 is the signal, the key names
+            # are the detail.
             _LOGGER.warning(
                 "[%s] hOn API: 0 appliances (request OK). result keys=%s; modules keys=%s. "
                 "If the appliances appear in the hOn app, it is more likely an API change "
                 "than an empty/unshared account.",
                 APPLIANCE_LIST_EMPTY.label,
-                sorted(result.keys()) if isinstance(result, dict) else "n/a",
-                sorted(modules.keys()) if isinstance(modules, dict) else "n/a",
+                result_keys,
+                module_keys,
             )
-            _LOGGER.debug("hOn raw appliance response: %s", redact_identity(result))
+            try:
+                _LOGGER.debug("hOn raw appliance response: %s", redact_identity(result))
+            except Exception:  # noqa: BLE001 - same rule, and this one is gated anyway
+                _LOGGER.debug("hOn raw appliance response: <unreadable>", exc_info=True)
         return appliances
 
     async def load_commands(self, appliance: Any) -> dict:

@@ -1152,6 +1152,53 @@ class FetchCensusEnvelopeTest(unittest.TestCase):
         _run(api.load_appliances())
         return api.last_appliance_fetch
 
+    def test_a_body_that_fights_back_never_takes_the_setup_down(self) -> None:
+        """The last unguarded stretch of `load_appliances`, closed end to end.
+
+        Three separate calls on the response object stood between a hostile body and a
+        surviving setup: `parse_appliance_list` walking with `.get`, the ADDHON-210
+        message reading `.keys()` to name the levels, and the redacted DEBUG dump. All
+        three ran on an object the CLOUD supplied, and the middle one would have raised
+        while building the very message that exists to explain the failure.
+
+        The input is a dict subclass raising from `get`. Not reachable from
+        `json.loads`, which is precisely why the old reasoning held that none of this
+        could raise: the input is `await resp.json(content_type=None)` on a duck-typed
+        response, so "a json.loads output is safe" and "this cannot abort a setup" are
+        different claims, and only the second one matters inside `NativeHon.setup()`.
+
+        What must survive is not just the absence of an exception: the census still has
+        to say something, and ADDHON-210 still has to be logged, because that code is
+        what a reporter is told to search for.
+        """
+
+        class _HostileGetBody(dict):
+            def get(self, *args, **kwargs):
+                raise RuntimeError("hostile mapping")
+
+        with self.assertLogs(
+            "custom_components.addhon.client.transport.api", level="WARNING"
+        ) as logs:
+            census = self._census(_HostileGetBody(healthy()))
+        self.assertEqual([], _run(_call(_AuthedConnection(
+            _HostileGetBody(healthy()), _id_token(OUR_ACCOUNT))).load_appliances()))
+        # ADDHON-210 is still emitted, and the key names degrade to `unreadable`
+        # rather than to the `n/a` that means "the shape was wrong": the two are
+        # different findings and the log keeps them apart.
+        self.assertIn("ADDHON-210", logs.output[0])
+        self.assertIn("unreadable", logs.output[0])
+        # The census is still a census. Note WHICH census: the probe walks with
+        # `key in node` + `node[key]` and this subclass only poisons `get`, so the
+        # probe sails through and reports the healthy walk it genuinely performed.
+        # The result is a dump saying `count: 1` beside `"appliances": []`, and that
+        # pair is not a contradiction to paper over -- it is the signature of this
+        # exact failure, and the only one that names it. A response where the walk
+        # finds a list and the parse cannot return it is neither "the cloud sent
+        # nothing" nor "the chain changed", and before this it looked like the first.
+        self.assertEqual("ok", census["outcome"])
+        self.assertEqual(1, census["count"])
+        self.assertEqual(200, census["status"])
+
     def test_the_healthy_capture_reads_as_healthy(self) -> None:
         census = self._census(healthy())
         self.assertEqual(200, census["status"])
