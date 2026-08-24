@@ -74,7 +74,9 @@ def account_match(result: Any, person_account_id: str | None) -> str:
     response carries `sfPersonAccountId`, and until now nothing compared the two. A
     session that silently resolves to a different account answers 200 with a
     well-formed envelope and a list that is empty or simply not ours -- and every
-    other field of the dump reads like a legitimately empty account.
+    other field of the dump reads like a legitimately empty account. What this field
+    adds is the account BOUNDARY; whether crossing it is a fault is a question the
+    complaint answers, not this function (see the note under the verdicts).
 
     RETURNS A TOKEN OF `ACCOUNT_TOKENS`, NEVER AN IDENTIFIER. Both values compared here
     are account ids; neither is emitted, neither is logged. That is the whole design
@@ -94,8 +96,25 @@ def account_match(result: Any, person_account_id: str | None) -> str:
                           list AND for a drift our walk cannot follow (its sec9
                           fail-safe), which is exactly the distinction being made here.
       * `match`        -- every appliance whose owner we could read is ours.
-      * `mismatch`     -- none of them is: the session resolved to another account.
-      * `mixed`        -- some are and some are not, i.e. the response spans accounts.
+      * `mismatch`     -- none of them is.
+      * `mixed`        -- some are and some are not.
+
+    `mismatch` AND `mixed` ARE NOT FAULTS ON THEIR OWN, and reading them as one would
+    mis-triage a healthy install. hOn family sharing puts appliances a member does not
+    OWN into that member's own list -- the same `view/appliance-list` serves owned and
+    shared alike, proven by the app re-running `retrieveInitialAppliances()` when an
+    invitation turns CONFIRMED (apk/analysis/addhon210-empty-appliance-list.md). A user
+    who joined someone else's group therefore sees every appliance stamped with the
+    OWNER's account id, and reads `mismatch` while everything works. A household where
+    one of two appliances is shared reads `mixed`, likewise correctly.
+
+    What the two verdicts actually mean is "the list is not stamped with our account
+    id", which is a fact, not a diagnosis. They earn their weight only NEXT TO the
+    symptom: a `mismatch` on a user who reports missing appliances says the session and
+    the appliances are on different sides of an account boundary, which is worth
+    chasing; the same `mismatch` on a working install says the user is a group member,
+    which is worth nothing. `no_appliances` is the verdict that carries a complaint on
+    its own, because an empty list is the complaint.
 
     Appliances with no readable owner do not vote and are silent rather than counted
     as a mismatch: a missing or non-string `sfPersonAccountId` is a schema question,

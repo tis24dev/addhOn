@@ -3129,6 +3129,12 @@ def _fetch_block(raw: Mapping, counters: Mapping, *, now: datetime) -> dict:
         # Whose appliances the cloud answered with, as a verdict and never as an id.
         # See `api.account_match`: the comparison happens in the transport and only the
         # token crosses into this document.
+        #
+        # `mismatch` and `mixed` are NOT faults to triage on their own: family sharing
+        # puts appliances a member does not own into that member's own list, so a group
+        # member reads `mismatch` on a perfectly healthy install. The verdict states an
+        # account BOUNDARY; only the reported symptom says whether crossing it is the
+        # bug. `no_appliances` is the one that carries a complaint by itself.
         "account": _closed_token(raw.get("account"), _FETCH_ACCOUNTS),
         "expanded": _bounded_int(counters.get("expanded"), 0, _FETCH_MAX_INT),
         "built": _bounded_int(counters.get("built"), 0, _FETCH_MAX_INT),

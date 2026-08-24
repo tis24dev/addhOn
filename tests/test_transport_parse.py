@@ -360,12 +360,52 @@ class ProbeApplianceListTest(unittest.TestCase):
         self.assertEqual("other", foreign["node_type"])
 
     def test_the_envelope_flags_survive_every_branch_of_the_walk(self) -> None:
-        # The reason `_envelope_flags` runs BEFORE the try and is spread into all five
-        # returns. A failure branch is exactly where a reader needs to know whether the
-        # cloud declared the call a success: "our walk stopped at `payload`" and "the
-        # module said false, so there was no payload" are the same picture otherwise.
-        # Computing them on the happy path only would have left the field null in every
-        # dump that needed it, and every test asserting the ok branch would still pass.
+        """All FIVE outcomes, as a table, not the two that were easy to reach.
+
+        The reason `_envelope_flags` runs BEFORE the try and is spread into every
+        return. A failure branch is exactly where a reader needs to know whether the
+        cloud declared the call a success: "our walk stopped at `payload`" and "the
+        module said false, so there was no payload" are the same picture otherwise.
+        Computing them on the happy path only would leave the field null in every dump
+        that needed it, and every test asserting the ok branch would still pass.
+
+        Enumerated rather than sampled because that is exactly how the gap got in: the
+        earlier version of this test carried this name while asserting two branches out
+        of five, so `not_a_dict` and `not_a_list` could both drop all three flags with
+        the whole suite green. Each case below breaks the walk BELOW the module level,
+        so the flags stay readable and their loss is a defect rather than an absence.
+        """
+        def _break(mutate) -> dict:
+            envelope = healthy()
+            mutate(envelope)
+            return envelope
+
+        def _payload(envelope) -> dict:
+            return envelope["modules"]["applianceList"]
+
+        cases = (
+            # outcome        stopped_at     response
+            ("ok", None, healthy()),
+            ("missing_key", "appliances",
+             _break(lambda e: _payload(e)["payload"].pop("appliances"))),
+            ("not_a_dict", "appliances",
+             _break(lambda e: _payload(e).__setitem__("payload", "not a mapping"))),
+            ("not_a_list", None,
+             _break(lambda e: _payload(e)["payload"].__setitem__("appliances", {"a": 1}))),
+        )
+        for outcome, stopped_at, response in cases:
+            with self.subTest(outcome=outcome):
+                probe = self.probe(response)
+                self.assertEqual(outcome, probe["outcome"])
+                self.assertEqual(stopped_at, probe["stopped_at"])
+                # The three flags describe the ENVELOPE, which every one of these
+                # responses still carries intact: none of them may go null.
+                self.assertIs(True, probe["envelope_ok"])
+                self.assertIs(True, probe["module_ok"])
+                self.assertEqual(0, probe["auth_keys"])
+
+        # A false module flag has to survive too, or the one branch where the cloud
+        # TOLD us why the payload is missing is the branch that discards the answer.
         broken = healthy()
         del broken["modules"]["applianceList"]["payload"]
         broken["modules"]["applianceList"]["success"] = False
@@ -375,12 +415,14 @@ class ProbeApplianceListTest(unittest.TestCase):
         self.assertIs(True, probe["envelope_ok"])
         self.assertIs(False, probe["module_ok"])
         self.assertEqual(0, probe["auth_keys"])
-        # ...and on the branch that reaches nothing at all, including the reserved
-        # `other` one, which is reached through the guard rather than through a return.
+
+        # ...and the reserved `other` branch, reached through the guard rather than
+        # through a return, which is why it can lose the flags in its own way.
         hostile = _HostileDict(healthy())
         self.assertEqual("other", self.probe(hostile)["outcome"])
         self.assertIs(True, self.probe(hostile)["envelope_ok"])
         self.assertIs(True, self.probe(hostile)["module_ok"])
+        self.assertEqual(0, self.probe(hostile)["auth_keys"])
 
     def test_every_branch_emits_the_same_key_set(self) -> None:
         # The census this returns IS the diagnostics block's key set (the reader spreads
