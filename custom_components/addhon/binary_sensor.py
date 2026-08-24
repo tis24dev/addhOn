@@ -259,14 +259,76 @@ _WINE_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     ),
 )
 
-# Hob (IH/HOB): pan detected per zone.
-_HOB_BINARY: tuple[HonBinarySensorEntityDescription, ...] = tuple(
-    HonBinarySensorEntityDescription(
-        key=f"pan_zone{z}",
-        icon="mdi:pot-steam",
-        attr_key=f"panStatusZ{z}",
-    )
-    for z in range(1, 7)
+# The zone index the per-zone hob families are generated over. Kept as the six the
+# pan sensors have always used: the app's own IH parameter list runs to Z6, and the
+# per-attribute gate is what reduces it to the four a HA2MTSJ68MC reports.
+_HOB_ZONES = range(1, 7)
+
+# Hob (IH/HOB): everything the shadow says about each cooking zone, plus the
+# panel lock.
+#
+# `child_lock` REUSES the wash group's description object rather than declaring a
+# hob-specific twin. It is the same `lockStatus` parameter with the same meaning,
+# so it gets the same key, the same icon and the same translation -- and no
+# device_class: BinarySensorDeviceClass.LOCK is inverted in Home Assistant (on
+# means UNlocked), so a hob reporting lockStatus=1 would display as unlocked.
+_HOB_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    *(
+        HonBinarySensorEntityDescription(
+            key=f"pan_zone{z}",
+            icon="mdi:pot-steam",
+            attr_key=f"panStatusZ{z}",
+        )
+        for z in _HOB_ZONES
+    ),
+    # Whether the zone is switched on at all. Distinct from `pan_zone*`, which
+    # says only that the hob can see cookware on the ring.
+    *(
+        HonBinarySensorEntityDescription(
+            key=f"zone_on_zone{z}",
+            attr_key=f"onOffStatusZ{z}",
+            device_class=BinarySensorDeviceClass.RUNNING,
+        )
+        for z in _HOB_ZONES
+    ),
+    # Residual heat: the "H" the panel shows after a zone is switched off. This is
+    # the reading issue #84 asks for by name.
+    *(
+        HonBinarySensorEntityDescription(
+            key=f"hot_zone{z}",
+            attr_key=f"hotStatusZ{z}",
+            device_class=BinarySensorDeviceClass.HEAT,
+        )
+        for z in _HOB_ZONES
+    ),
+    # Per-zone fault. `has_problem` and NOT the platform's `on_value`
+    # comparison: the hob spells "no error" as 0 AND as the app's zero-padded
+    # "00", and the client folds "01" to "1" on the way in, so a comparison
+    # against a raw code would light a PROBLEM permanently on all four zones.
+    *(
+        HonBinarySensorEntityDescription(
+            key=f"error_zone{z}",
+            attr_key=f"errorZ{z}",
+            device_class=BinarySensorDeviceClass.PROBLEM,
+            value_fn=has_problem,
+        )
+        for z in _HOB_ZONES
+    ),
+    # Flex zones bridged into one cooking surface. Behind the experimental option:
+    # the value is 0 on every zone of the only hob we have, and the app reads 1
+    # and 2 as two different halves of a bridged pair, a distinction a boolean
+    # cannot carry and nothing here can verify.
+    *(
+        HonBinarySensorEntityDescription(
+            key=f"combi_mode_zone{z}",
+            icon="mdi:link-variant",
+            attr_key=f"combiModeZ{z}",
+            value_fn=lambda raw: str(raw).strip() not in ("", "0", "0.0"),
+            experimental=True,
+        )
+        for z in _HOB_ZONES
+    ),
+    _CHILD_LOCK,
 )
 
 def _hood_filter_cleaning(raw) -> bool | None:

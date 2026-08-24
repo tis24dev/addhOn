@@ -483,6 +483,102 @@
       },
       "last_work_time": {
         "name": "Last work time"
+      },
+      "power_zone1": {
+        "name": "Zone 1 power level"
+      },
+      "power_zone2": {
+        "name": "Zone 2 power level"
+      },
+      "power_zone3": {
+        "name": "Zone 3 power level"
+      },
+      "power_zone4": {
+        "name": "Zone 4 power level"
+      },
+      "power_zone5": {
+        "name": "Zone 5 power level"
+      },
+      "power_zone6": {
+        "name": "Zone 6 power level"
+      },
+      "remaining_time_zone1": {
+        "name": "Zone 1 remaining time"
+      },
+      "remaining_time_zone2": {
+        "name": "Zone 2 remaining time"
+      },
+      "remaining_time_zone3": {
+        "name": "Zone 3 remaining time"
+      },
+      "remaining_time_zone4": {
+        "name": "Zone 4 remaining time"
+      },
+      "remaining_time_zone5": {
+        "name": "Zone 5 remaining time"
+      },
+      "remaining_time_zone6": {
+        "name": "Zone 6 remaining time"
+      },
+      "plate_temp_zone1": {
+        "name": "Zone 1 plate temperature"
+      },
+      "plate_temp_zone2": {
+        "name": "Zone 2 plate temperature"
+      },
+      "plate_temp_zone3": {
+        "name": "Zone 3 plate temperature"
+      },
+      "plate_temp_zone4": {
+        "name": "Zone 4 plate temperature"
+      },
+      "plate_temp_zone5": {
+        "name": "Zone 5 plate temperature"
+      },
+      "plate_temp_zone6": {
+        "name": "Zone 6 plate temperature"
+      },
+      "program_code_zone1": {
+        "name": "Zone 1 program code"
+      },
+      "program_code_zone2": {
+        "name": "Zone 2 program code"
+      },
+      "program_code_zone3": {
+        "name": "Zone 3 program code"
+      },
+      "program_code_zone4": {
+        "name": "Zone 4 program code"
+      },
+      "program_code_zone5": {
+        "name": "Zone 5 program code"
+      },
+      "program_code_zone6": {
+        "name": "Zone 6 program code"
+      },
+      "program_phase_zone1": {
+        "name": "Zone 1 program phase"
+      },
+      "program_phase_zone2": {
+        "name": "Zone 2 program phase"
+      },
+      "program_phase_zone3": {
+        "name": "Zone 3 program phase"
+      },
+      "program_phase_zone4": {
+        "name": "Zone 4 program phase"
+      },
+      "program_phase_zone5": {
+        "name": "Zone 5 program phase"
+      },
+      "program_phase_zone6": {
+        "name": "Zone 6 program phase"
+      },
+      "timer_hh": {
+        "name": "Timer hours"
+      },
+      "timer_mm": {
+        "name": "Timer minutes"
       }
     },
     "binary_sensor": {
@@ -620,6 +716,78 @@
       },
       "running": {
         "name": "Running"
+      },
+      "zone_on_zone1": {
+        "name": "Zone 1 on"
+      },
+      "zone_on_zone2": {
+        "name": "Zone 2 on"
+      },
+      "zone_on_zone3": {
+        "name": "Zone 3 on"
+      },
+      "zone_on_zone4": {
+        "name": "Zone 4 on"
+      },
+      "zone_on_zone5": {
+        "name": "Zone 5 on"
+      },
+      "zone_on_zone6": {
+        "name": "Zone 6 on"
+      },
+      "hot_zone1": {
+        "name": "Zone 1 hot"
+      },
+      "hot_zone2": {
+        "name": "Zone 2 hot"
+      },
+      "hot_zone3": {
+        "name": "Zone 3 hot"
+      },
+      "hot_zone4": {
+        "name": "Zone 4 hot"
+      },
+      "hot_zone5": {
+        "name": "Zone 5 hot"
+      },
+      "hot_zone6": {
+        "name": "Zone 6 hot"
+      },
+      "error_zone1": {
+        "name": "Zone 1 error"
+      },
+      "error_zone2": {
+        "name": "Zone 2 error"
+      },
+      "error_zone3": {
+        "name": "Zone 3 error"
+      },
+      "error_zone4": {
+        "name": "Zone 4 error"
+      },
+      "error_zone5": {
+        "name": "Zone 5 error"
+      },
+      "error_zone6": {
+        "name": "Zone 6 error"
+      },
+      "combi_mode_zone1": {
+        "name": "Zone 1 bridged"
+      },
+      "combi_mode_zone2": {
+        "name": "Zone 2 bridged"
+      },
+      "combi_mode_zone3": {
+        "name": "Zone 3 bridged"
+      },
+      "combi_mode_zone4": {
+        "name": "Zone 4 bridged"
+      },
+      "combi_mode_zone5": {
+        "name": "Zone 5 bridged"
+      },
+      "combi_mode_zone6": {
+        "name": "Zone 6 bridged"
       }
     },
     "switch": {

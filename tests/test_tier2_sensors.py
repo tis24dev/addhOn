@@ -264,7 +264,7 @@ def _binary_keys(app_type: str) -> list[str]:
     return [d.key for d in BINARY_SENSORS.get(app_type, ())]
 
 
-async def _build_sensors(app_type: str, attributes: dict) -> list:
+async def _build_sensors(app_type: str, attributes: dict, options: dict | None = None) -> list:
     from custom_components.addhon import sensor
     from custom_components.addhon.const import DOMAIN
 
@@ -272,13 +272,13 @@ async def _build_sensors(app_type: str, attributes: dict) -> list:
     coordinator = FakeCoordinator(data)
     hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
     added: list = []
-    await sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+    await sensor.async_setup_entry(hass, FakeEntry(options=options), added.extend)
     # Drop the account-level diagnostic entities so the per-appliance assertions
     # below see only the appliance sensors.
     return [e for e in added if not getattr(e, "_addhon_account", False)]
 
 
-async def _build_binary(app_type: str, attributes: dict) -> list:
+async def _build_binary(app_type: str, attributes: dict, options: dict | None = None) -> list:
     from custom_components.addhon import binary_sensor
     from custom_components.addhon.const import DOMAIN
 
@@ -286,9 +286,39 @@ async def _build_binary(app_type: str, attributes: dict) -> list:
     coordinator = FakeCoordinator(data)
     hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
     added: list = []
-    await binary_sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+    await binary_sensor.async_setup_entry(hass, FakeEntry(options=options), added.extend)
     # Drop the account-level diagnostic entities (see _build_sensors).
     return [e for e in added if not getattr(e, "_addhon_account", False)]
+
+
+def _experimental(enabled: bool) -> dict:
+    from custom_components.addhon.const import CONF_ENABLE_EXPERIMENTAL
+
+    return {CONF_ENABLE_EXPERIMENTAL: enabled}
+
+
+# The shadow of the reporting HA2MTSJ68MC (issue #84), trimmed to the per-zone
+# families and to the four zones it actually has. Every value is 0 because the hob
+# was offline for ten hours when the dump was taken: the NAMES are evidence, the
+# values are not, which is why nothing below asserts a state this device reported.
+HOB_ATTRIBUTES = {
+    "available": True,
+    **{f"panStatusZ{z}": 0 for z in range(1, 5)},
+    **{f"onOffStatusZ{z}": 0 for z in range(1, 5)},
+    **{f"hotStatusZ{z}": 0 for z in range(1, 5)},
+    **{f"errorZ{z}": 0 for z in range(1, 5)},
+    **{f"powerZ{z}": 0 for z in range(1, 5)},
+    **{f"combiModeZ{z}": 0 for z in range(1, 5)},
+    **{f"tempZ{z}": 0 for z in range(1, 5)},
+    **{f"prCodeZ{z}": 0 for z in range(1, 5)},
+    **{f"prPhaseZ{z}": 0 for z in range(1, 5)},
+    **{f"remainingTimeHHZ{z}": 0 for z in range(1, 5)},
+    **{f"remainingTimeMMZ{z}": 0 for z in range(1, 5)},
+    "lockStatus": 0,
+    "timerHH": 0,
+    "timerMM": 0,
+    "remoteCtrValid": 0,
+}
 
 
 class Tier2TableTest(unittest.TestCase):
@@ -360,11 +390,228 @@ class Tier2TableTest(unittest.TestCase):
             actual = {d.key for d in SENSORS[app_type] if d.gated}
             self.assertEqual(actual, gated_keys, f"{app_type} gated set mismatch")
 
-    def test_hob_binary_has_six_pan_zones(self) -> None:
+    def test_hob_binary_still_has_six_pan_zones_first(self) -> None:
+        """The original assertion, narrowed rather than widened.
+
+        It was the sentinel for the IH/HOB alias -- the two types must resolve to
+        the SAME tuple object -- and for the pan family staying six wide. Growing
+        it into "the whole set" would have retired that sentinel along with it, so
+        the pan check keeps its own test and the full set gets a second one below.
+        """
         self.assertEqual(
-            _binary_keys("IH"),
             [f"pan_zone{z}" for z in range(1, 7)],
+            _binary_keys("IH")[:6],
         )
+
+    def test_hob_binary_full_keys(self) -> None:
+        # Spelled out, in table order: this is what a hob owner's device page
+        # offers, and a row appearing or disappearing here is a user-visible
+        # change that should have to be typed out.
+        zones = range(1, 7)
+        self.assertEqual(
+            [f"pan_zone{z}" for z in zones]
+            + [f"zone_on_zone{z}" for z in zones]
+            + [f"hot_zone{z}" for z in zones]
+            + [f"error_zone{z}" for z in zones]
+            + [f"combi_mode_zone{z}" for z in zones]
+            + ["child_lock"],
+            _binary_keys("IH"),
+        )
+
+    def test_hob_full_keys(self) -> None:
+        # The sensor half, which had no test at all before the per-zone readings
+        # of #84.3 arrived.
+        zones = range(1, 7)
+        self.assertEqual(
+            [f"temp_zone{z}" for z in range(1, 6)]
+            + [f"power_zone{z}" for z in zones]
+            + [f"plate_temp_zone{z}" for z in zones]
+            + [f"program_code_zone{z}" for z in zones]
+            + [f"program_phase_zone{z}" for z in zones]
+            + ["timer_hh", "timer_mm"],
+            _sensor_keys("IH"),
+        )
+
+    def test_the_hob_child_lock_reuses_the_wash_group_description(self) -> None:
+        """Same object, not a twin: same parameter, same meaning, same label.
+
+        Also the guard against giving it `device_class=LOCK`, whose polarity is
+        inverted in Home Assistant -- a hob reporting lockStatus=1 would display
+        as unlocked, which is the opposite of the truth on a safety control.
+        """
+        from custom_components.addhon.binary_sensor import _CHILD_LOCK, BINARY_SENSORS
+
+        child_lock = next(d for d in BINARY_SENSORS["IH"] if d.key == "child_lock")
+        self.assertIs(_CHILD_LOCK, child_lock)
+        self.assertIsNone(child_lock.device_class)
+        self.assertEqual("lockStatus", child_lock.attr_key)
+
+
+class HobZoneReadingsTest(unittest.IsolatedAsyncioTestCase):
+    """The per-zone readings of issue #84 point 3.
+
+    Every family is generated for six zones and gated per attribute, so the four
+    a HA2MTSJ68MC reports produce four entities and a hypothetical six-zone hob
+    produces six -- without either being written down anywhere.
+    """
+
+    async def test_a_four_zone_hob_gets_four_of_each_live_family(self) -> None:
+        keys = {e._attr_unique_id for e in await _build_binary("IH", HOB_ATTRIBUTES)}
+        for family in ("pan_zone", "zone_on_zone", "hot_zone", "error_zone"):
+            self.assertEqual(
+                {f"x-1_{family}{z}" for z in range(1, 5)},
+                {k for k in keys if k.startswith(f"x-1_{family}")},
+                family,
+            )
+        self.assertIn("x-1_child_lock", keys)
+
+    async def test_a_hob_reporting_two_zones_gets_two(self) -> None:
+        attributes = {
+            "available": True,
+            "hotStatusZ1": 0,
+            "hotStatusZ3": 1,
+        }
+        keys = {e._attr_unique_id for e in await _build_binary("IH", attributes)}
+        self.assertEqual(
+            {"x-1_hot_zone1", "x-1_hot_zone3", "x-1_connectivity"}, keys
+        )
+
+    async def test_residual_heat_reads_the_panel_flag(self) -> None:
+        attributes = dict(HOB_ATTRIBUTES, hotStatusZ2=1)
+        added = await _build_binary("IH", attributes)
+        by_id = {e._attr_unique_id: e for e in added}
+        self.assertIs(True, by_id["x-1_hot_zone2"].is_on)
+        self.assertIs(False, by_id["x-1_hot_zone1"].is_on)
+
+    async def test_a_healthy_hob_reports_no_zone_error(self) -> None:
+        """The regression this family exists to avoid.
+
+        A comparison against a raw code lights PROBLEM on every zone forever: the
+        hob spells "no error" as 0 and the app spells it "00", and the client
+        folds "01" to "1" on the way in, so no single literal can be the off
+        value. `has_problem` is the shared rule that already knows all three.
+        """
+        added = await _build_binary("IH", dict(HOB_ATTRIBUTES, errorZ1="00", errorZ2=0))
+        by_id = {e._attr_unique_id: e for e in added}
+        self.assertIs(False, by_id["x-1_error_zone1"].is_on)
+        self.assertIs(False, by_id["x-1_error_zone2"].is_on)
+
+    async def test_a_real_zone_fault_still_reports(self) -> None:
+        added = await _build_binary("IH", dict(HOB_ATTRIBUTES, errorZ3="05"))
+        by_id = {e._attr_unique_id: e for e in added}
+        self.assertIs(True, by_id["x-1_error_zone3"].is_on)
+
+    def test_every_no_error_spelling_reads_as_healthy(self) -> None:
+        # Directly, on the shared rule, so the reason the assertions above pass is
+        # visible rather than inferred.
+        from custom_components.addhon.air_purifier import has_problem
+
+        for healthy in ("0", "00", 0, 0.0, "0.0", ""):
+            self.assertFalse(has_problem(healthy), repr(healthy))
+        for faulty in ("1", "05", "0A", 5):
+            self.assertTrue(has_problem(faulty), repr(faulty))
+
+    async def test_the_power_level_is_a_level_and_not_watts(self) -> None:
+        added = await _build_sensors("IH", dict(HOB_ATTRIBUTES, powerZ1=9))
+        power = next(e for e in added if e._attr_unique_id == "x-1_power_zone1")
+        self.assertEqual(9.0, power.native_value)
+        self.assertIsNone(power.entity_description.device_class)
+        self.assertIsNone(power.entity_description.native_unit_of_measurement)
+
+    async def test_the_remaining_time_combines_both_halves(self) -> None:
+        attributes = dict(HOB_ATTRIBUTES, remainingTimeHHZ1=1, remainingTimeMMZ1=30)
+        added = await _build_sensors("IH", attributes)
+        remaining = next(
+            e for e in added if e._attr_unique_id == "x-1_remaining_time_zone1"
+        )
+        self.assertEqual(90, remaining.native_value)
+
+    async def test_the_remaining_time_needs_both_halves_to_exist(self) -> None:
+        # Half a clock is worse than none: the minute half alone reads 5 minutes
+        # for a two-hour-five programme.
+        attributes = {"available": True, "remainingTimeMMZ1": 30}
+        added = await _build_sensors("IH", attributes)
+        self.assertEqual([], [e for e in added if "remaining_time" in e._attr_unique_id])
+
+    async def test_the_remaining_time_exists_per_reported_zone(self) -> None:
+        added = await _build_sensors("IH", HOB_ATTRIBUTES)
+        self.assertEqual(
+            [f"x-1_remaining_time_zone{z}" for z in range(1, 5)],
+            [e._attr_unique_id for e in added if "remaining_time" in e._attr_unique_id],
+        )
+
+    async def test_an_unreadable_half_reads_unknown(self) -> None:
+        attributes = dict(HOB_ATTRIBUTES, remainingTimeHHZ1="", remainingTimeMMZ1=30)
+        added = await _build_sensors("IH", attributes)
+        remaining = [e for e in added if e._attr_unique_id == "x-1_remaining_time_zone1"]
+        # The key is present in the shadow, so the entity is created; the reading
+        # itself is what refuses to be invented.
+        self.assertEqual(1, len(remaining))
+        self.assertIsNone(remaining[0].native_value)
+
+    async def test_the_child_lock_reads_the_panel_lock(self) -> None:
+        added = await _build_binary("IH", dict(HOB_ATTRIBUTES, lockStatus=1))
+        lock = next(e for e in added if e._attr_unique_id == "x-1_child_lock")
+        self.assertIs(True, lock.is_on)
+
+    async def test_the_dead_families_are_absent_by_default(self) -> None:
+        # tempZ*, prCodeZ*, prPhaseZ*, combiModeZ* and the hob timer are all in
+        # this hob's shadow and none of them has moved since 2022.
+        sensors = {e._attr_unique_id for e in await _build_sensors("IH", HOB_ATTRIBUTES)}
+        binaries = {e._attr_unique_id for e in await _build_binary("IH", HOB_ATTRIBUTES)}
+        for absent in (
+            "x-1_plate_temp_zone1",
+            "x-1_program_code_zone1",
+            "x-1_program_phase_zone1",
+            "x-1_timer_hh",
+            "x-1_timer_mm",
+        ):
+            self.assertNotIn(absent, sensors, absent)
+        self.assertNotIn("x-1_combi_mode_zone1", binaries)
+
+    async def test_the_dead_families_appear_when_experimental_is_on(self) -> None:
+        sensors = {
+            e._attr_unique_id
+            for e in await _build_sensors("IH", HOB_ATTRIBUTES, _experimental(True))
+        }
+        binaries = {
+            e._attr_unique_id
+            for e in await _build_binary("IH", HOB_ATTRIBUTES, _experimental(True))
+        }
+        for present in (
+            "x-1_plate_temp_zone1",
+            "x-1_program_code_zone1",
+            "x-1_program_phase_zone1",
+            "x-1_timer_hh",
+            "x-1_timer_mm",
+        ):
+            self.assertIn(present, sensors, present)
+        self.assertIn("x-1_combi_mode_zone1", binaries)
+
+    async def test_the_live_families_do_not_depend_on_the_option(self) -> None:
+        # The option must add readings, never move the ones a hob owner already
+        # relies on.
+        default = {e._attr_unique_id for e in await _build_binary("IH", HOB_ATTRIBUTES)}
+        enabled = {
+            e._attr_unique_id
+            for e in await _build_binary("IH", HOB_ATTRIBUTES, _experimental(True))
+        }
+        self.assertTrue(default < enabled)
+        self.assertIn("x-1_hot_zone1", default)
+
+    async def test_the_plate_temperature_does_not_replace_the_sensor_one(self) -> None:
+        # `temp_zone{N}` reads sensorTempZ{N} and other hobs publish it; the new
+        # family reads tempZ{N} under its own key so neither displaces the other.
+        attributes = {"available": True, "sensorTempZ1": 40, "tempZ1": 55}
+        added = await _build_sensors("IH", attributes, _experimental(True))
+        by_id = {e._attr_unique_id: e for e in added}
+        self.assertEqual(40.0, by_id["x-1_temp_zone1"].native_value)
+        self.assertEqual(55.0, by_id["x-1_plate_temp_zone1"].native_value)
+
+    async def test_the_hob_alias_produces_the_same_entities(self) -> None:
+        ih = [e._attr_unique_id for e in await _build_binary("IH", HOB_ATTRIBUTES)]
+        hob = [e._attr_unique_id for e in await _build_binary("HOB", HOB_ATTRIBUTES)]
+        self.assertEqual(ih, hob)
 
 
 class Tier2GatingTest(unittest.IsolatedAsyncioTestCase):

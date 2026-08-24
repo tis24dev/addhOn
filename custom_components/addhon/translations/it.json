@@ -483,6 +483,102 @@
       },
       "last_work_time": {
         "name": "Ultimo tempo di lavoro"
+      },
+      "power_zone1": {
+        "name": "Livello potenza zona 1"
+      },
+      "power_zone2": {
+        "name": "Livello potenza zona 2"
+      },
+      "power_zone3": {
+        "name": "Livello potenza zona 3"
+      },
+      "power_zone4": {
+        "name": "Livello potenza zona 4"
+      },
+      "power_zone5": {
+        "name": "Livello potenza zona 5"
+      },
+      "power_zone6": {
+        "name": "Livello potenza zona 6"
+      },
+      "remaining_time_zone1": {
+        "name": "Tempo rimanente zona 1"
+      },
+      "remaining_time_zone2": {
+        "name": "Tempo rimanente zona 2"
+      },
+      "remaining_time_zone3": {
+        "name": "Tempo rimanente zona 3"
+      },
+      "remaining_time_zone4": {
+        "name": "Tempo rimanente zona 4"
+      },
+      "remaining_time_zone5": {
+        "name": "Tempo rimanente zona 5"
+      },
+      "remaining_time_zone6": {
+        "name": "Tempo rimanente zona 6"
+      },
+      "plate_temp_zone1": {
+        "name": "Temperatura piastra zona 1"
+      },
+      "plate_temp_zone2": {
+        "name": "Temperatura piastra zona 2"
+      },
+      "plate_temp_zone3": {
+        "name": "Temperatura piastra zona 3"
+      },
+      "plate_temp_zone4": {
+        "name": "Temperatura piastra zona 4"
+      },
+      "plate_temp_zone5": {
+        "name": "Temperatura piastra zona 5"
+      },
+      "plate_temp_zone6": {
+        "name": "Temperatura piastra zona 6"
+      },
+      "program_code_zone1": {
+        "name": "Codice programma zona 1"
+      },
+      "program_code_zone2": {
+        "name": "Codice programma zona 2"
+      },
+      "program_code_zone3": {
+        "name": "Codice programma zona 3"
+      },
+      "program_code_zone4": {
+        "name": "Codice programma zona 4"
+      },
+      "program_code_zone5": {
+        "name": "Codice programma zona 5"
+      },
+      "program_code_zone6": {
+        "name": "Codice programma zona 6"
+      },
+      "program_phase_zone1": {
+        "name": "Fase programma zona 1"
+      },
+      "program_phase_zone2": {
+        "name": "Fase programma zona 2"
+      },
+      "program_phase_zone3": {
+        "name": "Fase programma zona 3"
+      },
+      "program_phase_zone4": {
+        "name": "Fase programma zona 4"
+      },
+      "program_phase_zone5": {
+        "name": "Fase programma zona 5"
+      },
+      "program_phase_zone6": {
+        "name": "Fase programma zona 6"
+      },
+      "timer_hh": {
+        "name": "Timer ore"
+      },
+      "timer_mm": {
+        "name": "Timer minuti"
       }
     },
     "binary_sensor": {
@@ -620,6 +716,78 @@
       },
       "running": {
         "name": "In funzione"
+      },
+      "zone_on_zone1": {
+        "name": "Zona 1 accesa"
+      },
+      "zone_on_zone2": {
+        "name": "Zona 2 accesa"
+      },
+      "zone_on_zone3": {
+        "name": "Zona 3 accesa"
+      },
+      "zone_on_zone4": {
+        "name": "Zona 4 accesa"
+      },
+      "zone_on_zone5": {
+        "name": "Zona 5 accesa"
+      },
+      "zone_on_zone6": {
+        "name": "Zona 6 accesa"
+      },
+      "hot_zone1": {
+        "name": "Zona 1 calda"
+      },
+      "hot_zone2": {
+        "name": "Zona 2 calda"
+      },
+      "hot_zone3": {
+        "name": "Zona 3 calda"
+      },
+      "hot_zone4": {
+        "name": "Zona 4 calda"
+      },
+      "hot_zone5": {
+        "name": "Zona 5 calda"
+      },
+      "hot_zone6": {
+        "name": "Zona 6 calda"
+      },
+      "error_zone1": {
+        "name": "Errore zona 1"
+      },
+      "error_zone2": {
+        "name": "Errore zona 2"
+      },
+      "error_zone3": {
+        "name": "Errore zona 3"
+      },
+      "error_zone4": {
+        "name": "Errore zona 4"
+      },
+      "error_zone5": {
+        "name": "Errore zona 5"
+      },
+      "error_zone6": {
+        "name": "Errore zona 6"
+      },
+      "combi_mode_zone1": {
+        "name": "Zona 1 unita"
+      },
+      "combi_mode_zone2": {
+        "name": "Zona 2 unita"
+      },
+      "combi_mode_zone3": {
+        "name": "Zona 3 unita"
+      },
+      "combi_mode_zone4": {
+        "name": "Zona 4 unita"
+      },
+      "combi_mode_zone5": {
+        "name": "Zona 5 unita"
+      },
+      "combi_mode_zone6": {
+        "name": "Zona 6 unita"
       }
     },
     "switch": {

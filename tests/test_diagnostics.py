@@ -3362,6 +3362,41 @@ class DumpTimestampTest(unittest.TestCase):
             self.assertEqual("AC", block["type"])
 
 
+class HobDerivedCoverageTest(unittest.TestCase):
+    """The hob's derived per-zone timers, which no description table can see.
+
+    `_mapped_sets` walks the platform tables, and a sensor built from TWO
+    attributes has no row in them. Without an explicit entry the coverage block
+    calls twelve live readings unmapped while `entities.sources` in the same
+    document names the sensors that read them -- the self-contradiction the
+    custom-entity section exists to remove.
+    """
+
+    def test_both_halves_of_every_zone_timer_are_mapped(self) -> None:
+        mapped_attrs, _params, sources, _ = diagnostics._mapped_sets("IH")
+        for zone in range(1, 7):
+            for unit in ("HH", "MM"):
+                self.assertIn(f"remainingTime{unit}Z{zone}", mapped_attrs)
+            self.assertIn(f"sensor.remaining_time_zone{zone}", sources)
+
+    def test_the_source_row_names_both_halves(self) -> None:
+        _attrs, _params, sources, _ = diagnostics._mapped_sets("IH")
+        row = sources["sensor.remaining_time_zone1"]
+        self.assertIn("remainingTimeHHZ1", row["read"])
+        self.assertIn("remainingTimeMMZ1", row["read"])
+        # A read-only entity omits the write half rather than emitting an empty
+        # one, so a reader can see at a glance that it writes nothing.
+        self.assertNotIn("write", row)
+
+    def test_the_hob_alias_is_covered_identically(self) -> None:
+        self.assertEqual(diagnostics._mapped_sets("IH"), diagnostics._mapped_sets("HOB"))
+
+    def test_another_type_did_not_inherit_the_zone_timers(self) -> None:
+        mapped_attrs, _params, sources, _ = diagnostics._mapped_sets("OV")
+        self.assertNotIn("remainingTimeHHZ1", mapped_attrs)
+        self.assertNotIn("sensor.remaining_time_zone1", sources)
+
+
 class CoverageExpectedAbsentTest(unittest.TestCase):
     """The mirror axis: what this code maps and the device does not have."""
 

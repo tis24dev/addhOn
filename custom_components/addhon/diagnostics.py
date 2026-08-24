@@ -65,6 +65,8 @@ from .const import (
     APPLIANCE_FR,
     APPLIANCE_FRE,
     APPLIANCE_HO,
+    APPLIANCE_HOB,
+    APPLIANCE_IH,
     APPLIANCE_REF,
     APPLIANCE_WASH_GROUP,
     APPLIANCE_WD,
@@ -678,9 +680,9 @@ def _mapped_sets(
         _AC_DIRECTION_SELECTS, _PROGRAM_OPTION_SELECTS = (), ()
         _note_missing_registry("select", unavailable)
     try:
-        from .sensor import SENSORS
+        from .sensor import HOB_ZONE_TIME_ATTRS, SENSORS
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
-        SENSORS = {}
+        HOB_ZONE_TIME_ATTRS, SENSORS = frozenset(), {}
         _note_missing_registry("sensor", unavailable)
     try:
         from .switch import (
@@ -826,6 +828,23 @@ def _mapped_sets(
             )
     if app_type in APPLIANCE_WASH_GROUP:
         mapped_params.update(PROGRAM_PARAM_NAMES)
+    if app_type in (APPLIANCE_IH, APPLIANCE_HOB):
+        # The per-zone remaining-time sensors are DERIVED from two attributes
+        # each, so they are custom classes with no description row and the walk
+        # above cannot see either half. Twelve live readings would otherwise be
+        # reported unmapped on every hob dump while `entities.sources` two
+        # sections below named the sensors that read them.
+        mapped_attrs |= HOB_ZONE_TIME_ATTRS
+        for zone in sorted(
+            {name.rsplit("Z", 1)[1] for name in HOB_ZONE_TIME_ATTRS}, key=int
+        ):
+            sources[f"sensor.remaining_time_zone{zone}"] = _source_row(
+                read=[
+                    key
+                    for unit in ("HH", "MM")
+                    for key in _read_chain(f"remainingTime{unit}Z{zone}")
+                ]
+            )
     if app_type == APPLIANCE_HO:
         # Same shape as the AP block below, same reason. The hood's four parameters
         # are each read as state AND written as a command field, but only two of the

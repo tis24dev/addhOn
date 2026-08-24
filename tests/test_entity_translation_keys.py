@@ -207,8 +207,13 @@ def _collect_code_keys() -> dict[str, set[str]]:
     used["sensor"] = {
         _tk(d) for descs in sensor.SENSORS.values() for d in descs
     }
-    # Derived custom-class sensor (not a description-table row).
+    # Derived custom-class sensors (not description-table rows): each combines
+    # several attributes, so the tables above cannot see them and each has to
+    # register the key it publishes here.
     used["sensor"].add(sensor.HonMeanWaterConsumption._attr_translation_key)
+    used["sensor"].update(
+        f"remaining_time_zone{zone}" for zone in sensor._HOB_ZONES
+    )
     # Account-level diagnostic sensors (fixed-key, not in the per-type table).
     used["sensor"].update(
         {"debug_status", "integration_log_level", "mqtt_log_level",

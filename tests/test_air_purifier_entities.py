@@ -582,7 +582,11 @@ class AirPurifierBinaryTableTest(unittest.TestCase):
                 # The hood spells this one as the text "false", not as 0/1, so the
                 # shared comparison would read every value as off.
                 ("HO", "filter_cleaning"),
-            },
+            }
+            # The hob's per-zone fault reads through `has_problem` because "no
+            # error" has three spellings on that device; the flex-bridge flag has
+            # two distinct "on" values.
+            | _hob_keys("error_zone", "combi_mode_zone"),
             declared,
         )
 
@@ -1958,6 +1962,23 @@ class AirPurifierAromaArchitectureTest(unittest.TestCase):
 # --- Task 9: the experimental option and the custom timing numbers -----------
 
 
+# The per-zone families the induction hob generates, spelled out here so the
+# "exact set" pins below stay hand-checkable while covering 30-odd rows. The zone
+# ceiling is repeated on purpose: widening the tables to seven zones has to fail
+# these tests rather than pass silently.
+_HOB_TYPES = ("IH", "HOB")
+_HOB_ZONE_RANGE = range(1, 7)
+
+
+def _hob_keys(*families: str) -> set[tuple[str, str]]:
+    return {
+        (app_type, f"{family}{zone}")
+        for app_type in _HOB_TYPES
+        for family in families
+        for zone in _HOB_ZONE_RANGE
+    }
+
+
 class ExperimentalGateTest(unittest.IsolatedAsyncioTestCase):
     """Nothing whose meaning is inferred from incomplete evidence may exist on a
     default installation."""
@@ -1984,7 +2005,13 @@ class ExperimentalGateTest(unittest.IsolatedAsyncioTestCase):
             for d in descs
             if d.experimental
         }
-        self.assertEqual({(APPLIANCE_AP, "air_quality_label")}, experimental)
+        self.assertEqual(
+            {(APPLIANCE_AP, "air_quality_label")}
+            | _hob_keys("plate_temp_zone", "program_code_zone", "program_phase_zone")
+            | {(app_type, key) for app_type in _HOB_TYPES
+               for key in ("timer_hh", "timer_mm")},
+            experimental,
+        )
 
     def test_the_flag_defaults_off_for_every_other_binary(self) -> None:
         from custom_components.addhon.binary_sensor import BINARY_SENSORS
@@ -1995,7 +2022,10 @@ class ExperimentalGateTest(unittest.IsolatedAsyncioTestCase):
             for d in descs
             if d.experimental
         }
-        self.assertEqual({(APPLIANCE_AP, "co_alarm")}, experimental)
+        self.assertEqual(
+            {(APPLIANCE_AP, "co_alarm")} | _hob_keys("combi_mode_zone"),
+            experimental,
+        )
 
     async def test_the_raw_co_sensor_stays_standard(self) -> None:
         """The interpreted alarm is experimental; the raw level it reads is not,
