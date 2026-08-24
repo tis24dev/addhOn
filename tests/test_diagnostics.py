@@ -3790,6 +3790,7 @@ def _static_parameter_names() -> set[str]:
         _UNIVERSAL_GATED,
     )
     from custom_components.addhon.const import PROGRAM_PARAM_NAMES
+    from custom_components.addhon.hob import HOB_ENTITY_PARAMS
     from custom_components.addhon.number import (
         NUMBERS,
         _AP_TIMING_NUMBERS,
@@ -3799,14 +3800,26 @@ def _static_parameter_names() -> set[str]:
         _AC_DIRECTION_SELECTS,
         _PROGRAM_OPTION_SELECTS,
     )
-    from custom_components.addhon.sensor import SENSORS
+    from custom_components.addhon.sensor import HOB_ZONE_TIME_ATTRS, SENSORS
     from custom_components.addhon.switch import (
         _AIR_PURIFIER_SWITCHES,
         _PROGRAM_OPTION_SWITCHES,
         _SETTINGS_SWITCHES,
     )
 
-    names: set[str] = set(AP_ENTITY_PARAMS) | set(PROGRAM_PARAM_NAMES)
+    # `AP_ENTITY_PARAMS`, `HOB_ENTITY_PARAMS` and `HOB_ZONE_TIME_ATTRS` are the
+    # three frozensets a fixed-key entity declares in place of the description row
+    # a table walk could find. Every member is a literal of this repository -- the
+    # hob's `powerManagement`, and the twelve `remainingTime{HH,MM}Z{N}` the
+    # derived per-zone timers read -- so they belong in the allowed set for exactly
+    # the reason the table fields do, and NOT because a custom row in
+    # `diagnostics.py` names them. `_CUSTOM_ENTITY_SOURCES` stays unharvested.
+    names: set[str] = (
+        set(AP_ENTITY_PARAMS)
+        | set(HOB_ENTITY_PARAMS)
+        | set(HOB_ZONE_TIME_ATTRS)
+        | set(PROGRAM_PARAM_NAMES)
+    )
     for registry in (SENSORS, BINARY_SENSORS):
         for descriptions in registry.values():
             for desc in descriptions:
@@ -4488,11 +4501,20 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         # allowed set is harvested from the PLATFORM tables, never from
         # `_CUSTOM_ENTITY_SOURCES`, so a name typed into a custom row has to be
         # justified by some other table or by the one-word allowlist.
+        #
+        # "Over every type" was a claim this loop did not honour: the list below
+        # was written when nine types had rows and stayed at nine when the induction
+        # hob gained its own (#84). `select.power_limit` and the twelve
+        # `sensor.remaining_time_zone*` rows therefore shipped as the only names in
+        # `entities.sources` that no guard had ever looked at -- the one section of
+        # the dump whose safety rests entirely on this test.
         allowed = _static_parameter_names()
         self.assertIn("tempSelZ3", allowed)  # not vacuous
         seen = 0
         swept_domains: dict[str, set[str]] = {}
-        for app_type in ("REF", "AC", "WD", "AP", "WC", "OV", "HO", "TD", "WM"):
+        for app_type in (
+            "REF", "AC", "WD", "AP", "WC", "OV", "HO", "IH", "HOB", "TD", "WM"
+        ):
             index = diagnostics._mapped_sets(app_type)[2]
             self.assertIsNotNone(index)
             for tag, row in index.items():
@@ -4507,13 +4529,15 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
                         name in allowed or bare in allowed,
                         f"{app_type} {tag}: {name} is in no static table",
                     )
-        # A floor of 200 against a real count of 381 lets an ENTIRE table stop
-        # being walked unnoticed: the sensor.* rows alone are 113 names and
-        # binary_sensor.* 63, so deleting either leaves the count above the
-        # floor. A union floor is also blind to a table that stops being walked
-        # for ONE type, because the other eight keep the domain in the union.
-        # Pin the SHAPE of the sweep, per type, and not only a number.
-        self.assertGreater(seen, 375, f"the sweep shrank to {seen} names")
+        # A slack floor lets an ENTIRE table stop being walked unnoticed: the
+        # sensor.* rows alone are over a hundred names, so deleting one table
+        # would still leave the count high. The floor is therefore kept TIGHT
+        # against the real count (549 across the eleven types), and it has to be
+        # raised deliberately whenever a type or a table joins the sweep. A union
+        # floor is also blind to a table that stops being walked for ONE type,
+        # because the other ten keep the domain in the union: pin the SHAPE of the
+        # sweep, per type, and not only a number.
+        self.assertGreater(seen, 540, f"the sweep shrank to {seen} names")
         self.assertEqual(
             {
                 "REF": {"binary_sensor", "number", "select", "sensor"},
@@ -4525,6 +4549,14 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
                 # The hood gained its fan, light/timer switches and delay number
                 # in 5.18.0 (#83); before that it was read-only like the oven.
                 "HO": {"binary_sensor", "fan", "number", "sensor", "switch"},
+                # The two spellings of an induction hob. Both were missing from
+                # this sweep when their custom rows shipped (#84), so the intake
+                # limit and the twelve per-zone timers were the only names in
+                # `entities.sources` no drift guard had ever looked at. The
+                # `select` domain is the intake limit; the timers land under
+                # `sensor` beside the description rows.
+                "IH": {"binary_sensor", "select", "sensor"},
+                "HOB": {"binary_sensor", "select", "sensor"},
                 "TD": {"binary_sensor", "button", "number", "select", "sensor", "switch"},
                 "WM": {"binary_sensor", "button", "number", "select", "sensor", "switch"},
             },

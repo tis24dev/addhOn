@@ -804,13 +804,22 @@ _HOB: tuple[HonSensorEntityDescription, ...] = (
     # anyone who has not asked for it. It is NOT a liveness heuristic on
     # `last_update`, which would be non-deterministic across restarts and would
     # also delete `temp_zone*` from hobs that report it.
+    #
+    # NO device_class, NO unit and NO state_class, unlike every other temperature
+    # in this file. All three are CLAIMS: `device_class=TEMPERATURE` plus `°C`
+    # tells Home Assistant the number is a temperature in Celsius, and
+    # `state_class=MEASUREMENT` records it into long-term statistics under that
+    # unit. On the one hob anyone has, `tempZ{N}` has not moved since 2022 and the
+    # model declares `probe = "0"` -- no temperature probe at all -- so the whole
+    # reading is an inference from a parameter NAME in the decompiled app. The
+    # value is shipped raw, like every other experimental hob family, and a user
+    # with the hardware can report what it turns out to be. Promoting it later is
+    # additive; unpicking a year of statistics recorded in the wrong unit is not.
     *(
         HonSensorEntityDescription(
             key=f"plate_temp_zone{zone}",
             attr_key=f"tempZ{zone}",
-            native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-            device_class=SensorDeviceClass.TEMPERATURE,
-            state_class=SensorStateClass.MEASUREMENT,
+            icon="mdi:thermometer",
             gated=True,
             experimental=True,
         )

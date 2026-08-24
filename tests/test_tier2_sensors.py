@@ -608,6 +608,38 @@ class HobZoneReadingsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(40.0, by_id["x-1_temp_zone1"].native_value)
         self.assertEqual(55.0, by_id["x-1_plate_temp_zone1"].native_value)
 
+    async def test_the_plate_temperature_claims_nothing_it_cannot_prove(self) -> None:
+        """It shipped as a TEMPERATURE in °C with statistics enabled, and none of
+        the three is something this integration can stand behind.
+
+        `tempZ{N}` has not moved since 2022 on the only hob anyone has, and that
+        model declares `probe = "0"` -- no probe. The reading being a plate
+        temperature at all is an inference from a parameter NAME in the decompiled
+        app. `device_class` + unit tell Home Assistant what the number IS, and
+        `state_class=MEASUREMENT` writes it into long-term statistics under that
+        unit: promoting the entity later is additive, unpicking a year of
+        statistics recorded in the wrong unit is not.
+
+        The positive control below is the point of the test: the CONFIRMED
+        temperature on the same hob keeps all three, so this is a claim withdrawn
+        where the evidence is missing and not a device_class deleted everywhere.
+        """
+        attributes = {"available": True, "sensorTempZ1": 40, "tempZ1": 55}
+        by_id = {
+            e._attr_unique_id: e
+            for e in await _build_sensors("IH", attributes, _experimental(True))
+        }
+        plate = by_id["x-1_plate_temp_zone1"].entity_description
+        self.assertIsNone(plate.device_class)
+        self.assertIsNone(plate.native_unit_of_measurement)
+        self.assertIsNone(plate.state_class)
+        self.assertTrue(plate.experimental)
+
+        confirmed = by_id["x-1_temp_zone1"].entity_description
+        self.assertIsNotNone(confirmed.device_class)
+        self.assertIsNotNone(confirmed.native_unit_of_measurement)
+        self.assertIsNotNone(confirmed.state_class)
+
     async def test_the_hob_alias_produces_the_same_entities(self) -> None:
         ih = [e._attr_unique_id for e in await _build_binary("IH", HOB_ATTRIBUTES)]
         hob = [e._attr_unique_id for e in await _build_binary("HOB", HOB_ATTRIBUTES)]

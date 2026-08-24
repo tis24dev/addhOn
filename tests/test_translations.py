@@ -292,7 +292,26 @@ class AirPurifierTranslationTest(unittest.TestCase):
             self.assertIn(fragments[lang], name, f"{lang}: {name}")
 
     def test_experimental_entities_say_so_in_their_name(self) -> None:
-        """They may be wrong or disappear; the label is what tells the user."""
+        """They may be wrong or disappear; the label is what tells the user.
+
+        THE INDUCTION HOB IS A DELIBERATE EXCEPTION and is absent from the map
+        below. Its experimental families are per-zone and generated: 26 entities
+        (`plate_temp_zone1..6`, `program_code_zone1..6`, `program_phase_zone1..6`,
+        `combi_mode_zone1..6`, `timer_hh`, `timer_mm`), so carrying the marker in
+        every name would fill a dashboard with the same word 26 times and bury the
+        four zone labels that tell them apart. The user who sees them has switched
+        the option on in the Options flow, whose own description warns what the
+        option creates, and none of them is switched on by default -- which is not
+        true of the four entities listed here, whose families ship enabled and
+        where the name is the only warning a user ever gets.
+
+        What replaces the marker for the hob is HONESTY IN THE DATA rather than in
+        the label: those entities carry no `device_class`, no unit and no
+        `state_class`, so they claim nothing about what they measure.
+        `plate_temp_zone{N}` is the one that had to be walked back -- it declared
+        TEMPERATURE and °C on an attribute that has not moved since 2022 on a model
+        declaring `probe = "0"` -- and `test_tier2_sensors` pins the raw shape.
+        """
         marker = {"en": "experimental", "it": "sperimentale"}
         experimental = {
             "sensor": ("air_quality_label",),
