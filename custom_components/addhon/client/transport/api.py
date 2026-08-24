@@ -33,7 +33,7 @@ from .connection import HonConnection
 from .parse import APPLIANCE_LIST_PATH, parse_appliance_list, probe_appliance_list
 from .tokens import token_person_account_id
 from .values import API_URL
-from ...debug_utils import redact_identity, structure_only
+from ...debug_utils import redact_identity, safe_key_names, structure_only
 from ...error_codes import APPLIANCE_LIST_EMPTY, classify
 
 _LOGGER = logging.getLogger(__name__)
@@ -298,10 +298,16 @@ class HonApi:
             # answer; `unreadable` is the object-fought-back one, and they are worth
             # telling apart in the log for the same reason `outcome: "other"` is worth
             # telling apart in the dump.
+            # `safe_key_names`, not `sorted(...keys())`. Reading "just the names" looks
+            # obviously harmless and is not: a mapping the vendor keyed BY a serial or
+            # by a cognito identity partition carries that identity in the key
+            # position, and this line goes to a level meant for pasting into public
+            # issues. Same shape rule as the response shape below, so the summary and
+            # the detail cannot disagree about what is safe to print.
             try:
                 modules = result.get("modules") if isinstance(result, dict) else None
-                result_keys = sorted(result.keys()) if isinstance(result, dict) else "n/a"
-                module_keys = sorted(modules.keys()) if isinstance(modules, dict) else "n/a"
+                result_keys = safe_key_names(result)
+                module_keys = safe_key_names(modules)
             except Exception:  # noqa: BLE001 - a log line must never abort a setup
                 result_keys = module_keys = "unreadable"
             # Emitted OUTSIDE the try so the code the user is told to search for is

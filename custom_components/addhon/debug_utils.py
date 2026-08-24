@@ -228,6 +228,24 @@ def redact_identity(obj):
     return obj
 
 
+def safe_key_names(obj) -> list | str:
+    """The sorted key names of a mapping, each masked unless it is a schema key.
+
+    The companion of `structure_only` for the places that want the names alone. Same
+    rule and the same reason: a mapping the vendor keyed BY a serial or by a cognito
+    identity partition puts that identity in the key position, where copying "just the
+    names" is copying a value. `sorted(x.keys())` reads as obviously safe and is not.
+
+    Returns "n/a" for a non-mapping, so a caller can print the result either way.
+    """
+    if not isinstance(obj, dict):
+        return "n/a"
+    return sorted(
+        key if _is_schema_key(key) and not _is_identity_key(key) else _REDACTED
+        for key in obj
+    )
+
+
 def structure_only(obj, _depth: int = 0):
     """The SHAPE of a response: key names and value types, never a value.
 

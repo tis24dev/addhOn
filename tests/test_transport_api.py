@@ -1209,6 +1209,28 @@ class FetchCensusEnvelopeTest(unittest.TestCase):
         # ...and the finding still travels: the census counts the keys it refused to name.
         self.assertIn("auth_keys=2", blob)
 
+    def test_the_summary_key_names_are_filtered_too(self) -> None:
+        """`sorted(result.keys())` reads as obviously safe and is not.
+
+        A mapping the vendor keyed BY an identity carries it in the key position, and
+        this summary goes to the level meant for pasting into public issues. The shape
+        line below it was fixed first; a summary that stayed raw would have leaked the
+        same value one line earlier.
+        """
+        poisoned = reporter()
+        poisoned["user#eu-west-1:CANARY-IDENTITY"] = {"x": 1}
+        poisoned["modules"]["0011q00001CANARYAAA"] = {"y": 2}
+        with self.assertLogs(
+            "custom_components.addhon.client.transport.api", level="WARNING"
+        ) as logs:
+            self._census(poisoned)
+        blob = "\n".join(logs.output)
+        self.assertNotIn("CANARY-IDENTITY", blob)
+        self.assertNotIn("0011q00001CANARYAAA", blob)
+        # The real schema keys still print, or the summary stops being a summary.
+        self.assertIn("modules", blob)
+        self.assertIn("applianceList", blob)
+
     def test_a_failed_module_says_so_in_the_warning(self) -> None:
         # The reason the flag is worth logging at all: with `success: false` the list
         # is empty for a reason that is NOT an empty account, and until now the two
