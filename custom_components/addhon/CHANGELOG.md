@@ -7,6 +7,49 @@ per-release page, with the full commit list and the compare diff, is on
 [GitHub Releases](https://github.com/tis24dev/addhOn/releases). Versions released before
 the notes were generated automatically carry a link to their diff instead of a summary.
 
+## [Unreleased]
+
+**New Features**
+
+- Cooker hoods (`HO`) gain their first controls (#83): a fan entity for the extraction
+  speed, one step per level the device declares, plus switches for the light and for the
+  delayed switch-off and a number for how many minutes that delay runs. Everything is
+  read from the hood's live command schema, so a model that does not declare a parameter
+  gets no entity for it.
+- Induction hobs (`IH`/`HOB`) gain the one control the cloud lets a remote client
+  change (#84): a select for the **power intake limit**, in kW. Per-zone readings arrive
+  alongside it — power level, pan detection, zone on, residual heat, per-zone errors and
+  remaining time — with the plate temperatures, program code and phase, flex-zone
+  bridging and the hob timer behind the *experimental* option, because the only hob
+  observed has never reported anything but zero for them.
+
+**Breaking Changes**
+
+- An induction hob used to be registered as **five** Home Assistant devices: the hob
+  itself and four per-zone clones. It is now one device, which is what it is. The clone
+  devices and every entity on them are **removed automatically** on upgrade; their
+  entity IDs (the ones carrying `_z1` … `_z4`) disappear, and **any automation, script,
+  dashboard card or template naming one of them breaks**. There is no one-to-one rename
+  available: the clones duplicated readings that the surviving hob device already
+  publishes under its own IDs, so an automation has to be repointed at the hob's own
+  entity rather than at a renamed clone.
+
+**Known Behaviour**
+
+- **Turning the hood's fan off also turns its light off.** This is the device's own
+  declaration, not a choice of this integration: the hood's `stopProgram` command pins
+  `lightStatus` to `"0"` as a fixed value, and the official app behaves the same way.
+  Switch the light back on after stopping the fan if you want it lit.
+- **The hob's power limit is a cap on the WHOLE appliance, not the power of one zone.**
+  It is the maximum the hob may draw, in kW, and lowering it while cooking reduces the
+  power available to the zones. It cannot switch a zone on, off or up — the cloud schema
+  exposes no way to do that at all.
+- **A hob may refuse the command.** The hob of issue #84 reports `remoteCtrValid = 0`
+  and has done since 2025-04-20, which usually means remote control is disabled on the
+  appliance itself. The select is still offered — no other writable entity in this
+  integration hides itself behind that flag — so a refusal surfaces as a "command
+  rejected" error rather than as a missing control.
+
 ## [5.17.0] - 2026-08-24
 
 **Diagnostics**
