@@ -307,18 +307,42 @@ class HonApi:
             # Emitted OUTSIDE the try so the code the user is told to search for is
             # emitted whatever the body did: ADDHON-210 is the signal, the key names
             # are the detail.
+            #
+            # THE CENSUS TRAVELS WITH THE WARNING, at WARNING level, and that is a
+            # deliberate departure from "diagnostics live in the dump". This branch is
+            # reached only when the account shows no appliances -- the single hardest
+            # report to act on, and the one where asking for a downloaded dump has
+            # repeatedly failed to produce one. Every value here is a closed-domain
+            # token or a bounded int produced by OUR code (`probe_appliance_list`,
+            # `account_match`), not a value chosen by the cloud, so the line is
+            # leak-proof by the same construction the dump block relies on and can be
+            # pasted into a public issue as it stands. A reporter who can copy one log
+            # line can now hand over a complete diagnosis without touching a toggle.
+            census = self.last_appliance_fetch or {}
             _LOGGER.warning(
-                "[%s] hOn API: 0 appliances (request OK). result keys=%s; modules keys=%s. "
+                "[%s] hOn API: 0 appliances (request OK). result keys=%s; modules keys=%s; "
+                "envelope_ok=%s module_ok=%s auth_keys=%s account=%s. "
                 "If the appliances appear in the hOn app, it is more likely an API change "
                 "than an empty/unshared account.",
                 APPLIANCE_LIST_EMPTY.label,
                 result_keys,
                 module_keys,
+                census.get("envelope_ok"),
+                census.get("module_ok"),
+                census.get("auth_keys"),
+                census.get("account"),
             )
+            # WARNING, not DEBUG. This is the line the investigation asked for about ten
+            # times and never got, because it required the reporter to enable a toggle
+            # BEFORE a reload -- the appliance-list call happens once, during setup, so
+            # turning debug on afterwards captures nothing. The cost of raising it is
+            # bounded by the branch it sits in: it prints only when the list is empty,
+            # which is when the body is small, and never on a working install.
+            # `redact_identity` keeps the structure and masks the identity values.
             try:
-                _LOGGER.debug("hOn raw appliance response: %s", redact_identity(result))
-            except Exception:  # noqa: BLE001 - same rule, and this one is gated anyway
-                _LOGGER.debug("hOn raw appliance response: <unreadable>", exc_info=True)
+                _LOGGER.warning("hOn raw appliance response: %s", redact_identity(result))
+            except Exception:  # noqa: BLE001 - a log line must never abort a setup
+                _LOGGER.warning("hOn raw appliance response: <unreadable>", exc_info=True)
         return appliances
 
     async def load_commands(self, appliance: Any) -> dict:

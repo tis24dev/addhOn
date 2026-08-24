@@ -1192,7 +1192,11 @@ class HonClient:
                         ),
                     )
             else:
-                _LOGGER.debug(
+                # INFO, not DEBUG: it is the pointer to the WARNING that carries the
+                # whole diagnosis, and a pointer that only appears when debug is on is
+                # a pointer nobody follows. It fires only on the empty-list branch, so
+                # a working install never sees it.
+                _LOGGER.info(
                     "Discovery: the hOn cloud returned 0 appliances for this "
                     "account (request OK). With the unified-api endpoint the list "
                     "also includes offline devices, so 0 = a truly empty/not-shared "

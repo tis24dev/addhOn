@@ -1152,6 +1152,52 @@ class FetchCensusEnvelopeTest(unittest.TestCase):
         _run(api.load_appliances())
         return api.last_appliance_fetch
 
+    def test_the_warning_carries_the_whole_diagnosis_without_debug(self) -> None:
+        """The empty-list WARNING is a finished diagnosis, at a level everyone sees.
+
+        This branch is the hardest report in the project to act on, and asking for a
+        downloaded dump has repeatedly failed to produce one: the appliance-list call
+        happens ONCE, during setup, so a reporter who enables debug afterwards captures
+        nothing, and the raw response used to live at DEBUG behind exactly that trap.
+
+        So the census travels with the warning. Everything asserted here is a token or
+        a bounded int produced by OUR code -- `probe_appliance_list` and
+        `account_match` -- never a value chosen by the cloud, which is what lets a
+        WARNING carry it into a public issue unedited.
+        """
+        with self.assertLogs(
+            "custom_components.addhon.client.transport.api", level="WARNING"
+        ) as logs:
+            self._census(reporter())
+        summary = next(line for line in logs.output if "ADDHON-210" in line)
+        for fragment in (
+            "envelope_ok=True",
+            "module_ok=True",
+            "auth_keys=0",
+            "account=no_appliances",
+        ):
+            self.assertIn(fragment, summary)
+        # And the raw response is emitted at WARNING too, redacted: it is the one
+        # artefact that answers what is UNDER `payload`, which no census field can.
+        self.assertTrue(
+            any("hOn raw appliance response" in line for line in logs.output),
+            logs.output,
+        )
+
+    def test_a_failed_module_says_so_in_the_warning(self) -> None:
+        # The reason the flag is worth logging at all: with `success: false` the list
+        # is empty for a reason that is NOT an empty account, and until now the two
+        # produced the same line.
+        broken = reporter()
+        broken["modules"]["applianceList"]["success"] = False
+        with self.assertLogs(
+            "custom_components.addhon.client.transport.api", level="WARNING"
+        ) as logs:
+            self._census(broken)
+        summary = next(line for line in logs.output if "ADDHON-210" in line)
+        self.assertIn("module_ok=False", summary)
+        self.assertIn("envelope_ok=True", summary)
+
     def test_a_body_that_fights_back_never_takes_the_setup_down(self) -> None:
         """The last unguarded stretch of `load_appliances`, closed end to end.
 
