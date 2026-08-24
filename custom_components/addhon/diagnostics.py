@@ -2566,6 +2566,74 @@ def _coordinator(hass: HomeAssistant, entry: ConfigEntry):
     return entry_data.get("coordinator")
 
 
+# A setup phase as the client records it: flat ("authenticate", "mfa_challenge") or
+# hierarchical ("load_appliances/auth"). Shape-validated rather than enumerated, because
+# the vocabulary is assembled at raise time from the segment a phase() context was opened
+# with (client/phase.py) and a frozenset here would have to be kept in step with every
+# new context in the transport. Lower-case words and slashes only, and short: whatever a
+# future caller puts in `last_error_phase`, what this file publishes is that shape.
+_PHASE_RE = re.compile(r"[a-z_]+(?:/[a-z_]+)*")
+_PHASE_MAX_LEN = 64
+
+
+def _phase_token(value) -> str | None:
+    """A phase name, or None. The `type(...) is not str` is the guard `_closed_token`
+    documents: a str SUBCLASS passes `isinstance` and re-implements `__str__`, so the
+    string that reaches the file need not be the one the regex matched."""
+    if type(value) is not str or len(value) > _PHASE_MAX_LEN:
+        return None
+    return value if _PHASE_RE.fullmatch(value) else None
+
+
+def _reason_for_label(label: str | None) -> str | None:
+    """The catalog reason for an ADDHON label, resolved HERE and never echoed.
+
+    `_last_error`'s live branch reads `code.reason_en` off the code object the client
+    holds, which is an `error_codes` singleton -- the text is this module's, not the
+    cloud's. The failure-record branch has no such object: it has a string that has been
+    through hass.data. Resolving the reason from the catalog instead of storing it keeps
+    the two branches on the same footing, and means a record written by an older version
+    of this integration cannot put a stale (or foreign) sentence in the document.
+    """
+    if label is None:
+        return None
+    from . import error_codes
+
+    for code in error_codes.all_codes():
+        if code.label == label:
+            return code.reason_en
+    return None
+
+
+def _setup_failed(failure: Mapping) -> dict:
+    """`last_error` for an entry whose setup failed, from the record __init__ left.
+
+    Same leak-proof argument as the live branch below, one notch stricter because the
+    values arrive through a mapping rather than off a code object: the label is
+    shape-checked (`_label_token`), the reason is looked up in the catalog rather than
+    read from the record, the phase is shape-checked, and the instant goes through the
+    same `_as_utc` + `_stamp_text` pair every other stamp in this file uses.
+
+    `phase_ledger` is passed through exactly as the live branch passes it (:2620): a
+    list of {phase, seconds, outcome} rows built by our own phase tracker, in this
+    process, out of the same objects. It is guarded to a list so a foreign value cannot
+    make the key a shape no reader expects, but its rows are not rebuilt -- doing that
+    here and not there would claim a difference in trust that does not exist.
+    """
+    label = _label_token(failure.get("code"))
+    out: dict = {
+        "status": "setup_failed",
+        "code": label,
+        "reason": _reason_for_label(label),
+        "phase": _phase_token(failure.get("phase")),
+        "at": _stamp_text(_as_utc(failure.get("at"), assume_naive_utc=False)),
+    }
+    ledger = failure.get("phase_ledger")
+    if isinstance(ledger, list) and ledger:
+        out["phase_ledger"] = ledger
+    return out
+
+
 def _last_error(hass: HomeAssistant, entry: ConfigEntry) -> dict | None:
     """The last classified setup/update error code, for issue triage.
 
@@ -2579,13 +2647,19 @@ def _last_error(hass: HomeAssistant, entry: ConfigEntry) -> dict | None:
         # account that simply owns no appliances: both read `"last_error": null,
         # "appliances": []`, and a real 5.9.3 report was triaged as the second when
         # it was the first. `null` is now the answer of a client, not the absence of
-        # one. "No entry data" and "entry data without a client" are deliberately
-        # ONE state: async_setup_entry stores the bucket as a single literal that
-        # always carries the client (__init__.py:621) and pops it whole on a failed
-        # setup or unload (__init__.py:651, :662, :680), so a bucket without a
-        # client is not a state this integration can produce -- a second token would
-        # only send a triager hunting a distinction nothing writes. A closed-domain
-        # token like the fields below, so it needs no _redact either.
+        # one.
+        #
+        # A bucket without a client IS a state this integration produces, and only
+        # one thing produces it: `_store_setup_failure` replacing the bucket on a
+        # failed setup (__init__.py). When that record is there it is a strictly
+        # better answer than the marker below -- it carries the classified code, the
+        # phase, the ledger -- so it is preferred. `client_absent` keeps its meaning
+        # for everything else: an entry absent from hass.data, and a bucket a future
+        # caller builds without either key.
+        failure = entry_data.get("setup_failure")
+        if isinstance(failure, Mapping):
+            return _setup_failed(failure)
+        # A closed-domain token like the fields below, so it needs no _redact either.
         return {"status": "client_absent"}
     code = getattr(client, "last_error_code", None)
     if code is None:
@@ -2826,13 +2900,13 @@ def _last_fetch(hass: HomeAssistant, entry: ConfigEntry, *, now: datetime) -> di
     absence of a session -- the ambiguity `_last_error` was rewritten to remove
     (:2582-2588).
 
-    NOT in that list, though `outcome: "raised"` is in `_FETCH_OUTCOMES` and the
-    transport writes it: "the call never reached a body". That census dies with the
-    session the raise tore down, and the entry bucket is popped with it, so the block
-    reads `client_absent`. The reader's domain still carries the token because the
-    writer produces it and a reader that printed "other" for its own main field would
-    be worse; the state becomes reachable here when a failed setup gets a record of
-    its own. See `HonApi.load_appliances`.
+    IN that list since the failed setup got a record of its own: `outcome: "raised"`,
+    "the call never reached a body". The census still dies with the session the raise
+    tore down -- `setup_sync` snapshots it into `last_setup_fetch` one line before
+    `_close_sync`, and `_store_setup_failure` copies that into the entry bucket in
+    place of the coordinator and client the setup never handed over. A dump taken
+    after a failed setup therefore reads the block, not `client_absent`. See
+    `HonApi.load_appliances` for the writer.
 
     Leak-proof by construction on the strongest terms in the file: every KEY is a
     literal written above, and every VALUE is either an int this function range-checks,
@@ -2861,14 +2935,46 @@ def _build_last_fetch(hass: HomeAssistant, entry: ConfigEntry, *, now: datetime)
     entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
     client = entry_data.get("client")
     if client is None:
-        # Same two-into-one state `_last_error` documents at :2582-2588: a bucket
-        # without a client is not a state this integration can produce.
+        # No client, but possibly a record of why there is none. `_store_setup_failure`
+        # flattens the census and the four counters into one mapping precisely so this
+        # branch reads the same block builder the live branch does -- and it is what
+        # finally makes `outcome: "raised"` reachable in a dump. The census of a setup
+        # that died before the response had a body used to be torn down with the
+        # session that raised, which is why the docstring above listed that state as
+        # written-but-unobservable.
+        failure = entry_data.get("setup_failure")
+        recorded = failure.get("fetch") if isinstance(failure, Mapping) else None
+        if isinstance(recorded, Mapping):
+            return _fetch_block(recorded, recorded, now=now)
         return {"state": "client_absent", **_fetch_empty()}
     raw = getattr(client, "last_appliance_fetch", None)
     if not isinstance(raw, Mapping):
         # A live client whose session was closed, or one between _close_sync and the
         # end of setup_sync on a runtime re-auth. `null` would be true too, but silent.
         return {"state": "never_ran", **_fetch_empty()}
+    return _fetch_block(
+        raw,
+        # The counters are what SETUP made of the list; `raw` is what the CALL
+        # returned. Two sources on the live path, one flattened mapping on the record
+        # path, and one block builder for both.
+        {
+            "expanded": getattr(client, "setup_expanded", None),
+            "built": getattr(client, "appliance_count", None),
+            "skipped": getattr(client, "setup_drops", None),
+            "degraded": getattr(client, "degraded_census", None),
+        },
+        now=now,
+    )
+
+
+def _fetch_block(raw: Mapping, counters: Mapping, *, now: datetime) -> dict:
+    """The `recorded` block, from a census mapping and a counter mapping.
+
+    Every value is validated HERE rather than at either call site, so the block a live
+    client produces and the block a setup-failure record produces are the same document
+    under the same guarantees -- and the record, which has been through hass.data and is
+    therefore the less trusted of the two, cannot be the one that got the shorter check.
+    """
     moment = _as_utc(raw.get("at"), assume_naive_utc=False)
     return {
         "state": "recorded",
@@ -2905,14 +3011,10 @@ def _build_last_fetch(hass: HomeAssistant, entry: ConfigEntry, *, now: datetime)
         "node_type": _closed_token(raw.get("node_type"), _FETCH_NODE_TYPES),
         "siblings": _bounded_int(raw.get("siblings"), 0, _FETCH_MAX_INT),
         "count": _bounded_int(raw.get("count"), 0, _FETCH_MAX_INT),
-        "expanded": _bounded_int(
-            getattr(client, "setup_expanded", None), 0, _FETCH_MAX_INT
-        ),
-        "built": _bounded_int(
-            getattr(client, "appliance_count", None), 0, _FETCH_MAX_INT
-        ),
-        "skipped": _skip_census(getattr(client, "setup_drops", None)),
-        "degraded": _degraded_census(getattr(client, "degraded_census", None)),
+        "expanded": _bounded_int(counters.get("expanded"), 0, _FETCH_MAX_INT),
+        "built": _bounded_int(counters.get("built"), 0, _FETCH_MAX_INT),
+        "skipped": _skip_census(counters.get("skipped")),
+        "degraded": _degraded_census(counters.get("degraded")),
     }
 
 

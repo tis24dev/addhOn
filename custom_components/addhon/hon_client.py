@@ -347,6 +347,19 @@ class HonClient:
         # phase names, rounded seconds, ok/error/timeout). This is the artefact that
         # makes a report like #76 diagnosable without a live probe.
         self.last_phase_ledger: list[dict] | None = None
+        # The appliance-list census as it stood when setup_sync FAILED, snapshotted
+        # before _close_sync tears the session down. Part of the failure record with
+        # the three fields above, and cleared with them.
+        #
+        # This is deliberately the mirror `last_appliance_fetch` (:840) argues against,
+        # and the argument does not reach it: what that property refuses is a mirror of
+        # a LIVE census, which drifts because the session keeps writing after the copy.
+        # This one is written once, on the path that has just decided there will be no
+        # more writes, and is read by __init__ into a hass.data record that is never
+        # updated afterwards. Without it the census of a setup that raised inside
+        # load_appliances dies with the session, and `outcome: "raised"` -- the state
+        # that says "the call never reached a body" -- stays unreachable in a dump.
+        self.last_setup_fetch: dict | None = None
         # Census of the last COMPLETED poll cycle (see _poll_census): how many
         # appliances the cloud returned, how many survived, one catalog label per
         # drop. None until a cycle finishes, which is the third state the dump has
@@ -653,6 +666,7 @@ class HonClient:
             self.last_error_phase = None
             self.last_mfa_summary = None
             self.last_phase_ledger = None
+            self.last_setup_fetch = None
             # Not part of that failure record: a census is a statement about ONE
             # session's poll, and this attempt builds a new session. Carrying it over
             # would let a dump answer "how did the last poll go" with a cycle that ran
@@ -732,6 +746,11 @@ class HonClient:
                     self.last_error_phase or "setup",
                     classify_failure_reason(err),
                 )
+                # BEFORE _close_sync, which nulls _hon_instance and with it the only
+                # reader of the census (`last_appliance_fetch`). This is the whole
+                # reason the failure record can say "the POST never reached a body":
+                # after the next line that fact exists nowhere else in the process.
+                self.last_setup_fetch = self.last_appliance_fetch
                 self._close_sync()
                 raise
 

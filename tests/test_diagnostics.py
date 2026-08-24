@@ -1290,7 +1290,9 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
         # A 5.9.3 field dump read `"last_error": null, "appliances": []` and was
         # triaged as an account owning no appliances; it was a failed setup, whose
         # client never reached hass.data. `null` must not be the answer to a
-        # question nobody could ask.
+        # question nobody could ask. A failed setup now leaves a record and reads
+        # `setup_failed` instead; this marker covers what is left, an entry with no
+        # session and nothing said about why.
         result = _run(diagnostics.async_get_config_entry_diagnostics(FakeHass(_build_coordinator()), FakeEntry()))
         self.assertEqual({"status": "client_absent"}, result["last_error"])
         # And it must not be readable as a recorded failure: a consumer keying on
@@ -1317,12 +1319,14 @@ class LastErrorDiagnosticsTest(unittest.TestCase):
         self.assertNotEqual(healthy["last_error"], failed_setup["last_error"])
 
     def test_last_error_folds_missing_entry_data_into_the_same_marker(self) -> None:
-        # "No entry data for this entry" and "entry data without a client" are ONE
-        # state on purpose (diagnostics.py `_last_error`): __init__ writes the bucket
-        # with the client inside it and pops it whole, so the two cannot be reached
-        # separately, and a second token would be a distinction nothing writes. This
-        # pins the fold: an entry absent from hass.data reports the same marker as
-        # the client-less bucket above.
+        # "No entry data for this entry" and "a bucket with neither a client nor a
+        # failure record" are ONE state on purpose (diagnostics.py `_last_error`).
+        # They were once the same for a stronger reason -- nothing could produce the
+        # second -- and `_store_setup_failure` has since made a client-less bucket a
+        # real state, but a client-less bucket with NOTHING in it still is not, and
+        # inventing a token for it would send a triager hunting a distinction nothing
+        # writes. This pins the fold: an entry absent from hass.data reports the same
+        # marker as the record-less bucket above.
         hass = FakeHass(_build_coordinator(), entry_id="other-entry")
         result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
         self.assertEqual({"status": "client_absent"}, result["last_error"])
@@ -1620,9 +1624,11 @@ class LastFetchDiagnosticsTest(unittest.TestCase):
                 self.assertIn(result["last_fetch"]["state"], diagnostics._FETCH_STATES)
 
     def test_no_client_reads_client_absent(self) -> None:
-        # The whole suite runs on a bucket holding only {"coordinator": ...}, which is
-        # the failed-setup state: there is no client to ask, and saying so is a
-        # different statement from "the client was asked and had nothing".
+        # The whole suite runs on a bucket holding only {"coordinator": ...}: no
+        # client to ask, and no record of a failure either. Saying so is a different
+        # statement from "the client was asked and had nothing" -- and, since
+        # `_store_setup_failure` exists, a different one from "the setup failed, and
+        # here is what the call returned before it did" (SetupFailureRecordTest).
         fetch = self._dump()["last_fetch"]
         self.assertEqual("client_absent", fetch["state"])
         for key, value in fetch.items():
@@ -6702,6 +6708,340 @@ class TheNestedParametersContainerIsAlwaysAPlainDictTest(unittest.TestCase):
                     type(landed) is dict or not isinstance(landed, Mapping),
                     f"a {type(landed).__name__} reached the dead fallback",
                 )
+
+
+class _FailedCode:
+    """The `error_codes` singleton `HonClient.last_error_code` holds after a failure."""
+
+    label = "ADDHON-400"
+    reason_en = "Validation failed"
+
+
+class _FailedClient:
+    """A client as `_store_setup_failure` finds it: the session already gone (so the
+    live census reads None) and the snapshot `setup_sync` took in its place."""
+
+    last_error_code = _FailedCode
+    last_error_phase = "load_appliances/auth"
+    last_phase_ledger = [{"phase": "auth", "seconds": 2.1, "outcome": "error"}]
+    last_appliance_fetch = None
+    last_setup_fetch = {"outcome": "raised", "code": "ADDHON-470", "status": None}
+    setup_expanded = 0
+    appliance_count = 0
+    setup_drops = {}
+    degraded_census = {}
+
+
+def _addhon_init():
+    """The integration package, which owns the writer half of the record."""
+    return importlib.import_module("custom_components.addhon")
+
+
+class SetupFailureRecordTest(unittest.TestCase):
+    """A dump taken after a FAILED setup says why it failed.
+
+    Until the record existed both failure branches of `async_setup_entry` popped the
+    entry bucket whole, so `last_error` read `{"status": "client_absent"}` -- the same
+    answer a dump gives while Home Assistant is still retrying -- and `last_fetch` read
+    `client_absent` too. Everything built to explain a failed setup (the per-phase
+    ledger of #76, the appliance-list census) was unreachable in the one dump a
+    reporter can produce for it.
+    """
+
+    def _hass_with_record(self, record):
+        hass = FakeHass(_build_coordinator())
+        hass.data[DOMAIN]["e1"] = {"setup_failure": record}
+        return hass
+
+    def _dump_record(self, record):
+        return _run(
+            diagnostics.async_get_config_entry_diagnostics(
+                self._hass_with_record(record), FakeEntry()
+            )
+        )
+
+    def _record(self, **over):
+        record = {
+            "code": "ADDHON-400",
+            "phase": "load_appliances/auth",
+            "phase_ledger": [{"phase": "auth", "seconds": 2.1, "outcome": "error"}],
+            "fetch": None,
+            "at": datetime(2026, 8, 24, 9, 0, 0, tzinfo=timezone.utc),
+        }
+        record.update(over)
+        return record
+
+    # -- the writer -------------------------------------------------------------
+
+    def test_a_failed_setup_replaces_the_bucket_instead_of_popping_it(self) -> None:
+        # REPLACES, not merges: a coordinator and a client the setup could not finish
+        # handing over must not survive it. The record is the only key left.
+        init = _addhon_init()
+        hass = FakeHass(_build_coordinator())
+        hass.data[DOMAIN]["e1"]["client"] = _FailedClient()
+        init._store_setup_failure(hass, FakeEntry(), _FailedClient())
+        bucket = hass.data[DOMAIN]["e1"]
+        self.assertEqual({"setup_failure"}, set(bucket))
+        self.assertEqual("ADDHON-400", bucket["setup_failure"]["code"])
+        self.assertEqual("load_appliances/auth", bucket["setup_failure"]["phase"])
+
+    def test_the_record_stores_the_label_and_never_the_code_object(self) -> None:
+        # The reason is resolved from the catalog at READ time, so the sentence in the
+        # dump comes from error_codes.py in the running version. A record that carried
+        # the object (or its text) would put a value from another process's catalog --
+        # or from whatever a future writer decides to store -- into the document.
+        init = _addhon_init()
+        hass = FakeHass(_build_coordinator())
+        init._store_setup_failure(hass, FakeEntry(), _FailedClient())
+        record = hass.data[DOMAIN]["e1"]["setup_failure"]
+        self.assertEqual("ADDHON-400", record["code"])
+        self.assertNotIn("reason", record)
+        self.assertIsInstance(record["at"], datetime)
+        self.assertIsNotNone(record["at"].tzinfo)
+
+    def test_the_record_falls_back_to_the_snapshot_when_the_session_is_gone(self) -> None:
+        # THE reason `last_setup_fetch` exists. A failure raised inside setup_sync has
+        # already closed the session there, so the live property reads None and the
+        # census of the call would be gone -- with it, the only evidence of a POST that
+        # never reached a body.
+        init = _addhon_init()
+        hass = FakeHass(_build_coordinator())
+        init._store_setup_failure(hass, FakeEntry(), _FailedClient())
+        fetch = hass.data[DOMAIN]["e1"]["setup_failure"]["fetch"]
+        self.assertEqual("raised", fetch["outcome"])
+        self.assertEqual("ADDHON-470", fetch["code"])
+        # The four counters are flattened in beside it, so the reader has one source.
+        for key in ("expanded", "built", "skipped", "degraded"):
+            self.assertIn(key, fetch)
+
+    def test_a_live_census_wins_over_the_snapshot(self) -> None:
+        # A setup that failed AFTER the client came up (the first coordinator refresh
+        # raising ConfigEntryNotReady) still has its session: the live census describes
+        # the same call and is the fresher of the two.
+        init = _addhon_init()
+        client = _FailedClient()
+        client.last_appliance_fetch = {"outcome": "ok", "count": 2}
+        hass = FakeHass(_build_coordinator())
+        init._store_setup_failure(hass, FakeEntry(), client)
+        self.assertEqual(
+            "ok", hass.data[DOMAIN]["e1"]["setup_failure"]["fetch"]["outcome"]
+        )
+
+    def test_removing_the_entry_drops_the_record(self) -> None:
+        # The only hook that can: an entry whose setup never succeeded is never
+        # unloaded, so without async_remove_entry the record outlives the entry and
+        # keeps hass.data[DOMAIN] non-empty -- which is what async_unload_entry reads
+        # to decide the global debug services can go.
+        init = _addhon_init()
+        hass = self._hass_with_record(self._record())
+        _run(init.async_remove_entry(hass, FakeEntry()))
+        self.assertNotIn("e1", hass.data[DOMAIN])
+
+    def test_both_failure_branches_record_before_closing_the_client(self) -> None:
+        # Source-level, because async_setup_entry is not behaviourally testable in this
+        # harness (it runs the executor login, the first refresh and the platform
+        # forwarding). Order is the whole point: _async_close_client nulls the session
+        # `last_appliance_fetch` reads through, so a record built after it would have
+        # lost the live census in exactly the case that has one.
+        source = (
+            Path(diagnostics.__file__).resolve().parent / "__init__.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        setup = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "async_setup_entry"
+        )
+        handlers = [h for h in ast.walk(setup) if isinstance(h, ast.ExceptHandler)]
+        recording = [
+            h for h in handlers
+            if any(
+                isinstance(call.func, ast.Name) and call.func.id == "_store_setup_failure"
+                for call in ast.walk(h) if isinstance(call, ast.Call)
+            )
+        ]
+        self.assertEqual(2, len(recording), "both failure branches must record")
+        for handler in recording:
+            # By LINE, not by the order ast.walk happens to yield: walk is breadth
+            # first, so an index into its output says nothing about which call runs
+            # first, and an assertion built on it passes whichever way the two are
+            # written. Verified by mutation: swapping the two statements leaves a
+            # walk-order assertion green and fails this one.
+            lines = {
+                node.func.id: node.lineno
+                for node in ast.walk(handler)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in ("_store_setup_failure", "_async_close_client")
+            }
+            self.assertLess(
+                lines["_store_setup_failure"],
+                lines["_async_close_client"],
+                "the record must be built while the session is still there",
+            )
+            # And the pop it replaced must be gone: a pop after the write would delete
+            # the record, a pop before it would be dead code that reads as a live rule.
+            self.assertNotIn(
+                "pop",
+                [
+                    node.func.attr
+                    for node in ast.walk(handler)
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                ],
+            )
+
+    # -- the reader -------------------------------------------------------------
+
+    def test_last_error_reports_the_failure_instead_of_client_absent(self) -> None:
+        result = self._dump_record(self._record())["last_error"]
+        self.assertEqual("setup_failed", result["status"])
+        self.assertEqual("ADDHON-400", result["code"])
+        self.assertEqual("2026-08-24T09:00:00+00:00", result["at"])
+        self.assertEqual(
+            [{"phase": "auth", "seconds": 2.1, "outcome": "error"}],
+            result["phase_ledger"],
+        )
+
+    def test_the_reason_is_looked_up_and_never_read_from_the_record(self) -> None:
+        # The record is written by us, but it has been through hass.data: a writer in a
+        # future version (or a test double, or an older record left by an install that
+        # has since been upgraded) is not a source this file publishes text from.
+        from custom_components.addhon import error_codes as ec
+
+        result = self._dump_record(
+            self._record(reason="3C:71:BF:AA:BB:CC belongs to user@example.com")
+        )["last_error"]
+        self.assertEqual(ec.NETWORK_TIMEOUT.reason_en, result["reason"])
+        self.assertNotIn("3C:71", json.dumps(result))
+
+    def test_an_unknown_label_reports_no_reason_rather_than_a_guess(self) -> None:
+        # 998 is registered by nothing (999 IS: it is UNKNOWN), so this is a label
+        # whose shape passes and whose meaning this version does not have -- a record
+        # written by a newer install, read after a downgrade.
+        result = self._dump_record(self._record(code="ADDHON-998"))["last_error"]
+        self.assertEqual("ADDHON-998", result["code"])
+        self.assertIsNone(result["reason"])
+
+    def test_a_hostile_label_and_a_hostile_phase_are_refused(self) -> None:
+        result = self._dump_record(
+            self._record(code="3C:71:BF:AA:BB:CC", phase="user@example.com")
+        )["last_error"]
+        self.assertIsNone(result["code"])
+        self.assertIsNone(result["reason"])
+        self.assertIsNone(result["phase"])
+        self.assertNotIn("3C:71", json.dumps(result))
+        self.assertNotIn("example.com", json.dumps(result))
+
+    def test_a_str_subclass_cannot_smuggle_text_through_the_phase(self) -> None:
+        # The B1 guard, on the field this change adds: `isinstance` admits a str
+        # SUBCLASS, which can match the regex and still render something else.
+        class Sneaky(str):
+            def __str__(self) -> str:  # pragma: no cover - only reached if the guard fails
+                return "3C:71:BF:AA:BB:CC"
+
+        result = self._dump_record(self._record(phase=Sneaky("authenticate")))["last_error"]
+        self.assertIsNone(result["phase"])
+
+    def test_a_naive_stamp_is_refused(self) -> None:
+        result = self._dump_record(
+            self._record(at=datetime(2026, 8, 24, 9, 0, 0))
+        )["last_error"]
+        self.assertIsNone(result["at"])
+
+    def test_a_foreign_ledger_shape_is_dropped_not_published(self) -> None:
+        result = self._dump_record(self._record(phase_ledger="user@example.com"))["last_error"]
+        self.assertNotIn("phase_ledger", result)
+
+    def test_last_fetch_reads_the_recorded_census(self) -> None:
+        # THE acceptance test of this change, and the state the previous one wrote but
+        # could not show: a POST that never reached a body. The census used to die with
+        # the session the raise tore down.
+        block = self._dump_record(
+            self._record(
+                fetch={
+                    "outcome": "raised",
+                    "code": "ADDHON-470",
+                    "status": None,
+                    "expanded": 0,
+                    "built": 0,
+                    "skipped": {},
+                    "degraded": {},
+                }
+            )
+        )["last_fetch"]
+        self.assertEqual("recorded", block["state"])
+        self.assertEqual("raised", block["outcome"])
+        self.assertEqual("ADDHON-470", block["code"])
+
+    def test_the_counters_of_a_failed_setup_survive_it(self) -> None:
+        # The inventory arrived, setup dropped all of it, and then setup failed. Before
+        # the record this dump was indistinguishable from an account owning nothing.
+        block = self._dump_record(
+            self._record(
+                fetch={
+                    "outcome": "ok",
+                    "count": 2,
+                    "status": 200,
+                    "expanded": 2,
+                    "built": 0,
+                    "skipped": {"mac_empty": 2},
+                    "degraded": {},
+                }
+            )
+        )["last_fetch"]
+        self.assertEqual((2, 2, 0), (block["count"], block["expanded"], block["built"]))
+        self.assertEqual({"mac_empty": 2}, block["skipped"])
+
+    def test_a_record_without_a_census_still_reads_client_absent(self) -> None:
+        # The failure happened before the call, so there is nothing to say about it.
+        # `last_error` speaks for that dump; this block must not invent a census.
+        block = self._dump_record(self._record())["last_fetch"]
+        self.assertEqual("client_absent", block["state"])
+        self.assertIsNone(block["outcome"])
+
+    def test_the_recorded_block_keeps_the_key_set(self) -> None:
+        # Same rule as the four states above it: a field-by-field diff between two
+        # downloads of the same issue is only meaningful if the key set is stable.
+        from_record = self._dump_record(
+            self._record(fetch={"outcome": "ok", "count": 0})
+        )["last_fetch"]
+        hass = FakeHass(_build_coordinator())
+        hass.data[DOMAIN]["e1"]["client"] = _FetchClient({"outcome": "ok", "count": 0})
+        from_client = _run(
+            diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+        )["last_fetch"]
+        self.assertEqual(set(from_client), set(from_record))
+        self.assertEqual("recorded", from_record["state"])
+
+    def test_the_record_is_validated_like_a_live_client_not_trusted(self) -> None:
+        # The record has been through hass.data, so it is the LESS trusted of the two
+        # sources -- it must not be the one that gets the shorter check. Every hostile
+        # value below is refused by the same guard the live path uses.
+        block = self._dump_record(
+            self._record(
+                fetch={
+                    "outcome": "user@example.com",
+                    "stopped_at": "3C:71:BF:AA:BB:CC",
+                    "node_type": "Kitchen_Washer_3C71BFAABBCC",
+                    "code": "not-a-label",
+                    "status": 99999,
+                    "count": -1,
+                    "skipped": {"3C:71:BF:AA:BB:CC": 1},
+                    "degraded": {"user@example.com": 1},
+                }
+            )
+        )["last_fetch"]
+        # Two refusals, deliberately different. A token this reader does not know
+        # renders as "other" -- the finding survives, the value does not (_closed_token)
+        # -- while a label, a status and a count that fail their check go to null.
+        for key in ("outcome", "stopped_at", "node_type"):
+            with self.subTest(key=key):
+                self.assertEqual("other", block[key])
+        for key in ("code", "status", "count"):
+            with self.subTest(key=key):
+                self.assertIsNone(block[key])
+        self.assertEqual({}, block["skipped"])
+        self.assertEqual({}, block["degraded"])
+        self.assertNotIn("3C:71", json.dumps(block))
+        self.assertNotIn("example.com", json.dumps(block))
 
 
 if __name__ == "__main__":

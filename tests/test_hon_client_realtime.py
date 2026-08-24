@@ -15,6 +15,7 @@ import asyncio
 import sys
 import threading
 import time
+import ast
 import types
 import unittest
 from pathlib import Path
@@ -1259,6 +1260,77 @@ class LastFetchAccessorTest(unittest.TestCase):
         self.assertIsNone(client.setup_expanded)
         self.assertIsNone(client.setup_drops)
         self.assertIsNone(client.degraded_census)
+
+
+class SetupFetchSnapshotTest(unittest.TestCase):
+    """`last_setup_fetch`: the one census the live accessor above cannot keep.
+
+    The accessor's argument against mirroring holds for a LIVE census, which drifts
+    because the session keeps writing after the copy. This field is written on the path
+    that has just decided there will be no more writes -- the except of setup_sync, one
+    line before `_close_sync` -- and read once, by `__init__._store_setup_failure`, into
+    a record that is never updated. Without it the census of a setup that raised inside
+    load_appliances dies with the session, and `outcome: "raised"` stays a state the
+    transport writes and no dump can show.
+    """
+
+    def test_a_fresh_client_has_no_snapshot(self) -> None:
+        client = HonClient(email="e@x", password="p")
+        self.assertIsNone(client.last_setup_fetch)
+
+    def test_the_snapshot_survives_the_close_the_accessor_does_not(self) -> None:
+        # The two halves of the same instant, side by side: after _close_sync the live
+        # accessor answers None (it has no session to ask) while the snapshot still
+        # carries what the call returned. That difference is the whole feature.
+        client = HonClient(email="e@x", password="p")
+        client._start_hon_loop()
+        session = FakeSession([])
+        session.last_appliance_fetch = {"outcome": "raised", "code": "ADDHON-470"}
+        client._hon_instance = session
+        client.last_setup_fetch = client.last_appliance_fetch
+        client._close_sync()
+        self.assertIsNone(client.last_appliance_fetch)
+        self.assertEqual("raised", client.last_setup_fetch["outcome"])
+
+    def test_setup_sync_snapshots_before_it_closes_and_clears_on_a_retry(self) -> None:
+        # Source-level: setup_sync runs a real login in an executor and is not
+        # behaviourally reachable here. Two orderings matter and both are asserted by
+        # LINE, because ast.walk is breadth first and an index into it would pass
+        # whichever way the statements are written.
+        #
+        # 1. the snapshot is taken BEFORE _close_sync, which nulls the session the
+        #    accessor reads through -- after it, there is nothing left to snapshot;
+        # 2. it is CLEARED at the top of setup_sync with the rest of the failure
+        #    record, so a retry that succeeds cannot leave a dump describing the
+        #    census of an attempt this client has already thrown away.
+        source = Path(HonClient.__module__.replace(".", "/") + ".py")
+        if not source.exists():  # pragma: no cover - import layout guard
+            source = Path(__file__).resolve().parents[1] / "custom_components" / "addhon" / "hon_client.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        setup = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "setup_sync"
+        )
+        writes = [
+            node.lineno
+            for node in ast.walk(setup)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(t, ast.Attribute) and t.attr == "last_setup_fetch"
+                for t in node.targets
+            )
+        ]
+        closes = [
+            node.lineno
+            for node in ast.walk(setup)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_close_sync"
+        ]
+        self.assertEqual(2, len(writes), "one clear at the top, one snapshot on failure")
+        self.assertTrue(closes, "setup_sync must still close the session it failed on")
+        self.assertLess(writes[0], min(closes), "the clear precedes every close")
+        self.assertLess(writes[1], max(closes), "the snapshot precedes the close it feeds")
 
 
 if __name__ == "__main__":
