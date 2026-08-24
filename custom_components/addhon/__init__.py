@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - only under the test stub
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    ACCOUNT_DEVICE_SUFFIX,
     APPLIANCE_HOB,
     APPLIANCE_IH,
     APPLIANCE_TD,
@@ -641,6 +642,14 @@ async def async_remove_config_entry_device(
     Returns True only for a device NOT in the current snapshot: allowing a live
     device to be deleted would let a user remove an appliance the next poll
     recreates, which reads as the delete button not working.
+
+    The ACCOUNT's synthetic "diagnostics" device counts as live even though it is
+    not an appliance and so never appears in the snapshot. It is the one device
+    every entry of every account owns, it carries the debug toggles and the
+    refresh button, and setup recreates it on the next reload -- so offering to
+    delete it is offering to break the entry's own controls. Without this it was
+    the ONLY device this hook answered True for on a healthy single-appliance
+    account, which is the opposite of what the paragraph above promises.
     """
     entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
     coordinator = entry_data.get("coordinator")
@@ -649,7 +658,10 @@ async def async_remove_config_entry_device(
         # No snapshot means no way to tell a live device from a stale one, and
         # answering True there would offer to delete every device of the entry.
         return False
-    live_ids = set(coord_data)
+    # Built from `entry` and not from the snapshot: the account device is ours by
+    # construction, whatever the poll returned. `base_entity.account_device_info`
+    # builds the same identifier from the same constant.
+    live_ids = set(coord_data) | {f"{entry.entry_id}{ACCOUNT_DEVICE_SUFFIX}"}
     ours = {ident for domain, ident in device.identifiers if domain == DOMAIN}
     return bool(ours) and not (ours & live_ids)
 

@@ -390,6 +390,55 @@ class RemoveConfigEntryDeviceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(allowed)
 
+    async def test_the_account_diagnostics_device_can_never_be_deleted(self) -> None:
+        """The one device EVERY entry of EVERY account owns, and the one this hook
+        was offering to destroy.
+
+        It is a synthetic service device, not an appliance, so `coordinator.data`
+        never mentions it and the stale/live comparison on its own answered True --
+        for every user, whatever they own. Home Assistant then drew a Delete button
+        on the card that carries the debug toggles and the "Refresh now" button,
+        and pressing it removed the card until the next reload. It also flatly
+        contradicted this function's own docstring, which promises to refuse a
+        device that is still alive.
+
+        The identifier is read out of `account_device_info`, the function that
+        BUILDS the device, rather than spelled again here: that makes this a
+        two-sided pin, so renaming the suffix on one side has to fail here instead
+        of silently putting the button back.
+        """
+        from custom_components.addhon.base_entity import account_device_info
+
+        entry = FakeEntry()
+        identifiers = set(account_device_info(entry)["identifiers"])
+        # Anti-vacuity: a device with no identifiers is refused by the `bool(ours)`
+        # guard for an unrelated reason, and would pass this test for free.
+        self.assertEqual(1, len(identifiers), identifiers)
+        coord_data = {"MAC": {"type": "IH"}}
+        self.assertTrue(
+            identifiers.isdisjoint(
+                {(DOMAIN, appliance_id) for appliance_id in coord_data}
+            ),
+            "the snapshot already names the account device; the test proves nothing",
+        )
+
+        allowed = await async_remove_config_entry_device(
+            self._hass(coord_data), entry, FakeDevice("dev-diag", identifiers)
+        )
+        self.assertFalse(allowed)
+
+    async def test_refusing_the_account_device_did_not_freeze_the_button(self) -> None:
+        # The positive control for the test above: a genuinely orphaned device of
+        # the SAME entry is still deletable, so the fix narrowed the answer by
+        # exactly one device rather than turning the hook off.
+        entry = FakeEntry()
+        allowed = await async_remove_config_entry_device(
+            self._hass({"MAC": {"type": "IH"}}),
+            entry,
+            FakeDevice("dev-z1", {(DOMAIN, "MAC_z1")}),
+        )
+        self.assertTrue(allowed)
+
 
 if __name__ == "__main__":
     unittest.main()

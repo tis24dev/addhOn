@@ -12,7 +12,7 @@ from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import ACCOUNT_DEVICE_SUFFIX, DOMAIN
 from .debug_utils import debug_key_sample, redact_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ def account_device_info(entry, sw_version: str | None = None) -> DeviceInfo:
     room dashboards.
     """
     return DeviceInfo(
-        identifiers={(DOMAIN, f"{entry.entry_id}_diagnostics")},
+        identifiers={(DOMAIN, f"{entry.entry_id}{ACCOUNT_DEVICE_SUFFIX}")},
         entry_type=DeviceEntryType.SERVICE,
         # Name is translated (device.diagnostics.name in en/it.json) via
         # translation_key, so it follows the UI language like the entity names

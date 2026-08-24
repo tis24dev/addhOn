@@ -119,6 +119,21 @@ ATTR_LEVEL = "level"
 # button. Global to the domain (no target, no fields), registered once.
 SERVICE_REFRESH = "refresh"
 
+# Identifier suffix of the synthetic per-account "diagnostics" device, whose
+# DeviceInfo `base_entity.account_device_info` builds as
+# `{(DOMAIN, f"{entry.entry_id}{ACCOUNT_DEVICE_SUFFIX}")}`.
+#
+# It lives HERE, and not next to the only function that builds it, because a
+# second module has to recognise the same identifier:
+# `__init__.async_remove_config_entry_device` must REFUSE to delete that device,
+# and it never appears in `coordinator.data` (it is not an appliance), so the
+# snapshot comparison that rejects every live appliance cannot see it. const.py
+# is the one module both can import without dragging the entity layer into the
+# setup module, and sharing the literal is what keeps the two halves from
+# drifting apart -- a renamed suffix would otherwise silently re-offer the
+# Delete button on the account's diagnostics device.
+ACCOUNT_DEVICE_SUFFIX = "_diagnostics"
+
 # Option keys (entry.options) of the two debug toggles exposed in the
 # Configure/Options screen of the integration. They persist across restarts and
 # are applied on the fly (see _apply_debug_options in __init__). enable_debug ->
