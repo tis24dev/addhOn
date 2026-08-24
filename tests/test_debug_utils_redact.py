@@ -333,6 +333,55 @@ class IdentityKeysBehaviouralTest(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertFalse(debug_utils._is_identity_key(key))
 
+    def test_a_value_used_as_a_key_is_masked_by_shape(self) -> None:
+        """A vendor keying a mapping BY an identity would leak it one level up.
+
+        `structure_only` exists so no leaf value is copied, and printing every key
+        verbatim would have reintroduced exactly that leak in the key position. The
+        test is by shape and not by blacklist for the reason `cognitoTokenNew` already
+        demonstrated: no set enumerates a vendor's naming.
+        """
+        for hostile in (
+            "user#eu-west-1:8f3c-4a21-9b0e",       # the DynamoDB identity partition
+            "0011q00001IbepGAAR",                   # a Salesforce account id
+            "ABC123456789",                         # a serial: long digit run
+            "ABCDEFGH",                             # a serial with no digits at all:
+                                                    # only the lowercase rule stops it
+            "mario.rossi@gmail.com",
+            "3C:71:BF:AA:BB:CC",
+            "a1b2c3d4-5e6f-7890-abcd-ef1234567890",
+        ):
+            with self.subTest(key=hostile):
+                shape = debug_utils.structure_only({"payload": {hostile: {"x": 1}}})
+                self.assertEqual({"payload": {"***": "***"}}, shape)
+
+    def test_the_shape_rule_keeps_every_key_the_real_envelope_carries(self) -> None:
+        # Measured against the appliance-list capture of 2026-08-24: a rule that
+        # masked a real schema key would leave the log unreadable, which is the other
+        # way to fail. Identity keys are excluded here -- they are masked ON PURPOSE
+        # and covered by _MUST_MASK above.
+        real = (
+            "applianceModelId", "applianceStatus", "applianceTypeId",
+            "applianceTypeName", "attributes", "brand", "connectivity", "coords",
+            "defaultWarrantyYears", "eepromName", "enrollmentDate", "firstEnrollment",
+            "firstEnrollmentTBC", "fwVersion", "id", "lastCheckUp", "lastUpdate",
+            "modelName", "purchaseDate", "sections", "series", "seriesVersion",
+            "topics", "executionTime", "modules", "success", "payload", "appliances",
+            "authInfo", "tempSelZ2",
+        )
+        for key in real:
+            with self.subTest(key=key):
+                self.assertTrue(debug_utils._is_schema_key(key))
+                self.assertEqual(
+                    {key: "<int>"}, debug_utils.structure_only({key: 1})
+                )
+
+    def test_the_shape_never_copies_a_leaf_value(self) -> None:
+        # The whole contract in one assertion.
+        body = {"payload": {"appliances": []}, "note": "CANARY", "n": 42,
+                "deep": {"deeper": ["CANARY", 1]}}
+        self.assertNotIn("CANARY", repr(debug_utils.structure_only(body)))
+
     def test_every_identity_key_has_a_behavioural_assertion(self) -> None:
         # The replacement for the old pin. This is still a set equality, but the
         # right-hand side is no longer a copy kept only for comparison: _MUST_MASK is

@@ -107,6 +107,30 @@ _IDENTITY_KEYS = frozenset(
 # and a wider list would start masking the structure the logs exist to show.
 _IDENTITY_KEY_PARTS = ("token", "password", "secret")
 
+# A key NAME is safe to print only when it is a SCHEMA key -- a name the vendor's
+# developers typed -- and not a value the vendor used AS a key. The distinction cannot
+# be made by blacklist (that is what `cognitoTokenNew` cost), so it is made by SHAPE,
+# the same way `_ADDHON_LABEL_RE` bounds a catalog label in the diagnostics dump.
+#
+# A schema key is a short identifier with at least one lowercase letter: `payload`,
+# `applianceTypeName`, `fwVersion`, `authInfo`. A value used as a key is not: an
+# identity partition `user#eu-west-1:8f3c-...` fails on `#` and `:`, a serial
+# `ABC123456789` fails for having no lowercase, an email fails on `@`, a UUID fails on
+# `-`, and anything the vendor made long fails the length bound. Digit runs are capped
+# because a schema key does not carry a five-digit number; `tempSelZ2` survives, a
+# stock code does not.
+_SCHEMA_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,39}$")
+_DIGIT_RUN_RE = re.compile(r"[0-9]{5,}")
+
+
+def _is_schema_key(key) -> bool:
+    """True when a key NAME may be printed as-is in a log meant for public issues."""
+    if not isinstance(key, str) or not _SCHEMA_KEY_RE.match(key):
+        return False
+    if _DIGIT_RUN_RE.search(key):
+        return False
+    return any(c.islower() for c in key)
+
 
 def _is_identity_key(key) -> bool:
     if not isinstance(key, str):
@@ -218,10 +242,12 @@ def structure_only(obj, _depth: int = 0):
     begin with: what is left is the envelope, which is exactly what the question
     "why is the list empty" is about.
 
-    Key NAMES are emitted, because they are the answer, and they are the same class of
-    value the ADDHON-210 line already prints as `result keys=`. A name that is itself
-    identity (a mapping keyed by MAC, an identity key holding a nested object) is
-    masked with the same rules as the values.
+    Key NAMES are emitted, because they are the answer -- but only the ones that pass
+    `_is_schema_key`, a SHAPE test rather than a blacklist. A mapping keyed by a serial,
+    by an account id or by a cognito identity partition (`user#<region>:<identity>`) is
+    a vendor using a VALUE as a key, and its names are masked exactly like values. That
+    residual is why this is not simply `{k: type(v)}`: printing every key verbatim would
+    reintroduce, one level up, the leak the whole function exists to remove.
 
     Depth-bounded so a self-referential or pathologically nested body cannot turn a log
     line into a hang; the bound is generous next to the four levels the envelope has.
@@ -230,9 +256,9 @@ def structure_only(obj, _depth: int = 0):
         return "<deeper>"
     if isinstance(obj, dict):
         return {
-            (_REDACTED if _is_identity_key(key) else _MAC_RE.sub(_REDACTED, str(key))): (
+            (key if _is_schema_key(key) and not _is_identity_key(key) else _REDACTED): (
                 _REDACTED
-                if _is_identity_key(key)
+                if _is_identity_key(key) or not _is_schema_key(key)
                 else structure_only(val, _depth + 1)
             )
             for key, val in obj.items()
