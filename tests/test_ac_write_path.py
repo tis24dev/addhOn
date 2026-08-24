@@ -985,18 +985,31 @@ class SettingsSwitchChannelTest(unittest.IsolatedAsyncioTestCase):
         ]
         return appliance_switches, command
 
-    # The air conditioner's `settings` as the AS35PBPHRA-PRE declares the part
-    # that matters here: the toggled flag, a louvre parameter the sanitizer has to
-    # repair, and two unrelated siblings that must still travel.
-    _AC_SETTINGS = {
-        "lightStatus": Param("0"),
-        "windDirectionVertical": Param("0", values=["2", "4", "8"]),
-        "machMode": Param("1"),
-        "tempSel": Param("22"),
-    }
+    @staticmethod
+    def _fresh_ac_settings() -> dict:
+        """The air conditioner's `settings`, FRESH on every call.
+
+        A class attribute holding these would be copied by `dict(...)` one level
+        deep only, so every test would share the same mutable `Param` objects and
+        inherit whatever the previous send left in them. The louvre repair test
+        is the one that would rot: `windDirectionVertical` arriving already at
+        "2" makes it assert that the sanitizer did something it no longer had to
+        do, and it would keep passing after the sanitizer was removed. Test order
+        is not a contract, so the fixture must not depend on it.
+
+        Mirrors the part of the AS35PBPHRA-PRE schema that matters here: the
+        toggled flag, a louvre parameter the sanitizer has to repair, and two
+        unrelated siblings that must still travel.
+        """
+        return {
+            "lightStatus": Param("0"),
+            "windDirectionVertical": Param("0", values=["2", "4", "8"]),
+            "machMode": Param("1"),
+            "tempSel": Param("22"),
+        }
 
     async def test_an_ac_toggle_still_sends_the_whole_settings_group(self) -> None:
-        switches, command = await self._switches("AC", "ac-1", dict(self._AC_SETTINGS))
+        switches, command = await self._switches("AC", "ac-1", self._fresh_ac_settings())
         light = next(s for s in switches if s._attr_unique_id == "ac-1_light")
         await light.async_turn_on()
         self.assertEqual(
@@ -1014,7 +1027,7 @@ class SettingsSwitchChannelTest(unittest.IsolatedAsyncioTestCase):
         # The concrete harm of a sparse conversion, stated on its own: the louvre
         # value the device reports while it is off is not in its own enum, and the
         # cloud rejects a command carrying it. A one-key payload cannot repair it.
-        switches, command = await self._switches("AC", "ac-1", dict(self._AC_SETTINGS))
+        switches, command = await self._switches("AC", "ac-1", self._fresh_ac_settings())
         light = next(s for s in switches if s._attr_unique_id == "ac-1_light")
         await light.async_turn_off()
         self.assertIn("windDirectionVertical", command.sent)

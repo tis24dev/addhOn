@@ -164,6 +164,7 @@ _install_platform_stubs()
 
 from homeassistant.exceptions import HomeAssistantError  # noqa: E402
 
+from custom_components.addhon import hood  # noqa: E402
 from custom_components.addhon.const import APPLIANCE_HO  # noqa: E402
 
 # The live `settings` command of the reporting hood, verbatim from the dump apart
@@ -531,6 +532,108 @@ class HoodFanPercentageTest(unittest.IsolatedAsyncioTestCase):
         added = await _build("fan", _entry_data(attributes))
         self.assertIsNone(added[0].percentage)
         self.assertIsNone(added[0].is_on)
+
+
+class HoodFanSteppedGridTest(unittest.IsolatedAsyncioTestCase):
+    """A hood whose wind speed advances in steps larger than 1.
+
+    The hood of issue #83 declares `incrementValue: "1"`, so every integer between
+    the bounds is legal there and the increment could be dropped without anyone
+    noticing. A hood declaring 0..6 step 2 accepts 0, 2, 4 and 6 and REFUSES 1, 3
+    and 5: modelling it as six selectable levels puts three phantom notches on the
+    slider and turns most of the slider into a command the device rejects.
+    Reported independently by two reviewers on PR #87.
+
+    The grid is enumerated from the device's own lower bound, not from
+    `HOOD_MIN_SPEED`: walking 1, 3, 5 from 1 would be just as off-grid as
+    interpolating, and it would look right in a test that only counted the levels.
+    """
+
+    _STEPPED = {
+        "typology": "range", "category": "command", "mandatory": 0,
+        "minimumValue": "0", "maximumValue": "6", "incrementValue": "2",
+        "defaultValue": "0",
+    }
+
+    async def _fan(self, wind_speed=0, client=None):
+        params = dict(HOOD_SETTINGS_PARAMS)
+        params["windSpeed"] = self._STEPPED
+        attributes = copy.deepcopy(HOOD_ATTRIBUTES)
+        attributes["windSpeed"] = wind_speed
+        data = _entry_data(attributes, appliance=_appliance(params))
+        added = await _build("fan", data, client=client)
+        return added[0]
+
+    def test_the_levels_are_the_declared_grid(self) -> None:
+        params = dict(HOOD_SETTINGS_PARAMS)
+        params["windSpeed"] = self._STEPPED
+        self.assertEqual((2, 4, 6), hood.speed_levels(_appliance(params)))
+
+    async def test_three_legal_levels_become_three_steps(self) -> None:
+        fan_entity = await self._fan()
+        self.assertEqual(3, fan_entity.speed_count)
+
+    async def test_every_percentage_writes_a_level_the_schema_declares(self) -> None:
+        # The whole point: NO write may land between two legal levels.
+        for percent in range(1, 101):
+            fan_entity = await self._fan(client=RunningClient())
+            await fan_entity.async_set_percentage(percent)
+            sent = fan_entity._appliance.api.sent[-1]["parameters"]["windSpeed"]
+            self.assertIn(sent, {"2", "4", "6"}, percent)
+
+    async def test_the_grid_round_trips(self) -> None:
+        for level in (2, 4, 6):
+            fan_entity = await self._fan(level, client=RunningClient())
+            await fan_entity.async_set_percentage(fan_entity.percentage)
+            sent = fan_entity._appliance.api.sent[-1]["parameters"]["windSpeed"]
+            self.assertEqual(str(level), sent, level)
+
+    async def test_turning_on_bare_uses_the_lowest_LEGAL_level(self) -> None:
+        # Not HOOD_MIN_SPEED: 1 is not a value this hood accepts.
+        fan_entity = await self._fan(client=RunningClient())
+        await fan_entity.async_turn_on()
+        sent = fan_entity._appliance.api.sent[-1]["parameters"]["windSpeed"]
+        self.assertEqual("2", sent)
+
+    async def test_an_off_grid_reading_is_placed_without_raising(self) -> None:
+        # A firmware is free to report a level the writable range does not list.
+        # `percentage` must survive it: a property that raises takes the entity
+        # down, and the reading is already the device's own inconsistency.
+        fan_entity = await self._fan(3)
+        self.assertIn(fan_entity.percentage, {33, 66})
+        self.assertIs(True, fan_entity.is_on)
+
+
+class HoodFanStepOneUnchangedTest(unittest.IsolatedAsyncioTestCase):
+    """The step-1 hood must convert EXACTLY as it did before the grid landed.
+
+    The percentage axis moved from the ranged helpers to the ordered-list ones,
+    which agree on a contiguous 1..N list and diverge on everything else. This
+    pins the agreement on the hood we actually have a dump for, so a later change
+    to the conversion cannot quietly shift the hood of issue #83 by one notch.
+    """
+
+    async def _fan(self, wind_speed, client=None):
+        attributes = copy.deepcopy(HOOD_ATTRIBUTES)
+        attributes["windSpeed"] = wind_speed
+        added = await _build("fan", _entry_data(attributes), client=client)
+        return added[0]
+
+    async def test_the_five_levels_keep_their_percentages(self) -> None:
+        for level, percent in ((1, 20), (2, 40), (3, 60), (4, 80), (5, 100)):
+            fan_entity = await self._fan(level)
+            self.assertEqual(percent, fan_entity.percentage, level)
+
+    async def test_the_percentage_boundaries_keep_their_levels(self) -> None:
+        for percent, level in (
+            (1, "1"), (20, "1"), (21, "2"), (40, "2"),
+            (41, "3"), (60, "3"), (61, "4"), (80, "4"),
+            (81, "5"), (100, "5"),
+        ):
+            fan_entity = await self._fan(0, client=RunningClient())
+            await fan_entity.async_set_percentage(percent)
+            sent = fan_entity._appliance.api.sent[-1]["parameters"]["windSpeed"]
+            self.assertEqual(level, sent, percent)
 
 
 class HoodFanWriteTest(unittest.IsolatedAsyncioTestCase):

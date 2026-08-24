@@ -423,7 +423,10 @@ class Tier2TableTest(unittest.TestCase):
         # of #84.3 arrived.
         zones = range(1, 7)
         self.assertEqual(
-            [f"temp_zone{z}" for z in range(1, 6)]
+            # sensorTempZ{N} covers the same six zones as every other per-zone
+            # family: the table used to stop at five, so a hob reporting
+            # sensorTempZ6 got no temp_zone6 (PR #87 review).
+            [f"temp_zone{z}" for z in zones]
             + [f"power_zone{z}" for z in zones]
             + [f"plate_temp_zone{z}" for z in zones]
             + [f"program_code_zone{z}" for z in zones]
@@ -525,6 +528,27 @@ class HobZoneReadingsTest(unittest.IsolatedAsyncioTestCase):
             e for e in added if e._attr_unique_id == "x-1_remaining_time_zone1"
         )
         self.assertEqual(90, remaining.native_value)
+
+    async def test_a_non_finite_half_reads_unknown_rather_than_raising(self) -> None:
+        """`float("nan")` parses; `int()` of it does not.
+
+        The guard used to wrap only the two `float()` calls, so a device sending
+        "nan" or "inf" reached `int()` unprotected: ValueError on the first,
+        OverflowError on the second, both escaping a PROPERTY. Home Assistant
+        surfaces that as a broken entity, which is a worse answer than "unknown"
+        to a reading the device itself could not express. Reported on PR #87.
+        """
+        for hours, minutes in (
+            ("nan", 30), (1, "nan"), ("inf", 30), (1, "-inf"), ("nan", "nan"),
+        ):
+            attributes = dict(
+                HOB_ATTRIBUTES, remainingTimeHHZ1=hours, remainingTimeMMZ1=minutes
+            )
+            added = await _build_sensors("IH", attributes)
+            remaining = next(
+                e for e in added if e._attr_unique_id == "x-1_remaining_time_zone1"
+            )
+            self.assertIsNone(remaining.native_value, (hours, minutes))
 
     async def test_the_remaining_time_needs_both_halves_to_exist(self) -> None:
         # Half a clock is worse than none: the minute half alone reads 5 minutes

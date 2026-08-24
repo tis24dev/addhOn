@@ -451,6 +451,14 @@ def _install_percentage_util_stub() -> None:
     look exact here and land one step off on a real hood. `states_in_range` counts
     the endpoints (range (1, 5) holds five speeds, not four), which is precisely
     the off-by-one an ad-hoc `value / max * 100` gets wrong.
+
+    The ordered-list pair is what the hood fan actually converts with, because a
+    hood declares a wind-speed GRID and not merely two endpoints: a range of 0..6
+    with increment 2 offers three speeds, and interpolating between them produces
+    values the schema rejects. `percentage_to_ordered_list_item` rounds UP by
+    construction -- the first item whose upper bound reaches the percentage wins --
+    which is the property the fan relies on so that no non-zero request becomes a
+    silent no-op.
     """
     util = _ensure_module("homeassistant.util")
     sys.modules["homeassistant"].util = util
@@ -474,8 +482,30 @@ def _install_percentage_util_stub() -> None:
     percentage.ranged_value_to_percentage = getattr(
         percentage, "ranged_value_to_percentage", ranged_value_to_percentage
     )
+    def ordered_list_item_to_percentage(ordered_list, item):
+        if item not in ordered_list:
+            raise ValueError(f'The item "{item}" is not in "{ordered_list}"')
+        list_len = len(ordered_list)
+        list_position = list(ordered_list).index(item) + 1
+        return (list_position * 100) // list_len
+
+    def percentage_to_ordered_list_item(ordered_list, percentage_value):
+        if not (list_len := len(ordered_list)):
+            raise ValueError("The ordered list is empty")
+        for offset, item in enumerate(ordered_list):
+            upper_bound = ((offset + 1) * 100) // list_len
+            if percentage_value <= upper_bound:
+                return item
+        return ordered_list[-1]
+
     percentage.percentage_to_ranged_value = getattr(
         percentage, "percentage_to_ranged_value", percentage_to_ranged_value
+    )
+    percentage.ordered_list_item_to_percentage = getattr(
+        percentage, "ordered_list_item_to_percentage", ordered_list_item_to_percentage
+    )
+    percentage.percentage_to_ordered_list_item = getattr(
+        percentage, "percentage_to_ordered_list_item", percentage_to_ordered_list_item
     )
 
 

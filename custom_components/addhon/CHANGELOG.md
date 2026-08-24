@@ -9,6 +9,8 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 ## [Unreleased]
 
+## [5.18.0] - 2026-08-24
+
 **New Features**
 
 - Cooker hoods (`HO`) gain their first controls (#83): a fan entity for the extraction

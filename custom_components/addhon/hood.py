@@ -80,22 +80,30 @@ HOOD_ENTITY_PARAMS = frozenset(
 HOOD_MIN_SPEED = 1
 
 
-def speed_range(appliance) -> tuple[int, int] | None:
-    """Speed axis (lowest, highest) of this hood, or None when it has none.
+def speed_levels(appliance) -> tuple[int, ...] | None:
+    """Every wind-speed level this hood declares as writable, lowest first.
 
     Read from the LIVE `settings.windSpeed` bounds, which is also the capability
     gate of the fan entity: a hood that does not declare the parameter as a
     writable range gets no fan rather than a control that writes into nothing.
 
-    The lower bound is raised to `HOOD_MIN_SPEED` because the schema counts the
-    stopped state (0) among its values while the percentage axis must not; the
-    upper bound is whatever the device declares. `model_attributes.speedLevel`
-    reports the same 5 on the hood of issue #83, but it is a catalogue value and
-    the schema is the operative one.
+    THE DECLARED INCREMENT IS PART OF THE GRID, not a detail to round away. A
+    hood declaring 0..6 step 2 accepts 0, 2, 4 and 6 and refuses everything in
+    between, so the levels are enumerated from the device's own low bound and
+    only then filtered: walking from `HOOD_MIN_SPEED` instead would produce
+    1/3/5, three values that hood rejects. The hood of issue #83 declares step 1
+    and is unaffected either way, which is exactly why the grid has to come from
+    the schema rather than from what that one device happens to report.
 
-    Returns None for a degenerate range (no step between the bounds), so a
-    firmware that pinned `windSpeed` to a single value loses the fan instead of
-    shipping a slider with one position.
+    Levels below `HOOD_MIN_SPEED` are dropped because the schema counts the
+    stopped state (0) among its values while the percentage axis must not: Home
+    Assistant expresses "stopped" as `percentage = 0` / `turn_off`, never as a
+    speed step. `model_attributes.speedLevel` reports the same 5 on the hood of
+    issue #83, but it is a catalogue value and the schema is the operative one.
+
+    Returns None for a degenerate axis (fewer than two levels), so a firmware
+    that pinned `windSpeed` to a single value loses the fan instead of shipping a
+    slider with one position.
     """
     param = command_param(appliance, HOOD_SETTINGS_COMMAND, HOOD_SPEED_PARAM)
     if param is None:
@@ -103,12 +111,17 @@ def speed_range(appliance) -> tuple[int, int] | None:
     bounds = param_range(param)
     if bounds is None:
         return None
-    low, high, _step = bounds
-    lowest = max(int(low), HOOD_MIN_SPEED)
-    highest = int(high)
-    if highest <= lowest:
-        return None
-    return lowest, highest
+    low, high, step = bounds
+    # A missing, zero or fractional increment falls back to 1: the schema counts
+    # wind speeds in whole steps, and a range that cannot say how wide its own
+    # step is has told us nothing that beats the obvious default.
+    increment = int(step) if step and step >= 1 else 1
+    levels = tuple(
+        value
+        for value in range(int(low), int(high) + 1, increment)
+        if value >= HOOD_MIN_SPEED
+    )
+    return levels if len(levels) > 1 else None
 
 
 def speed_level(raw) -> int | None:

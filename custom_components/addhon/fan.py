@@ -24,7 +24,6 @@ also travel by two different senders, and `HonHoodFan._send` says why.
 from __future__ import annotations
 
 import logging
-import math
 
 from homeassistant.components.fan import FanEntity, FanEntityFeature
 from homeassistant.config_entries import ConfigEntry
@@ -32,8 +31,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util.percentage import (
-    percentage_to_ranged_value,
-    ranged_value_to_percentage,
+    ordered_list_item_to_percentage,
+    percentage_to_ordered_list_item,
 )
 
 from .air_purifier import (
@@ -54,7 +53,7 @@ from .hood import (
     HOOD_SPEED_PARAM,
     HOOD_STOP_COMMAND,
     speed_level,
-    speed_range,
+    speed_levels,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -94,8 +93,8 @@ def _hood_fan(coordinator, appliance_id: str, data: dict, client):
     hood that never reached this branch look identical from a field report, and
     the schema bounds are the only input that decides between them.
     """
-    bounds = speed_range(data.get("appliance"))
-    if bounds is None:
+    levels = speed_levels(data.get("appliance"))
+    if levels is None:
         _LOGGER.debug(
             "Fan debug: skip hood id=%s (no writable '%s' range on the '%s' command)",
             redact_id(appliance_id),
@@ -103,7 +102,7 @@ def _hood_fan(coordinator, appliance_id: str, data: dict, client):
             HOOD_SETTINGS_COMMAND,
         )
         return None
-    return HonHoodFan(coordinator, appliance_id, bounds, client)
+    return HonHoodFan(coordinator, appliance_id, levels, client)
 
 
 async def async_setup_entry(
@@ -337,24 +336,26 @@ class HonHoodFan(HonBaseEntity, FanEntity):
         self,
         coordinator,
         appliance_id: str,
-        speed_bounds: tuple[int, int],
+        levels: tuple[int, ...],
         client=None,
     ) -> None:
         super().__init__(coordinator, appliance_id, client)
-        self._speed_bounds = speed_bounds
-        lowest, highest = speed_bounds
-        # `speed_count` is the number of SELECTABLE steps, endpoints included, so
-        # Home Assistant renders one slider notch per real level. Deriving it from
-        # the bounds rather than from the top value keeps a hypothetical hood whose
-        # range does not start at 1 honest.
-        self._attr_speed_count = highest - lowest + 1
+        self._levels = levels
+        lowest, highest = levels[0], levels[-1]
+        # `speed_count` is the number of SELECTABLE steps, so Home Assistant
+        # renders one slider notch per real level. Counted from the enumerated
+        # grid rather than from the distance between the endpoints: on a hood
+        # declaring an increment above 1 the two disagree, and it is the grid
+        # that the device will accept.
+        self._attr_speed_count = len(levels)
         self._attr_unique_id = f"{appliance_id}_hood"
         _LOGGER.debug(
-            "Fan debug: initialized hood fan id=%s speeds=%s..%s (%d steps)",
+            "Fan debug: initialized hood fan id=%s speeds=%s..%s (%d steps: %s)",
             redact_id(appliance_id),
             lowest,
             highest,
             self._attr_speed_count,
+            levels,
         )
 
     @property
@@ -379,22 +380,31 @@ class HonHoodFan(HonBaseEntity, FanEntity):
             return None
         if level <= 0:
             return 0
-        return min(100, ranged_value_to_percentage(self._speed_bounds, level))
+        if level in self._levels:
+            return ordered_list_item_to_percentage(self._levels, level)
+        # Off-grid reading: snap to the nearest declared level instead of letting
+        # `ordered_list_item_to_percentage` raise on a value it cannot place. A
+        # property that raises takes the entity down; a percentage that is one
+        # notch off on a reading the device should never have sent does not.
+        nearest = min(self._levels, key=lambda declared: abs(declared - level))
+        return ordered_list_item_to_percentage(self._levels, nearest)
 
     async def async_set_percentage(self, percentage: int) -> None:
         """Set the extraction level; 0 means stop, as Home Assistant defines it."""
         if percentage == 0:
             await self.async_turn_off()
             return
-        lowest, highest = self._speed_bounds
-        # Rounded UP so that any non-zero request produces a moving fan: rounding
-        # to nearest would turn the bottom slice of the slider into a silent
-        # no-op that reads as "the integration ignored me".
-        level = math.ceil(percentage_to_ranged_value(self._speed_bounds, percentage))
+        # Rounds UP by construction (`ceil(percentage * len / 100)`), so any
+        # non-zero request produces a moving fan: rounding to nearest would turn
+        # the bottom slice of the slider into a silent no-op that reads as "the
+        # integration ignored me". Picking from the enumerated grid also means the
+        # value sent is always one the schema declares, never an interpolation
+        # between two legal steps.
+        level = percentage_to_ordered_list_item(self._levels, percentage)
         await self._send(
             "set_percentage",
             HOOD_SETTINGS_COMMAND,
-            {HOOD_SPEED_PARAM: str(max(lowest, min(highest, level)))},
+            {HOOD_SPEED_PARAM: str(level)},
         )
 
     async def async_turn_on(
@@ -412,7 +422,7 @@ class HonHoodFan(HonBaseEntity, FanEntity):
         await self._send(
             "turn_on",
             HOOD_SETTINGS_COMMAND,
-            {HOOD_SPEED_PARAM: str(self._speed_bounds[0])},
+            {HOOD_SPEED_PARAM: str(self._levels[0])},
         )
 
     async def async_turn_off(self, **kwargs) -> None:

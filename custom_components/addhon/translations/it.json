@@ -304,6 +304,9 @@
       "temp_zone5": {
         "name": "Temperatura Zona 5"
       },
+      "temp_zone6": {
+        "name": "Temperatura Zona 6"
+      },
       "temp_upper": {
         "name": "Temperatura Zona Superiore"
       },

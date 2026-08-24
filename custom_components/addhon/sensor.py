@@ -783,6 +783,7 @@ _HOB: tuple[HonSensorEntityDescription, ...] = (
     _g_temp("temp_zone3", "sensorTempZ3"),
     _g_temp("temp_zone4", "sensorTempZ4"),
     _g_temp("temp_zone5", "sensorTempZ5"),
+    _g_temp("temp_zone6", "sensorTempZ6"),
     # The power LEVEL of each zone, 0..`model_attributes.power` (15 on the
     # reporting hob). No device_class and no unit: these are panel steps, not
     # watts, and POWER would make Home Assistant render "15 W" for a zone drawing
@@ -1378,12 +1379,20 @@ class HonHobZoneRemainingTime(HonBaseEntity, SensorEntity):
 
     @property
     def native_value(self):
+        # The int() conversions belong INSIDE the guard, not after it. float()
+        # accepts "nan" and "inf" happily and only int() rejects them, with
+        # ValueError on the first and OverflowError on the second -- both of which
+        # used to escape a PROPERTY, which Home Assistant surfaces as a broken
+        # entity. Folding them in here answers "unknown" instead, which is what a
+        # reading the device could not express actually means. Catching the two
+        # errors is what does the work: an explicit isfinite() check on top would
+        # be unreachable, and an unreachable guard is one no test can defend.
         try:
             hours = float(self._get_attr(self._hours_key))
             minutes = float(self._get_attr(self._minutes_key))
-        except (ValueError, TypeError):
+            return int(hours) * 60 + int(minutes)
+        except (ValueError, TypeError, OverflowError):
             return None
-        return int(hours) * 60 + int(minutes)
 
 
 class HonDebugStatusSensor(HonAccountEntity, SensorEntity):
