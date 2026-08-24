@@ -1,7 +1,8 @@
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Haier hOn select - washer program selection + writable program options."""
+"""Haier hOn select: washer programs, writable program options, AC louvres,
+purifier aroma and panel light, and the induction hob's intake limit."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ import logging
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -38,6 +40,8 @@ from .const import (
     APPLIANCE_AP,
     APPLIANCE_FR,
     APPLIANCE_FRE,
+    APPLIANCE_HOB,
+    APPLIANCE_IH,
     APPLIANCE_REF,
     APPLIANCE_TD,
     APPLIANCE_WASH_GROUP,
@@ -57,6 +61,7 @@ from .const import (
     TEMP_LEVEL_LABELS,
 )
 from .debug_utils import redact_id, redact_store
+from .hob import HOB_POWER_LIMIT_PARAM, HOB_SETTINGS_COMMAND, power_limit_levels
 from .hon_commands import async_send_command, command_param, param_range
 from .program_labels import for_coordinator
 from .ac_command import async_send_settings, param_allowed_values, settings_param
@@ -327,6 +332,38 @@ async def async_setup_entry(
                     capabilities.supports_light,
                     sorted(capabilities.light_values),
                     reports_attribute(attributes, _LIGHT_ATTR),
+                )
+            continue
+        if app_type in (APPLIANCE_IH, APPLIANCE_HOB):
+            # The hob's only writable control (#84.1). Capability-gated on the live
+            # schema; the kW labels come from the model catalogue's `series`.
+            model_attributes = getattr(appliance, "model_attributes", None)
+            series = (
+                model_attributes.get("series")
+                if isinstance(model_attributes, dict)
+                else None
+            )
+            levels = power_limit_levels(appliance, series)
+            if levels:
+                entities.append(
+                    HonHobPowerLimitSelect(
+                        coordinator, appliance_id, levels, client
+                    )
+                )
+                _LOGGER.info(
+                    "Added hob power-limit select: id=%s", redact_id(appliance_id)
+                )
+            else:
+                _LOGGER.debug(
+                    "Select debug: no hob power-limit select for id=%s "
+                    "(series=%s params=%s)",
+                    redact_id(appliance_id),
+                    series,
+                    _param_names(
+                        getattr(appliance, "commands", {}).get(HOB_SETTINGS_COMMAND)
+                        if isinstance(getattr(appliance, "commands", None), dict)
+                        else None
+                    ),
                 )
             continue
         if app_type == APPLIANCE_AC:
@@ -1036,6 +1073,118 @@ class HonAcDirectionSelect(HonBaseEntity, SelectEntity):
             _LOGGER.error(
                 "Select: AC %s set error %s=%s: %s",
                 self._desc.key, self._desc.param, raw, err, exc_info=True,
+            )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
+
+
+class HonHobPowerLimitSelect(HonBaseEntity, SelectEntity):
+    """The intake LIMIT of an induction hob, in kW (#84.1).
+
+    A select and not a number, following the same reasoning that turned the air
+    purifier's panel light into one: the parameter declares a handful of named
+    positions with known labels, and a slider would invite values between them
+    that the device does not honour. Here the labels are the whole point -- a bare
+    "3" says nothing, "4.5 kW" is the number on the user's meter.
+
+    NEVER called "power". `powerManagement` caps what the whole hob may draw; it is
+    not the power of a zone, and `model_attributes.power` is a third quantity again
+    (the panel steps of one zone). Lowering the limit while cooking reduces what
+    the zones can draw, so the label has to say limit or the control lies.
+
+    NOT gated on `remoteCtrValid`. The reporting hob has it at 0 and its writes may
+    well be refused, but this integration's policy is to let a refusal surface as
+    the dispatcher's localized `command_rejected` rather than to hide a control on
+    a flag no other writable entity consults. Changing that is a decision for every
+    writable entity at once, not for this one.
+    """
+
+    _attr_translation_key = "power_limit"
+    _attr_icon = "mdi:speedometer-slow"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        levels: dict[str, str],
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        # Device order, not sorted: the schema lists the levels from no limit
+        # upwards, which is the order the app shows and the order a user expects.
+        self._raw_to_key = dict(levels)
+        self._key_to_raw = {key: raw for raw, key in self._raw_to_key.items()}
+        self._attr_options = list(self._raw_to_key.values())
+        self._attr_unique_id = f"{appliance_id}_power_limit"
+        _LOGGER.debug(
+            "Select debug: init hob power-limit select id=%s options=%s",
+            redact_id(appliance_id),
+            self._attr_options,
+        )
+
+    @property
+    def current_option(self) -> str | None:
+        """The live level, or None when it is one this hob's scale does not name.
+
+        Never a false map and never a raise: a firmware reporting a level outside
+        the ones it declares reads as unknown, exactly like the AC direction
+        selects do with an out-of-enum louvre position.
+        """
+        raw = self._get_attr(HOB_POWER_LIMIT_PARAM)
+        if raw is None:
+            return None
+        return self._raw_to_key.get(normalize_code(raw))
+
+    async def async_select_option(self, option: str) -> None:
+        raw = self._key_to_raw.get(option)
+        if raw is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_setpoint",
+                translation_placeholders={
+                    "value": option,
+                    "allowed": ", ".join(self._attr_options),
+                },
+            )
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        try:
+            _LOGGER.info(
+                "Select: hob power limit -> %s=%s id=%s",
+                HOB_POWER_LIMIT_PARAM,
+                raw,
+                redact_id(self._appliance_id),
+            )
+            # The settings command, with the ONE parameter this write is about.
+            # `category` is never named: it is a dispatcher selector key, and
+            # asking for it by name would make the engine swap the active command
+            # category permanently. See hood.py for the full argument.
+            await async_send_command(
+                self.hass,
+                client,
+                appliance,
+                HOB_SETTINGS_COMMAND,
+                {HOB_POWER_LIMIT_PARAM: raw},
+            )
+            await self._async_request_command_refresh()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error(
+                "Select: hob power limit set error %s=%s: %s",
+                HOB_POWER_LIMIT_PARAM,
+                raw,
+                err,
+                exc_info=True,
             )
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

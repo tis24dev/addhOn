@@ -644,7 +644,7 @@ def _mapped_sets(
     mapped_params: set[str] = set()
     sources: dict[str, dict[str, list[str]] | None] = {}
     unavailable: list[str] = []
-    # Eight imports, eight guards. Written out rather than driven by a table of
+    # Nine imports, nine guards. Written out rather than driven by a table of
     # module/name strings on purpose: `from .sensor import SENSORS` is a spelling
     # a linter, a grep and `rename` all understand, and this walk is already one
     # rename away from silently collapsing a numerator (there is no test that can
@@ -654,6 +654,11 @@ def _mapped_sets(
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
         AP_ENTITY_PARAMS = frozenset()
         _note_missing_registry("air_purifier", unavailable)
+    try:
+        from .hob import HOB_ENTITY_PARAMS
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        HOB_ENTITY_PARAMS = frozenset()
+        _note_missing_registry("hob", unavailable)
     try:
         from .hood import HOOD_ENTITY_PARAMS
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
@@ -835,6 +840,13 @@ def _mapped_sets(
         # reported unmapped on every hob dump while `entities.sources` two
         # sections below named the sensors that read them.
         mapped_attrs |= HOB_ZONE_TIME_ATTRS
+        # The intake-limit select is a fixed-key entity, so the same applies to
+        # the one parameter a hob lets anyone write.
+        mapped_attrs |= HOB_ENTITY_PARAMS
+        mapped_params |= HOB_ENTITY_PARAMS
+        sources["select.power_limit"] = _source_row(
+            read=_read_chain("powerManagement"), write=["powerManagement"]
+        )
         for zone in sorted(
             {name.rsplit("Z", 1)[1] for name in HOB_ZONE_TIME_ATTRS}, key=int
         ):

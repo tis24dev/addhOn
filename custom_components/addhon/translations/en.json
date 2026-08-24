@@ -1036,6 +1036,21 @@
           "position_6": "Position 6",
           "swing": "Swing"
         }
+      },
+      "power_limit": {
+        "name": "Power intake limit",
+        "state": {
+          "no_limit": "No limit",
+          "kw_2_5": "2.5 kW",
+          "kw_3_5": "3.5 kW",
+          "kw_4_5": "4.5 kW",
+          "kw_5_5": "5.5 kW",
+          "kw_6_5": "6.5 kW",
+          "kw_2_0": "2.0 kW",
+          "kw_3_0": "3.0 kW",
+          "kw_6_8": "6.8 kW",
+          "kw_7_2": "7.2 kW"
+        }
       }
     },
     "button": {

@@ -252,6 +252,7 @@ def _collect_code_keys() -> dict[str, set[str]]:
             "ref_program",
             select.HonAirPurifierAromaSelect._attr_translation_key,
             select.HonAirPurifierPanelLightSelect._attr_translation_key,
+            select.HonHobPowerLimitSelect._attr_translation_key,
         }
         | {d.translation_key for d in select._PROGRAM_OPTION_SELECTS}
         | {d.translation_key for d in select._AC_DIRECTION_SELECTS}

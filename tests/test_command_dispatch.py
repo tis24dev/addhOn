@@ -36,6 +36,16 @@ _EXPECTED_LEGACY_CALL_EDGES = {
     "climate.py": {
         "HaierClimateEntity.async_set_hvac_mode": ("async_send_command",),
     },
+    # The cooker hood writes its speed on the settings command and its stop on
+    # stopProgram, both through the legacy sender. Deliberate, and argued in
+    # hood.py: the transactional dispatcher would be the natural choice, but the
+    # hood's proven-executed payload is the FULL stopProgram the device declares,
+    # and its speed parameter lives on a categorised settings command whose
+    # selector must never be named. The purifier fan in the same module stays on
+    # the dispatcher and a test in test_air_purifier_entities pins that.
+    "fan.py": {
+        "HonHoodFan._send": ("async_send_command",),
+    },
     "number.py": {
         "HonNumber.async_set_native_value": ("async_send_command",),
     },
@@ -45,6 +55,7 @@ _EXPECTED_LEGACY_CALL_EDGES = {
     },
     "select.py": {
         "HonRefProgramSelect.async_select_option": ("async_send_command",),
+        "HonHobPowerLimitSelect.async_select_option": ("async_send_command",),
     },
     "switch.py": {
         "HonWashingMachinePauseSwitch._send_pause_command._do": (
