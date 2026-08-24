@@ -33,7 +33,7 @@ from .connection import HonConnection
 from .parse import APPLIANCE_LIST_PATH, parse_appliance_list, probe_appliance_list
 from .tokens import token_person_account_id
 from .values import API_URL
-from ...debug_utils import redact_identity
+from ...debug_utils import redact_identity, structure_only
 from ...error_codes import APPLIANCE_LIST_EMPTY, classify
 
 _LOGGER = logging.getLogger(__name__)
@@ -332,17 +332,28 @@ class HonApi:
                 census.get("auth_keys"),
                 census.get("account"),
             )
-            # WARNING, not DEBUG. This is the line the investigation asked for about ten
-            # times and never got, because it required the reporter to enable a toggle
-            # BEFORE a reload -- the appliance-list call happens once, during setup, so
-            # turning debug on afterwards captures nothing. The cost of raising it is
-            # bounded by the branch it sits in: it prints only when the list is empty,
-            # which is when the body is small, and never on a working install.
-            # `redact_identity` keeps the structure and masks the identity values.
+            # WARNING, not DEBUG. This is the artefact the investigation asked for about
+            # ten times and never got, because it required the reporter to enable a
+            # toggle BEFORE a reload -- the appliance-list call happens once, during
+            # setup, so turning debug on afterwards captures nothing.
+            #
+            # SHAPE, not the redacted body. `redact_identity` is a blacklist keyed on
+            # names, and a blacklist is always one vendor spelling behind: `token` was
+            # in it and `cognitoTokenNew` -- the replacement bearer credential the
+            # aggregator returns inside `authInfo` -- was not. Promoting a
+            # masked-by-blacklist body to a level meant for pasting into public issues
+            # is the wrong trade; `structure_only` copies no leaf value at all, so
+            # there is nothing left to have forgotten to mask.
+            #
+            # It costs almost nothing HERE, which is why it is affordable: this branch
+            # fires when `appliances` is `[]`, so the body carries no appliance data to
+            # begin with. What survives is the envelope -- both `success` flags, the
+            # shape of `payload`, how many keys `authInfo` holds -- which is precisely
+            # what "why is the list empty" is asking about.
             try:
-                _LOGGER.warning("hOn raw appliance response: %s", redact_identity(result))
+                _LOGGER.warning("hOn appliance response shape: %s", structure_only(result))
             except Exception:  # noqa: BLE001 - a log line must never abort a setup
-                _LOGGER.warning("hOn raw appliance response: <unreadable>", exc_info=True)
+                _LOGGER.warning("hOn appliance response shape: <unreadable>", exc_info=True)
         return appliances
 
     async def load_commands(self, appliance: Any) -> dict:

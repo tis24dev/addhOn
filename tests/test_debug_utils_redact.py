@@ -266,6 +266,23 @@ class IdentityKeysBehaviouralTest(unittest.TestCase):
         "password", "token", "access_token", "refresh_token",
         "authorization", "secret",
         "transactionid", "transaction_id", "mobileid", "mobile_id",
+        # The appliance-list envelope, captured live 2026-08-24: every element carries
+        # the owning Salesforce account and the DynamoDB keys, whose PK IS the cognito
+        # identity (`user#<region>:<identity>`) in plain text under two letters.
+        "sfpersonaccountid", "personaccountid", "personcontactid",
+        "pk", "sk", "applianceid", "eepromid",
+    )
+
+    # Keys no exact set would have contained, masked by the substring rule. Named the
+    # same way and for the same reason: a loop over _IDENTITY_KEY_PARTS would prove the
+    # rule fires without proving it fires on the SPELLING the cloud actually sends.
+    _MUST_MASK_BY_PART = (
+        "cognitoTokenNew",   # the one that proved the exact set insufficient
+        "cognitoToken",
+        "idToken",
+        "sfAccessToken",
+        "userPassword",
+        "clientSecret",
     )
 
     def test_named_identity_keys_mask_their_value_on_the_log_path(self) -> None:
@@ -288,6 +305,33 @@ class IdentityKeysBehaviouralTest(unittest.TestCase):
                     self.assertEqual(
                         "***", nested["payload"][0]["attributes"][spelling]
                     )
+
+    def test_vendor_spellings_are_masked_by_the_substring_rule(self) -> None:
+        """`token` was in the set and `cognitoTokenNew` was not.
+
+        That gap was a bearer credential travelling unmasked into a WARNING this
+        project asks users to paste into public issues -- the aggregator returns a
+        replacement cognito token inside `modules.applianceList.authInfo`, and the
+        empty-list branch is exactly where that response gets logged.
+        """
+        for key in self._MUST_MASK_BY_PART:
+            with self.subTest(key=key):
+                self.assertTrue(debug_utils._is_identity_key(key))
+                nested = debug_utils.redact_identity(
+                    {"modules": {"applianceList": {"authInfo": {key: self._CANARY_VALUE}}}}
+                )
+                self.assertEqual(
+                    "***",
+                    nested["modules"]["applianceList"]["authInfo"][key],
+                )
+
+    def test_the_substring_rule_stays_narrow(self) -> None:
+        # A wider list would start masking the structure the logs exist to show. These
+        # are keys the envelope really carries and that must survive redaction.
+        for key in ("applianceTypeName", "modelName", "connectivity", "attributes",
+                    "success", "payload", "modules", "series", "brand"):
+            with self.subTest(key=key):
+                self.assertFalse(debug_utils._is_identity_key(key))
 
     def test_every_identity_key_has_a_behavioural_assertion(self) -> None:
         # The replacement for the old pin. This is still a set equality, but the

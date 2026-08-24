@@ -1177,12 +1177,37 @@ class FetchCensusEnvelopeTest(unittest.TestCase):
             "account=no_appliances",
         ):
             self.assertIn(fragment, summary)
-        # And the raw response is emitted at WARNING too, redacted: it is the one
-        # artefact that answers what is UNDER `payload`, which no census field can.
-        self.assertTrue(
-            any("hOn raw appliance response" in line for line in logs.output),
-            logs.output,
+        # And the response SHAPE is emitted at WARNING too: it is the one artefact
+        # that answers what is UNDER `payload`, which no census field can.
+        shape = next(
+            (line for line in logs.output if "appliance response shape" in line), None
         )
+        self.assertIsNotNone(shape, logs.output)
+        self.assertIn("<list of 0>", shape)
+
+    def test_the_shape_line_cannot_carry_a_bearer_token(self) -> None:
+        """The reason it is a shape and not a redacted body.
+
+        `redact_identity` matches key NAMES against a set, and no set enumerates a
+        vendor's naming: `token` was in it and `cognitoTokenNew` was not. That key is
+        the replacement cognito credential the aggregator returns inside
+        `modules.applianceList.authInfo`, and THIS branch is where the response is
+        logged -- at a level this project asks reporters to paste into public issues.
+        """
+        poisoned = reporter()
+        poisoned["modules"]["applianceList"]["authInfo"] = {
+            "cognitoTokenNew": "eyJhbGciOiJIUzI1NiJ9.CANARY-BEARER-CREDENTIAL.sig",
+            "sfPersonAccountId": "0011q00001CANARYAAA",
+        }
+        with self.assertLogs(
+            "custom_components.addhon.client.transport.api", level="WARNING"
+        ) as logs:
+            self._census(poisoned)
+        blob = "\n".join(logs.output)
+        self.assertNotIn("CANARY-BEARER-CREDENTIAL", blob)
+        self.assertNotIn("0011q00001CANARYAAA", blob)
+        # ...and the finding still travels: the census counts the keys it refused to name.
+        self.assertIn("auth_keys=2", blob)
 
     def test_a_failed_module_says_so_in_the_warning(self) -> None:
         # The reason the flag is worth logging at all: with `success: false` the list

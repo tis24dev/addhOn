@@ -85,8 +85,34 @@ _IDENTITY_KEYS = frozenset(
         "transaction_id",
         "mobileid",
         "mobile_id",
+        # Added after the appliance-list envelope was captured live: the cloud stamps
+        # each appliance with its owning Salesforce account and with DynamoDB keys whose
+        # PK is `user#<region>:<cognito-identity>` -- the identity itself, in plain text
+        # under a two-letter key no exact-name rule would have guessed.
+        "sfpersonaccountid",
+        "personaccountid",
+        "personcontactid",
+        "pk",
+        "sk",
+        "applianceid",
+        "eepromid",
     }
 )
+
+# Substring rule, applied to the lowercased key AFTER the exact set misses. The exact
+# set cannot enumerate a vendor's naming: `token` is in it and `cognitoTokenNew` is not,
+# which is how a bearer credential the aggregator returns inside `authInfo` would have
+# travelled unmasked into a log this project asks users to paste into public issues.
+# Kept deliberately short -- these three words do not appear in a benign key by accident,
+# and a wider list would start masking the structure the logs exist to show.
+_IDENTITY_KEY_PARTS = ("token", "password", "secret")
+
+
+def _is_identity_key(key) -> bool:
+    if not isinstance(key, str):
+        return False
+    lowered = key.lower()
+    return lowered in _IDENTITY_KEYS or any(p in lowered for p in _IDENTITY_KEY_PARTS)
 
 
 # A float holds every integer only up to 2**53. Past that, distinct integers share one
@@ -155,8 +181,10 @@ def _as_float(text: str) -> float | None:
 def redact_identity(obj):
     """Deep-copy a mapping/list masking identity/credential VALUES to '***'.
 
-    Redaction is keyed on the dict KEY name (exact, case-insensitive) against
-    _IDENTITY_KEYS. As a second layer, any MAC embedded in a STRING LEAF is masked
+    Redaction is keyed on the dict KEY name (case-insensitive) against _IDENTITY_KEYS
+    exactly, then against _IDENTITY_KEY_PARTS as a substring -- the second rule exists
+    because an exact set cannot enumerate a vendor's naming, and `cognitoTokenNew` is
+    the counter-example that proved it: `token` was in the set and that key was not. As a second layer, any MAC embedded in a STRING LEAF is masked
     too (same _MAC_RE as redact_topic) -- so identity that arrives where key-name
     redaction can't reach it (a bare list element, or a value under a benign key, e.g.
     a malformed MQTT `parameters` scalar -- CR#4) does not slip through. Non-MAC
@@ -166,11 +194,7 @@ def redact_identity(obj):
     """
     if isinstance(obj, dict):
         return {
-            key: (
-                _REDACTED
-                if isinstance(key, str) and key.lower() in _IDENTITY_KEYS
-                else redact_identity(val)
-            )
+            key: (_REDACTED if _is_identity_key(key) else redact_identity(val))
             for key, val in obj.items()
         }
     if isinstance(obj, (list, tuple)):
@@ -178,6 +202,50 @@ def redact_identity(obj):
     if isinstance(obj, str):
         return _MAC_RE.sub(_REDACTED, obj)
     return obj
+
+
+def structure_only(obj, _depth: int = 0):
+    """The SHAPE of a response: key names and value types, never a value.
+
+    `redact_identity` is a blacklist, and a blacklist is always one vendor spelling
+    behind -- `cognitoTokenNew` proved that at the cost of a bearer token nearly
+    reaching a public issue. Where a log is meant to be pasted in public, the shape is
+    the stronger contract: no leaf value is copied at all, so there is nothing to have
+    forgotten to mask.
+
+    It loses less than it sounds on the branch that uses it. The empty-list warning
+    fires when `appliances` is `[]`, so the response carries no appliance data to
+    begin with: what is left is the envelope, which is exactly what the question
+    "why is the list empty" is about.
+
+    Key NAMES are emitted, because they are the answer, and they are the same class of
+    value the ADDHON-210 line already prints as `result keys=`. A name that is itself
+    identity (a mapping keyed by MAC, an identity key holding a nested object) is
+    masked with the same rules as the values.
+
+    Depth-bounded so a self-referential or pathologically nested body cannot turn a log
+    line into a hang; the bound is generous next to the four levels the envelope has.
+    """
+    if _depth >= 8:
+        return "<deeper>"
+    if isinstance(obj, dict):
+        return {
+            (_REDACTED if _is_identity_key(key) else _MAC_RE.sub(_REDACTED, str(key))): (
+                _REDACTED
+                if _is_identity_key(key)
+                else structure_only(val, _depth + 1)
+            )
+            for key, val in obj.items()
+        }
+    if isinstance(obj, (list, tuple)):
+        # The length is the finding on this branch: `<list of 0>` IS the report.
+        if not obj:
+            return "<list of 0>"
+        return [f"<list of {len(obj)}>", structure_only(obj[0], _depth + 1)]
+    if isinstance(obj, bool) or obj is None:
+        # Booleans and null are the envelope's own verdicts (`success`), not data.
+        return obj
+    return f"<{type(obj).__name__}>"
 
 
 def redact_mac(mac: str | None) -> str | None:
