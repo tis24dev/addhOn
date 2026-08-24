@@ -36,13 +36,13 @@ _EXPECTED_LEGACY_CALL_EDGES = {
     "climate.py": {
         "HaierClimateEntity.async_set_hvac_mode": ("async_send_command",),
     },
-    # The cooker hood writes its speed on the settings command and its stop on
-    # stopProgram, both through the legacy sender. Deliberate, and argued in
-    # hood.py: the transactional dispatcher would be the natural choice, but the
-    # hood's proven-executed payload is the FULL stopProgram the device declares,
-    # and its speed parameter lives on a categorised settings command whose
-    # selector must never be named. The purifier fan in the same module stays on
-    # the dispatcher and a test in test_air_purifier_entities pins that.
+    # The cooker hood keeps ONE leg on the legacy sender: `stopProgram`, whose
+    # every parameter is `fixed`, so the whole-command send is byte-for-byte the
+    # payload this hood's command history shows it accepted AND executed. Its
+    # `settings` leg moved to the transactional dispatcher, because that group also
+    # holds three clock fields the device never mirrors back and a full-group send
+    # zeroed the hood's clock on every speed change. `HonHoodFan._send` argues both
+    # halves; the purifier fan in the same module has always dispatched.
     "fan.py": {
         "HonHoodFan._send": ("async_send_command",),
     },
@@ -1873,21 +1873,37 @@ def test_mixed_platform_legacy_classes_keep_the_legacy_sender() -> None:
 
     from custom_components.addhon import number, select
 
-    expected = {
-        switch.HonSettingsSwitch: "async_send_settings",
+    legacy_only = {
         switch.HonWashingMachinePauseSwitch: "run_command_sync",
         select.HonAcDirectionSelect: "async_send_settings",
         select.HonRefProgramSelect: "async_send_command",
-        number.HonNumber: "async_send_command",
         # Buffers onto startProgram instead of sending; the buffering IS its write
         # path, so losing it would be the same regression as losing a sender.
         number.HonProgramOptionNumber: "self._buffer(",
     }
-    for entity_class, legacy_callee in expected.items():
+    for entity_class, legacy_callee in legacy_only.items():
         source = inspect.getsource(entity_class)
         assert legacy_callee in source, entity_class.__name__
         for forbidden in _FORBIDDEN_DISPATCH_SYMBOLS:
             assert forbidden not in source, f"{entity_class.__name__}: {forbidden}"
+
+    # Classes serving BOTH families at once: the air conditioner and the wine
+    # cooler (and the fridge/oven setpoints) need the whole `settings` group on the
+    # wire, the cooker hood must never send it, and one description field picks the
+    # channel. Both senders therefore have to survive in the source, and losing
+    # EITHER is a regression -- dropping the legacy one would silently make every
+    # AC toggle sparse, dropping the dispatcher one would put the hood's clock back
+    # in the payload. Which appliance gets which channel is a behavioural claim a
+    # source scan cannot make: `test_ac_write_path.SettingsSwitchChannelTest` and
+    # `test_hood_entities.HoodSparseWritePayloadTest` pin the two payloads.
+    mixed = {
+        switch.HonSettingsSwitch: ("async_send_settings", "async_dispatch_patch"),
+        number.HonNumber: ("async_send_command", "async_dispatch_patch"),
+    }
+    for entity_class, callees in mixed.items():
+        source = inspect.getsource(entity_class)
+        for callee in callees:
+            assert callee in source, f"{entity_class.__name__}: {callee}"
 
 
 def _ap_dispatch_appliance() -> tuple[_DispatchAppliance, _DispatchCommand]:

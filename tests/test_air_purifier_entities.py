@@ -2423,17 +2423,23 @@ class AirPurifierTimeNumberArchitectureTest(unittest.TestCase):
         self.assertIn("async_dispatch_patch", source)
         self.assertNotIn("async_send_command", source)
 
-    def test_the_legacy_numbers_keep_the_legacy_sender(self) -> None:
+    def test_the_shared_number_keeps_both_senders(self) -> None:
+        # `HonNumber` serves the fridge/freezer/wine-cooler/oven setpoints, which
+        # need the whole command group on the wire, AND the cooker hood's delayed
+        # switch-off, which must not send it (the hood's `settings` group carries
+        # clock fields the device never mirrors back). One description field picks
+        # the channel, so BOTH senders have to be present here: losing the legacy
+        # one would make every fridge setpoint sparse, losing the dispatcher one
+        # would put the hood's clock back in the payload. Which appliance gets
+        # which is pinned behaviourally in test_number_setpoints and
+        # test_hood_entities.
         import inspect
 
         from custom_components.addhon import number
 
-        self.assertIn(
-            "async_send_command", inspect.getsource(number.HonNumber)
-        )
-        self.assertNotIn(
-            "async_dispatch_patch", inspect.getsource(number.HonNumber)
-        )
+        source = inspect.getsource(number.HonNumber)
+        self.assertIn("async_send_command", source)
+        self.assertIn("async_dispatch_patch", source)
 
 
 # --- Task 10: a schema ahead of the integration creates nothing ---------------

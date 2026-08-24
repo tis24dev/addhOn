@@ -257,6 +257,12 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
     # `windSpeed` is the whole control, both the level it reports and the level it
     # sends. Turning off is `stopProgram`, which carries no values of ours at all
     # (every parameter it declares is fixed), so it names no extra write here.
+    #
+    # The single-name write half is only TRUE because the speed goes out as a
+    # sparse patch (`fan.HonHoodFan._send`). While it went through the full-command
+    # sender the wire also carried `clockHH`/`clockMM`/`clockSS`,
+    # `filterCleaningAlarmStatus` and every other member of the `settings` group,
+    # and this row was telling the reporter something the dump itself disproved.
     {
         "tag": "fan.hood",
         "types": (APPLIANCE_HO,),

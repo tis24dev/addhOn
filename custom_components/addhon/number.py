@@ -56,7 +56,7 @@ from .air_purifier import (
     reports_attribute,
 )
 from .base_entity import HonBaseEntity
-from .command_dispatch import async_dispatch_patch
+from .command_dispatch import CommandPatch, async_dispatch_patch
 from .const import (
     APPLIANCE_AP,
     APPLIANCE_FR,
@@ -97,12 +97,23 @@ class HonNumberEntityDescription(NumberEntityDescription):
     - `param` = name of the hOn parameter to read (state) and write (command).
     - `fallback_min/max/step` = used only if the client does not expose the range on
       the parameter; normally the REAL range is read at runtime from param_range().
+    - `sparse` = pick the WRITE CHANNEL. False (fridge, freezer, wine cooler, oven)
+      keeps the legacy sender, which applies the value to the resolved
+      settings/setParameters command and transmits EVERY parameter of its group --
+      what those setpoints have always done. True (cooker hood) sends ONE sparse
+      patch through the transactional dispatcher instead, because the hood's
+      `settings` group also carries `clockHH`/`clockMM`/`clockSS`, parameters the
+      device never mirrors into its shadow: nothing can refresh them, they stay at
+      the 0 the schema loaded, and a full-group send resets the hood's clock on every
+      write. The flag is a bool and carries no command name because the command is
+      already resolved per instance by `find_settings_param`.
     """
 
     param: str
     fallback_min: float = 0.0
     fallback_max: float = 100.0
     fallback_step: float = 1.0
+    sparse: bool = False
 
 
 def _temp(key: str, param: str, translation_key=None) -> HonNumberEntityDescription:
@@ -165,6 +176,11 @@ _OVEN_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
 # name, opposite meaning, so sharing the label would mislabel one of the two.
 # CONFIG rather than the default category: it configures the timer the
 # `delay_timer` switch arms, it is not a reading of the hood's current state.
+#
+# SPARSE (see `sparse` on the description above): the hood's `settings` group also
+# carries three clock fields the device never mirrors back, so the full-group send
+# the fridge/oven/wine-cooler setpoints use would zero the hood's clock every time
+# the timer is adjusted.
 _HOOD_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
     HonNumberEntityDescription(
         key="delay_time",
@@ -177,6 +193,7 @@ _HOOD_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
         fallback_min=1.0,
         fallback_max=99.0,
         fallback_step=1.0,
+        sparse=True,
     ),
 )
 
@@ -572,12 +589,30 @@ class HonNumber(HonBaseEntity, NumberEntity):
         param = self.entity_description.param
         try:
             _LOGGER.debug(
-                "Number debug: set %s=%s (cmd=%s) id=%s",
-                param, send_value, self._command_name, redact_id(self._appliance_id),
+                "Number debug: set %s=%s (cmd=%s sparse=%s) id=%s",
+                param, send_value, self._command_name,
+                self.entity_description.sparse, redact_id(self._appliance_id),
             )
-            await async_send_command(
-                self.hass, client, appliance, self._command_name, {param: send_value}
-            )
+            if self.entity_description.sparse:
+                # Cooker hood: this parameter alone plus whatever the live schema
+                # marks mandatory (nothing, on that command). `action` is the label
+                # the command diagnostics record the intent under.
+                await async_dispatch_patch(
+                    self.hass,
+                    client,
+                    appliance,
+                    CommandPatch(
+                        self._command_name,
+                        {param: send_value},
+                        action=f"set_{self.entity_description.key}",
+                    ),
+                )
+            else:
+                # Every other setpoint: unchanged, the whole command group goes out.
+                await async_send_command(
+                    self.hass, client, appliance, self._command_name,
+                    {param: send_value},
+                )
             await self._async_request_command_refresh()
         except HomeAssistantError:
             raise

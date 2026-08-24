@@ -23,7 +23,7 @@ from .air_purifier import (
     raw_text,
     reports_attribute,
 )
-from .command_dispatch import async_dispatch_patch
+from .command_dispatch import CommandPatch, async_dispatch_patch
 from .const import (
     APPLIANCE_AC,
     APPLIANCE_AP,
@@ -39,7 +39,11 @@ from .const import (
     WM_ATTR_STATUS,
 )
 from .debug_utils import redact_id
-from .hood import HOOD_DELAY_STATUS_PARAM, HOOD_LIGHT_PARAM
+from .hood import (
+    HOOD_DELAY_STATUS_PARAM,
+    HOOD_LIGHT_PARAM,
+    HOOD_SETTINGS_COMMAND,
+)
 from .param_rollback import restore_params, snapshot_params
 from .program_options import (
     HonProgramOptionEntity,
@@ -56,12 +60,36 @@ class HonSettingsSwitchDescription:
 
     `param` is both the parameter name in the `settings` command (write) and
     the direct 0/1 attribute read via _get_attr (read). Used by the air conditioner
-    toggles and the wine-cooler interior light (same settings-command convention).
+    toggles, the wine-cooler interior light and the cooker hood's light and delayed
+    switch-off (same settings-command convention).
+
+    `sparse_command` picks the WRITE CHANNEL, and it is the whole reason this class
+    is still shared by three appliance families:
+
+    * None (air conditioner, wine cooler) -- the legacy sender, which applies the
+      value to the whole `settings` command and transmits EVERY parameter of its
+      `parameters` group. That is what those two have always done and what their
+      devices are known to accept; the AC in particular NEEDS the full group,
+      because `ac_command.sanitize_wind_direction` fixes sibling parameters on the
+      way out and a sparse payload would leave them unfixed on the device.
+    * a command name (cooker hood) -- one SPARSE patch through the transactional
+      dispatcher, carrying this parameter alone plus whatever the live schema marks
+      mandatory. The hood's `settings` group also holds `clockHH`/`clockMM`/
+      `clockSS`, which the device does NOT mirror into its shadow: nothing can ever
+      refresh them, they sit at the 0 the schema loaded, and a full-group send
+      therefore resets the hood's clock on every light or timer toggle. It also
+      restates `filterCleaningAlarmStatus="1"`. Same family of bug as the wine
+      cooler's #62, found before a user had to report it.
+
+    The channel is a FIELD and not a subclass because the read half, the gating, the
+    unique_id and the state mapping are identical for all three; only the sender
+    differs, and `_set_param` branches on it exactly once.
     """
 
     key: str            # unique_id suffix
     param: str
     icon: str | None = None
+    sparse_command: str | None = None
 
 
 # AC switches: 0/1 parameters confirmed in the settings command of Roberto's AC.
@@ -104,12 +132,22 @@ _WC_SWITCHES: tuple[HonSettingsSwitchDescription, ...] = (
 # combined dispatch of {windSpeed, delayTime, delayTimeStatus}, forcing at least
 # speed 1; we write the number and the flag separately. If the timer turns out not
 # to arm on a real hood, the fix is that combined dispatch, not a different command.
+#
+# Both are SPARSE (see `sparse_command` above): the hood's `settings` group carries
+# three clock fields the device never mirrors back, so the full-group send the AC
+# and the wine cooler use would zero the hood's clock on every toggle.
 _HOOD_SWITCHES: tuple[HonSettingsSwitchDescription, ...] = (
     HonSettingsSwitchDescription(
-        key="light", param=HOOD_LIGHT_PARAM, icon="mdi:lightbulb"
+        key="light",
+        param=HOOD_LIGHT_PARAM,
+        icon="mdi:lightbulb",
+        sparse_command=HOOD_SETTINGS_COMMAND,
     ),
     HonSettingsSwitchDescription(
-        key="delay_timer", param=HOOD_DELAY_STATUS_PARAM, icon="mdi:timer-sand"
+        key="delay_timer",
+        param=HOOD_DELAY_STATUS_PARAM,
+        icon="mdi:timer-sand",
+        sparse_command=HOOD_SETTINGS_COMMAND,
     ),
 )
 
@@ -581,8 +619,12 @@ class HonAirPurifierSwitch(HonBaseEntity, SwitchEntity):
 class HonSettingsSwitch(HonBaseEntity, SwitchEntity):
     """Boolean switch on a parameter of the `settings` command.
 
-    Serves the air conditioner toggles and the wine-cooler interior light: both write
-    a 0/1 parameter of the same `settings` command and read it back via _get_attr.
+    Serves the air conditioner toggles, the wine-cooler interior light and the cooker
+    hood's light and delayed switch-off: all write a 0/1 parameter of the same
+    `settings` command and read it back via _get_attr. They differ only in the write
+    CHANNEL, which `HonSettingsSwitchDescription.sparse_command` selects and
+    `_set_param` branches on once -- see that class for why the hood cannot use the
+    full-group sender the other two need.
     """
 
     def __init__(self, coordinator, appliance_id: str, description: HonSettingsSwitchDescription, client=None) -> None:
@@ -624,14 +666,36 @@ class HonSettingsSwitch(HonBaseEntity, SwitchEntity):
                 translation_key="appliance_or_client_unavailable",
             )
         param = self._desc.param
+        sparse_command = self._desc.sparse_command
         try:
-            _LOGGER.debug("Switch debug: AC set %s=%s id=%s", param, value, redact_id(self._appliance_id))
-            await async_send_settings(self.hass, client, appliance, {param: value})
+            _LOGGER.debug(
+                "Switch debug: settings set %s=%s id=%s sparse=%s",
+                param, value, redact_id(self._appliance_id), sparse_command,
+            )
+            if sparse_command is None:
+                # AC and wine cooler: unchanged. The whole `settings` group goes out,
+                # windDirection* sanitized on the way.
+                await async_send_settings(self.hass, client, appliance, {param: value})
+            else:
+                # Cooker hood: this parameter alone (plus whatever the live schema
+                # marks mandatory, which on that command is nothing). `action` is
+                # what the command diagnostics record the intent under; the
+                # appliance type travels beside it, so the key needs no prefix.
+                await async_dispatch_patch(
+                    self.hass,
+                    client,
+                    appliance,
+                    CommandPatch(
+                        sparse_command,
+                        {param: value},
+                        action=f"set_{self._desc.key}",
+                    ),
+                )
             await self._async_request_command_refresh()
         except HomeAssistantError:
             raise
         except Exception as err:
-            _LOGGER.error("AC switch: set error %s=%s: %s", param, value, err, exc_info=True)
+            _LOGGER.error("Settings switch: set error %s=%s: %s", param, value, err, exc_info=True)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="command_error",

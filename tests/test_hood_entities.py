@@ -266,9 +266,20 @@ class _HoodAppliance:
         self.unique_id = "ho-1"
         self.api = RecordingApi()
         self.synced: list[str] = []
+        # The device SHADOW, deliberately empty of the clock fields: the reporting
+        # hood's dump carries `windSpeed`, `lightStatus`, `delayTime` and
+        # `delayTimeStatus` as bare attributes and no `clockHH`/`clockMM`/`clockSS`
+        # at all. That absence is the whole reason the settings writes are sparse.
+        self.attributes: dict[str, dict] = {"parameters": {}}
+        self.synced_payloads: list[dict] = []
 
     def sync_command_to_params(self, name: str) -> None:
         self.synced.append(name)
+
+    def sync_payload_to_params(self, params) -> None:
+        # The dispatcher's post-commit reconciliation. Recorded rather than
+        # applied: this fixture has no shadow parameters to fold the payload into.
+        self.synced_payloads.append(dict(params))
 
 
 # The INACTIVE half of the settings command. The dump prints only the active
@@ -328,16 +339,31 @@ def _appliance(settings_params: dict | None = None, *, categorised: bool = True)
 
 
 class RunningClient:
-    """Runs the coroutine the legacy sender hands it, like the real client's loop."""
+    """Runs whatever the two senders hand it, like the real client's loop.
+
+    Both entry points are REAL: `run_command_sync` drives the legacy sender's
+    coroutine and `dispatch_patch_sync` drives the actual `CommandDispatcher`, so
+    every payload assertion below reads what the transport would have received --
+    not what a fake dispatcher decided to record.
+    """
 
     def __init__(self, fail: Exception | None = None) -> None:
         self.fail = fail
+        self.patches: list = []
 
     def run_command_sync(self, coro):
         if self.fail is not None:
             coro.close()
             raise self.fail
         return asyncio.run(coro)
+
+    def dispatch_patch_sync(self, appliance, patch):
+        from custom_components.addhon.command_dispatch import CommandDispatcher
+
+        if self.fail is not None:
+            raise self.fail
+        self.patches.append(patch)
+        return asyncio.run(CommandDispatcher().dispatch(appliance, patch))
 
 
 class RecordingHass:
@@ -666,6 +692,115 @@ class HoodSelectorKeyTest(unittest.IsolatedAsyncioTestCase):
                     continue
                 self.assertNotIn('"category"', line, f"{name}: {line}")
                 self.assertNotIn('"program"', line, f"{name}: {line}")
+
+
+class HoodSparseWritePayloadTest(unittest.IsolatedAsyncioTestCase):
+    """The EXACT key set a `settings` write puts on the wire.
+
+    Every hood write once travelled through the FULL-command sender, which
+    transmits the whole `parameters` group -- `clockHH`, `clockMM` and `clockSS`
+    included. The device does not mirror those three into its shadow (they are
+    absent from every bare attribute of the reporting dump), so
+    `sync_params_to_command` can never refresh them: they sit at the 0 the schema
+    loaded, and a light toggle, a speed change or a timer edit therefore reset the
+    hood's CLOCK to zero. The same payload restated `filterCleaningAlarmStatus="1"`
+    on every action. The wine cooler's #62 was this bug in another appliance.
+
+    No test in this suite watched the key SET before this class: every payload
+    assertion elsewhere reads ONE key out of the dict, and each of them is equally
+    satisfied by a dict with nine. The `settings` writes are sparse patches through
+    the transactional dispatcher now, and `RunningClient.dispatch_patch_sync` runs
+    the REAL dispatcher, so what is asserted below is what the transport receives.
+
+    `stopProgram` is deliberately NOT in here: every parameter it declares is fixed,
+    so its full group IS the proven-executed payload, and
+    `HoodFanWriteTest.test_the_stop_payload_is_the_one_the_device_executed` pins it.
+    """
+
+    # What a full-group send would add to every one of the four writes below.
+    LEAKED_BY_A_FULL_GROUP_SEND = (
+        "clockHH",
+        "clockMM",
+        "clockSS",
+        "filterCleaningAlarmStatus",
+        "quickDelayTimeStatus",
+    )
+
+    async def _controls(self):
+        """The four `settings` writers of one hood, over one shared appliance."""
+        client = RunningClient()
+        appliance = _appliance()
+        data = _entry_data(appliance=appliance)
+        fan_entity = (await _build("fan", data, client=client))[0]
+        switches = await _build("switch", data, client=client)
+        number = (await _build("number", data, client=client))[0]
+        return types.SimpleNamespace(
+            appliance=appliance,
+            fan=fan_entity,
+            light=next(s for s in switches if s._attr_unique_id == "ho-1_light"),
+            timer=next(
+                s for s in switches if s._attr_unique_id == "ho-1_delay_timer"
+            ),
+            number=number,
+        )
+
+    def test_the_fixture_declares_what_a_full_group_send_would_leak(self) -> None:
+        # Anti-vacuity, and the only thing standing between the assertions below
+        # and a fixture that proves nothing: a `settings` command carrying just the
+        # four written parameters would satisfy every "and nothing else" in this
+        # class while the real device kept losing its clock.
+        settings = _appliance().commands["settings"]
+        for name in self.LEAKED_BY_A_FULL_GROUP_SEND:
+            self.assertIn(name, settings.parameters, name)
+        self.assertNotIn(
+            "clockHH",
+            HOOD_ATTRIBUTES,
+            "the shadow now mirrors the clock; the premise of the fix has changed",
+        )
+
+    async def test_a_speed_change_carries_wind_speed_alone(self) -> None:
+        controls = await self._controls()
+        await controls.fan.async_set_percentage(60)
+        self.assertEqual(
+            {"windSpeed": "3"}, controls.appliance.api.sent[-1]["parameters"]
+        )
+
+    async def test_a_light_toggle_carries_light_status_alone(self) -> None:
+        controls = await self._controls()
+        await controls.light.async_turn_on()
+        self.assertEqual(
+            {"lightStatus": "1"}, controls.appliance.api.sent[-1]["parameters"]
+        )
+
+    async def test_arming_the_timer_carries_its_flag_alone(self) -> None:
+        controls = await self._controls()
+        await controls.timer.async_turn_on()
+        self.assertEqual(
+            {"delayTimeStatus": "1"}, controls.appliance.api.sent[-1]["parameters"]
+        )
+
+    async def test_a_delay_time_edit_carries_the_delay_alone(self) -> None:
+        controls = await self._controls()
+        await controls.number.async_set_native_value(45)
+        self.assertEqual(
+            {"delayTime": "45"}, controls.appliance.api.sent[-1]["parameters"]
+        )
+
+    async def test_no_settings_write_ever_touches_the_hood_clock(self) -> None:
+        # The four writes together, stated as the harm rather than as the key set:
+        # whichever of them a future edit moves back to the full-command sender,
+        # this fails.
+        controls = await self._controls()
+        await controls.fan.async_turn_on()
+        await controls.light.async_turn_off()
+        await controls.timer.async_turn_on()
+        await controls.number.async_set_native_value(20)
+        sent = [s for s in controls.appliance.api.sent if s["command"] == "settings"]
+        self.assertEqual(4, len(sent), controls.appliance.api.sent)
+        for payload in sent:
+            for name in self.LEAKED_BY_A_FULL_GROUP_SEND:
+                self.assertNotIn(name, payload["parameters"], payload)
+            self.assertEqual(1, len(payload["parameters"]), payload)
 
 
 class HoodSwitchTest(unittest.IsolatedAsyncioTestCase):

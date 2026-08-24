@@ -18,7 +18,8 @@ while it runs, which is why only the modes BOTH commands declare are offered
 COOKER HOOD. Speed goes out as `settings.windSpeed` and the stop as
 `stopProgram`, deliberately diverging from the official app, which uses
 `startProgram` for both. The reasoning, and the `programName` that divergence
-avoids, is written out once in `hood.py`'s module docstring.
+avoids, is written out once in `hood.py`'s module docstring. The two commands
+also travel by two different senders, and `HonHoodFan._send` says why.
 """
 from __future__ import annotations
 
@@ -44,7 +45,7 @@ from .air_purifier import (
     raw_text,
 )
 from .base_entity import HonBaseEntity, coordinator_data_map
-from .command_dispatch import async_dispatch_patch
+from .command_dispatch import CommandPatch, async_dispatch_patch
 from .const import AP_LAST_MODE_STORE, APPLIANCE_AP, APPLIANCE_HO, DOMAIN
 from .debug_utils import redact_id
 from .hon_commands import async_send_command
@@ -426,6 +427,25 @@ class HonHoodFan(HonBaseEntity, FanEntity):
     async def _send(self, action: str, command_name: str, values: dict[str, str]) -> None:
         """Send one hood intent, then refresh.
 
+        TWO SENDERS, on purpose, because the two commands need opposite things.
+
+        `settings` goes out as a SPARSE patch through the transactional
+        dispatcher: only `windSpeed` (plus whatever the live schema marks
+        mandatory, which on this command is nothing). The full-group sender would
+        also transmit `clockHH`/`clockMM`/`clockSS`, three parameters the hood does
+        NOT mirror into its shadow -- `sync_params_to_command` can never refresh
+        them, so they sit at the 0 the schema loaded and every speed change would
+        reset the hood's clock. It would restate `filterCleaningAlarmStatus="1"`
+        too. Same shape of bug as the wine cooler's #62.
+
+        `stopProgram` stays on the FULL-command sender, and that is not an
+        oversight. Every parameter it declares is `fixed`, so its whole group is
+        exactly `{lightStatus, onOffStatus, windSpeed}` at the device's own pinned
+        values -- the precise payload this hood's command history shows it accepted
+        AND executed. A sparse dispatch would carry only `onOffStatus`, the one
+        parameter the schema marks mandatory, and drop the other two from a payload
+        that is known to work as it stands.
+
         The payload is built INSIDE the try so a value the live schema rejects
         surfaces as the same localized command error as a transport failure,
         instead of a bare RuntimeError reaching Home Assistant.
@@ -445,9 +465,17 @@ class HonHoodFan(HonBaseEntity, FanEntity):
                 command_name,
                 values,
             )
-            await async_send_command(
-                self.hass, client, appliance, command_name, values
-            )
+            if command_name == HOOD_SETTINGS_COMMAND:
+                await async_dispatch_patch(
+                    self.hass,
+                    client,
+                    appliance,
+                    CommandPatch(command_name, values, action=f"hood_{action}"),
+                )
+            else:
+                await async_send_command(
+                    self.hass, client, appliance, command_name, values
+                )
             await self._async_request_command_refresh()
         except HomeAssistantError:
             raise
