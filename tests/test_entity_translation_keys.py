@@ -252,8 +252,12 @@ def _collect_code_keys() -> dict[str, set[str]]:
         | {d.translation_key for d in select._AC_DIRECTION_SELECTS}
     )
     used["button"] = {"start_program", "stop_program", "force_refresh", "reset_debug"}
-    # Air purifier fan: a single fixed-key entity, not a description table.
-    used["fan"] = {fan.HonAirPurifierFan._attr_translation_key}
+    # The fans are fixed-key entities, not description tables: each one has to
+    # register itself here or the platform's key set silently loses it.
+    used["fan"] = {
+        fan.HonAirPurifierFan._attr_translation_key,
+        fan.HonHoodFan._attr_translation_key,
+    }
     return used
 
 

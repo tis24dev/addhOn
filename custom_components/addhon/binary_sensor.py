@@ -269,7 +269,30 @@ _HOB_BINARY: tuple[HonBinarySensorEntityDescription, ...] = tuple(
     for z in range(1, 7)
 )
 
-# Hood (HO).
+def _hood_filter_cleaning(raw) -> bool | None:
+    """True while the hood reports a filter-cleaning cycle in progress.
+
+    Its own reader because this is the one hood flag the device spells as a
+    TEXTUAL boolean: the reporting HADG6DS46BWIFI publishes the string "false",
+    not 0/1, so the platform's default `raw == on_value` comparison would read
+    every value -- "true" included -- as off. Both spellings are accepted, and an
+    unrecognized one reads as unknown rather than being forced to a side: the
+    decompiled app never touches this attribute, so there is no third spelling we
+    can claim to know the meaning of.
+    """
+    text = str(raw).strip().lower()
+    if text in ("1", "true", "on", "yes"):
+        return True
+    if text in ("0", "false", "off", "no"):
+        return False
+    return None
+
+
+# Hood (HO). `filter_clean_needed` (filterCleaningAlarmStatus) and `filter_cleaning`
+# (filterCleaningStatus) are DELIBERATELY two entities: the first is the alarm flag
+# the settings command declares as a fixed "1", the second the cycle-in-progress
+# flag, and on the reporting hood they have not moved together since 2023. Folding
+# them would assert an equivalence nothing in the app or the dump supports.
 _HOOD_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     HonBinarySensorEntityDescription(
         key="light",
@@ -280,6 +303,24 @@ _HOOD_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
         key="filter_clean_needed",
         attr_key="filterCleaningAlarmStatus",
         device_class=BinarySensorDeviceClass.PROBLEM,
+    ),
+    HonBinarySensorEntityDescription(
+        key="filter_cleaning",
+        icon="mdi:air-filter",
+        attr_key="filterCleaningStatus",
+        value_fn=_hood_filter_cleaning,
+        # An unreadable spelling hides the entity instead of claiming "not
+        # cleaning": see _hood_filter_cleaning.
+        unavailable_when_unmapped=True,
+    ),
+    # Extraction running. Read from onOffStatus rather than from windSpeed, which
+    # the fan entity already publishes: two entities telling the same story from
+    # the same attribute would be a mirror, while onOffStatus is the device's own
+    # separate statement about whether it considers itself on.
+    HonBinarySensorEntityDescription(
+        key="running",
+        attr_key="onOffStatus",
+        device_class=BinarySensorDeviceClass.RUNNING,
     ),
 )
 

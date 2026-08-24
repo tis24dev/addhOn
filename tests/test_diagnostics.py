@@ -3490,21 +3490,37 @@ class CoverageExpectedAbsentTest(unittest.TestCase):
     def test_a_device_that_publishes_everything_it_maps_reports_nothing(self):
         # The empty case, derived rather than hand-listed so it cannot rot when a
         # table gains a row: ask the block what it expected, hand exactly that
-        # back as the device's shadow, and the mirror must fall silent.
-        def _block(attributes):
+        # back as the device's shadow AND as its command schema, and the mirror
+        # must fall silent on both axes.
+        #
+        # Both halves are fed now. Until the hood gained writable controls it
+        # mapped no command parameter at all, so the parameter half of this test
+        # was passing on an empty universe -- it asserted [] == [] and would have
+        # gone on doing so however wrong the mirror got.
+        def _block(attributes, params=()):
+            commands = (
+                {"settings": FakeCommand({n: FakeParam(value="0") for n in params})}
+                if params
+                else {}
+            )
             return diagnostics._appliance_block(
                 "id1",
                 {
-                    "appliance": FakeApplianceNoModel(commands={}),
+                    "appliance": FakeApplianceNoModel(commands=commands),
                     "type": "HO",
                     "attributes": attributes,
                     "statistics": {},
                 },
             )
 
-        expected = _block({})["coverage"]["attributes_expected_absent"]
-        self.assertTrue(expected, "the empty case would be vacuous")
-        complete = _block({name: "0" for name in expected})
+        empty = _block({})["coverage"]
+        expected_attrs = empty["attributes_expected_absent"]
+        expected_params = empty["command_params_expected_absent"]
+        self.assertTrue(expected_attrs, "the attribute case would be vacuous")
+        self.assertTrue(expected_params, "the parameter case would be vacuous")
+        complete = _block(
+            {name: "0" for name in expected_attrs}, params=expected_params
+        )
         self.assertEqual([], complete["coverage"]["attributes_expected_absent"])
         self.assertEqual([], complete["coverage"]["command_params_expected_absent"])
 
@@ -4471,7 +4487,9 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
                 "AP": {"binary_sensor", "fan", "number", "select", "sensor", "switch"},
                 "WC": {"binary_sensor", "number", "sensor", "switch"},
                 "OV": {"binary_sensor", "number", "sensor"},
-                "HO": {"binary_sensor", "sensor"},
+                # The hood gained its fan, light/timer switches and delay number
+                # in 5.18.0 (#83); before that it was read-only like the oven.
+                "HO": {"binary_sensor", "fan", "number", "sensor", "switch"},
                 "TD": {"binary_sensor", "button", "number", "select", "sensor", "switch"},
                 "WM": {"binary_sensor", "button", "number", "select", "sensor", "switch"},
             },

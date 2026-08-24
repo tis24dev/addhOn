@@ -745,13 +745,33 @@ _HOB: tuple[HonSensorEntityDescription, ...] = (
     _g_temp("temp_zone5", "sensorTempZ5"),
 )
 
-# Hood (HO): fan speed. Light/filter alarm are binary sensors.
+# Hood (HO): fan speed, errors, cumulative work time. Light / filter alarm /
+# running are binary sensors, and the SPEED is also a fan entity -- this read-only
+# mirror predates it and stays for the entity_id its users already reference.
 _HOOD: tuple[HonSensorEntityDescription, ...] = (
     HonSensorEntityDescription(
         key="fan_speed",
         attr_key="windSpeed",
         icon="mdi:fan",
         state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
+    ),
+    # Same treatment the oven, dishwasher and wine cooler already give `errors`:
+    # a raw code, not a number. `air_purifier.normalize_error` already folds every
+    # healthy spelling the hood uses (0 and the app's "00") onto one value, so the
+    # optional problem binary below reads correctly without a hood-specific map.
+    _g_text("errors", "errors", icon="mdi:alert-circle-outline"),
+    # No unit, no device_class, no state_class, and DIAGNOSTIC on purpose. The
+    # hood reports 11147 on the device of issue #83 and the decompiled app never
+    # reads the value at all, so whether it counts minutes of lifetime use (~186 h,
+    # credible for a 2022 install) or seconds of the last session (~3.1 h, equally
+    # credible) is unknown. A DURATION class would have to pick one, and a
+    # state_class would start recording long-term statistics in the wrong unit.
+    HonSensorEntityDescription(
+        key="last_work_time",
+        attr_key="lastWorkTime",
+        icon="mdi:timer-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
         gated=True,
     ),
 )

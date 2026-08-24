@@ -1,7 +1,7 @@
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Haier hOn switches: washer/dryer pause + air conditioner toggles + wine-cooler light."""
+"""Haier hOn switches: washer/dryer pause, AC toggles, wine-cooler and hood lights."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -27,6 +27,7 @@ from .command_dispatch import async_dispatch_patch
 from .const import (
     APPLIANCE_AC,
     APPLIANCE_AP,
+    APPLIANCE_HO,
     APPLIANCE_TD,
     APPLIANCE_WASH_GROUP,
     APPLIANCE_WC,
@@ -38,6 +39,7 @@ from .const import (
     WM_ATTR_STATUS,
 )
 from .debug_utils import redact_id
+from .hood import HOOD_DELAY_STATUS_PARAM, HOOD_LIGHT_PARAM
 from .param_rollback import restore_params, snapshot_params
 from .program_options import (
     HonProgramOptionEntity,
@@ -92,11 +94,32 @@ _WC_SWITCHES: tuple[HonSettingsSwitchDescription, ...] = (
 )
 
 
+# Cooker hood (HO) switches, ground-truthed on a real HADG6DS46BWIFI (issue #83):
+# the settings command declares lightStatus and delayTimeStatus as range[0,1]
+# (writable). The hood light is the SAME 0/1 model the wine cooler and the air
+# conditioner already use, so it needs no class and no translation key of its own.
+#
+# `delay_timer` arms the hood's delayed SWITCH-OFF (keep extracting for delayTime
+# minutes, then stop) -- not a delayed start. The official app arms it with one
+# combined dispatch of {windSpeed, delayTime, delayTimeStatus}, forcing at least
+# speed 1; we write the number and the flag separately. If the timer turns out not
+# to arm on a real hood, the fix is that combined dispatch, not a different command.
+_HOOD_SWITCHES: tuple[HonSettingsSwitchDescription, ...] = (
+    HonSettingsSwitchDescription(
+        key="light", param=HOOD_LIGHT_PARAM, icon="mdi:lightbulb"
+    ),
+    HonSettingsSwitchDescription(
+        key="delay_timer", param=HOOD_DELAY_STATUS_PARAM, icon="mdi:timer-sand"
+    ),
+)
+
+
 # Per-type settings-command switch tables. Every appliance here shares HonSettingsSwitch:
 # each switch reads/writes a 0/1 parameter of the device's `settings` command, capability-gated.
 _SETTINGS_SWITCHES: dict[str, tuple[HonSettingsSwitchDescription, ...]] = {
     APPLIANCE_AC: _AC_SWITCHES,
     APPLIANCE_WC: _WC_SWITCHES,
+    APPLIANCE_HO: _HOOD_SWITCHES,
 }
 
 

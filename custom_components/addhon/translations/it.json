@@ -480,6 +480,9 @@
       },
       "last_refresh": {
         "name": "Ultimo aggiornamento"
+      },
+      "last_work_time": {
+        "name": "Ultimo tempo di lavoro"
       }
     },
     "binary_sensor": {
@@ -611,6 +614,12 @@
       },
       "update_ok": {
         "name": "Aggiornamento OK"
+      },
+      "filter_cleaning": {
+        "name": "Pulizia filtro"
+      },
+      "running": {
+        "name": "In funzione"
       }
     },
     "switch": {
@@ -709,6 +718,9 @@
       },
       "mqtt_realtime_debug": {
         "name": "Debug MQTT realtime"
+      },
+      "delay_timer": {
+        "name": "Timer di spegnimento"
       }
     },
     "number": {
@@ -744,6 +756,9 @@
       },
       "aroma_time_off": {
         "name": "Durata Aroma Spento (sperimentale)"
+      },
+      "delay_off_time": {
+        "name": "Ritardo di spegnimento"
       }
     },
     "select": {
@@ -872,6 +887,9 @@
     "fan": {
       "purifier": {
         "name": "Purificatore"
+      },
+      "hood": {
+        "name": "Cappa"
       }
     }
   },

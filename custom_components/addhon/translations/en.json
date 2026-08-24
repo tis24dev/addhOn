@@ -480,6 +480,9 @@
       },
       "last_refresh": {
         "name": "Last refresh"
+      },
+      "last_work_time": {
+        "name": "Last work time"
       }
     },
     "binary_sensor": {
@@ -611,6 +614,12 @@
       },
       "update_ok": {
         "name": "Update OK"
+      },
+      "filter_cleaning": {
+        "name": "Filter cleaning"
+      },
+      "running": {
+        "name": "Running"
       }
     },
     "switch": {
@@ -709,6 +718,9 @@
       },
       "mqtt_realtime_debug": {
         "name": "MQTT realtime debug"
+      },
+      "delay_timer": {
+        "name": "Switch-off timer"
       }
     },
     "number": {
@@ -744,6 +756,9 @@
       },
       "aroma_time_off": {
         "name": "Aroma off time (experimental)"
+      },
+      "delay_off_time": {
+        "name": "Switch-off delay"
       }
     },
     "select": {
@@ -872,6 +887,9 @@
     "fan": {
       "purifier": {
         "name": "Purifier"
+      },
+      "hood": {
+        "name": "Hood"
       }
     }
   },

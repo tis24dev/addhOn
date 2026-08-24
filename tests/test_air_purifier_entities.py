@@ -557,15 +557,34 @@ class AirPurifierBinaryTableTest(unittest.TestCase):
         self.assertEqual("ecoModeStatus", eco.attr_key)
         self.assertIs(is_engaged, eco.value_fn)
 
-    def test_the_value_fn_field_defaults_off_everywhere_else(self) -> None:
-        """New optional field: no existing binary sensor changes behavior."""
+    def test_the_value_fn_field_is_declared_and_not_inherited(self) -> None:
+        """Every binary sensor that derives its state names itself here.
+
+        The field is optional and defaults off, so a description that grows one by
+        accident -- copied from a sibling row, say -- silently stops honouring the
+        platform's shared `on_value` rule. Pinned as the exact set rather than as
+        "nothing outside the AP has one" so that adding a derived reading stays a
+        deliberate edit while the guard keeps covering every other row.
+        """
         from custom_components.addhon.binary_sensor import BINARY_SENSORS
 
-        for app_type, descriptions in BINARY_SENSORS.items():
-            if app_type == APPLIANCE_AP:
-                continue
-            for description in descriptions:
-                self.assertIsNone(description.value_fn, description.key)
+        declared = {
+            (app_type, description.key)
+            for app_type, descriptions in BINARY_SENSORS.items()
+            for description in descriptions
+            if description.value_fn is not None
+        }
+        self.assertEqual(
+            {
+                (APPLIANCE_AP, "problem"),
+                (APPLIANCE_AP, "eco_active"),
+                (APPLIANCE_AP, "co_alarm"),
+                # The hood spells this one as the text "false", not as 0/1, so the
+                # shared comparison would read every value as off.
+                ("HO", "filter_cleaning"),
+            },
+            declared,
+        )
 
 
 class AirPurifierBinaryGatingTest(unittest.IsolatedAsyncioTestCase):
@@ -1040,16 +1059,34 @@ class AirPurifierFanErrorTest(unittest.IsolatedAsyncioTestCase):
 class AirPurifierFanArchitectureTest(unittest.TestCase):
     def test_the_fan_never_uses_the_legacy_sender(self) -> None:
         """Every AP write is transactional: `async_send_command` applies values to
-        a whole command and sends it, which is what the dispatcher replaces."""
-        source = (
+        a whole command and sends it, which is what the dispatcher replaces.
+
+        Scoped to the purifier CLASS, not to fan.py, because the platform also
+        hosts the cooker hood, which writes `settings.windSpeed` through the legacy
+        sender on purpose (see hood.py). A whole-file grep would have to be deleted
+        the day a second fan arrived; reading the class body keeps the purifier's
+        invariant alive with a second entity in the same module.
+        """
+        import ast
+
+        path = (
             Path(__file__).parents[1]
             / "custom_components" / "addhon" / "fan.py"
-        ).read_text(encoding="utf-8")
+        )
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        purifier = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "HonAirPurifierFan"
+        )
+        body = ast.get_source_segment(source, purifier) or ""
+        self.assertTrue(body, "the purifier class body could not be read")
 
-        self.assertNotIn("async_send_command", source)
-        self.assertNotIn("async_send_settings", source)
-        self.assertNotIn("run_command_sync", source)
-        self.assertIn("async_dispatch_patch", source)
+        self.assertNotIn("async_send_command", body)
+        self.assertNotIn("async_send_settings", body)
+        self.assertNotIn("run_command_sync", body)
+        self.assertIn("async_dispatch_patch", body)
 
     def test_fan_is_a_declared_platform(self) -> None:
         from custom_components.addhon.const import PLATFORMS

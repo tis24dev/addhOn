@@ -158,16 +158,23 @@ def _install_entity_platform_stubs() -> None:
     components.fan = fan
 
     class FanEntity:
-        """Mirror of HA's FanEntity surface the AP fan overrides.
+        """Mirror of HA's FanEntity surface the AP and hood fans override.
 
         The `_attr_*`-reading properties are what real HA's Entity/FanEntity
         provide; without them a test would read the private attribute and pass
-        even if the entity never exposed the value to Home Assistant."""
+        even if the entity never exposed the value to Home Assistant.
+
+        The speed half (`percentage`, `speed_count`, `percentage_step`) mirrors
+        HA's own defaults, `speed_count = 100` fallback included, because the
+        hood fan sets `_attr_speed_count` and lets `percentage_step` be derived:
+        a stub without them would let a fan ship with no speed axis at all and
+        still pass its tests."""
 
         _attr_preset_mode = None
         _attr_preset_modes = None
         _attr_supported_features = 0
         _attr_is_on = None
+        _attr_percentage = None
 
         @property
         def preset_mode(self):
@@ -184,6 +191,23 @@ def _install_entity_platform_stubs() -> None:
         @property
         def is_on(self):
             return self._attr_is_on
+
+        @property
+        def percentage(self):
+            return self._attr_percentage
+
+        @property
+        def speed_count(self):
+            # HA returns 100 (one step per percent) for a fan that declares no
+            # discrete speed count; keeping that default here means a missing
+            # `_attr_speed_count` shows up as a 1 % step, not as an AttributeError.
+            if hasattr(self, "_attr_speed_count"):
+                return self._attr_speed_count
+            return 100
+
+        @property
+        def percentage_step(self):
+            return 100 / self.speed_count
 
     class FanEntityFeature:
         # Real Home Assistant values, so a stub-vs-real mismatch cannot hide a
@@ -417,6 +441,44 @@ def _install_entity_platform_stubs() -> None:
     )
 
 
+def _install_percentage_util_stub() -> None:
+    """Install `homeassistant.util.percentage`, which the hood fan converts with.
+
+    Not a component stub, so it lives apart from `_install_entity_platform_stubs`.
+    The two functions are transcribed from Home Assistant rather than approximated:
+    the hood writes a wind-speed LEVEL and Home Assistant hands it a percentage, so
+    a stub that rounded differently from the real helper would let the round trip
+    look exact here and land one step off on a real hood. `states_in_range` counts
+    the endpoints (range (1, 5) holds five speeds, not four), which is precisely
+    the off-by-one an ad-hoc `value / max * 100` gets wrong.
+    """
+    util = _ensure_module("homeassistant.util")
+    sys.modules["homeassistant"].util = util
+    percentage = _ensure_module("homeassistant.util.percentage")
+    util.percentage = percentage
+
+    def states_in_range(low_high_range) -> float:
+        return low_high_range[1] - low_high_range[0] + 1
+
+    def ranged_value_to_percentage(low_high_range, value) -> int:
+        offset = low_high_range[0] - 1
+        return int(((value - offset) * 100) // states_in_range(low_high_range))
+
+    def percentage_to_ranged_value(low_high_range, percentage_value) -> float:
+        offset = low_high_range[0] - 1
+        return states_in_range(low_high_range) * percentage_value / 100 + offset
+
+    percentage.states_in_range = getattr(
+        percentage, "states_in_range", states_in_range
+    )
+    percentage.ranged_value_to_percentage = getattr(
+        percentage, "ranged_value_to_percentage", ranged_value_to_percentage
+    )
+    percentage.percentage_to_ranged_value = getattr(
+        percentage, "percentage_to_ranged_value", percentage_to_ranged_value
+    )
+
+
 def _ensure_yarl() -> None:
     """The CI test env installs only pytest (no yarl). config_flow now imports the
     transport auth (which does `from yarl import URL`), so importing config_flow -- and
@@ -522,6 +584,7 @@ def _install_service_helper_stubs() -> None:
 _install_homeassistant_error()
 _install_shared_entity_stubs()
 _install_entity_platform_stubs()
+_install_percentage_util_stub()
 _install_selector_stubs()
 _install_service_helper_stubs()
 _ensure_yarl()

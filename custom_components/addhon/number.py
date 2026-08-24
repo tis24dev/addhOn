@@ -41,7 +41,7 @@ from homeassistant.components.number import (
     NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature, UnitOfTime
+from homeassistant.const import EntityCategory, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -61,6 +61,7 @@ from .const import (
     APPLIANCE_AP,
     APPLIANCE_FR,
     APPLIANCE_FRE,
+    APPLIANCE_HO,
     APPLIANCE_OV,
     APPLIANCE_REF,
     APPLIANCE_TD,
@@ -72,6 +73,7 @@ from .const import (
     DOMAIN,
 )
 from .debug_utils import redact_id
+from .hood import HOOD_DELAY_TIME_PARAM
 from .hon_commands import (
     async_send_command,
     command_param,
@@ -152,12 +154,39 @@ _OVEN_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
     ),
 )
 
+# Cooker hood (HO): how long the fan keeps extracting after the delayed
+# switch-off is armed (issue #83). The unit is PROVEN minutes -- the app renders
+# the value through `moment.duration({minutes: delayTime})` and labels it with its
+# minute abbreviation -- and the bounds (1..99 on the reporting hood) are read live
+# from the parameter, never hardcoded.
+#
+# Its own translation key rather than the wash group's `delay_time`: on a washer
+# that number postpones the START, on a hood it postpones the STOP. Same parameter
+# name, opposite meaning, so sharing the label would mislabel one of the two.
+# CONFIG rather than the default category: it configures the timer the
+# `delay_timer` switch arms, it is not a reading of the hood's current state.
+_HOOD_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
+    HonNumberEntityDescription(
+        key="delay_time",
+        param=HOOD_DELAY_TIME_PARAM,
+        translation_key="delay_off_time",
+        entity_category=EntityCategory.CONFIG,
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        mode=NumberMode.BOX,
+        icon="mdi:timer-sand",
+        fallback_min=1.0,
+        fallback_max=99.0,
+        fallback_step=1.0,
+    ),
+)
+
 NUMBERS: dict[str, tuple[HonNumberEntityDescription, ...]] = {
     APPLIANCE_REF: _COOLING_NUMBERS,
     APPLIANCE_FR: _COOLING_NUMBERS,
     APPLIANCE_FRE: _COOLING_NUMBERS,
     APPLIANCE_WC: _WINE_NUMBERS,
     APPLIANCE_OV: _OVEN_NUMBERS,
+    APPLIANCE_HO: _HOOD_NUMBERS,
 }
 
 
