@@ -60,6 +60,27 @@ _LOGGER = logging.getLogger(__name__)
 # silently refuses to print.
 SETUP_DROP_REASONS = ("not_a_dict", "bad_zone", "construction_error", "mac_empty")
 
+# Appliance types whose `zone` field counts COOKING ZONES OF ONE APPLIANCE, not
+# appliances. For an induction hob the cloud publishes a single shadow whose
+# per-zone readings are indexed in the parameter NAMES (`panStatusZ1`, `powerZ2`,
+# ...) and whose commands select a zone through a `zone` parameter; the official
+# app models it as one appliance per MAC, and its own local cache enforces that
+# with a `UNIQUE(macAddress)` constraint. Expanding it produced N+1 Home Assistant
+# devices carrying byte-identical attributes -- five of them on the hob of issue
+# #84 -- N of which were pure duplicates of the base.
+#
+# The two strings are `const.APPLIANCE_IH` and `const.APPLIANCE_HOB` and are
+# DUPLICATED here rather than imported: this package is deliberately decoupled from
+# the integration above it (see client/factory.py, client/interfaces.py) and an
+# upward import would break that boundary. A test asserts the two sets are equal so
+# the copies cannot drift.
+#
+# Deliberately narrow. Every other type keeps expanding exactly as before, the oven
+# included: the app's own demo appliance list carries `zone` on an OV, and no dump
+# of a twin-cavity oven exists to prove its clones are duplicates too. We stop
+# cloning only where a real dump shows the clones carry nothing of their own.
+ZONE_IS_NOT_A_DEVICE = frozenset({"IH", "HOB"})
+
 
 class NativeHon:
     """Native hOn session: OUR auth, transport and parser engine.
@@ -484,9 +505,18 @@ class NativeHon:
                 self._setup_expanded += 1
                 self._count_drop("bad_zone")
                 continue
-            if zones > 1:
+            # The type is read off the RAW list entry, which is the only place it
+            # is available before anything is constructed: gating here keeps
+            # `_create_appliance`, the factory and HonAppliance untouched.
+            # `str(None)` is "None", which is not in the set, so a missing type
+            # expands exactly as it did before.
+            appliance_type = str(appliance.get("applianceTypeName", "")).upper()
+            if zones > 1 and appliance_type not in ZONE_IS_NOT_A_DEVICE:
                 for zone in range(zones):
                     await self._create_appliance(appliance.copy(), zone=zone + 1)
+            # Unconditional and unchanged: the surviving device is built with
+            # zone=0 exactly as before, so `_check_name_zone` returns the bare MAC
+            # and its unique_id -- and every entity_id under it -- is untouched.
             await self._create_appliance(appliance)
         # Anti-illusion guard, symmetric with the all-failed rule the poll already
         # applies: containing ONE broken appliance is a degradation, containing ALL of
@@ -636,11 +666,18 @@ class NativeHon:
         """How many appliance OBJECTS this setup accounted for.
 
         NOT the number of cloud entries. An entry with `zone > 1` is expanded into
-        zones + 1 objects (:487-490, pinned by tests/test_native_session.py:265-272
-        as [1, 2, 0]), so a census counted on the raw list length could never
-        reconcile against an inventory: `built > count` is a healthy reading for a
-        multi-zone fridge. An entry dropped before it can be expanded (:470-471, :484-485)
-        is charged one object, since it is one appliance that will never exist.
+        zones + 1 objects (pinned by tests/test_native_session.py as [1, 2, 0]), so a
+        census counted on the raw list length could never reconcile against an
+        inventory: `built > count` is a healthy reading for a multi-zone fridge. An
+        entry dropped before it can be expanded is charged one object, since it is
+        one appliance that will never exist.
+
+        The expansion is now conditional on the TYPE as well as on the zone count
+        (see ZONE_IS_NOT_A_DEVICE): an induction hob no longer expands, so an
+        account holding only hobs reads `setup_expanded == len(the raw cloud list)`.
+        The invariant below is unchanged -- it was always `>=`, never `==` -- but a
+        reader who found the equality surprising would otherwise go looking for a
+        bug that is not there.
 
         The invariant a maintainer reads this against:
 

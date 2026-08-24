@@ -333,6 +333,115 @@ class NativeSessionSetupTest(unittest.TestCase):
         # no load after mqtt
         self.assertEqual(h.events.index("mqtt"), len(h.events) - 1)
 
+    def test_an_induction_hob_is_never_split(self) -> None:
+        # #84.2: the hob's `zone` counts COOKING ZONES of one appliance, not
+        # appliances. Five Home Assistant devices carrying byte-identical
+        # attributes is what the reporting user saw.
+        data = [{"macAddress": "H", "applianceTypeName": "IH", "zone": "4"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual([a.zone for a in nh.appliances], [0])
+        self.assertEqual([a.mac_address for a in nh.appliances], ["H"])
+
+    def test_the_hob_alias_is_guarded_too(self) -> None:
+        data = [{"macAddress": "H", "applianceTypeName": "HOB", "zone": "4"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual([a.zone for a in nh.appliances], [0])
+
+    def test_the_surviving_hob_keeps_the_identity_it_already_had(self) -> None:
+        """What makes this a removal of duplicates and not a rename.
+
+        The base object was already built with zone=0 before this change, and
+        `_check_name_zone` returns the bare attribute for zone 0. So the id of the
+        device that survives is byte-for-byte the id it already had, and only the
+        four clone ids disappear -- which is why the migration is a purge of
+        orphans rather than a re-registration of everything the user owns.
+
+        Asserted on the REAL engine class: the session fixture's appliance double
+        does not carry an identity, and a double cannot demonstrate this.
+        """
+        from custom_components.addhon.client.engine.appliance import HonAppliance
+
+        info = {
+            "macAddress": "11-22-33-44-55-66",
+            "applianceTypeName": "IH",
+            "applianceModelId": "42",
+        }
+        base = HonAppliance(None, dict(info), zone=0)
+        clone = HonAppliance(None, dict(info), zone=1)
+        self.assertEqual("11-22-33-44-55-66", base.unique_id)
+        self.assertEqual("11-22-33-44-55-66_z1", clone.unique_id)
+
+    def test_another_type_with_two_zones_still_expands(self) -> None:
+        # THE non-regression test. `session.setup` is on the setup path of every
+        # appliance of every account: a guard that leaked would make devices
+        # vanish for users who have nothing to do with a hob. An oven is the
+        # concrete candidate -- the app's own demo appliance list carries `zone`
+        # on an OV -- and nothing has ever proved its clones are duplicates.
+        data = [{"macAddress": "O", "applianceTypeName": "OV", "zone": "2"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual([a.zone for a in nh.appliances], [1, 2, 0])
+
+    def test_an_entry_without_a_type_still_expands(self) -> None:
+        # `str(None)` is "None", not a member of the set: an entry the cloud
+        # sends without a type keeps the behaviour it had.
+        data = [{"macAddress": "U", "zone": "2"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual([a.zone for a in nh.appliances], [1, 2, 0])
+
+    def test_the_guard_is_case_insensitive(self) -> None:
+        # The type is echoed from the cloud list verbatim; nothing normalises it
+        # before this point.
+        data = [{"macAddress": "H", "applianceTypeName": "ih", "zone": "3"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual([a.zone for a in nh.appliances], [0])
+
+    def test_a_hob_entry_with_a_broken_zone_is_still_dropped(self) -> None:
+        # The guard acts on the expansion branch only: the zone is still parsed,
+        # and an unparseable one is still counted and skipped as before.
+        data = [{"macAddress": "H", "applianceTypeName": "IH", "zone": "many"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual(nh.appliances, [])
+        self.assertEqual(nh.setup_drops.get("bad_zone"), 1)
+
+    def test_a_hob_census_reconciles_without_the_clones(self) -> None:
+        data = [{"macAddress": "H", "applianceTypeName": "IH", "zone": "4"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual(nh.setup_expanded, 1)
+        self.assertEqual(
+            len(nh.appliances) + sum(nh.setup_drops.values()), nh.setup_expanded
+        )
+
+    def test_the_local_type_set_matches_the_integration_constants(self) -> None:
+        """The client package cannot import from the integration above it, so the
+        two type codes are duplicated in session.py. This is what stops the copies
+        from drifting apart -- a rename on one side fails here, loudly, instead of
+        quietly turning the guard off."""
+        from custom_components.addhon.client.session import ZONE_IS_NOT_A_DEVICE
+        from custom_components.addhon.const import APPLIANCE_HOB, APPLIANCE_IH
+
+        self.assertEqual({APPLIANCE_IH, APPLIANCE_HOB}, set(ZONE_IS_NOT_A_DEVICE))
+
     def test_zone_one_not_split(self) -> None:
         data = [{"macAddress": "Z", "applianceTypeName": "AC", "zone": "1"}]
         h = _Harness(self, data)

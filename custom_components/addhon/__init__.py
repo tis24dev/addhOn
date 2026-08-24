@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import NoReturn
@@ -25,6 +26,8 @@ except ImportError:  # pragma: no cover - only under the test stub
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    APPLIANCE_HOB,
+    APPLIANCE_IH,
     APPLIANCE_TD,
     ATTR_LEVEL,
     CONF_ENABLE_DEBUG,
@@ -464,6 +467,21 @@ _TD_REMOVED_SUFFIXES = (
     "_loading_percentage",
 )
 
+# The unique_id of an entity that belonged to a per-ZONE CLONE of an appliance.
+# `HonAppliance._check_name_zone` builds a clone's id as "<base>_z<N>", and every
+# entity's id is "<appliance_id>_<key>", so a clone's entity reads
+# "<base>_z<N>_<key>".
+#
+# ANCHORED and greedy on purpose. Unanchored it would also match a key that merely
+# CONTAINS the shape, and the hob's own tables are full of near misses:
+# `pan_zone1`, `temp_zone1`, `power_zone1`, `hot_zone1` all carry "zone" followed
+# by a digit and none of them is a clone. What distinguishes a clone is the
+# underscore-z-digits-underscore run in the DEVICE half of the id, before the key
+# begins. The greedy `.+` takes the LAST such run, which is the right one: a base
+# id built from the import-name fallback ("ih_<modelId>") contains underscores of
+# its own, and the zone suffix is always the final segment the engine appends.
+_ZONE_ONLY_RE = re.compile(r"^(?P<base>.+)_z\d+_")
+
 
 def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Remove from the registry the legacy entities no longer provided by the integration.
@@ -480,6 +498,10 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
       select with the same unique_id in a different domain. Scoped to the light
       domain for that reason: removing by unique_id alone would delete the
       replacement along with the entity it replaces.
+    - Everything that belonged to a per-zone CLONE of an induction hob
+      ('<base>_z<N>_<key>'), which the session no longer creates. Double-anchored:
+      the id must have the clone shape AND its base must be a hob in the current
+      snapshot, so a genuinely zoned appliance of another type keeps its entities.
 
     Without this cleanup there would be orphan 'unavailable' entities with the '?' badge.
     """
@@ -498,6 +520,7 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
         for appliance_id in td_ids
         for suffix in _TD_REMOVED_SUFFIXES
     }
+    hob_ids = _hob_ids(coord_data)
 
     registry = er.async_get(hass)
     checked = 0
@@ -524,12 +547,111 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 "Removed invalid consumption entity for tumble dryer: id=%s",
                 redact_id(reg_entry.unique_id),
             )
+        elif _is_hob_zone_clone(unique_id, hob_ids):
+            registry.async_remove(reg_entry.entity_id)
+            removed += 1
+            _LOGGER.info(
+                "Removed duplicate per-zone entity of an induction hob: id=%s",
+                redact_id(reg_entry.unique_id),
+            )
     _LOGGER.debug(
         "Setup debug: legacy cleanup completed for entry=%s, checked=%d, removed=%d",
         entry.entry_id,
         checked,
         removed,
     )
+    _remove_zone_clone_devices(hass, entry, coord_data, hob_ids)
+
+
+def _hob_ids(coord_data) -> set[str]:
+    """Appliance ids of the induction hobs in the current snapshot.
+
+    The second anchor of the zone-clone purge. Matching the '<base>_z<N>_' shape
+    alone would also delete the entities of an appliance whose zones are still
+    real -- a twin-cavity oven, say -- and those are not duplicates of anything.
+    Cross-checking against the snapshot's TYPE is the pattern the tumble-dryer
+    purge above already uses.
+
+    An empty snapshot yields an empty set and therefore removes nothing. That is
+    the safe direction: the purge is idempotent and runs on every setup, so a
+    degraded start postpones it instead of guessing.
+    """
+    return {
+        appliance_id
+        for appliance_id, device in (coord_data or {}).items()
+        if isinstance(device, dict) and device.get("type") in (APPLIANCE_IH, APPLIANCE_HOB)
+    }
+
+
+def _is_hob_zone_clone(unique_id: str, hob_ids: set[str]) -> bool:
+    """True for an entity that belonged to a zone clone of a hob in `hob_ids`."""
+    match = _ZONE_ONLY_RE.match(unique_id or "")
+    return bool(match) and match.group("base") in hob_ids
+
+
+def _remove_zone_clone_devices(hass: HomeAssistant, entry: ConfigEntry, coord_data, hob_ids) -> None:
+    """Detach the now-empty '<base>_z<N>' devices of a hob from this config entry.
+
+    Removing an entity does NOT remove its device: the row stays attached to the
+    config entry and keeps showing in the UI, now empty -- which is a worse result
+    than the duplicate it replaced, since an empty device looks like a broken one.
+
+    `remove_config_entry_id` rather than `async_remove_device`: it detaches only OUR
+    entry and lets Home Assistant drop the device once nothing else references it,
+    so a device an unrelated integration also claims is left alone.
+
+    The list is MATERIALISED before the loop. `async_entries_for_config_entry`
+    returns a live view over the registry, and detaching a device mutates exactly
+    what is being iterated.
+    """
+    from homeassistant.helpers import device_registry as dr
+
+    if not hob_ids:
+        return
+    live_ids = set(coord_data or {})
+    dev_reg = dr.async_get(hass)
+    for device in list(dr.async_entries_for_config_entry(dev_reg, entry.entry_id)):
+        ours = {ident for domain, ident in device.identifiers if domain == DOMAIN}
+        # `<base>_z<N>` with no trailing key: the DEVICE id, not an entity id, so
+        # the shared regex needs the separator the entity form always carries.
+        if not any(
+            _is_hob_zone_clone(f"{ident}_", hob_ids) and ident not in live_ids
+            for ident in ours
+        ):
+            continue
+        dev_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
+        _LOGGER.info(
+            "Removed duplicate per-zone device of an induction hob: id=%s",
+            redact_id(sorted(ours)[0]),
+        )
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: ConfigEntry, device
+) -> bool:
+    """Let the user delete a device this entry no longer provides.
+
+    Home Assistant shows the "Delete" button on a device card only when the
+    integration implements this hook, and until now it did not: a device left over
+    from an older layout could not be removed by hand at all. The automatic purge
+    above covers the hob clones, so this is the safety net for anything it misses
+    -- a clone whose base has since left the account, for instance, which no
+    snapshot can identify as a hob any more.
+
+    Returns True only for a device NOT in the current snapshot: allowing a live
+    device to be deleted would let a user remove an appliance the next poll
+    recreates, which reads as the delete button not working.
+    """
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    coordinator = entry_data.get("coordinator")
+    coord_data = getattr(coordinator, "data", None)
+    if not isinstance(coord_data, Mapping):
+        # No snapshot means no way to tell a live device from a stale one, and
+        # answering True there would offer to delete every device of the entry.
+        return False
+    live_ids = set(coord_data)
+    ours = {ident for domain, ident in device.identifiers if domain == DOMAIN}
+    return bool(ours) and not (ours & live_ids)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
