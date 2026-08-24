@@ -919,6 +919,162 @@ class DiagnosticsDeviceTest(unittest.TestCase):
         self.assertEqual({"generated_at": FROZEN_TEXT}, result)
 
 
+class AccountDeviceDiagnosticsTest(unittest.TestCase):
+    """The synthetic per-account service device carries a "Download diagnostics"
+    button of its own, and its identifier -- `entry_id` + ACCOUNT_DEVICE_SUFFIX -- is
+    never a key of `coordinator.data`, which is indexed by appliance id. Before the
+    account route that lookup could only miss, so the button could only ever hand
+    back the degraded dated stub. That is what the ADDHON-210 reporter downloaded and
+    sent us, instead of the self-contained dump 5.17.0 shipped for exactly that case:
+    with zero appliances the service device is the ONLY device that exists, so its
+    broken button was the only one there was to press.
+    """
+
+    @staticmethod
+    def _account_device(entry):
+        """The real service device, built by the function that BUILDS it.
+
+        Spelling `f"{entry_id}_diagnostics"` again here would make this a one-sided
+        pin that keeps passing after the suffix moves; reading it out of
+        `account_device_info` means a rename has to fail here instead of silently
+        re-breaking the button. Same two-sided pin as
+        `test_legacy_cleanup.py`'s account-device guard.
+        """
+        from custom_components.addhon.base_entity import account_device_info
+
+        identifiers = set(account_device_info(entry)["identifiers"])
+        # Anti-vacuity: a device with no identifiers resolves no appliance_id and
+        # would reach a degraded dump for an unrelated reason.
+        assert len(identifiers) == 1, identifiers
+        return FakeDevice(identifiers=identifiers)
+
+    def test_the_account_device_returns_the_entry_dump_itself(self):
+        # Not "a dump with the same keys": the SAME document. One clock, one shape,
+        # one set of privacy guarantees to argue about -- the reason this route
+        # delegates instead of assembling a second, subtly different, top-level
+        # object that would drift out of step with the first.
+        entry = FakeEntry()
+        with _FrozenClock(FROZEN):
+            result = _run(
+                diagnostics.async_get_device_diagnostics(
+                    FakeHass(_build_coordinator()), entry, self._account_device(entry)
+                )
+            )
+            expected = _run(
+                diagnostics.async_get_config_entry_diagnostics(
+                    FakeHass(_build_coordinator()), FakeEntry()
+                )
+            )
+        self.assertEqual(
+            [
+                "generated_at",
+                "entry",
+                "last_error",
+                "platforms",
+                "last_poll",
+                "last_fetch",
+                "appliances",
+            ],
+            list(result),
+        )
+        self.assertEqual(expected, result)
+
+    def test_the_account_device_dump_is_read_from_one_instant(self):
+        # The device path reads `_utcnow` before its own degraded returns. On this
+        # route that read would be a second one, discarded, while the document
+        # carries the entry dump's instant -- harmless today, but it is the shape
+        # that lets two ages in one document disagree tomorrow.
+        entry = FakeEntry()
+        with _FrozenClock(FROZEN) as clock:
+            result = _run(
+                diagnostics.async_get_device_diagnostics(
+                    FakeHass(_build_coordinator()), entry, self._account_device(entry)
+                )
+            )
+        self.assertEqual(FROZEN_TEXT, result["generated_at"])
+        self.assertEqual(1, clock.calls)
+
+    def test_an_account_dump_with_no_appliances_still_carries_the_evidence(self):
+        # THE ADDHON-210 CASE, verbatim: the cloud answered, the walk found nothing,
+        # `coordinator.data` is `{}`. What the reporter needed to send is exactly
+        # what a `{"generated_at": ...}` stub cannot say -- how the one inventory
+        # call went (`last_fetch`), what the poll counted (`last_poll`), which
+        # platforms forwarded (`platforms`) and whether an error was recorded
+        # (`last_error`). An empty `appliances` list is the SYMPTOM, not the dump
+        # failing to build.
+        entry = FakeEntry()
+        result = _run(
+            diagnostics.async_get_device_diagnostics(
+                FakeHass(FakeCoordinator({})), entry, self._account_device(entry)
+            )
+        )
+        self.assertEqual([], result["appliances"])
+        for key in ("entry", "last_error", "platforms", "last_poll", "last_fetch"):
+            self.assertIn(key, result)
+
+    def test_an_appliance_id_merely_ending_in_the_suffix_stays_an_appliance(self):
+        # The guard against the shortcut this file refuses everywhere:
+        # `ident[1].endswith(ACCOUNT_DEVICE_SUFFIX)` would answer an APPLIANCE
+        # question with the account dump for any cloud id that happens to end that
+        # way. The comparison is against the id built from THIS entry, and nothing
+        # else.
+        entry = FakeEntry()
+        decoy_id = f"x{entry.entry_id}{const.ACCOUNT_DEVICE_SUFFIX}"
+        # Anti-vacuity: the decoy must really be the near-miss it claims to be.
+        self.assertTrue(decoy_id.endswith(const.ACCOUNT_DEVICE_SUFFIX))
+        self.assertNotEqual(
+            f"{entry.entry_id}{const.ACCOUNT_DEVICE_SUFFIX}", decoy_id
+        )
+        coord = _build_coordinator()
+        coord.data[decoy_id] = coord.data.pop(WD_ID)
+        result = _run(
+            diagnostics.async_get_device_diagnostics(
+                FakeHass(coord), entry, FakeDevice(identifiers={(DOMAIN, decoy_id)})
+            )
+        )
+        self.assertEqual(["generated_at", "appliance"], list(result))
+        self.assertEqual("WD", result["appliance"]["type"])
+
+    def test_an_entry_with_no_id_does_not_take_the_account_route(self):
+        # With an empty `entry_id` the expected identifier collapses to the bare
+        # suffix, which is a perfectly plausible appliance id. The route is skipped
+        # rather than guessed at, and the previous behaviour stands.
+        entry = FakeEntry(entry_id="")
+        device = FakeDevice(identifiers={(DOMAIN, const.ACCOUNT_DEVICE_SUFFIX)})
+        with _FrozenClock(FROZEN):
+            result = _run(
+                diagnostics.async_get_device_diagnostics(
+                    FakeHass(_build_coordinator()), entry, device
+                )
+            )
+        self.assertEqual({"generated_at": FROZEN_TEXT}, result)
+
+    def test_no_raw_identity_reaches_the_account_dump(self):
+        # Same whole-document scan as `AttributeTimestampPrivacyTest`, run through
+        # the new route: delegating must not become a way of reaching the cloud
+        # values WITHOUT the validations, so the claim "byte for byte the entry
+        # dump" is checked on the property that matters rather than assumed from
+        # the call site.
+        entry = FakeEntry()
+        encoded = json.dumps(
+            _run(
+                diagnostics.async_get_device_diagnostics(
+                    FakeHass(_build_coordinator()), entry, self._account_device(entry)
+                )
+            )
+        )
+        for identity in (
+            "PLAINTEXT-SERIAL",
+            "SN-PLAINTEXT",
+            "AA:BB:CC:DD:EE:FF",
+            "11:22:33:44:55:66",
+            "phone-install-xyz",
+            "user@example.com",
+            "hunter2",
+        ):
+            self.assertNotIn(identity, encoded)
+
+
 # The bare attributes CUSTOM entity classes consume. They have no description
 # table, so no walk can derive them: `HonMeanWaterConsumption` needs both
 # `totalWaterUsed` and `totalWashCycle`, `HonWashingMachinePauseSwitch` reads

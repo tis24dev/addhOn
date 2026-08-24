@@ -60,6 +60,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    ACCOUNT_DEVICE_SUFFIX,
     APPLIANCE_AC,
     APPLIANCE_AP,
     APPLIANCE_FR,
@@ -3173,15 +3174,11 @@ async def async_get_device_diagnostics(
     ``device.identifiers`` is a set of ``(domain, id)`` tuples; base_entity.device_info
     registers ``{(DOMAIN, appliance_id)}``, so the appliance_id is recovered directly.
     The raw identifier (which may BE the serial) is never echoed into the output.
-    """
-    # Read BEFORE the two early returns below, not after. A device dump that
-    # resolves no appliance is precisely the one that gets pasted into an issue
-    # as 'the download gave me nothing', and an undated empty object cannot
-    # even be placed in time relative to the entry dump beside it.
-    now = _utcnow()
-    coordinator = _coordinator(hass, entry)
-    coord_data = getattr(coordinator, "data", None)
 
+    One device per entry is NOT an appliance: the synthetic per-account service
+    device that carries the debug controls. Asked for its diagnostics, this
+    returns the account's own dump -- see the route below.
+    """
     appliance_id = next(
         (
             ident[1]
@@ -3190,13 +3187,55 @@ async def async_get_device_diagnostics(
         ),
         None,
     )
+    # The account's service device asks an ACCOUNT question, so it gets the
+    # account's answer. Its identifier is `{entry_id}{ACCOUNT_DEVICE_SUFFIX}`
+    # (base_entity.device_info), which is never a key of `coordinator.data` --
+    # that mapping is indexed by appliance id. Without this route the lookup
+    # below could only miss, so every user pressing "Download diagnostics" on
+    # that device got the degraded dated stub; and in the one install that has
+    # ZERO appliances the service device is the only device that exists, so the
+    # only such button reachable is the one that could never answer. That is how
+    # the ADDHON-210 report arrived as `{"generated_at": ...}` instead of the
+    # self-contained dump 5.17.0 shipped for exactly that case.
+    #
+    # Delegating returns the entry dump byte for byte rather than a bespoke
+    # subset. That is deliberate on two counts: it introduces no new class of
+    # value and therefore no new privacy surface (`entry` still goes through
+    # _redact_title/_redact_email/_entry_options, `appliances` through
+    # _appliance_block + _redact, and the leak-proof-by-construction keys stay
+    # the same ones), and it leaves ONE top-level key set to maintain instead of
+    # a second shape that would drift out of step with the first -- the drift
+    # `_fetch_empty` exists to prevent.
+    entry_id = getattr(entry, "entry_id", "") or ""
+    # Exact equality, never `endswith`: a suffix test would swallow an appliance
+    # whose own id happens to end in `_diagnostics` and answer an appliance
+    # question with the account dump. Guarded on a non-empty entry_id because
+    # without one the expected identifier collapses to the bare suffix, which is
+    # a plausible id in its own right; with no entry to compare against the old
+    # behaviour stands.
+    if entry_id and appliance_id == f"{entry_id}{ACCOUNT_DEVICE_SUFFIX}":
+        return await async_get_config_entry_diagnostics(hass, entry)
+
+    # Read BEFORE the two early returns below, not after. A device dump that
+    # resolves no appliance is precisely the one that gets pasted into an issue
+    # as 'the download gave me nothing', and an undated empty object cannot
+    # even be placed in time relative to the entry dump beside it. Read AFTER
+    # the account route above so that every path reads the clock exactly once:
+    # the delegated dump takes its own single instant.
+    now = _utcnow()
+    coordinator = _coordinator(hass, entry)
+    coord_data = getattr(coordinator, "data", None)
+
     # Both degraded paths still return a DATED document rather than a bare {}.
     # They are the two dumps most likely to be attached to an issue, because
     # they are what a user gets when the thing they are reporting is that
     # nothing works, and 'the file was empty' is a materially different report
     # from 'the file said it was taken at 07:09 and had nothing in it'. Like
     # the entry dump's own `generated_at`, these bypass `_redact` and are
-    # leak-proof by construction rather than by masking.
+    # leak-proof by construction rather than by masking. What reaches them is
+    # now only what they were meant for -- a device whose identifier this
+    # integration does not own, or an appliance device the coordinator has
+    # nothing for -- because the account device is answered above.
     if appliance_id is None or not isinstance(coord_data, Mapping):
         return {"generated_at": _stamp_text(now)}
     data = coord_data.get(appliance_id)
