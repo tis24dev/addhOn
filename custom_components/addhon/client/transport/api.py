@@ -30,10 +30,10 @@ from typing import Any
 
 from . import device as _device
 from .connection import HonConnection
-from .parse import parse_appliance_list
+from .parse import parse_appliance_list, probe_appliance_list
 from .values import API_URL
 from ...debug_utils import redact_identity
-from ...error_codes import APPLIANCE_LIST_EMPTY
+from ...error_codes import APPLIANCE_LIST_EMPTY, classify
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +59,18 @@ class HonApi:
 
     def __init__(self, connection: HonConnection) -> None:
         self._connection = connection
+        # Census of the last appliance-list fetch: closed-domain primitives only, read
+        # by NativeHon.last_appliance_fetch -> HonClient -> Download Diagnostics. There
+        # is one HonApi per session (built in NativeHon.create(), session.py:194) and it
+        # is rebuilt with the session, so this always describes THIS session and needs
+        # no clear anywhere: a census that outlived its session is how a dump ends up
+        # answering "what did the fetch do" with a call that ran on an object the client
+        # has already thrown away.
+        #
+        # That lifetime is the whole contract, and it BOUNDS what a dump can show: the
+        # census dies with the session, so a fetch whose failure also killed the session
+        # is not readable from a dump. See load_appliances' `except` branch below.
+        self.last_appliance_fetch: dict | None = None
 
     @property
     def auth(self) -> Any:
@@ -70,11 +82,62 @@ class HonApi:
         # (fix v2.7.1: the old GET commands/v1/appliance returns [] for every
         # account). The defensive extraction lives in parse.parse_appliance_list.
         device_id = self._connection.device.mobile_id or _device.MOBILE_ID
-        async with self._connection.post(
-            f"{API_URL}/unified-api/v1/view/appliance-list",
-            json={"deviceId": device_id},
-        ) as resp:
-            result = await resp.json(content_type=None)
+        status: int | None = None
+        try:
+            async with self._connection.post(
+                f"{API_URL}/unified-api/v1/view/appliance-list",
+                json={"deviceId": device_id},
+            ) as resp:
+                # getattr, not resp.status: a session double without the attribute must
+                # answer "unknown status", never abort a setup over a diagnostic field.
+                status = getattr(resp, "status", None)
+                result = await resp.json(content_type=None)
+        except Exception as error:
+            # connection.py:322-355 raises BEFORE a body exists on 429 (:335), on any
+            # >= 500 (:337) and on a non-JSON body -- a CDN or maintenance page (:355).
+            # Without this branch the session's own census would still read `None`
+            # after a call that demonstrably happened, so the record is written where
+            # the fetch is: on the api that made it. Only the catalog LABEL of the
+            # classified error is kept: it is a closed-domain token, unlike the
+            # exception message, which carries whatever the vendor put in the body.
+            #
+            # WHAT THIS DOES NOT DO, stated here because the obvious reading is wrong.
+            # It does not put `outcome: "raised"` into a diagnostics dump. This raise
+            # propagates out of setup() -> NativeHon.create()'s `except BaseException`
+            # -> close(), which nulls `self._api` (session.py:737-738), so the session
+            # stops reporting a census; HonClient.setup_sync then calls _close_sync()
+            # and async_setup_entry pops the whole entry bucket (__init__.py:662, :673).
+            # The dump for that entry reads `{"state": "client_absent"}`, and by design:
+            # the design note refuses to make a FAILED SETUP diagnosable in this change
+            # and inscribes the shape that will (a `setup_failure` record in
+            # hass.data), because doing it here would change the meaning of an existing
+            # key. Pinned end to end by
+            # tests/test_native_session.py::FetchCensusLifetimeTest so the limit is
+            # behaviour under test, not folklore. This census is the value that record
+            # will carry when it lands.
+            self.last_appliance_fetch = {
+                "at": datetime.now(timezone.utc),
+                "status": status,
+                "code": getattr(classify(error), "label", None),
+                "outcome": "raised",
+                "stopped_at": None,
+                "node_type": None,
+                "siblings": None,
+                "count": None,
+            }
+            raise
+        # Recorded BEFORE the parse, and independently of it. "The cloud sent an empty
+        # list" and "our walk stopped at modules.applianceList" both leave `appliances`
+        # empty and both read as `"appliances": []` in the diagnostics dump; the probe
+        # is the only thing that separates them there, because the WARNING below carries
+        # the real key names and a dump can never carry those. parse_appliance_list
+        # stays the single source of the returned list; the probe only describes the walk.
+        self.last_appliance_fetch = {
+            "at": datetime.now(timezone.utc),
+            "status": status,
+            "code": None,
+            **probe_appliance_list(result),
+        }
         appliances = parse_appliance_list(result)
         if not appliances:
             # Request/auth OK but 0 appliances: log the response structure to

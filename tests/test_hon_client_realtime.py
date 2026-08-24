@@ -1189,5 +1189,77 @@ class RealtimeWiringSourceGuard(unittest.TestCase):
         self.assertIn("def build_realtime_snapshot", src)
 
 
+class LastFetchAccessorTest(unittest.TestCase):
+    """`HonClient.last_appliance_fetch` reads the LIVE session, never a mirror.
+
+    The census belongs to the transport api of the session that performed the fetch
+    (`NativeHon.last_appliance_fetch` -> `HonApi.last_appliance_fetch`). Mirroring it
+    into a field of the client would need a clear in setup_sync and a second write on
+    the MFA-resume path; forgetting either is how a dump ends up describing a session
+    the client has already thrown away, which is worse than reporting nothing.
+
+    `appliance_count`, `setup_expanded`, `setup_drops` and `degraded_census` beside
+    it are the setup census and are asserted here for the same reason and in the
+    same three shapes: they read through the same `_hon_instance` and inherit the
+    lifetime pinned by the last test of this class.
+    """
+
+    def test_the_accessors_are_none_without_a_session(self) -> None:
+        client = HonClient(email="e@x", password="p")  # no _hon_instance yet
+        self.assertIsNone(client._hon_instance)
+        self.assertIsNone(client.last_appliance_fetch)
+        # None, never 0 or {}: "this client has no session" and "the setup built
+        # nothing" are two different findings, and the dump renders them as two
+        # different states (`client_absent` against `expanded: 0`).
+        self.assertIsNone(client.appliance_count)
+        self.assertIsNone(client.setup_expanded)
+        self.assertIsNone(client.setup_drops)
+        self.assertIsNone(client.degraded_census)
+
+    def test_the_accessors_read_the_live_session(self) -> None:
+        census = {"status": 200, "outcome": "ok", "count": 2}
+        drops = {"mac_empty": 2}
+        degraded = {"ADDHON-230": 1}
+        client = HonClient(email="e@x", password="p")
+        client._hon_instance = types.SimpleNamespace(
+            last_appliance_fetch=census,
+            appliances=[],
+            setup_expanded=2,
+            setup_drops=drops,
+            degraded_census=degraded,
+        )
+        self.assertIs(census, client.last_appliance_fetch)
+        self.assertIs(drops, client.setup_drops)
+        self.assertIs(degraded, client.degraded_census)
+        self.assertEqual(2, client.setup_expanded)
+        # State (D) of the design's table, read end to end off one session: the
+        # cloud sent two appliances (census count), setup expanded two objects,
+        # built none of them, and named the reason. That reading is the entire
+        # purpose of these four accessors existing on the same object.
+        self.assertEqual(0, client.appliance_count)
+
+    def test_a_closed_session_stops_reporting_a_fetch(self) -> None:
+        # The lifetime claim of the accessor's docstring, stated as behaviour: after
+        # _close_sync the client holds no session, so it cannot answer with the census
+        # of the one it just discarded. A mirrored field would still answer.
+        client = HonClient(email="e@x", password="p")
+        client._start_hon_loop()
+        session = FakeSession([])
+        session.last_appliance_fetch = {"status": 200, "outcome": "ok", "count": 2}
+        client._hon_instance = session
+        session.setup_expanded = 2
+        session.setup_drops = {"mac_empty": 2}
+        session.degraded_census = {"ADDHON-230": 1}
+        self.assertEqual(2, client.last_appliance_fetch["count"])
+        self.assertEqual(0, client.appliance_count)
+        client._close_sync()
+        self.assertIsNone(client._hon_instance)
+        self.assertIsNone(client.last_appliance_fetch)
+        self.assertIsNone(client.appliance_count)
+        self.assertIsNone(client.setup_expanded)
+        self.assertIsNone(client.setup_drops)
+        self.assertIsNone(client.degraded_census)
+
+
 if __name__ == "__main__":
     unittest.main()

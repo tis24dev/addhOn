@@ -43,6 +43,23 @@ from ..error_codes import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Reason -> token for an appliance the CLOUD returned and this setup never
+# appended. `construction_error` is deliberately NOT "build_error": there are TWO
+# `except self._APPLIANCE_BUILD_ERRORS` branches over the same tuple and only the
+# first one DROPS the appliance (:300, construction). The second (:333, load)
+# KEEPS it and falls through to the append at :377, so counting that branch here
+# would put the same appliance in both `built` and `skipped` and break the
+# reconciliation `setup_expanded` exists to give the reader.
+#
+# The ORDER is part of the contract, not cosmetic: tests/test_diagnostics.py reads
+# this tuple out of this file with `ast` (session.py imports aiohttp, which that
+# suite does not stub) and compares it element by element against
+# `diagnostics._FETCH_SKIP_REASONS` -- the allowlist the dump iterates INSTEAD of
+# the mapping it receives, so that no key chosen outside this module can reach a
+# public issue. A reason added here without its twin there is a reason the dump
+# silently refuses to print.
+SETUP_DROP_REASONS = ("not_a_dict", "bad_zone", "construction_error", "mac_empty")
+
 
 class NativeHon:
     """Native hOn session: OUR auth, transport and parser engine.
@@ -106,6 +123,37 @@ class NativeHon:
         # `needs_rehydration`, which makes the first coordinator refresh re-run
         # load_commands before any entity is created.
         self._retryable_partials: list[Any] = []
+        # Reason -> count for appliances the cloud returned and this setup dropped,
+        # and how many appliance OBJECTS the setup loop accounted for. Counted by
+        # the tokens declared above, so the census carries no identity BY
+        # CONSTRUCTION -- which is why it can reach a public dump where
+        # `_hydration_failures` (keyed f"{mac}#{zone}") and `_hydration_causes`
+        # (raw exceptions) never can.
+        #
+        # REBOUND, never mutated in place, and that is the whole reason `_count_drop`
+        # exists instead of a `+= 1` at each site. setup() runs on the dedicated hOn
+        # loop thread (hon_client.py:678-681; the runtime re-auth path re-runs
+        # _close_sync + setup_sync in an executor at hon_client.py:1069-1070) while a
+        # Download Diagnostics runs on Home Assistant's event loop and calls `dict()`
+        # on this mapping.
+        #
+        # The rebind is NOT what stops that reader tearing, and the earlier claim that
+        # it was does not survive measurement: `dict(d)` over str keys is a single C
+        # call that never yields the GIL, so it raised 0 times in 50_000 reads against
+        # a writer thread at setswitchinterval(1e-6) -- at four keys AND at a thousand.
+        # A Python-level `for` over the same dict raised 2658 times in 20_000. So the
+        # copy in `setup_drops` was already safe on CPython, and the guard that IS
+        # load-bearing is the one in `degraded_census`, which loops in Python (see its
+        # docstring, and the threaded test that pins it).
+        #
+        # The rebind is kept anyway, for two reasons that do not rest on an interpreter
+        # detail: it makes the snapshot atomic BY CONSTRUCTION rather than by grace of
+        # how CPython implements dict copying, and a reader that already took the
+        # mapping holds a value that cannot change under it afterwards. It costs a
+        # four-entry dict per dropped appliance.
+        # `_setup_expanded` is a plain int, so it is already atomic.
+        self._setup_drops: dict[str, int] = {}
+        self._setup_expanded = 0
 
     async def __aenter__(self) -> "NativeHon":
         return await self.create()
@@ -208,7 +256,35 @@ class NativeHon:
                 type(appliance_data).__name__,
             )
 
+    def _count_drop(self, reason: str) -> None:
+        """One more appliance the cloud sent and this setup did not append.
+
+        Rebinds instead of mutating, for the reason __init__ gives at length: the
+        snapshot a diagnostics reader takes is then atomic by construction and not by
+        grace of how CPython happens to implement `dict(d)`.
+
+        Cannot raise, and that is load-bearing rather than incidental: every call
+        site sits inside an `except` handler or beside the `return`/`continue` that
+        IS the per-appliance fault boundary (CR#2), so a raise here would escape
+        that boundary and abort the whole setup loop -- the exact failure the
+        boundary was added to stop. `reason` is always a literal of
+        SETUP_DROP_REASONS, `dict.get` has no failure mode on a str key, and the
+        rebind allocates a dict of at most four entries.
+        """
+        self._setup_drops = {
+            **self._setup_drops,
+            reason: self._setup_drops.get(reason, 0) + 1,
+        }
+
     async def _create_appliance(self, appliance_data: dict, zone: int = 0) -> None:
+        # Counted BEFORE anything below can fail, so the census describes ATTEMPTS
+        # and not successes: `built + sum(setup_drops.values()) == setup_expanded`
+        # only holds if every exit from this method is either an append or a
+        # _count_drop, and an exit that skipped the count would silently shrink the
+        # left-hand side. Objects, not cloud entries: setup() calls this zones + 1
+        # times for a multi-zone entry (:487-490), which is why a census keyed on
+        # the length of the cloud list could never reconcile.
+        self._setup_expanded += 1
         # Per-appliance fault boundary (CR#2 -- distinct from the steady-state
         # coordinator/polling resilience): a single malformed device must be
         # logged-and-skipped so the OTHER appliances still load and setup completes.
@@ -223,8 +299,20 @@ class NativeHon:
             mac_empty = appliance.mac_address == ""
         except self._APPLIANCE_BUILD_ERRORS as error:
             self._log_malformed(error, appliance_data)
+            # The DROPPING one of the two branches over this tuple: no usable object
+            # exists, so nothing is appended and this is the only record that the
+            # cloud sent one more appliance than the inventory shows.
+            self._count_drop("construction_error")
             return
         if mac_empty:
+            # THE reason this census exists. This is the only drop in this file that
+            # emits no log line at all, so an inventory thrown away here produces a
+            # diagnostics dump AND a home-assistant.log byte-identical to those of an
+            # account that genuinely owns no appliances -- "turn on debug and
+            # reload" cannot separate them, because there is nothing to turn on.
+            # Still nothing is LOGGED here: a mac is identity, and a count keyed by a
+            # token of this module is the half of the finding that is safe to publish.
+            self._count_drop("mac_empty")
             return
         if self._minimal:
             # Validation only: the appliance is built (so .appliances is populated and
@@ -337,6 +425,19 @@ class NativeHon:
         self._hydration_failures.clear()
         self._hydration_causes.clear()
         self._retryable_partials.clear()
+        # REBOUND, not cleared in place, unlike the three lines above. Two of those
+        # three hold objects nothing outside this session reads; the third,
+        # `_hydration_failures`, is reachable from another thread through
+        # `degraded_appliances` (:576) and `degraded_census` (:581), and both take an
+        # atomic `dict()` copy before touching it -- so a clear in place still cannot
+        # tear a reader mid-read. A Download Diagnostics on Home Assistant's loop
+        # copies the census below while this line runs on the hOn loop thread (see
+        # __init__). This also runs on the MFA resume path, where submit_mfa_code()
+        # re-enters setup() on the SAME session (:705): the appliances built before
+        # the challenge are dropped by the clear above, so a census that survived
+        # would count them twice.
+        self._setup_drops = {}
+        self._setup_expanded = 0
         self._setup_phase = "load_appliances"
         # The hierarchical scope is what makes a LAZY sign-in nested in this request name
         # itself ("load_appliances/auth/...") instead of borrowing this label -- the
@@ -360,6 +461,14 @@ class NativeHon:
                     ),
                     appliance,
                 )
+                # Counted as one expanded object as well as one drop. This entry
+                # never reaches _create_appliance, so nothing else will count it,
+                # and the reconciliation the reader performs --
+                # `built + sum(skipped) == expanded` -- is what tells them the
+                # census is complete rather than merely plausible. One unusable
+                # entry is exactly one appliance object that will never exist.
+                self._setup_expanded += 1
+                self._count_drop("not_a_dict")
                 continue
             # Zone parse is INSIDE the per-appliance boundary: a non-numeric "zone"
             # raises ValueError (or TypeError on a non-str/int), which must skip only
@@ -368,6 +477,12 @@ class NativeHon:
                 zones = int(appliance.get("zone", "0"))
             except (TypeError, ValueError) as error:
                 self._log_malformed(error, appliance)
+                # One object per unreadable entry, for the reason given just above:
+                # the zone is what decides HOW MANY objects the entry expands into,
+                # so an entry whose zone cannot be read is charged the one object it
+                # would have produced at minimum.
+                self._setup_expanded += 1
+                self._count_drop("bad_zone")
                 continue
             if zones > 1:
                 for zone in range(zones):
@@ -461,6 +576,114 @@ class NativeHon:
     def degraded_appliances(self) -> dict[str, Any]:
         """'mac#zone' -> code for appliances kept with partial data (diagnostics only)."""
         return dict(self._hydration_failures)
+
+    @property
+    def degraded_census(self) -> dict[str, int]:
+        """ADDHON label -> count of appliances this setup KEPT in a degraded state.
+
+        A different population from `setup_drops`, and the commoner one. Those
+        appliances do not exist at all; these exist with an empty `commands` map,
+        which `_record_partial` (:393-394) spells out as no
+        select/number/switch/button/climate/fan entities until a MANUAL reload. That
+        is the shape of the report "half my entities disappeared", and today the dump
+        shows the shortfall through `platforms.appliance_totals` without ever being
+        able to name a cause: instrumenting the rare silent drop and leaving the
+        common degradation invisible would have been the census backwards.
+
+        The KEYS of `_hydration_failures` are f"{mac}#{zone}" (:405) and never leave
+        this object. The reduction to labels happens HERE, on the session, so no
+        diagnostics reader is ever the thing that has to decide not to publish a MAC
+        -- the same trade `_poll_census` makes and defends at hon_client.py:298-301,
+        where the redacted name is dropped on the floor rather than forwarded.
+
+        `dict()` first and the loop over the COPY, which is not a style choice: a
+        Python-level `for` over `.values()` gives up the GIL between items, so a
+        `_record_partial` running on the hOn loop thread (hon_client.py:678-681; a
+        runtime re-auth re-runs setup in an executor at :1069-1070) while this runs
+        on Home Assistant's loop during a Download Diagnostics raises `RuntimeError:
+        dictionary changed size during iteration`. Measured on CPython 3.11 with a
+        writer thread and `setswitchinterval(1e-6)`: 5719 failures in 97726 reads for
+        the in-place loop, 0 for the copy, which finishes inside a single C call.
+        `_last_fetch` would catch that and render the whole block "unreadable",
+        which is precisely the block the download was for. `_record_partial` still
+        mutates in place (:405), unlike `_count_drop`, so the copy is the only thing
+        standing between the two threads.
+
+        getattr on `label` rather than an attribute read: every value put here today
+        is a catalog entry (:345 APPLIANCE_DATA_MALFORMED, :361 classify), and an
+        object that turns out not to be one stays out of the census entirely instead
+        of contributing a `None` key to a document that gets pasted into an issue.
+        """
+        out: dict[str, int] = {}
+        for code in dict(self._hydration_failures).values():
+            label = getattr(code, "label", None)
+            if isinstance(label, str):
+                out[label] = out.get(label, 0) + 1
+        return out
+
+    @property
+    def setup_drops(self) -> dict[str, int]:
+        """Reason -> count for appliances the cloud returned and setup dropped.
+
+        A copy, and the copy is why `_count_drop` rebinds: this runs on Home
+        Assistant's loop during a diagnostics download while setup() may be
+        appending on the hOn loop thread.
+        """
+        return dict(self._setup_drops)
+
+    @property
+    def setup_expanded(self) -> int:
+        """How many appliance OBJECTS this setup accounted for.
+
+        NOT the number of cloud entries. An entry with `zone > 1` is expanded into
+        zones + 1 objects (:487-490, pinned by tests/test_native_session.py:265-272
+        as [1, 2, 0]), so a census counted on the raw list length could never
+        reconcile against an inventory: `built > count` is a healthy reading for a
+        multi-zone fridge. An entry dropped before it can be expanded (:470-471, :484-485)
+        is charged one object, since it is one appliance that will never exist.
+
+        The invariant a maintainer reads this against:
+
+            built + sum(setup_drops.values()) == setup_expanded
+            setup_expanded >= len(the raw cloud list)
+
+        equal in the second line if and only if no entry had `zone > 1`.
+
+        The first line holds for every setup that ran to COMPLETION, and "completion"
+        is a real precondition rather than a formality, because this census is
+        readable WHILE the loop is running. A runtime re-auth re-runs _close_sync +
+        setup_sync in an executor (hon_client.py:1069-1070) with the config entry
+        still LOADED and the client still in `hass.data`, so a Download Diagnostics
+        taken in that window reads a half-finished loop: `count` is already published
+        (load_appliances returns before the first appliance is built) while
+        `expanded`, `built` and `skipped` are three separate reads of three moments of
+        the same loop. A shortfall therefore has TWO readings, and the block carries
+        no field that separates them:
+
+          * the setup is still running -- and the entry may well be up, which is
+            precisely why someone was able to download the dump;
+          * the loop was aborted inside an appliance, which only the auth rejection
+            at :359-360 and a cancellation can do, and in that state the config entry
+            did not come up at all.
+
+        Do not read a shortfall as the second without corroborating it against
+        `last_error`/`platforms` in the same document. Closing the gap properly means
+        publishing a completion marker beside the counters; that is a change to the
+        shape of an emitted block and is deliberately not made here.
+        """
+        return self._setup_expanded
+
+    @property
+    def last_appliance_fetch(self) -> dict | None:
+        """Census of the appliance-list fetch this session performed (diagnostics).
+
+        `self._api` here is the transport `HonApi` built in create() (:194), which owns
+        the census because it is the only object that sees both the HTTP status and the
+        raw body. getattr rather than an attribute read: `_api` is None until create()
+        runs, and a session double in a test is not required to grow a field just to be
+        asked a diagnostic question.
+        """
+        return getattr(self._api, "last_appliance_fetch", None)
 
     @property
     def auth_phase(self) -> str:

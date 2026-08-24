@@ -15,7 +15,9 @@ awscrt. aiohttp/yarl/homeassistant are stubbed.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -1103,6 +1105,564 @@ class NativeSessionSetupTest(unittest.TestCase):
             self.assertIn(member, dir(nh))
         # appliances is readable right away (empty list), api is not (not created)
         self.assertEqual(nh.appliances, [])
+
+
+class SetupDropCensusTest(unittest.TestCase):
+    """`setup_drops` / `setup_expanded`: the appliances the cloud sent and we did not.
+
+    The class of failure this pins is the one no log can describe: an account whose
+    inventory arrives and is thrown away renders in the diagnostics dump, and in
+    home-assistant.log, exactly like an account that owns nothing -- and for the empty
+    mac (session.py:293-302) that is literal, since that branch writes no log line at
+    all. The census is the only artefact that can separate them, so its arithmetic has
+    to be pinned rather than assumed:
+
+        len(appliances) + sum(setup_drops.values()) == setup_expanded
+
+    Every test below is a term of that sum. `test_a_load_failure_is_NOT_counted_as_a_
+    drop` is the one that keeps it honest from the other side: the second
+    `except self._APPLIANCE_BUILD_ERRORS` KEEPS its appliance, and counting it would
+    put the same object on both sides of the equation.
+
+    The last two tests belong to `degraded_census`, the census of what that same
+    branch KEEPS. It is here rather than in a class of its own because the two
+    populations are defined by contrast -- an appliance is in exactly one of them,
+    and `test_a_load_failure_is_NOT_counted_as_a_drop` is the hinge between the two.
+    """
+
+    def _patch(self, obj, name, value):
+        real = getattr(obj, name)
+        setattr(obj, name, value)
+        self.addCleanup(lambda: setattr(obj, name, real))
+
+    def _nh_with_api(self, harness, **kw):
+        nh = NativeHon("u@x", "p", **kw)
+        nh._api = harness.api  # bypass connection creation, drive setup() directly
+        return nh
+
+    def test_a_silent_mac_drop_is_counted(self) -> None:
+        # The root cause the whole census exists for: the appliance arrived, was built,
+        # and was dropped for an empty mac WITHOUT a log line. assertNoLogs is part of
+        # the assertion, not tidiness -- it states the premise ("the log cannot answer
+        # this") that makes the counter worth its lines.
+        data = [{"macAddress": "", "applianceTypeName": "GHOST"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        with self.assertNoLogs(session_mod._LOGGER, level="DEBUG"):
+            _run(nh.setup())
+        self.assertEqual([], nh.appliances)
+        self.assertEqual({"mac_empty": 1}, nh.setup_drops)
+        self.assertEqual(1, nh.setup_expanded)
+
+    def test_a_non_dict_element_is_counted(self) -> None:
+        # Dropped in setup() BEFORE _create_appliance is reached, so this is also the
+        # test that the expansion counter is charged for an entry that never expands:
+        # without that, an inventory of schema-drift entries would report expanded == 0
+        # with a non-empty census and the reconciliation would fail on healthy data.
+        good = {"macAddress": "B", "applianceTypeName": "WM"}
+        h = _Harness(self, [good])
+        h.install()
+
+        async def mixed_load_appliances():
+            h.events.append("load_appliances")
+            return ["AA:BB:CC:DD:EE:FF", dict(good)]
+
+        h.api.load_appliances = mixed_load_appliances
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="ERROR"):
+            _run(nh.setup())
+        self.assertEqual({"not_a_dict": 1}, nh.setup_drops)
+        self.assertEqual(2, nh.setup_expanded)
+        self.assertEqual(["B"], [a.mac_address for a in nh.appliances])
+
+    def test_an_unparseable_zone_is_counted(self) -> None:
+        data = [{"macAddress": "BAD", "applianceTypeName": "AC", "zone": "abc"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="ERROR"):
+            _run(nh.setup())
+        self.assertEqual({"bad_zone": 1}, nh.setup_drops)
+        self.assertEqual(1, nh.setup_expanded)
+        self.assertEqual([], nh.appliances)
+
+    def test_a_construction_error_is_counted(self) -> None:
+        # factory.create_appliance raising leaves no usable object, so this branch
+        # returns without appending: it is a DROP and the census must say so.
+        data = [{"macAddress": "BAD", "applianceTypeName": "REF"}]
+        h = _Harness(self, data)
+
+        def raising_create_appliance(api, data, zone=0):
+            raise KeyError("malformed attributes in constructor")
+
+        async def fake_make_mqtt(hon):
+            h.events.append("mqtt")
+            return FakeMqtt(h)
+
+        self._patch(factory, "create_appliance", raising_create_appliance)
+        self._patch(NativeHon, "_make_mqtt", fake_make_mqtt)
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="ERROR"):
+            _run(nh.setup())
+        self.assertEqual({"construction_error": 1}, nh.setup_drops)
+        self.assertEqual(1, nh.setup_expanded)
+        self.assertEqual([], nh.appliances)
+
+    def test_a_load_failure_is_NOT_counted_as_a_drop(self) -> None:
+        # The trap this class exists to disarm. There are TWO
+        # `except self._APPLIANCE_BUILD_ERRORS` branches over the SAME tuple: the first
+        # (construction) drops, the second (load) KEEPS the appliance and falls through
+        # to the append. Counting the second would put one object in both `built` and
+        # `skipped`, and the invariant would then be broken by the most ordinary event
+        # in this file -- an appliance whose commands failed to load, which ships every
+        # day as a degraded entry. Without this test that breakage is silent.
+        data = [{"macAddress": "A", "applianceTypeName": "REF"}]
+        h = _Harness(self, data, fail_macs={"A"})
+        h.install()
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="ERROR"):
+            _run(nh.setup())
+        self.assertEqual({}, nh.setup_drops)
+        self.assertEqual(1, len(nh.appliances))
+        self.assertEqual(1, nh.setup_expanded)
+        # It is degraded, not absent: the OTHER census (C3) is the one that owns it.
+        self.assertEqual(1, len(nh.degraded_appliances))
+
+    def test_two_appliances_dropped_leave_an_empty_inventory_and_a_full_census(
+        self,
+    ) -> None:
+        # State (D) of the design's decision table: the cloud sent an inventory and we
+        # threw all of it away. Today this dump is byte-identical to an empty account;
+        # the three numbers below are what tell them apart.
+        data = [
+            {"macAddress": "", "applianceTypeName": "REF"},
+            {"macAddress": "", "applianceTypeName": "WM"},
+        ]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual([], nh.appliances)
+        self.assertEqual({"mac_empty": 2}, nh.setup_drops)
+        self.assertEqual(2, nh.setup_expanded)
+
+    def test_a_zoned_entry_expands_the_census_not_the_count(self) -> None:
+        # Blocker B3: ONE cloud entry with zone=2 becomes THREE appliance objects
+        # (zone 1, zone 2, base), so a census counted on the length of the cloud list
+        # could never reconcile -- `built > count` is a HEALTHY reading for a
+        # multi-zone fridge, not a bug. `expanded` is the term that makes the sum work.
+        data = [{"macAddress": "Z", "applianceTypeName": "AC", "zone": "2"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual(3, len(nh.appliances))
+        self.assertEqual(3, nh.setup_expanded)
+        self.assertEqual({}, nh.setup_drops)
+        # One cloud entry, three objects: the gap the raw count cannot explain.
+        self.assertEqual(1, len(data))
+
+    def test_a_dropped_zoned_entry_is_counted_per_object(self) -> None:
+        # The same expansion on the failing side: the drop is charged once per OBJECT,
+        # never once per entry, or the sum stops closing exactly when the account is
+        # both zoned and broken.
+        data = [{"macAddress": "", "applianceTypeName": "AC", "zone": "2"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual([], nh.appliances)
+        self.assertEqual({"mac_empty": 3}, nh.setup_drops)
+        self.assertEqual(3, nh.setup_expanded)
+
+    def test_the_census_invariant_holds(self) -> None:
+        # The whole point, on a table that mixes every branch at once: healthy, zoned,
+        # silently dropped, schema drift, unreadable zone. This is the arithmetic a
+        # maintainer performs on the dump to decide whether the census accounts for
+        # everything the cloud sent, so it is asserted rather than left to the reader.
+        good = {"macAddress": "A", "applianceTypeName": "REF"}
+        zoned = {"macAddress": "Z", "applianceTypeName": "AC", "zone": "2"}
+        headless = {"macAddress": "", "applianceTypeName": "GHOST"}
+        unreadable = {"macAddress": "B", "applianceTypeName": "WM", "zone": "abc"}
+        entries = [dict(good), dict(zoned), dict(headless), "x", dict(unreadable)]
+        h = _Harness(self, [good])
+        h.install()
+
+        async def mixed_load_appliances():
+            h.events.append("load_appliances")
+            return [dict(e) if isinstance(e, dict) else e for e in entries]
+
+        h.api.load_appliances = mixed_load_appliances
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="ERROR"):
+            _run(nh.setup())
+        self.assertEqual(
+            nh.setup_expanded, len(nh.appliances) + sum(nh.setup_drops.values())
+        )
+        # Stated again as literals, so a change that keeps the sum balanced by moving
+        # an appliance from one side to the other still fails here.
+        self.assertEqual(7, nh.setup_expanded)
+        self.assertEqual(4, len(nh.appliances))
+        self.assertEqual(
+            {"mac_empty": 1, "not_a_dict": 1, "bad_zone": 1}, nh.setup_drops
+        )
+        # The second half of the declared invariant: one object per cloud entry at
+        # minimum, more only where an entry was expanded into zones.
+        self.assertGreaterEqual(nh.setup_expanded, len(entries))
+
+    def test_setup_drops_are_cleared_on_a_new_setup(self) -> None:
+        # setup() is re-entered on the SAME session when a mid-setup MFA challenge is
+        # resumed, so a census that survived would describe two setups at once and the
+        # invariant would fail against a single inventory. Rebound, not cleared in
+        # place: a diagnostics download reads this map from another thread.
+        data = [{"macAddress": "", "applianceTypeName": "GHOST"}]
+        h = _Harness(self, data)
+        h.install()
+        nh = self._nh_with_api(h)
+        _run(nh.setup())
+        self.assertEqual({"mac_empty": 1}, nh.setup_drops)
+        # The PRIVATE object, not `nh.setup_drops`. The property returns
+        # `dict(self._setup_drops)` -- already a detached copy -- so an assertion on
+        # what it returned survives a `.clear()` just as happily as a rebind and
+        # cannot distinguish the two. This is the only assertion in the change that
+        # claims to pin the rebind, so it has to hold the object the writer touches.
+        before = nh._setup_drops
+        data[:] = [{"macAddress": "A", "applianceTypeName": "REF"}]
+        _run(nh.setup())
+        self.assertEqual({}, nh.setup_drops)
+        self.assertEqual(1, nh.setup_expanded)
+        self.assertEqual(1, len(nh.appliances))
+        # The reset REBOUND rather than mutating: a reader on Home Assistant's loop
+        # that took the mapping mid-download still holds a complete census of the
+        # setup it was reading, not an emptied one.
+        self.assertIsNot(before, nh._setup_drops)
+        self.assertEqual({"mac_empty": 1}, before)
+
+    def test_count_drop_rebinds_instead_of_mutating(self) -> None:
+        # The other half of the same discipline, and the half no other test reaches:
+        # `_count_drop` is called once per dropped appliance while a Download
+        # Diagnostics may already hold the mapping. A `self._setup_drops[reason] += 1`
+        # would pass every behavioural test in this class -- the counts are identical
+        # -- and would silently change what a concurrent reader sees.
+        nh = NativeHon("u@x", "p")
+        held = nh._setup_drops
+        nh._count_drop("mac_empty")
+        self.assertIsNot(held, nh._setup_drops)
+        self.assertEqual({}, held)
+        self.assertEqual({"mac_empty": 1}, nh.setup_drops)
+        # And again on a non-empty census, because a rebind that only happened on the
+        # first drop would still lose the property from the second one on.
+        held = nh._setup_drops
+        nh._count_drop("mac_empty")
+        self.assertIsNot(held, nh._setup_drops)
+        self.assertEqual({"mac_empty": 1}, held)
+        self.assertEqual({"mac_empty": 2}, nh.setup_drops)
+
+    def test_setup_drop_reasons_are_exhaustive(self) -> None:
+        # A fifth way out of the loop must arrive with a token, or the dump will drop
+        # its count on the floor: diagnostics.py iterates SETUP_DROP_REASONS instead of
+        # the mapping it receives, precisely so a key it does not know cannot reach a
+        # public issue. That safety has a cost -- an uncounted reason is invisible --
+        # and this test is what makes the cost visible at the moment it is incurred.
+        observed: set = set()
+        for entries, patch_factory in (
+            ([{"macAddress": "", "applianceTypeName": "GHOST"}], False),
+            (["not-a-dict"], False),
+            ([{"macAddress": "B", "applianceTypeName": "WM", "zone": "abc"}], False),
+            ([{"macAddress": "C", "applianceTypeName": "REF"}], True),
+        ):
+            h = _Harness(self, [])
+            h.install()
+            if patch_factory:
+                def raising_create_appliance(api, data, zone=0):
+                    raise KeyError("constructor boom")
+
+                self._patch(factory, "create_appliance", raising_create_appliance)
+
+            async def load_appliances(captured=entries):
+                return [dict(e) if isinstance(e, dict) else e for e in captured]
+
+            h.api.load_appliances = load_appliances
+            nh = self._nh_with_api(h)
+            _run(nh.setup())
+            observed |= set(nh.setup_drops)
+        self.assertEqual(set(session_mod.SETUP_DROP_REASONS), observed)
+
+    def test_degraded_census_counts_labels_never_macs(self) -> None:
+        # The commoner half of the report this whole block exists for: nothing was
+        # dropped, both appliances shipped, and both shipped WITHOUT commands -- so
+        # the user sees two devices and none of their select/number/switch/button/
+        # climate/fan entities (session.py:378-380). The raw bookkeeping that knows
+        # this is keyed by identity, so the two assertions below are one statement:
+        # the session holds "AA:BB:CC:DD:EE:FF#0" and publishes "ADDHON-230".
+        data = [
+            {"macAddress": "AA:BB:CC:DD:EE:FF", "applianceTypeName": "REF"},
+            {"macAddress": "11:22:33:44:55:66", "applianceTypeName": "WM"},
+        ]
+        h = _Harness(self, data, fail_macs={a["macAddress"] for a in data})
+        h.install()
+        nh = self._nh_with_api(h)
+        with self.assertLogs(session_mod._LOGGER, level="ERROR"):
+            _run(nh.setup())
+        # Kept, not dropped: the other census must stay empty or the same appliance
+        # would be counted as both absent and present.
+        self.assertEqual(2, len(nh.appliances))
+        self.assertEqual({}, nh.setup_drops)
+        self.assertEqual({"ADDHON-230": 2}, nh.degraded_census)
+        # Two identities collapse into ONE row, which is what makes the reduction a
+        # reduction rather than a rename of the mapping beside it.
+        self.assertEqual(
+            ["AA:BB:CC:DD:EE:FF#0", "11:22:33:44:55:66#0"],
+            list(nh.degraded_appliances),
+        )
+        # The leak test, on the writer side, where section 3.5 of the design puts
+        # it: the census is what crosses into the dump, and a dump is pasted into a
+        # public issue. "#" is asserted as well as the two MACs because a key that
+        # leaked in a form we did not anticipate would still carry the separator.
+        blob = json.dumps(nh.degraded_census)
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", blob)
+        self.assertNotIn("11:22:33:44:55:66", blob)
+        self.assertNotIn("#", blob)
+
+    def test_the_census_separates_the_two_causes_it_is_fed(self) -> None:
+        # Beyond the design's list, and the reason is that the test above cannot
+        # tell "groups by label" apart from "emits the one label this branch always
+        # produces": with a single cause in play, a census that ignored `code`
+        # entirely would pass it. The two branches that call `_record_partial` pass
+        # DIFFERENT codes -- APPLIANCE_DATA_MALFORMED at session.py:332 and
+        # `classify(error)` at :344 -- and a maintainer reading the dump acts on
+        # which one it is: ADDHON-230 is a payload this build cannot parse and will
+        # parse the same way after a reload, ADDHON-400 is a network timeout that a
+        # reload may well clear.
+        good = {"macAddress": "A", "applianceTypeName": "REF"}
+        malformed = {"macAddress": "B", "applianceTypeName": "WM"}
+        timed_out = {"macAddress": "C", "applianceTypeName": "AC"}
+        h = _Harness(self, [good, malformed, timed_out], fail_macs={"B"})
+        h.install()
+        built = factory.create_appliance  # the harness fake, already installed
+
+        def create_with_a_timeout(api, data, zone=0):
+            appliance = built(api, data, zone=zone)
+            if data.get("macAddress") == "C":
+                async def load_commands():
+                    raise TimeoutError("hOn did not answer in time")
+
+                appliance.load_commands = load_commands
+            return appliance
+
+        self._patch(factory, "create_appliance", create_with_a_timeout)
+        nh = self._nh_with_api(h)
+        # WARNING, not ERROR: the transport branch logs at WARNING and the malformed
+        # one at ERROR, and both have to be captured or the second escapes to the
+        # root logger and prints through the run.
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            _run(nh.setup())
+        self.assertEqual(3, len(nh.appliances))
+        # ADDHON-400 rather than the 460 a bare `classify(TimeoutError())` returns:
+        # `budgeted` converts every TimeoutError that leaves its scope into a coded
+        # error attributed to the innermost phase (client/budget.py:227-229), and
+        # inside "load_appliance" that resolves to NETWORK_TIMEOUT instead of the
+        # mute "setup timed out". The census reports what the session recorded and
+        # re-derives nothing, which is what keeps it and `last_error` from naming one
+        # failure two ways.
+        self.assertEqual({"ADDHON-230": 1, "ADDHON-400": 1}, nh.degraded_census)
+        # One healthy appliance is in neither census: `degraded` counts what is
+        # broken, never what was loaded.
+        self.assertEqual({}, nh.setup_drops)
+        self.assertEqual(3, nh.setup_expanded)
+
+
+class DegradedCensusThreadSafetyTest(unittest.TestCase):
+    """`degraded_census` is read from a DIFFERENT thread than the one that fills it.
+
+    `_record_partial` mutates `_hydration_failures` IN PLACE (session.py) on the
+    dedicated hOn loop thread, while a Download Diagnostics reads this property on
+    Home Assistant's event loop -- during setup, and during the runtime re-auth that
+    re-runs setup in an executor with the config entry still loaded.
+
+    The property loops in PYTHON over the values, and a Python-level `for` gives up
+    the GIL between items, so without the `dict()` copy it raises `RuntimeError:
+    dictionary changed size during iteration`. `_last_fetch` catches that and renders
+    the whole block `{"state": "unreadable"}` -- the block the download was for.
+
+    This is the ONLY guard in the census whose failure mechanism reproduces on demand:
+    the sibling copy in `setup_drops` is a single C-level `dict()` call that never
+    yields, measured at 0 failures in 50_000 reads with the same writer, which is why
+    it is pinned by an identity assertion (`test_count_drop_rebinds_instead_of_
+    mutating`) rather than by a race. The one defended by a measurement was the one
+    tested by nothing, and this closes that.
+    """
+
+    def _hammer(self, reader, *, keys: int, reads: int):
+        """Run `reader` against a writer thread churning `_hydration_failures`.
+
+        Returns (escaped exception or None, results). The switch interval is dropped
+        so the interpreter preempts inside a Python-level loop rather than once every
+        few milliseconds; it is restored unconditionally.
+        """
+        nh = NativeHon("u@x", "p")
+        code = ec.APPLIANCE_DATA_MALFORMED
+        for i in range(keys):
+            nh._hydration_failures[f"AA:BB:CC:DD:EE:{i:02X}#0"] = code
+        stop = threading.Event()
+        failures: list = []
+
+        def writer() -> None:
+            # Grow by a batch, then drop the batch, rather than add/remove one key at
+            # a time: an insert immediately undone leaves the size wrong for two
+            # bytecodes and a reader almost never lands there. `_record_partial` is
+            # itself a burst -- one write per degraded appliance as the setup loop
+            # walks the inventory -- so the batch is also the truer shape.
+            i = 0
+            try:
+                while not stop.is_set():
+                    nh._hydration_failures[f"11:22:33:44:55:{i % 64:02X}#1"] = code
+                    if i % 64 == 63:
+                        for j in range(64):
+                            nh._hydration_failures.pop(f"11:22:33:44:55:{j:02X}#1", None)
+                    i += 1
+            except Exception as err:  # pragma: no cover - writer must stay clean
+                failures.append(err)
+
+        # Registered BEFORE the interval is touched and before the thread exists, so
+        # neither can leak into the rest of the run no matter where this fails. A
+        # switch interval left at 1e-6 slows every Python-level operation in the
+        # process, which is how a threaded test takes an unrelated wall-clock test
+        # down with it several files later.
+        # Cleanups run LIFO, so these are registered in reverse of the order they must
+        # execute: signal the writer to stop, THEN join it, THEN restore the interval.
+        previous = sys.getswitchinterval()
+        self.addCleanup(sys.setswitchinterval, previous)
+        sys.setswitchinterval(1e-6)
+        thread = threading.Thread(target=writer, daemon=True)
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(stop.set)
+        thread.start()
+        try:
+            escaped = None
+            results = []
+            for _ in range(reads):
+                try:
+                    results.append(reader(nh))
+                except Exception as err:
+                    escaped = err
+                    break
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+            sys.setswitchinterval(previous)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(previous, sys.getswitchinterval())
+        self.assertEqual([], failures)
+        return escaped, results
+
+    def test_a_concurrent_writer_cannot_make_the_census_raise(self) -> None:
+        escaped, results = self._hammer(
+            lambda nh: nh.degraded_census, keys=400, reads=2000
+        )
+        self.assertIsNone(escaped, f"degraded_census raised: {escaped!r}")
+        self.assertEqual(2000, len(results))
+        # Not merely "did not raise": every snapshot is still a shape-checked label
+        # mapped to a count, so a copy that traded the race for a torn read would be
+        # caught here too. The count floats with the writer's batch, hence the bound
+        # rather than an equality.
+        for row in results[:: max(1, len(results) // 50)]:
+            self.assertEqual({"ADDHON-230"}, set(row))
+            self.assertGreaterEqual(row["ADDHON-230"], 400)
+
+    def test_the_reader_this_test_stands_in_for_really_does_tear(self) -> None:
+        # The control. Without it this class proves nothing: a guard test that stays
+        # green because the race is unreachable on this interpreter is indistinguish-
+        # able from one that stays green because the guard works. This runs the
+        # UNGUARDED shape -- the same Python-level loop over the live mapping that
+        # `degraded_census` would be if the `dict()` copy were dropped -- and asserts
+        # it does tear, so a future reader knows the copy above is load-bearing here
+        # and not cargo.
+        def unguarded(nh):
+            out: dict = {}
+            for value in nh._hydration_failures.values():
+                label = getattr(value, "label", None)
+                if isinstance(label, str):
+                    out[label] = out.get(label, 0) + 1
+            return out
+
+        escaped, _ = self._hammer(unguarded, keys=400, reads=2000)
+        self.assertIsInstance(
+            escaped,
+            RuntimeError,
+            "the unguarded loop did NOT tear on this interpreter, so the test above "
+            "proves nothing about the dict() copy in degraded_census. Re-derive "
+            "whether that copy is still load-bearing here before deleting either "
+            "test -- do not delete this guard to make the run green.",
+        )
+        self.assertIn("changed size during iteration", str(escaped))
+
+
+class FetchCensusLifetimeTest(unittest.TestCase):
+    """How far the appliance-list fetch census actually travels, stated as behaviour.
+
+    `HonApi.load_appliances` records `outcome: "raised"` when the POST dies before a
+    body (a 429, any >= 500, a non-JSON CDN page). The obvious reading of that branch
+    -- that a diagnostics dump will therefore show `outcome: "raised"` -- is WRONG,
+    and this class exists so nobody has to rediscover why by instrumenting a running
+    Home Assistant.
+
+    The census lives on the transport api, the api lives on the session, and the raise
+    that produced the census also destroys the session: it propagates out of setup(),
+    `create()`'s `except BaseException` calls `close()`, and `close()` nulls `_api`.
+    From that point the session answers `None`, `HonClient._close_sync` nulls the
+    session, and `async_setup_entry` pops the entry bucket -- so the dump for that
+    entry reads `client_absent`.
+
+    That is by design, not by oversight: making a FAILED SETUP diagnosable is refused
+    for this change (it would change the meaning of `_last_error`'s existing
+    `client_absent` answer and opens an ownership question of its own), and the shape
+    that will carry this census when it lands is inscribed in the design note. Until
+    then the branch is correct where it is written and unreachable where it is read,
+    and that is exactly what the two tests below say.
+    """
+
+    def test_the_census_records_the_raise_on_the_api_that_made_the_call(self) -> None:
+        nh = NativeHon("u@x", "p")
+        api = FakeApi([], [])
+
+        async def failing_load_appliances():
+            api.last_appliance_fetch = {
+                "at": None,
+                "status": None,
+                "code": "ADDHON-450",
+                "outcome": "raised",
+                "stopped_at": None,
+                "node_type": None,
+                "siblings": None,
+                "count": None,
+            }
+            raise RuntimeError("hOn server error (status 503)")
+
+        api.last_appliance_fetch = None
+        api.load_appliances = failing_load_appliances
+        nh._api = api
+        with self.assertRaises(RuntimeError):
+            _run(nh.setup())
+        # Written, and readable through the session -- for as long as the session has
+        # an api to read it from.
+        self.assertEqual("raised", nh.last_appliance_fetch["outcome"])
+
+    def test_the_raise_that_writes_the_census_also_destroys_its_reader(self) -> None:
+        # The half that bounds the feature. close() nulls `_api`, so the census the
+        # branch above just wrote stops being reachable from the session, and every
+        # reader downstream of the session (HonClient -> diagnostics) reads None.
+        nh = NativeHon("u@x", "p")
+        api = FakeApi([], [])
+        nh._api = api
+        api.last_appliance_fetch = {"outcome": "raised", "code": "ADDHON-450"}
+        self.assertEqual("raised", nh.last_appliance_fetch["outcome"])
+        _run(nh.close())
+        self.assertIsNone(nh._api)
+        # `never_ran` in the dump, and after the entry bucket is popped,
+        # `client_absent`. Neither says "raised", and that is the documented cost.
+        self.assertIsNone(nh.last_appliance_fetch)
 
 
 if __name__ == "__main__":

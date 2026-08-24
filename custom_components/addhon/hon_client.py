@@ -836,6 +836,89 @@ class HonClient:
             _LOGGER.error("Error fetching appliances: %s", err)
             raise RuntimeError(f"Error fetching appliances: {err}") from err
 
+    @property
+    def last_appliance_fetch(self) -> dict | None:
+        """The live session's appliance-list fetch census, or None if there is none.
+
+        Read LIVE off the session rather than mirrored into a field of this client. A
+        mirror would need a clear beside the ones at the top of setup_sync and a second
+        write on the MFA-resume path, and forgetting either is how a census ends up
+        describing a session the client has already thrown away. Reading through
+        `_hon_instance` cannot drift: `_close_sync` nulls it under the lifecycle lock,
+        so the answer is either this session's census or None.
+
+        getattr, not an attribute read: `_hon_instance` is None before the first setup
+        and after a close, and a session double is free not to carry the field.
+        """
+        return getattr(self._hon_instance, "last_appliance_fetch", None)
+
+    @property
+    def appliance_count(self) -> int | None:
+        """How many appliances the live session actually built (None: no session).
+
+        The same number as `last_poll.returned` whenever both describe the same
+        session -- that one is a recount of this list at the end of a poll cycle
+        (`_poll_census`, written at :1300) -- but the two have INDEPENDENT
+        resets, and the window where that matters is a SUCCESSFUL runtime re-auth:
+        `last_poll_census` is nulled at the top of every setup_sync (:660) and
+        rewritten only when a whole cycle closes, so between the end of setup_sync
+        and the end of the first poll `last_poll` is null and this is the only
+        number in the dump that says how many appliances the setup built. That
+        window is exactly when someone downloads a dump saying "I reloaded and my
+        entities are gone".
+
+        isinstance before len(): `_hon_instance` can be a session double, and a
+        length taken off an arbitrary object is how a convenience field in a dump
+        learns to raise.
+        """
+        appliances = getattr(self._hon_instance, "appliances", None)
+        return len(appliances) if isinstance(appliances, list) else None
+
+    @property
+    def setup_expanded(self) -> int | None:
+        """How many appliance objects the live session's setup accounted for.
+
+        Read off the session for the reason `last_appliance_fetch` above gives at
+        length: a copy kept on this client would need a clear that someone will
+        eventually forget, and would then describe a session already discarded.
+        With `built` beside it the reader can check
+        `built + sum(skipped.values()) == expanded` and know the census accounts
+        for every appliance the cloud sent.
+        """
+        return getattr(self._hon_instance, "setup_expanded", None)
+
+    @property
+    def setup_drops(self) -> dict[str, int] | None:
+        """Reason -> count for the appliances the live setup dropped, or None.
+
+        The session already reduced this to tokens it declares itself
+        (`client/session.py:SETUP_DROP_REASONS`), so no identity crosses this
+        boundary and the diagnostics reader still filters it against its own
+        allowlist rather than trusting the mapping it receives.
+        """
+        return getattr(self._hon_instance, "setup_drops", None)
+
+    @property
+    def degraded_census(self) -> dict[str, int] | None:
+        """ADDHON label -> count for the appliances the live setup KEPT broken.
+
+        The other half of the account beside `setup_drops`, and the half that
+        answers the commoner report: `setup_drops` counts appliances that never
+        became entities at all, this counts the ones that exist with an empty
+        `commands` map and therefore lost their select/number/switch/button/
+        climate/fan entities until a manual reload (`client/session.py:393-394`).
+        Read together they say whether a shrunken entity list is missing devices or
+        missing capabilities, which nothing in the dump could distinguish before.
+
+        Deliberately NOT `degraded_appliances`, which is the same information keyed
+        by f"{mac}#{zone}". The session publishes the reduced form itself
+        (`client/session.py:581`) so a plaintext MAC is never handed across this
+        boundary for a reader to remember not to write down; the diagnostics reader
+        then still shape-checks every label it receives (`_degraded_census`) instead
+        of trusting the mapping, for the same reason `setup_drops` is filtered above.
+        """
+        return getattr(self._hon_instance, "degraded_census", None)
+
     def _needs_rehydration(self, appliance) -> bool:
         """Did setup append this appliance without its commands, for a retryable reason?
 

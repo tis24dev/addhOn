@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 import sys
 import types
@@ -83,9 +84,14 @@ from custom_components.addhon.client.transport.api import HonApi, API_URL  # noq
 # Test doubles                                                                #
 # --------------------------------------------------------------------------- #
 class FakeResponse:
-    def __init__(self, body, text="<text>") -> None:
+    # `status` mirrors aiohttp.ClientResponse.status, which load_appliances reads into
+    # its fetch census: a 4xx carrying a JSON body decodes cleanly and is delivered as
+    # a success by connection.py (it re-raises only on 429 and >= 500), so the status
+    # is the only thing that separates "the endpoint moved" from "the schema drifted".
+    def __init__(self, body, text="<text>", status: int = 200) -> None:
         self._body = body
         self._text = text
+        self.status = status
 
     async def json(self, content_type=None):
         return self._body
@@ -119,14 +125,17 @@ class _ReqCtx:
 class FakeConnection:
     """Replaces HonConnection: records the requests, returns a fixed body."""
 
-    def __init__(self, body, text="<text>", mobile_id="pyhOn") -> None:
+    def __init__(self, body, text="<text>", mobile_id="pyhOn", status: int = 200) -> None:
         self._body = body
         self._text = text
+        self._status = status
         self.calls: list = []
         self.device = _device.HonDevice(mobile_id)
 
     def _ctx(self, method, url, kwargs):
-        return _ReqCtx(self, method, url, kwargs, FakeResponse(self._body, self._text))
+        return _ReqCtx(
+            self, method, url, kwargs, FakeResponse(self._body, self._text, self._status)
+        )
 
     def get(self, url, **kwargs):
         return self._ctx("GET", url, kwargs)
@@ -680,7 +689,9 @@ class _StrictResponse(FakeResponse):
 
 class _StrictConnection(FakeConnection):
     def _ctx(self, method, url, kwargs):
-        return _ReqCtx(self, method, url, kwargs, _StrictResponse(self._body, self._text))
+        return _ReqCtx(
+            self, method, url, kwargs, _StrictResponse(self._body, self._text, self._status)
+        )
 
 
 class ContentTypeTest(unittest.TestCase):
@@ -707,6 +718,234 @@ class ContentTypeTest(unittest.TestCase):
 
     def test_load_statistics_passes_content_type_none(self) -> None:
         _run(_call(_StrictConnection({})).load_statistics(FakeAppliance()))
+
+
+# --------------------------------------------------------------------------- #
+# The appliance-list fetch census                                              #
+# --------------------------------------------------------------------------- #
+class _RaisingCtx:
+    """A request context that dies before there is a body, like connection.py does on
+    429, on any >= 500 and on a non-JSON body (a CDN or maintenance page)."""
+
+    def __init__(self, conn, method, url, kwargs, error) -> None:
+        self._conn = conn
+        self._method = method
+        self._url = url
+        self._kwargs = kwargs
+        self._error = error
+
+    async def __aenter__(self):
+        self._conn.calls.append((self._method, self._url, self._kwargs))
+        raise self._error
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _RaisingConnection(FakeConnection):
+    def __init__(self, error, **kwargs) -> None:
+        super().__init__(None, **kwargs)
+        self._error = error
+
+    def _ctx(self, method, url, kwargs):
+        return _RaisingCtx(self, method, url, kwargs, self._error)
+
+
+class _NoStatusResponse:
+    """A duck-typed response with no `status` attribute at all.
+
+    Every response double in this suite grew one when the census landed; this one
+    deliberately did not, because the field the census reads must be optional. A
+    diagnostic field that can abort a setup is worse than the missing diagnosis.
+    """
+
+    def __init__(self, body) -> None:
+        self._body = body
+
+    async def json(self, content_type=None):
+        return self._body
+
+
+class _NoStatusConnection(FakeConnection):
+    def _ctx(self, method, url, kwargs):
+        return _ReqCtx(self, method, url, kwargs, _NoStatusResponse(self._body))
+
+
+class FetchCensusTest(unittest.TestCase):
+    """`load_appliances` records what the ONE appliance-list call did, on BOTH paths.
+
+    The live case this exists for: the cloud answered with `result` keys
+    ['executionTime', 'modules', 'success'] and `modules` keys ['applianceList'], the
+    hOn app showed two appliances, and the dump said `"appliances": []` with
+    `"last_error": null`. Nothing in that file said whether the list was empty, whether
+    our walk stopped early, or whether the call reached a body at all. The census is
+    what answers that, and it has to survive the raising path too -- an exception
+    leaves the field untouched otherwise, which reads exactly like "no session".
+    """
+
+    def test_a_successful_fetch_records_status_and_probe(self) -> None:
+        body = {
+            "modules": {"applianceList": {"payload": {"appliances": [{"a": 1}, {"b": 2}]}}}
+        }
+        api = _call(FakeConnection(body))
+        # Nothing recorded before the call: the field starts as None so the diagnostics
+        # reader can tell "this session never fetched" from "this session fetched".
+        self.assertIsNone(api.last_appliance_fetch)
+        _run(api.load_appliances())
+        census = api.last_appliance_fetch
+        self.assertEqual(200, census["status"])
+        self.assertEqual("ok", census["outcome"])
+        self.assertEqual(2, census["count"])
+        self.assertIsNone(census["code"])
+        self.assertIsNone(census["stopped_at"])
+        # Aware UTC, so the diagnostics layer can subtract it from its own clock.
+        self.assertIsNotNone(census["at"].utcoffset())
+
+    def test_a_non_200_with_a_json_body_records_its_status(self) -> None:
+        # Root cause (C): the endpoint moved. connection.py re-raises only on 429 and
+        # >= 500, so a 404 with a JSON body is delivered here as a success and the
+        # parser reports an empty account. The status is the whole diagnosis.
+        api = _call(FakeConnection({"message": "Not Found"}, status=404))
+        with self.assertLogs(
+            "custom_components.addhon.client.transport.api", level="WARNING"
+        ):
+            self.assertEqual([], _run(api.load_appliances()))
+        census = api.last_appliance_fetch
+        self.assertEqual(404, census["status"])
+        self.assertEqual("missing_key", census["outcome"])
+        self.assertEqual("modules", census["stopped_at"])
+        self.assertIsNone(census["count"])
+
+    def test_a_raising_fetch_still_records_a_census(self) -> None:
+        # Root cause (E): the call never reached a body. The exception must still
+        # propagate untouched -- the census is a bystander, not a handler.
+        from custom_components.addhon.error_codes import classify
+
+        error = RuntimeError("hOn server error (status 503)")
+        api = _call(_RaisingConnection(error))
+        with self.assertRaises(RuntimeError) as caught:
+            _run(api.load_appliances())
+        self.assertIs(error, caught.exception)
+        census = api.last_appliance_fetch
+        self.assertEqual("raised", census["outcome"])
+        self.assertEqual(classify(error).label, census["code"])
+        self.assertRegex(census["code"], r"^ADDHON-[0-9]{3}$")
+        # No body was reached, so nothing downstream of it can be reported.
+        self.assertIsNone(census["status"])
+        self.assertIsNone(census["count"])
+        self.assertIsNone(census["node_type"])
+
+    def test_a_response_without_a_status_attribute_does_not_raise(self) -> None:
+        body = {"modules": {"applianceList": {"payload": {"appliances": [{"a": 1}]}}}}
+        api = _call(_NoStatusConnection(body))
+        self.assertEqual([{"a": 1}], _run(api.load_appliances()))
+        self.assertIsNone(api.last_appliance_fetch["status"])
+        self.assertEqual("ok", api.last_appliance_fetch["outcome"])
+
+    def test_the_census_carries_no_cloud_string(self) -> None:
+        # The leak test on the writer side: this dict is published verbatim into a
+        # document users paste into public issues, so not one string of it may come
+        # from the response. `default=str` so the datetime does not hide a failure to
+        # serialize behind a TypeError.
+        import json
+
+        body = {
+            "AA:BB:CC:DD:EE:FF": "user@example.com",
+            "modules": {
+                "applianceList": {
+                    "payload": {
+                        "appliances": [
+                            {
+                                "macAddress": "AA:BB:CC:DD:EE:FF",
+                                "serialNumber": "PLAINTEXT-SERIAL",
+                                "nickName": "Kitchen Washer",
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+        api = _call(FakeConnection(body))
+        _run(api.load_appliances())
+        blob = json.dumps(api.last_appliance_fetch, default=str)
+        for leak in (
+            "AA:BB:CC:DD:EE:FF",
+            "user@example.com",
+            "PLAINTEXT-SERIAL",
+            "Kitchen Washer",
+        ):
+            self.assertNotIn(leak, blob, leak)
+
+    def test_both_paths_stamp_an_instant_the_dump_can_render(self) -> None:
+        """WHEN the fetch ran, on both paths, carried end to end into the block.
+
+        Without the stamp the block says the cloud sent an empty list without saying
+        whether that was six seconds or six days ago -- that is, without saying whether
+        asking the reporter for a reload would change anything. `generated_at` dates the
+        DOWNLOAD, not the fetch, and in a dump whose account came back empty it is the only
+        instant left in the document: every other one lives inside an appliance block,
+        and there are none.
+
+        BOTH paths are asserted because `load_appliances` builds two SEPARATE dict
+        literals (api.py:98-107 for the raising branch, :115-120 for the success branch)
+        and
+        nothing else in this suite reads `at` on the raising one. A stamp dropped there,
+        or written as a naive `datetime.now()`, is refused by `_as_utc(...,
+        assume_naive_utc=False)` (diagnostics.py:1259-1260), which blanks `at` AND
+        `age_s` on exactly the root cause where the age decides what to do next: a 503
+        six days old is a census nobody should act on, a 503 six seconds old is an
+        outage in progress.
+
+        The READER half runs here and not in tests/test_diagnostics.py because that file
+        stubs only the `homeassistant.*` tree and deliberately provides no `yarl` (its
+        comment at :844-845), so it cannot import this transport at all; this file stubs
+        aiohttp and yarl already, so it is the only place where the instant the writer
+        stamps meets the real `_stamp_text` -> `_age_seconds` path. Split across the two
+        files both halves stay green while the field renders `null`: every writer test
+        above reads `census["at"]` as a datetime object, and every reader test in
+        test_diagnostics.py hand-writes the instant it then reads back.
+
+        The api object stands in for the client because the accessor chain forwards this
+        very dict without copying it: `HonApi.last_appliance_fetch` ->
+        `NativeHon.last_appliance_fetch` (session.py:654) -> `HonClient`
+        (hon_client.py:853).
+        """
+        from datetime import timedelta
+        from types import SimpleNamespace
+
+        from custom_components.addhon import diagnostics
+        from custom_components.addhon.const import DOMAIN
+
+        body = {"modules": {"applianceList": {"payload": {"appliances": [{"a": 1}]}}}}
+        served = _call(FakeConnection(body))
+        _run(served.load_appliances())
+        refused = _call(_RaisingConnection(RuntimeError("hOn server error (status 503)")))
+        with self.assertRaises(RuntimeError):
+            _run(refused.load_appliances())
+
+        for path, api in (("served", served), ("refused", refused)):
+            with self.subTest(path=path):
+                stamped = api.last_appliance_fetch["at"]
+                # Aware UTC at the source. An offset-carrying instant is what the reader
+                # is allowed to subtract from a clock of its own, and normalising to
+                # +00:00 is also what keeps the emitted text from matching `_MAC_RE` --
+                # `_stamp_text` measured '2026-04-09T12:34:56-05:30:15' surviving
+                # `_jsonable` as '2026-04-09T***' (diagnostics.py:1286-1292).
+                self.assertEqual(timedelta(0), stamped.utcoffset())
+                hass = SimpleNamespace(data={DOMAIN: {"e1": {"client": api}}})
+                block = diagnostics._last_fetch(
+                    hass,
+                    SimpleNamespace(entry_id="e1"),
+                    now=stamped + timedelta(seconds=51_840),
+                )
+                self.assertEqual("recorded", block["state"])
+                # Equality with the writer's own isoformat, not merely "not None": it is
+                # what proves the real stamp clears `_ISO_RE` and the 40-character cap
+                # instead of being dropped by them.
+                self.assertEqual(stamped.isoformat(), block["at"])
+                self.assertTrue(block["at"].endswith("+00:00"), block["at"])
+                self.assertEqual(51_840, block["age_s"])
+
 
 
 if __name__ == "__main__":
