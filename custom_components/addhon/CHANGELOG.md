@@ -9,13 +9,16 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 ## [Unreleased]
 
+## [5.19.1] - 2026-08-25
+
 **New Features**
 
-- Cooker hoods (`HO`) gain a **power switch** (#83). The hood has three states, not two:
-  the control panel is lit or dark, and while it is dark the appliance ignores every
-  speed and light command it is sent. The new switch owns that axis — switching it on is
-  the remote equivalent of tapping the glass, switching it off stops the hood and darkens
-  the panel.
+- Cooker hoods (`HO`) gain a **power switch** (#83). The hood has three states, and the
+  integration used to model only two of them: the control panel dark, the panel lit with
+  the fan stopped, and the panel lit with the fan running. While the panel is dark the
+  appliance ignores every speed and light command it is sent. The new switch owns the
+  panel — switching it on is the remote equivalent of tapping the glass, switching it off
+  stops the hood and darkens the panel — while the fan entity owns the other axis.
 
 **Fixes**
 

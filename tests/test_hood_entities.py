@@ -769,6 +769,29 @@ class HoodFanWriteTest(unittest.IsolatedAsyncioTestCase):
         # The user still asked for something, so the state is still reconciled.
         self.assertEqual(1, fan_entity.coordinator.refreshes)
 
+    async def test_a_refresh_that_reveals_a_running_fan_still_sends_the_off(
+        self,
+    ) -> None:
+        # The cached reading is what the guard looks at, and it can be stale: a
+        # hood started from its own panel or from the app still reports zero until
+        # the next poll. Skipping on that first look would make `turn_off` report
+        # success while the fan kept running, so the guard refreshes and looks
+        # again before deciding it has nothing to do.
+        fan_entity = await self._fan(running=0)
+        coordinator = fan_entity.coordinator
+        polled = coordinator.async_refresh
+
+        async def reveal_a_running_fan() -> None:
+            await polled()
+            coordinator.data["ho-1"]["attributes"]["windSpeed"] = 3
+
+        coordinator.async_refresh = reveal_a_running_fan
+        await fan_entity.async_turn_off()
+        self.assertEqual(
+            {"windSpeed": "0", "onOffStatus": "1"},
+            fan_entity._appliance.api.sent[0]["parameters"],
+        )
+
     async def test_an_unreadable_level_still_writes_the_off(self) -> None:
         # Unknown is not a reason to swallow a command the user asked for, and the
         # guard must not turn a hood whose reading broke into a fan that cannot be
@@ -1141,6 +1164,19 @@ class HoodPowerSwitchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("stopProgram", sent["command"])
         self.assertEqual({"onOffStatus": "0"}, sent["parameters"])
 
+    async def test_its_diagnostics_tag_is_its_own_unique_id_suffix(self) -> None:
+        # The diagnostics join key is `f"{domain}.{unique_id suffix}"`
+        # (`diagnostics.py` builds it that way for every registry row), so a tag
+        # that does not match the suffix never joins and the entity reports a null
+        # source. Tying the two together here is what makes renaming one without
+        # the other fail, instead of shipping a row that silently says nothing.
+        from custom_components.addhon import diagnostics
+
+        power = await self._power()
+        suffix = power._attr_unique_id.split("_", 1)[1]
+        _attrs, _params, sources, _unavailable = diagnostics._mapped_sets(APPLIANCE_HO)
+        self.assertIn(f"switch.{suffix}", sources)
+
     async def test_neither_direction_ships_a_program_name(self) -> None:
         appliance = _appliance()
         power = await self._power(appliance)
@@ -1331,8 +1367,8 @@ class HoodDiagnosticsCoverageTest(unittest.TestCase):
         # mandatory, but the entity that CHOOSES it is the power switch, and that
         # is the row a reader chasing the parameter has to land on.
         self.assertEqual(["windSpeed"], sources["fan.hood"]["write"])
-        self.assertEqual(["onOffStatus"], sources["switch.hood_power"]["write"])
-        self.assertEqual(["onOffStatus"], sources["switch.hood_power"]["read"])
+        self.assertEqual(["onOffStatus"], sources["switch.power"]["write"])
+        self.assertEqual(["onOffStatus"], sources["switch.power"]["read"])
 
     def test_another_type_did_not_inherit_the_hood_parameters(self) -> None:
         # The block is type-gated; a missing gate would fold the hood's names into

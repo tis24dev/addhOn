@@ -281,7 +281,12 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
     # `startProgram`, down through `stopProgram` -- so unlike the fan row above it
     # is the entity that OWNS this parameter.
     {
-        "tag": "switch.hood_power",
+        # `switch.power`, not `switch.hood_power`: the join key is
+        # `f"{domain}.{unique_id suffix}"`, and this entity's suffix is `power`
+        # (same shape as `switch.pause` above). A tag that does not match the
+        # suffix never joins the registry row, and the entity reports a null
+        # source instead of its parameter.
+        "tag": "switch.power",
         "types": (APPLIANCE_HO,),
         "read": ("onOffStatus",),
         "write": ("onOffStatus",),

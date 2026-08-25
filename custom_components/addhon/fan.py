@@ -435,12 +435,18 @@ class HonHoodFan(HonBaseEntity, FanEntity):
         entity's current state, so the guard has to live here. An unreadable level
         is not zero and still writes: unknown is not a reason to skip a command the
         user asked for.
+
+        THE GUARD LOOKS TWICE, and the refresh between the two looks is the point.
+        A hood that started extracting since the last poll -- from its own panel, or
+        from the app -- still reports zero in the cached reading, and skipping on
+        that first look would make `turn_off` report success while the fan kept
+        running. `_async_request_command_refresh` awaits a full coordinator refresh,
+        so the second look is on current data.
         """
         if self._level == 0:
-            # The state may still be stale, and the user did ask for something; the
-            # refresh is what a real write would have ended with anyway.
             await self._async_request_command_refresh()
-            return
+            if self._level == 0:
+                return
         await self._send("turn_off", "0")
 
     async def _send(self, action: str, level: str) -> None:
