@@ -218,7 +218,25 @@ class HonCommand:
         params: dict[str, str | float],
         *,
         sync_shadow: bool,
+        program_name: str | None = None,
     ) -> bool:
+        """Transmit `params`; `program_name` overrides the category on the wire.
+
+        `program_name` is the top-level `programName` of a `startProgram` body, and
+        the default (None) keeps the historical behaviour: the command's own raw
+        cloud category key, which is what a washer or a fridge program start has to
+        carry. An explicit "" SUPPRESSES the key -- the caller is telling us this
+        `startProgram` is not a program start at all.
+
+        The cooker hood is why the override exists. Its `startProgram` is filed
+        under a placeholder category the cloud invented for a command that starts
+        nothing (the app never names it, and no such key exists in the app's
+        translation catalogue), while the app's own hood body -- proven three times
+        over in the decompiled sources -- carries no `programName` field whatsoever.
+        Without a way to say "not a program" the hood could not use the only command
+        that can set its `onOffStatus`. Every other caller passes nothing and is
+        unaffected.
+        """
         if not (
             isinstance(params, _CanonicalExactPayload)
             and params.command is self
@@ -250,7 +268,7 @@ class HonCommand:
             self._name,
             params,
             ancillary_params,
-            self._category_name,
+            self._category_name if program_name is None else program_name,
         )
         if not result:
             _LOGGER.error("Command rejected by cloud: %s", self._name)
@@ -269,8 +287,15 @@ class HonCommand:
             payload["prStr"] = self._category_name.upper()
         return payload
 
-    async def send_exact(self, params: dict[str, str | float]) -> bool:
-        return await self._send_parameters(params, sync_shadow=False)
+    async def send_exact(
+        self,
+        params: dict[str, str | float],
+        *,
+        program_name: str | None = None,
+    ) -> bool:
+        return await self._send_parameters(
+            params, sync_shadow=False, program_name=program_name
+        )
 
     @property
     def categories(self) -> dict[str, "HonCommand"]:

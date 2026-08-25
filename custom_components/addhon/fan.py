@@ -15,11 +15,12 @@ disturb the light, aroma, lock or tone settings. A preset is written through
 while it runs, which is why only the modes BOTH commands declare are offered
 (`AirPurifierCapabilities.writable_modes`).
 
-COOKER HOOD. Speed goes out as `settings.windSpeed` and the stop as
-`stopProgram`, deliberately diverging from the official app, which uses
-`startProgram` for both. The reasoning, and the `programName` that divergence
-avoids, is written out once in `hood.py`'s module docstring. The two commands
-also travel by two different senders, and `HonHoodFan._send` says why.
+COOKER HOOD. Every write is a `CommandPatch` too, built by `hood.hood_patch` and
+dispatched the same way. Speed AND the fan's own off both go out as
+`startProgram.windSpeed`, which reproduces the official app's body once the
+dispatcher adds the command's mandatory `onOffStatus`. Switching the appliance off
+is a different action on a different entity: it belongs to the hood's power
+switch, not to the fan. `hood.py`'s module docstring carries the whole argument.
 """
 from __future__ import annotations
 
@@ -44,14 +45,13 @@ from .air_purifier import (
     raw_text,
 )
 from .base_entity import HonBaseEntity, coordinator_data_map
-from .command_dispatch import CommandPatch, async_dispatch_patch
+from .command_dispatch import async_dispatch_patch
 from .const import AP_LAST_MODE_STORE, APPLIANCE_AP, APPLIANCE_HO, DOMAIN
 from .debug_utils import redact_id
-from .hon_commands import async_send_command
 from .hood import (
-    HOOD_SETTINGS_COMMAND,
     HOOD_SPEED_PARAM,
-    HOOD_STOP_COMMAND,
+    HOOD_START_COMMAND,
+    hood_patch,
     speed_level,
     speed_levels,
 )
@@ -99,7 +99,7 @@ def _hood_fan(coordinator, appliance_id: str, data: dict, client):
             "Fan debug: skip hood id=%s (no writable '%s' range on the '%s' command)",
             redact_id(appliance_id),
             HOOD_SPEED_PARAM,
-            HOOD_SETTINGS_COMMAND,
+            HOOD_START_COMMAND,
         )
         return None
     return HonHoodFan(coordinator, appliance_id, levels, client)
@@ -304,7 +304,7 @@ class HonAirPurifierFan(HonBaseEntity, FanEntity):
 class HonHoodFan(HonBaseEntity, FanEntity):
     """Cooker hood extraction fan: one speed step per declared wind-speed level.
 
-    The speed axis is the LIVE `settings.windSpeed` range, never
+    The speed axis is the LIVE `startProgram.windSpeed` range, never
     `model_attributes.speedLevel`: both report 5 on the hood of issue #83, but the
     schema is the value the device will actually accept. On that hood the app
     labels the top one or two steps as "boost" and "double boost"
@@ -312,16 +312,17 @@ class HonHoodFan(HonBaseEntity, FanEntity):
     percentage steps they are, because the boost is not a separate mode the device
     reports back and a preset that cannot be read is a preset that ships unknown.
 
-    ON/OFF IS READ FROM `windSpeed`, NOT FROM `onOffStatus`. The two agree on the
-    dump (both 0 while stopped), but `windSpeed` is what we write and what we read
-    back, so binding the state to it keeps the entity self-consistent even if a
-    firmware moved `onOffStatus` on its own.
+    THIS ENTITY IS THE EXTRACTION FAN, NOT THE APPLIANCE. It reads and writes
+    `windSpeed` and nothing else; `onOffStatus` -- the lit-or-dark panel -- belongs
+    to the hood's power switch. That separation is the fix for the first shipped
+    version, whose off sent `stopProgram` and so darkened the whole appliance:
+    from the dark state the hood ignores every later write, so Home Assistant could
+    switch the fan off once and never switch it back on.
 
-    TURNING THE FAN OFF ALSO TURNS THE LIGHT OFF. `stopProgram` pins `windSpeed`
-    AND `lightStatus` to "0" -- they are `fixed` in the schema, so the values are
-    the device's own declaration, not a choice of ours -- and the official app
-    behaves the same way. The light switch re-reads its state right after, because
-    the post-command refresh reloads the whole appliance.
+    TURNING THE FAN OFF NOW LEAVES THE LIGHT ALONE, because it is a `windSpeed` of
+    zero and touches nothing else. The device's own declaration says the same: 0 is
+    a legal value of the range it publishes, and the app's slider sends exactly
+    that. Switching everything off, light included, is the power switch.
     """
 
     _attr_translation_key = "hood"
@@ -401,11 +402,7 @@ class HonHoodFan(HonBaseEntity, FanEntity):
         # value sent is always one the schema declares, never an interpolation
         # between two legal steps.
         level = percentage_to_ordered_list_item(self._levels, percentage)
-        await self._send(
-            "set_percentage",
-            HOOD_SETTINGS_COMMAND,
-            {HOOD_SPEED_PARAM: str(level)},
-        )
+        await self._send("set_percentage", str(level))
 
     async def async_turn_on(
         self, percentage: int | None = None, preset_mode: str | None = None, **kwargs
@@ -419,42 +416,50 @@ class HonHoodFan(HonBaseEntity, FanEntity):
         if percentage:
             await self.async_set_percentage(percentage)
             return
-        await self._send(
-            "turn_on",
-            HOOD_SETTINGS_COMMAND,
-            {HOOD_SPEED_PARAM: str(self._levels[0])},
-        )
+        await self._send("turn_on", str(self._levels[0]))
 
     async def async_turn_off(self, **kwargs) -> None:
-        """Stop the hood with `stopProgram`, the one command it is known to run.
+        """Stop extraction by writing a wind speed of zero.
 
-        No values are passed: every parameter this command carries is `fixed` in
-        the schema, so the device's own declaration is what goes on the wire --
-        the exact payload its command history shows it accepted and executed.
+        NOT `stopProgram`, which pins `onOffStatus` and `lightStatus` to zero as
+        well and leaves the appliance in the dark state no later write can reach.
+        Zero is a declared value of the same range every other speed comes from,
+        and it is what the app's own slider sends at its bottom notch, so the panel
+        and the light stay exactly as the user left them.
+
+        A HOOD ALREADY AT ZERO IS LEFT ALONE. Every write on this channel carries
+        the schema's mandatory `onOffStatus = "1"`, so sending one to a hood whose
+        fan is already stopped would WAKE the control panel -- a `fan.turn_off`
+        service call, or a `homeassistant.turn_off` sweeping a whole area, would
+        switch the appliance ON. Home Assistant calls this method regardless of the
+        entity's current state, so the guard has to live here. An unreadable level
+        is not zero and still writes: unknown is not a reason to skip a command the
+        user asked for.
         """
-        await self._send("turn_off", HOOD_STOP_COMMAND, {})
+        if self._level == 0:
+            # The state may still be stale, and the user did ask for something; the
+            # refresh is what a real write would have ended with anyway.
+            await self._async_request_command_refresh()
+            return
+        await self._send("turn_off", "0")
 
-    async def _send(self, action: str, command_name: str, values: dict[str, str]) -> None:
-        """Send one hood intent, then refresh.
+    async def _send(self, action: str, level: str) -> None:
+        """Write one wind speed, then refresh.
 
-        TWO SENDERS, on purpose, because the two commands need opposite things.
+        ONE command, one channel: a sparse `startProgram` patch through the
+        transactional dispatcher, carrying `windSpeed` and the one field the live
+        schema marks mandatory. That field is `onOffStatus`, pinned to "1" by the
+        schema itself, so the wire body is the official app's speed body to the
+        key -- and a speed change wakes a dark panel exactly like the app's does.
 
-        `settings` goes out as a SPARSE patch through the transactional
-        dispatcher: only `windSpeed` (plus whatever the live schema marks
-        mandatory, which on this command is nothing). The full-group sender would
-        also transmit `clockHH`/`clockMM`/`clockSS`, three parameters the hood does
-        NOT mirror into its shadow -- `sync_params_to_command` can never refresh
-        them, so they sit at the 0 the schema loaded and every speed change would
-        reset the hood's clock. It would restate `filterCleaningAlarmStatus="1"`
-        too. Same shape of bug as the wine cooler's #62.
-
-        `stopProgram` stays on the FULL-command sender, and that is not an
-        oversight. Every parameter it declares is `fixed`, so its whole group is
-        exactly `{lightStatus, onOffStatus, windSpeed}` at the device's own pinned
-        values -- the precise payload this hood's command history shows it accepted
-        AND executed. A sparse dispatch would carry only `onOffStatus`, the one
-        parameter the schema marks mandatory, and drop the other two from a payload
-        that is known to work as it stands.
+        Sparse, and through the dispatcher, for the same reason as every other hood
+        write: `hood.hood_patch` builds it, which is also where the `programName`
+        suppression lives. The full-command sender is deliberately NOT used here.
+        It would transmit the whole group, `lightStatus` included -- and this
+        hood's `startProgram.lightStatus` loads at 1 and is never refreshed from
+        the shadow, so every speed change would switch the light ON. It would also
+        pre-write that value into the shadow before the network call, where nothing
+        undoes it if the send fails.
 
         The payload is built INSIDE the try so a value the live schema rejects
         surfaces as the same localized command error as a transport failure,
@@ -469,23 +474,23 @@ class HonHoodFan(HonBaseEntity, FanEntity):
             )
         try:
             _LOGGER.debug(
-                "Fan debug: hood %s id=%s command=%s values=%s",
+                "Fan debug: hood %s id=%s command=%s %s=%s",
                 action,
                 redact_id(self._appliance_id),
-                command_name,
-                values,
+                HOOD_START_COMMAND,
+                HOOD_SPEED_PARAM,
+                level,
             )
-            if command_name == HOOD_SETTINGS_COMMAND:
-                await async_dispatch_patch(
-                    self.hass,
-                    client,
-                    appliance,
-                    CommandPatch(command_name, values, action=f"hood_{action}"),
-                )
-            else:
-                await async_send_command(
-                    self.hass, client, appliance, command_name, values
-                )
+            await async_dispatch_patch(
+                self.hass,
+                client,
+                appliance,
+                hood_patch(
+                    HOOD_START_COMMAND,
+                    {HOOD_SPEED_PARAM: level},
+                    action=f"hood_{action}",
+                ),
+            )
             await self._async_request_command_refresh()
         except HomeAssistantError:
             raise

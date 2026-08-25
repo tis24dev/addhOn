@@ -72,7 +72,7 @@ class ClientInterfacesTest(unittest.TestCase):
             def send(self):  # noqa: D401 - shape only
                 return None
 
-            def send_exact(self, params):
+            def send_exact(self, params, *, program_name=None):
                 return None
 
         self.assertIsInstance(Cmd(), self.I.Command)
@@ -84,7 +84,7 @@ class ClientInterfacesTest(unittest.TestCase):
             def send(self):
                 return None
 
-            def send_exact(self, params):
+            def send_exact(self, params, *, program_name=None):
                 return None
 
         self.assertNotIsInstance(CmdNoCategories(), self.I.Command)

@@ -62,7 +62,10 @@ class Command(Protocol):
     def send(self) -> Awaitable[bool]: ...
 
     def send_exact(
-        self, params: dict[str, str | float]
+        self,
+        params: dict[str, str | float],
+        *,
+        program_name: str | None = None,
     ) -> Awaitable[bool]: ...
 
 

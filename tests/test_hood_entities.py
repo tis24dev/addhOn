@@ -211,6 +211,14 @@ HOOD_STOP_PARAMS = {
                     "fixedValue": "0"},
 }
 
+# The raw cloud key the hood's single `startProgram` category is filed under. The
+# dump stores only the CLEANED name ("undefined"), so this literal is a
+# reconstruction: what the schema proves is its SHAPE -- it contains the substring
+# "PROGRAM" (or the engine would have named the synthetic parameter differently)
+# and its last dot-segment lowercases to "undefined". Nothing below asserts the
+# string itself; what is asserted is that whatever it is never reaches the wire.
+HOOD_START_CATEGORY = "PROGRAMS.HO.UNDEFINED"
+
 HOOD_START_PARAMS = {
     "onOffStatus": {"typology": "fixed", "category": "command", "mandatory": 1,
                     "fixedValue": "1"},
@@ -296,15 +304,29 @@ HOOD_CONFIG_PARAMS = {
 }
 
 
-def _appliance(settings_params: dict | None = None, *, categorised: bool = True):
+def _appliance(
+    settings_params: dict | None = None,
+    *,
+    categorised: bool = True,
+    start_params: dict | None = None,
+):
     """A hood appliance carrying the live schema of the reporting device.
 
     `categorised` reproduces the shape the command loader really builds for this
-    hood: a `settings` command with TWO categories, `setParameters` active, which is
-    what makes the engine attach the synthetic `category` parameter. Building the
-    fixture the flat way, or with a single category, would make every "no selector"
-    assertion below pass for the wrong reason -- a selector with nothing to select
-    can swap nothing.
+    hood: a `settings` command with TWO categories, `setParameters` active, and a
+    `startProgram` filed under ONE placeholder category, which is what makes the
+    engine attach the synthetic selector parameters. Building the fixture the flat
+    way, or with a single category, would make every "no selector" assertion below
+    pass for the wrong reason -- a selector with nothing to select can swap
+    nothing -- and it would hide the `programName` the transport stamps on a
+    categorised `startProgram`.
+
+    THE SPEED RANGE IS ONE KNOB, MIRRORED ONTO BOTH COMMANDS, because the real hood
+    declares the identical 0..5 range on `settings.windSpeed` and on
+    `startProgram.windSpeed`. A test that reshapes `settings_params["windSpeed"]`
+    is reshaping the speed axis, and the axis has to move on the command the fan
+    actually writes. Pass `start_params` explicitly to break the mirror and drive
+    the two commands apart.
     """
     from custom_components.addhon.client.engine.commands import HonCommand
 
@@ -312,6 +334,14 @@ def _appliance(settings_params: dict | None = None, *, categorised: bool = True)
     params = copy.deepcopy(
         HOOD_SETTINGS_PARAMS if settings_params is None else settings_params
     )
+    start = copy.deepcopy(
+        HOOD_START_PARAMS if start_params is None else start_params
+    )
+    if start_params is None:
+        if "windSpeed" in params:
+            start["windSpeed"] = copy.deepcopy(params["windSpeed"])
+        else:
+            start.pop("windSpeed", None)
     categories: dict[str, HonCommand] = {}
     settings = HonCommand(
         "settings",
@@ -333,9 +363,19 @@ def _appliance(settings_params: dict | None = None, *, categorised: bool = True)
     appliance.commands["stopProgram"] = HonCommand(
         "stopProgram", {"parameters": copy.deepcopy(HOOD_STOP_PARAMS)}, appliance
     )
+    start_categories: dict[str, HonCommand] = {}
     appliance.commands["startProgram"] = HonCommand(
-        "startProgram", {"parameters": copy.deepcopy(HOOD_START_PARAMS)}, appliance
+        "startProgram",
+        {"parameters": start},
+        appliance,
+        categories=start_categories if categorised else None,
+        category_name=HOOD_START_CATEGORY if categorised else "",
     )
+    if categorised:
+        # Filed under the CLEANED name, exactly like `HonCommandLoader`: the raw key
+        # goes to `category_name`, `_clean_name` lowercases its last dot-segment,
+        # and that is the key the categories dict uses.
+        start_categories["undefined"] = appliance.commands["startProgram"]
     return appliance
 
 
@@ -444,6 +484,19 @@ class HoodFanGatingTest(unittest.IsolatedAsyncioTestCase):
             if name != "windSpeed"
         }
         data = _entry_data(appliance=_appliance(params))
+        self.assertEqual([], await _build("fan", data))
+
+    async def test_the_fan_is_gated_on_the_command_it_writes(self) -> None:
+        # `settings` still declares a perfectly good 0..5 range here; `startProgram`
+        # does not declare the parameter at all. Gating on the first while writing
+        # to the second would ship a slider with nowhere to land.
+        start = {
+            name: body
+            for name, body in HOOD_START_PARAMS.items()
+            if name != "windSpeed"
+        }
+        data = _entry_data(appliance=_appliance(start_params=start))
+        self.assertIn("windSpeed", HOOD_SETTINGS_PARAMS)
         self.assertEqual([], await _build("fan", data))
 
     async def test_a_pinned_wind_speed_gets_no_fan(self) -> None:
@@ -637,9 +690,17 @@ class HoodFanStepOneUnchangedTest(unittest.IsolatedAsyncioTestCase):
 
 
 class HoodFanWriteTest(unittest.IsolatedAsyncioTestCase):
-    async def _fan(self, client=None):
+    async def _fan(self, client=None, *, running: int = 0):
+        """A hood fan, stopped by default; `running` reports a live wind speed.
+
+        The two are not interchangeable for the OFF path: a fan already at zero is
+        deliberately left alone (writing would wake the panel), so every test of
+        what an off PUTS ON THE WIRE has to start from a hood that is extracting.
+        """
         client = RunningClient() if client is None else client
-        added = await _build("fan", _entry_data(), client=client)
+        attributes = copy.deepcopy(HOOD_ATTRIBUTES)
+        attributes["windSpeed"] = running
+        added = await _build("fan", _entry_data(attributes), client=client)
         return added[0]
 
     async def test_turning_on_without_a_speed_uses_the_lowest_level(self) -> None:
@@ -647,7 +708,7 @@ class HoodFanWriteTest(unittest.IsolatedAsyncioTestCase):
         await fan_entity.async_turn_on()
         sent = fan_entity._appliance.api.sent
         self.assertEqual(1, len(sent))
-        self.assertEqual("settings", sent[0]["command"])
+        self.assertEqual("startProgram", sent[0]["command"])
         self.assertEqual("1", sent[0]["parameters"]["windSpeed"])
 
     async def test_turning_on_with_a_percentage_uses_that_level(self) -> None:
@@ -671,44 +732,87 @@ class HoodFanWriteTest(unittest.IsolatedAsyncioTestCase):
         await fan_entity.async_set_percentage(30)
         self.assertEqual("2", fan_entity._appliance.api.sent[0]["parameters"]["windSpeed"])
 
-    async def test_zero_percent_is_a_stop_not_a_zero_speed(self) -> None:
-        fan_entity = await self._fan()
+    async def test_zero_percent_is_a_zero_speed_not_a_stop(self) -> None:
+        # The regression issue #83 came back for: a 0 % slider used to send
+        # `stopProgram`, which darkens the control panel, and from the dark panel
+        # the hood ignores everything Home Assistant sends it afterwards.
+        fan_entity = await self._fan(running=3)
         await fan_entity.async_set_percentage(0)
-        self.assertEqual("stopProgram", fan_entity._appliance.api.sent[0]["command"])
+        sent = fan_entity._appliance.api.sent
+        self.assertEqual(["startProgram"], [s["command"] for s in sent])
+        self.assertEqual("0", sent[0]["parameters"]["windSpeed"])
 
-    async def test_turning_off_sends_stop_program_and_never_start_program(self) -> None:
-        # `api.send_command` appends a `programName` to EVERY startProgram of a
-        # categorised command, and this hood's startProgram is categorised. Off has
-        # to travel on the one command this device is known to have executed.
-        fan_entity = await self._fan()
+    async def test_turning_the_fan_off_leaves_the_panel_and_the_light_alone(
+        self,
+    ) -> None:
+        # The payload is the whole assertion: `lightStatus` is absent, so the light
+        # keeps whatever state the user left it in, and `onOffStatus` is the "1" the
+        # schema pins on this command, so the panel stays lit.
+        fan_entity = await self._fan(running=3)
         await fan_entity.async_turn_off()
         sent = fan_entity._appliance.api.sent
-        self.assertEqual(["stopProgram"], [s["command"] for s in sent])
-        self.assertEqual("", sent[0]["program_name"])
+        self.assertEqual(["startProgram"], [s["command"] for s in sent])
+        self.assertEqual(
+            {"windSpeed": "0", "onOffStatus": "1"}, sent[0]["parameters"]
+        )
 
-    async def test_the_stop_payload_is_the_one_the_device_executed(self) -> None:
-        fan_entity = await self._fan()
+    async def test_turning_off_a_stopped_fan_does_not_wake_the_panel(self) -> None:
+        # Every write on this channel carries the schema's mandatory
+        # `onOffStatus = "1"`, so an off sent to a hood that is ALREADY stopped
+        # would switch the appliance on. `fan.turn_off` and a
+        # `homeassistant.turn_off` sweeping an area both reach this method whatever
+        # the entity currently reports, so the guard has to be in the entity.
+        fan_entity = await self._fan(running=0)
+        self.assertIs(False, fan_entity.is_on)
+        await fan_entity.async_turn_off()
+        self.assertEqual([], fan_entity._appliance.api.sent)
+        # The user still asked for something, so the state is still reconciled.
+        self.assertEqual(1, fan_entity.coordinator.refreshes)
+
+    async def test_an_unreadable_level_still_writes_the_off(self) -> None:
+        # Unknown is not a reason to swallow a command the user asked for, and the
+        # guard must not turn a hood whose reading broke into a fan that cannot be
+        # stopped.
+        attributes = copy.deepcopy(HOOD_ATTRIBUTES)
+        attributes["windSpeed"] = ""
+        added = await _build("fan", _entry_data(attributes), client=RunningClient())
+        fan_entity = added[0]
+        self.assertIsNone(fan_entity.is_on)
         await fan_entity.async_turn_off()
         self.assertEqual(
-            {"onOffStatus": "0", "windSpeed": "0", "lightStatus": "0"},
+            {"windSpeed": "0", "onOffStatus": "1"},
             fan_entity._appliance.api.sent[0]["parameters"],
         )
 
-    async def test_no_hood_write_at_all_uses_start_program(self) -> None:
-        # `startProgram` is the ONE command name that makes the transport append a
-        # `programName` to the body (pinned by
-        # test_transport_api::test_send_command_start_program_adds_program_name),
-        # and the hood's settings command is categorised, so a category name is
-        # handed to every send. Never naming `startProgram` is what keeps that name
-        # off the wire; the recorded category below shows the ingredient is present.
+    async def test_a_speed_change_is_the_official_app_body(self) -> None:
+        # `apk/decomp.txt:3137444-3137456`: the app's hood speed intent is exactly
+        # these two keys. We do not build it -- the dispatcher adds `onOffStatus`
+        # because the live schema marks it mandatory -- but the result has to match.
         fan_entity = await self._fan()
+        await fan_entity.async_set_percentage(60)
+        self.assertEqual(
+            {"windSpeed": "3", "onOffStatus": "1"},
+            fan_entity._appliance.api.sent[0]["parameters"],
+        )
+
+    async def test_no_hood_write_ever_ships_a_program_name(self) -> None:
+        # `api.send_command` appends `programName` to EVERY startProgram whose
+        # command carries a category name (pinned by
+        # test_transport_api::test_send_command_start_program_adds_program_name),
+        # and this hood's startProgram IS categorised -- the fixture files it under
+        # a raw key exactly as the loader does. The app's own hood body has no such
+        # field, so `hood.hood_patch` suppresses it, and the empty string recorded
+        # below is that suppression reaching the transport.
+        fan_entity = await self._fan(running=3)
+        appliance = fan_entity._appliance
+        self.assertEqual(
+            HOOD_START_CATEGORY, appliance.commands["startProgram"].category
+        )
         await fan_entity.async_set_percentage(80)
         await fan_entity.async_turn_off()
-        commands = [s["command"] for s in fan_entity._appliance.api.sent]
-        self.assertEqual(["settings", "stopProgram"], commands)
-        self.assertEqual(
-            "setParameters", fan_entity._appliance.api.sent[0]["program_name"]
-        )
+        sent = appliance.api.sent
+        self.assertEqual(["startProgram", "startProgram"], [s["command"] for s in sent])
+        self.assertEqual(["", ""], [s["program_name"] for s in sent])
 
     async def test_every_write_refreshes_the_state(self) -> None:
         fan_entity = await self._fan()
@@ -757,9 +861,14 @@ class HoodSelectorKeyTest(unittest.IsolatedAsyncioTestCase):
         client = RunningClient()
         appliance = _appliance()
         settings = appliance.commands["settings"]
-        data = _entry_data(appliance=appliance)
+        # A hood reported as EXTRACTING, so the fan's off is a real write and not
+        # the idle no-op of `HonHoodFan.async_turn_off`.
+        attributes = copy.deepcopy(HOOD_ATTRIBUTES)
+        attributes["windSpeed"] = 3
+        data = _entry_data(attributes, appliance=appliance)
         fan_entity = (await _build("fan", data, client=client))[0]
         switches = await _build("switch", data, client=client)
+        power = next(s for s in switches if s._attr_unique_id == "ho-1_power")
         light = next(s for s in switches if s._attr_unique_id == "ho-1_light")
         timer = next(s for s in switches if s._attr_unique_id == "ho-1_delay_timer")
         number = (await _build("number", data, client=client))[0]
@@ -770,8 +879,10 @@ class HoodSelectorKeyTest(unittest.IsolatedAsyncioTestCase):
         await light.async_turn_off()
         await timer.async_turn_on()
         await number.async_set_native_value(30)
+        await power.async_turn_on()
+        await power.async_turn_off()
 
-        self.assertEqual(6, len(appliance.api.sent), appliance.api.sent)
+        self.assertEqual(8, len(appliance.api.sent), appliance.api.sent)
         for sent in appliance.api.sent:
             self.assertNotIn("category", sent["parameters"], sent)
             self.assertNotIn("program", sent["parameters"], sent)
@@ -815,12 +926,15 @@ class HoodSparseWritePayloadTest(unittest.IsolatedAsyncioTestCase):
     the transactional dispatcher now, and `RunningClient.dispatch_patch_sync` runs
     the REAL dispatcher, so what is asserted below is what the transport receives.
 
-    `stopProgram` is deliberately NOT in here: every parameter it declares is fixed,
-    so its full group IS the proven-executed payload, and
-    `HoodFanWriteTest.test_the_stop_payload_is_the_one_the_device_executed` pins it.
+    `stopProgram` is a sparse patch too now, but it is not in here because it is not
+    a `settings` write and carries no clock: it belongs to the power switch, and
+    `HoodPowerSwitchTest.test_switching_off_is_the_payload_the_device_executed`
+    pins its key set instead.
     """
 
-    # What a full-group send would add to every one of the four writes below.
+    # What a full-group send would add to every one of the three writes below.
+    # (The fan used to be a fourth; it writes `startProgram` now, which is what
+    # test_a_speed_change_is_not_a_settings_write_at_all asserts.)
     LEAKED_BY_A_FULL_GROUP_SEND = (
         "clockHH",
         "clockMM",
@@ -830,7 +944,8 @@ class HoodSparseWritePayloadTest(unittest.IsolatedAsyncioTestCase):
     )
 
     async def _controls(self):
-        """The four `settings` writers of one hood, over one shared appliance."""
+        """The three `settings` writers of one hood, plus the fan, over one shared
+        appliance. The fan is here to prove it is NOT one of them any more."""
         client = RunningClient()
         appliance = _appliance()
         data = _entry_data(appliance=appliance)
@@ -861,12 +976,16 @@ class HoodSparseWritePayloadTest(unittest.IsolatedAsyncioTestCase):
             "the shadow now mirrors the clock; the premise of the fix has changed",
         )
 
-    async def test_a_speed_change_carries_wind_speed_alone(self) -> None:
+    async def test_a_speed_change_is_not_a_settings_write_at_all(self) -> None:
+        # The fan left this channel: `windSpeed` now travels on `startProgram`,
+        # which is the only command that can also light the control panel. Asserted
+        # here rather than only in HoodFanWriteTest so that moving it back would
+        # have to face the clock argument this class exists for.
         controls = await self._controls()
         await controls.fan.async_set_percentage(60)
-        self.assertEqual(
-            {"windSpeed": "3"}, controls.appliance.api.sent[-1]["parameters"]
-        )
+        sent = controls.appliance.api.sent[-1]
+        self.assertEqual("startProgram", sent["command"])
+        self.assertEqual({"windSpeed": "3", "onOffStatus": "1"}, sent["parameters"])
 
     async def test_a_light_toggle_carries_light_status_alone(self) -> None:
         controls = await self._controls()
@@ -899,7 +1018,9 @@ class HoodSparseWritePayloadTest(unittest.IsolatedAsyncioTestCase):
         await controls.timer.async_turn_on()
         await controls.number.async_set_native_value(20)
         sent = [s for s in controls.appliance.api.sent if s["command"] == "settings"]
-        self.assertEqual(4, len(sent), controls.appliance.api.sent)
+        # Three, not four: the fan's write above is a `startProgram` now, and the
+        # test_a_speed_change_is_not_a_settings_write_at_all above is what says so.
+        self.assertEqual(3, len(sent), controls.appliance.api.sent)
         for payload in sent:
             for name in self.LEAKED_BY_A_FULL_GROUP_SEND:
                 self.assertNotIn(name, payload["parameters"], payload)
@@ -907,10 +1028,10 @@ class HoodSparseWritePayloadTest(unittest.IsolatedAsyncioTestCase):
 
 
 class HoodSwitchTest(unittest.IsolatedAsyncioTestCase):
-    async def test_the_light_and_the_timer_are_switches(self) -> None:
+    async def test_the_power_the_light_and_the_timer_are_switches(self) -> None:
         added = await _build("switch", _entry_data(), client=RunningClient())
         self.assertEqual(
-            ["ho-1_light", "ho-1_delay_timer"],
+            ["ho-1_power", "ho-1_light", "ho-1_delay_timer"],
             [e._attr_unique_id for e in added],
         )
 
@@ -922,7 +1043,9 @@ class HoodSwitchTest(unittest.IsolatedAsyncioTestCase):
         }
         data = _entry_data(appliance=_appliance(params))
         added = await _build("switch", data, client=RunningClient())
-        self.assertEqual(["ho-1_delay_timer"], [e._attr_unique_id for e in added])
+        self.assertEqual(
+            ["ho-1_power", "ho-1_delay_timer"], [e._attr_unique_id for e in added]
+        )
 
     async def test_the_light_writes_the_settings_light_status(self) -> None:
         appliance = _appliance()
@@ -950,6 +1073,139 @@ class HoodSwitchTest(unittest.IsolatedAsyncioTestCase):
         from custom_components.addhon.const import PLATFORMS
 
         self.assertNotIn("light", PLATFORMS)
+
+
+class HoodPowerSwitchTest(unittest.IsolatedAsyncioTestCase):
+    """The panel axis: `onOffStatus`, one command per direction.
+
+    The hood of issue #83 has THREE states, not two. `onOffStatus` is the lit-or-
+    dark control panel, and while it is 0 the device ignores every speed and light
+    command it receives -- it does not even beep, which is its acknowledgement
+    tone. The first shipped version had no entity for this axis and darkened the
+    panel from the fan's off, so Home Assistant could switch the hood off exactly
+    once and then had to wait for someone to touch the glass.
+    """
+
+    async def _power(self, appliance=None, attributes=None, client=None):
+        client = RunningClient() if client is None else client
+        data = _entry_data(attributes, appliance=appliance)
+        added = await _build("switch", data, client=client)
+        return next(e for e in added if e._attr_unique_id == "ho-1_power")
+
+    async def test_switching_on_is_a_bare_wake_up(self) -> None:
+        # No values of ours at all: the dispatcher adds `onOffStatus` because the
+        # live schema marks it mandatory and pins it to "1". Anything else in this
+        # payload would be a speed or a light the user did not ask for.
+        appliance = _appliance()
+        power = await self._power(appliance)
+        await power.async_turn_on()
+        sent = appliance.api.sent[-1]
+        self.assertEqual("startProgram", sent["command"])
+        self.assertEqual({"onOffStatus": "1"}, sent["parameters"])
+
+    async def test_switching_off_is_the_payload_the_device_executed(self) -> None:
+        # Byte-for-byte the parameters of the one command this hood's own
+        # `commandHistory` carries with both a `timestampAccepted` AND a
+        # `timestampExecuted`. Switching the hood off switches its light off with
+        # it: `stopProgram` pins all three values itself.
+        appliance = _appliance()
+        power = await self._power(appliance)
+        await power.async_turn_off()
+        sent = appliance.api.sent[-1]
+        self.assertEqual("stopProgram", sent["command"])
+        self.assertEqual(
+            {"windSpeed": "0", "lightStatus": "0", "onOffStatus": "0"},
+            sent["parameters"],
+        )
+
+    async def test_switching_off_names_only_what_this_hood_declares(self) -> None:
+        # `stopProgram` schemas vary per model -- the minimal `{onOffStatus}` shape
+        # is ordinary in this cloud, and a hood with no lamp is a device family this
+        # platform already gates for. Naming a parameter the command does not
+        # declare makes the dispatcher raise, which reaches the user as a command
+        # error and leaves the switch stuck on.
+        appliance = _appliance()
+        from custom_components.addhon.client.engine.commands import HonCommand
+
+        appliance.commands["stopProgram"] = HonCommand(
+            "stopProgram",
+            {"parameters": {
+                "onOffStatus": {"typology": "fixed", "category": "command",
+                                "mandatory": 1, "fixedValue": "0"},
+            }},
+            appliance,
+        )
+        power = await self._power(appliance)
+        await power.async_turn_off()
+        sent = appliance.api.sent[-1]
+        self.assertEqual("stopProgram", sent["command"])
+        self.assertEqual({"onOffStatus": "0"}, sent["parameters"])
+
+    async def test_neither_direction_ships_a_program_name(self) -> None:
+        appliance = _appliance()
+        power = await self._power(appliance)
+        await power.async_turn_on()
+        await power.async_turn_off()
+        self.assertEqual(["", ""], [s["program_name"] for s in appliance.api.sent])
+
+    async def test_it_reads_the_panel_flag_back(self) -> None:
+        attributes = copy.deepcopy(HOOD_ATTRIBUTES)
+        attributes["onOffStatus"] = 1
+        self.assertIs(True, (await self._power(attributes=attributes)).is_on)
+        attributes["onOffStatus"] = 0
+        self.assertIs(False, (await self._power(attributes=attributes)).is_on)
+
+    async def test_an_unreadable_flag_is_unknown_rather_than_off(self) -> None:
+        # A hood that stopped reporting its own power flag has not told us it is
+        # off, and an entity that claims "off" invites an automation to "fix" it.
+        attributes = copy.deepcopy(HOOD_ATTRIBUTES)
+        attributes.pop("onOffStatus")
+        self.assertIsNone((await self._power(attributes=attributes)).is_on)
+
+    async def test_it_is_gated_on_the_command_that_can_set_the_flag(self) -> None:
+        # A hood whose startProgram does not declare `onOffStatus` cannot be woken
+        # at all, and a switch that reads correctly and writes nothing is the one
+        # failure a capability gate exists to prevent.
+        start = {
+            name: body
+            for name, body in HOOD_START_PARAMS.items()
+            if name != "onOffStatus"
+        }
+        data = _entry_data(appliance=_appliance(start_params=start))
+        added = await _build("switch", data, client=RunningClient())
+        self.assertEqual(
+            ["ho-1_light", "ho-1_delay_timer"], [e._attr_unique_id for e in added]
+        )
+
+    async def test_it_is_gated_on_the_command_that_switches_the_hood_off(self) -> None:
+        appliance = _appliance()
+        del appliance.commands["stopProgram"]
+        added = await _build(
+            "switch", _entry_data(appliance=appliance), client=RunningClient()
+        )
+        self.assertEqual(
+            ["ho-1_light", "ho-1_delay_timer"], [e._attr_unique_id for e in added]
+        )
+
+    async def test_a_missing_client_raises_the_localized_error(self) -> None:
+        added = await _build("switch", _entry_data(), client=None)
+        power = next(e for e in added if e._attr_unique_id == "ho-1_power")
+        with self.assertRaises(HomeAssistantError) as caught:
+            await power.async_turn_on()
+        self.assertEqual(
+            "appliance_or_client_unavailable", caught.exception.translation_key
+        )
+
+    async def test_a_transport_failure_becomes_a_localized_command_error(self) -> None:
+        power = await self._power(client=RunningClient(fail=RuntimeError("boom")))
+        with self.assertRaises(HomeAssistantError) as caught:
+            await power.async_turn_off()
+        self.assertEqual("command_error", caught.exception.translation_key)
+
+    async def test_every_write_refreshes_the_state(self) -> None:
+        power = await self._power()
+        await power.async_turn_on()
+        self.assertEqual(1, power.coordinator.refreshes)
 
 
 class HoodNumberTest(unittest.IsolatedAsyncioTestCase):
@@ -1061,11 +1317,22 @@ class HoodDiagnosticsCoverageTest(unittest.TestCase):
         mapped_attrs, mapped_params, sources, _unavailable = diagnostics._mapped_sets(
             APPLIANCE_HO
         )
-        for name in ("windSpeed", "lightStatus", "delayTime", "delayTimeStatus"):
+        for name in (
+            "windSpeed",
+            "lightStatus",
+            "onOffStatus",
+            "delayTime",
+            "delayTimeStatus",
+        ):
             self.assertIn(name, mapped_attrs, name)
             self.assertIn(name, mapped_params, name)
         self.assertIn("fan.hood", sources)
+        # `onOffStatus` rides along on every fan write because the schema marks it
+        # mandatory, but the entity that CHOOSES it is the power switch, and that
+        # is the row a reader chasing the parameter has to land on.
         self.assertEqual(["windSpeed"], sources["fan.hood"]["write"])
+        self.assertEqual(["onOffStatus"], sources["switch.hood_power"]["write"])
+        self.assertEqual(["onOffStatus"], sources["switch.hood_power"]["read"])
 
     def test_another_type_did_not_inherit_the_hood_parameters(self) -> None:
         # The block is type-gated; a missing gate would fold the hood's names into

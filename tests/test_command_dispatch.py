@@ -36,16 +36,15 @@ _EXPECTED_LEGACY_CALL_EDGES = {
     "climate.py": {
         "HaierClimateEntity.async_set_hvac_mode": ("async_send_command",),
     },
-    # The cooker hood keeps ONE leg on the legacy sender: `stopProgram`, whose
-    # every parameter is `fixed`, so the whole-command send is byte-for-byte the
-    # payload this hood's command history shows it accepted AND executed. Its
-    # `settings` leg moved to the transactional dispatcher, because that group also
-    # holds three clock fields the device never mirrors back and a full-group send
-    # zeroed the hood's clock on every speed change. `HonHoodFan._send` argues both
-    # halves; the purifier fan in the same module has always dispatched.
-    "fan.py": {
-        "HonHoodFan._send": ("async_send_command",),
-    },
+    # NO legacy edge left in fan.py, and the empty dict is the assertion. Both fans
+    # in this module now dispatch: the purifier always did, and the cooker hood's
+    # last legacy leg -- a full-command `stopProgram` for the fan's off -- is gone,
+    # because switching the appliance off turned out to be the power switch's job
+    # and not the fan's. Keeping it would also have been a bug in its own right: the
+    # full-command sender transmits the whole group, and the hood's
+    # `startProgram.lightStatus` loads at 1, so every speed change would have
+    # switched the light on. See `hood.py` for the three-state model.
+    "fan.py": {},
     "number.py": {
         "HonNumber.async_set_native_value": ("async_send_command",),
     },
@@ -289,6 +288,10 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
         Path("command_dispatch.py"),
         Path("hon_client.py"),
         Path("air_purifier.py"),
+        # The cooker hood's counterpart to air_purifier.py: `hood.hood_patch` is the
+        # single builder every HO write goes through, and it is where the
+        # `programName` suppression is pinned.
+        Path("hood.py"),
         Path("fan.py"),
         Path("light.py"),
         # Mixed files: the AP entities dispatch, the legacy ones stay legacy.
@@ -728,6 +731,9 @@ class _DispatchCommand(HonCommand):
         self.send_error: BaseException | None = None
         self.before_send: Callable[[], None] | None = None
         self.sent_payloads: list[dict[str, str | float]] = []
+        # What the dispatcher asked the transport to stamp as `programName`:
+        # None means "use my own category", "" means "suppress the field".
+        self.program_names: list[str | None] = []
         super().__init__(
             name,
             attributes,
@@ -736,7 +742,13 @@ class _DispatchCommand(HonCommand):
             category_name=category_name,
         )
 
-    async def send_exact(self, payload: dict[str, str | float]) -> bool:
+    async def send_exact(
+        self,
+        payload: dict[str, str | float],
+        *,
+        program_name: str | None = None,
+    ) -> bool:
+        self.program_names.append(program_name)
         self.sent_payloads.append(dict(payload))
         if self.before_send is not None:
             self.before_send()
@@ -815,7 +827,11 @@ def _block_command_sends(
 ) -> None:
     call_index = 0
 
-    async def send_exact(payload: dict[str, str | float]) -> bool:
+    async def send_exact(
+        payload: dict[str, str | float],
+        *,
+        program_name: str | None = None,
+    ) -> bool:
         nonlocal call_index
         release = releases[call_index]
         call_index += 1
@@ -911,6 +927,40 @@ def test_dispatch_transaction_success_syncs_exact_payload_once() -> None:
         dict(appliance.attributes["parameters"]["untouched"].__dict__)
         == untouched_before
     )
+
+
+def test_dispatch_leaves_the_program_name_to_the_command_by_default() -> None:
+    """None is the default and it means "use your own category".
+
+    Every caller but the cooker hood relies on this: a washer or a fridge program
+    start MUST carry its `programName`, and the value is the command's own cloud
+    category, which only the command knows.
+    """
+    appliance, _first, second = _dispatch_appliance()
+
+    asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+
+    assert second.program_names == [None]
+
+
+def test_dispatch_forwards_an_explicit_program_name_suppression() -> None:
+    """An empty string reaches the transport, which drops the field entirely.
+
+    The cooker hood is the only caller that asks for it: its `startProgram` is
+    filed under a placeholder category the official app never names, and the app's
+    own hood body carries no `programName` at all.
+    """
+    appliance, _first, second = _dispatch_appliance()
+    patch = CommandPatch(
+        "settings",
+        {"category": "second", "mode": "target"},
+        action="select_category_mode",
+        program_name="",
+    )
+
+    asyncio.run(CommandDispatcher().dispatch(appliance, patch))
+
+    assert second.program_names == [""]
 
 
 def test_dispatch_post_commit_sync_error_keeps_committed_state(
@@ -1379,7 +1429,11 @@ def test_dispatch_rollback_preserves_update_landing_while_send_is_suspended() ->
         started = asyncio.Event()
         release = asyncio.Event()
 
-        async def send_exact(payload: dict[str, str | float]) -> bool:
+        async def send_exact(
+            payload: dict[str, str | float],
+            *,
+            program_name: str | None = None,
+        ) -> bool:
             second.sent_payloads.append(dict(payload))
             started.set()
             await release.wait()

@@ -256,8 +256,14 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
     # The hood fan, a fixed-key entity with no description table for the registry
     # walk to find. Unlike the purifier fan it DOES write its read parameter:
     # `windSpeed` is the whole control, both the level it reports and the level it
-    # sends. Turning off is `stopProgram`, which carries no values of ours at all
-    # (every parameter it declares is fixed), so it names no extra write here.
+    # sends -- including the zero that stops it, which is a speed like any other
+    # and not a separate command.
+    #
+    # `onOffStatus` is NOT named here even though every hood write carries it: the
+    # dispatcher fills it from the schema's own pinned value because the command
+    # marks it mandatory, exactly as `fan.purifier` above does not claim the field
+    # its stop command pins. The entity that genuinely chooses that value is the
+    # power switch, and it declares it on its own row.
     #
     # The single-name write half is only TRUE because the speed goes out as a
     # sparse patch (`fan.HonHoodFan._send`). While it went through the full-command
@@ -269,6 +275,16 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "types": (APPLIANCE_HO,),
         "read": ("windSpeed",),
         "write": ("windSpeed",),
+    },
+    # The hood power switch, the other fixed-key HO entity. It reads the bare
+    # `onOffStatus` attribute and drives it in both directions -- up through
+    # `startProgram`, down through `stopProgram` -- so unlike the fan row above it
+    # is the entity that OWNS this parameter.
+    {
+        "tag": "switch.hood_power",
+        "types": (APPLIANCE_HO,),
+        "read": ("onOffStatus",),
+        "write": ("onOffStatus",),
     },
 )
 
@@ -865,12 +881,13 @@ def _mapped_sets(
                 ]
             )
     if app_type == APPLIANCE_HO:
-        # Same shape as the AP block below, same reason. The hood's four parameters
+        # Same shape as the AP block below, same reason. The hood's five parameters
         # are each read as state AND written as a command field, but only two of the
-        # four reach the walk above: `windSpeed` belongs to the fan, a fixed-key
-        # entity with no table, and `delayTime`/`delayTimeStatus` are written from
-        # the NUMBERS/_SETTINGS_SWITCHES tables, which feed `mapped_params` alone
-        # and never the attribute axis. Without this line the dump kept naming
+        # five reach the walk above: `windSpeed` belongs to the fan and
+        # `onOffStatus` to the power switch, both fixed-key entities with no table,
+        # and `delayTime`/`delayTimeStatus` are written from the
+        # NUMBERS/_SETTINGS_SWITCHES tables, which feed `mapped_params` alone and
+        # never the attribute axis. Without this line the dump kept naming
         # `windSpeed` an unmapped control on a hood that ships a fan for it.
         mapped_attrs |= HOOD_ENTITY_PARAMS
         mapped_params |= HOOD_ENTITY_PARAMS

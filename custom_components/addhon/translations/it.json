@@ -892,6 +892,9 @@
       },
       "delay_timer": {
         "name": "Timer di spegnimento"
+      },
+      "power": {
+        "name": "Alimentazione"
       }
     },
     "number": {

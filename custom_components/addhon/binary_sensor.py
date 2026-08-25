@@ -375,10 +375,15 @@ _HOOD_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
         # cleaning": see _hood_filter_cleaning.
         unavailable_when_unmapped=True,
     ),
-    # Extraction running. Read from onOffStatus rather than from windSpeed, which
-    # the fan entity already publishes: two entities telling the same story from
-    # the same attribute would be a mirror, while onOffStatus is the device's own
-    # separate statement about whether it considers itself on.
+    # The appliance's own on/off flag: on this hood `onOffStatus` is the lit-or-dark
+    # control panel, which the device treats as its power state -- while it is 0 the
+    # hood ignores every speed and light command it receives. Read from there rather
+    # than from windSpeed, which the fan entity already publishes and which answers
+    # the narrower question "is it extracting right now".
+    #
+    # The power SWITCH added for the same field is a control, not a duplicate of
+    # this reading: it is the entity that writes the flag, and it can be gated away
+    # on a hood that declares no startProgram while this sensor still reports.
     HonBinarySensorEntityDescription(
         key="running",
         attr_key="onOffStatus",

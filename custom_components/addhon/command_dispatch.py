@@ -205,10 +205,20 @@ def _emit_shadow_safely(
 
 @dataclass(frozen=True, slots=True)
 class CommandPatch:
+    """One sparse intent: the command to send and the fields the entity chose.
+
+    `program_name` overrides the top-level `programName` the transport stamps on a
+    `startProgram` body. None (the default) keeps the command's own cloud category,
+    which is what a real program start must carry; "" suppresses the key for a
+    `startProgram` that starts no program. Only the cooker hood asks for the
+    suppression -- see `HonCommand._send_parameters` for the whole argument.
+    """
+
     command_name: str
     values: Mapping[str, str | float]
     action: str
     prepare: PrepareCallback | None = None
+    program_name: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
@@ -440,7 +450,9 @@ class CommandDispatcher:
                         changed_keys=prepared.changed_keys,
                     )
                     _emit_payload_safely(common_fields, prepared)
-                    result = await prepared.command.send_exact(prepared.payload)
+                    result = await prepared.command.send_exact(
+                        prepared.payload, program_name=patch.program_name
+                    )
                 except BaseException as error:
                     rollback(own_write_snapshots)
                     _emit_result_safely(

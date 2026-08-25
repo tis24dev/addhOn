@@ -892,6 +892,9 @@
       },
       "delay_timer": {
         "name": "Switch-off timer"
+      },
+      "power": {
+        "name": "Power"
       }
     },
     "number": {

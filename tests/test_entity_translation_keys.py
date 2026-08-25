@@ -243,6 +243,10 @@ def _collect_code_keys() -> dict[str, set[str]]:
         | {d.key for d in switch._PROGRAM_OPTION_SWITCHES}
         | {d.key for d in switch._AIR_PURIFIER_SWITCHES}
         | {"pause", "debug_logging", "mqtt_realtime_debug"}
+        # The cooker hood's power switch is a fixed-key class, not a table row: it
+        # writes `onOffStatus`, which the hood's settings command does not declare,
+        # and it needs one command per direction.
+        | {switch.HonHoodPowerSwitch._attr_translation_key}
     )
     # Program select (fixed key) + the REF program/mode select (#40) + the
     # program-option selects (#35) + the AC fan-direction selects (#37).

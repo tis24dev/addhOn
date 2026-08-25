@@ -1066,10 +1066,11 @@ class AirPurifierFanArchitectureTest(unittest.TestCase):
         a whole command and sends it, which is what the dispatcher replaces.
 
         Scoped to the purifier CLASS, not to fan.py, because the platform also
-        hosts the cooker hood, which writes `settings.windSpeed` through the legacy
-        sender on purpose (see hood.py). A whole-file grep would have to be deleted
-        the day a second fan arrived; reading the class body keeps the purifier's
-        invariant alive with a second entity in the same module.
+        hosts the cooker hood. The hood dispatches too now (it stopped using the
+        legacy sender when its off moved off `stopProgram`), so the file-level
+        statement would be true today by accident -- and would go back to being
+        wrong the moment a third fan arrived. Reading the class body keeps the
+        purifier's own invariant alive whatever its neighbours do.
         """
         import ast
 

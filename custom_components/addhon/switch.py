@@ -1,7 +1,8 @@
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Haier hOn switches: washer/dryer pause, AC toggles, wine-cooler and hood lights."""
+"""Haier hOn switches: washer/dryer pause, AC toggles, wine-cooler and hood lights,
+and the cooker hood's power."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,10 +40,16 @@ from .const import (
     WM_ATTR_STATUS,
 )
 from .debug_utils import redact_id
+from .hon_commands import command_param
 from .hood import (
     HOOD_DELAY_STATUS_PARAM,
     HOOD_LIGHT_PARAM,
+    HOOD_POWER_PARAM,
     HOOD_SETTINGS_COMMAND,
+    HOOD_SPEED_PARAM,
+    HOOD_START_COMMAND,
+    HOOD_STOP_COMMAND,
+    hood_patch,
 )
 from .param_rollback import restore_params, snapshot_params
 from .program_options import (
@@ -136,6 +143,10 @@ _WC_SWITCHES: tuple[HonSettingsSwitchDescription, ...] = (
 # Both are SPARSE (see `sparse_command` above): the hood's `settings` group carries
 # three clock fields the device never mirrors back, so the full-group send the AC
 # and the wine cooler use would zero the hood's clock on every toggle.
+#
+# The hood's THIRD switch, power, is deliberately not in this table: it writes
+# `onOffStatus`, which the `settings` command does not declare, and it needs one
+# command per direction. See `HonHoodPowerSwitch`.
 _HOOD_SWITCHES: tuple[HonSettingsSwitchDescription, ...] = (
     HonSettingsSwitchDescription(
         key="light",
@@ -368,6 +379,26 @@ def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> l
             redact_id(appliance_id), len(created_ap), created_ap,
         )
     elif app_type in _SETTINGS_SWITCHES:
+        if app_type == APPLIANCE_HO:
+            # The power switch is NOT a `_SETTINGS_SWITCHES` row and cannot be one:
+            # every row there is gated on `settings_param`, and this hood's
+            # `settings` command does not declare `onOffStatus` at all, so the row
+            # would be gated out and the entity would never exist. It also needs
+            # two DIFFERENT commands, one per direction, which that description
+            # cannot express.
+            if HonHoodPowerSwitch.supports(appliance):
+                found.append(HonHoodPowerSwitch(coordinator, appliance_id, client))
+                _LOGGER.info("Added hood power switch: id=%s", redact_id(appliance_id))
+            else:
+                _LOGGER.debug(
+                    "Switch debug: no hood power switch for id=%s "
+                    "(needs '%s' on '%s' and a '%s' command; commands=%s)",
+                    redact_id(appliance_id),
+                    HOOD_POWER_PARAM,
+                    HOOD_START_COMMAND,
+                    HOOD_STOP_COMMAND,
+                    _command_names(appliance),
+                )
         created: list[str] = []
         for desc in _SETTINGS_SWITCHES[app_type]:
             # capability-gate: only if the parameter exists in the settings command
@@ -609,6 +640,134 @@ class HonAirPurifierSwitch(HonBaseEntity, SwitchEntity):
                 "Purifier switch: set %s=%s failed: %s",
                 description.param, value, err, exc_info=True,
             )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
+
+
+class HonHoodPowerSwitch(HonBaseEntity, SwitchEntity):
+    """Cooker hood power: the lit-or-dark control panel, `onOffStatus`.
+
+    NOT the extraction fan, which is its own entity on `windSpeed`. The hood has
+    three states, not two -- panel dark, panel lit with the fan stopped, panel lit
+    with the fan running -- and while the panel is dark the device ignores every
+    speed and light command it receives without even beeping. This switch owns the
+    first axis; `fan.HonHoodFan` owns the second. `hood.py`'s module docstring
+    carries the evidence.
+
+    TWO COMMANDS, ONE PER DIRECTION, which is why this is a class and not a
+    `HonSettingsSwitchDescription` row:
+
+    * ON  -> `startProgram` with no values of ours at all. The dispatcher adds the
+      one field the live schema marks mandatory, `onOffStatus`, pinned to "1" by
+      the schema, so the body is a bare wake-up: the panel lights and whatever
+      speed and light the hood remembers come back, and nothing we did not ask for
+      is written. This is the one hood action the official app has no exact
+      equivalent for -- it never sends `onOffStatus` alone -- because the app has
+      no "wake the panel" button; its user taps the glass instead.
+    * OFF -> `stopProgram` carrying `windSpeed` and `lightStatus` at the zeroes the
+      schema pins them to, plus the mandatory `onOffStatus`. That is byte-for-byte
+      the payload this hood's own `commandHistory` shows it accepted AND executed,
+      and it is the only proven-executed command in the whole dossier. Switching
+      the hood off switches its light off too: the device declares those values
+      itself, they are not a choice of ours.
+
+    Both directions are sparse patches through the transactional dispatcher, built
+    by `hood.hood_patch` so the `programName` suppression cannot be forgotten.
+    """
+
+    _attr_translation_key = "power"
+    _attr_icon = "mdi:power"
+
+    @staticmethod
+    def supports(appliance) -> bool:
+        """True when this hood declares both halves of the power axis.
+
+        Gated on the write schema rather than on the reported attribute: a hood that
+        publishes `onOffStatus` but cannot be told to change it would ship a switch
+        that reads correctly and does nothing, which is the one failure mode a
+        capability gate exists to prevent.
+
+        The two halves are gated differently on purpose. The ON side needs the
+        parameter itself, because without it `startProgram` cannot say "wake up".
+        The OFF side needs only the COMMAND: `stopProgram` pins its own values, so
+        whatever it declares is what switching off means on that hood, and
+        `async_turn_off` names only the parameters it finds rather than assuming
+        this specimen's three.
+        """
+        if command_param(appliance, HOOD_START_COMMAND, HOOD_POWER_PARAM) is None:
+            return False
+        commands = getattr(appliance, "commands", None)
+        return isinstance(commands, dict) and HOOD_STOP_COMMAND in commands
+
+    def __init__(self, coordinator, appliance_id: str, client=None) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._attr_unique_id = f"{appliance_id}_power"
+        _LOGGER.debug(
+            "Switch debug: initialized hood power switch id=%s",
+            redact_id(appliance_id),
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        # The bare shadow attribute, which this hood publishes alongside the dotted
+        # per-command mirrors. Unknown rather than off when it is missing: a hood
+        # that stopped reporting its own power flag has not told us it is off.
+        raw = self._get_attr(HOOD_POWER_PARAM)
+        if raw is None:
+            return None
+        return str(raw) == "1"
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._dispatch(
+            "turn_on",
+            hood_patch(HOOD_START_COMMAND, {}, action="hood_power_on"),
+        )
+
+    async def async_turn_off(self, **kwargs) -> None:
+        # Only the zeroes this hood's OWN `stopProgram` declares. The reporting hood
+        # declares all three, so the payload is byte-for-byte the one its command
+        # history shows it executed; a hood declaring fewer -- the minimal
+        # `{onOffStatus}` shape is perfectly ordinary in this cloud, and a hood with
+        # no lamp is a device family this platform already gates for -- gets the
+        # subset it understands instead of a `ValueError` from the dispatcher, which
+        # would surface as a command error and leave the switch stuck on. The
+        # mandatory `onOffStatus` is added by the dispatcher either way, so the
+        # command is never empty.
+        values = {
+            name: "0"
+            for name in (HOOD_SPEED_PARAM, HOOD_LIGHT_PARAM)
+            if command_param(self._appliance, HOOD_STOP_COMMAND, name) is not None
+        }
+        await self._dispatch(
+            "turn_off",
+            hood_patch(HOOD_STOP_COMMAND, values, action="hood_power_off"),
+        )
+
+    async def _dispatch(self, action: str, patch: CommandPatch) -> None:
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        try:
+            _LOGGER.debug(
+                "Switch debug: hood power %s id=%s command=%s values=%s",
+                action,
+                redact_id(self._appliance_id),
+                patch.command_name,
+                dict(patch.values),
+            )
+            await async_dispatch_patch(self.hass, client, appliance, patch)
+            await self._async_request_command_refresh()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error("Hood power switch: %s failed: %s", action, err, exc_info=True)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="command_error",
