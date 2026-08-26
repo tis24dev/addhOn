@@ -109,6 +109,7 @@ from .air_purifier import (
     normalize_error,
 )
 from .debug_utils import redact_id
+from .hon_commands import find_settings_param, param_range, param_values
 from .program_labels import for_coordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -687,6 +688,110 @@ _COOLING: tuple[HonSensorEntityDescription, ...] = (
     ),
 )
 
+# The three types that share _COOLING. Named because the My Zone correction below
+# is REF-shaped and must not reach a hob, which publishes `tempZ{N}` too.
+_COOLING_TYPES: tuple[str, ...] = (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE)
+
+# --- My Zone measured temperature, corrected for the cloud bias of issue #75 ----
+#
+# Some fridges publish the My Zone drawer's MEASURED temperature 38 °C below
+# reality while its setpoint stays correct: HFW7918ENMP reports tempZ3 = -43 with
+# tempSelZ4 = -5, HCW58F18EWMP reports tempZ4 = -56 with tempSelZ4 = -18. The
+# other zones of the same appliances are exact, so this is not a device-wide scale.
+#
+# The reading is a real measurement and not the setpoint echoed back. In the debug
+# trace of #75 the setpoint stepped 2 -> -5 in a single push and the reading did
+# NOT follow: it stayed at -36 for seven more minutes, then walked -37, -38, -39,
+# -40, one degree every seven minutes, on its way to -43. Slope 1, offset -38.
+# Corrected, that curve starts at +2 -- the setpoint it had been resting at -- and
+# cools towards -5, which is what a drawer pulling down actually does.
+#
+# Nothing in the hOn app compensates it, because the app never displays tempZ* for
+# a My Zone: it reads tempSel* and only falls back to tempZ* when the setpoint is
+# missing. The bias is upstream, in the model's cloud parameter dictionary, and
+# the integration can correct it only downstream (apk/analysis/issue75-*.md).
+MY_ZONE_TEMP_KEYS: frozenset[str] = frozenset({"temp_zone3", "temp_zone4"})
+MY_ZONE_TEMP_BIAS = 38.0
+# The reading is judged against the WHOLE band its setpoint declares, not just its
+# lower edge: it has to be impossible as a temperature, AND adding the bias has to
+# land it back on a temperature that drawer could really be at.
+#
+# Testing only the lower edge is not enough, and the failure is not academic. The
+# span of a switch zone (-18..+5 on HCW58F18EWMP) is smaller than the bias, so a
+# floor-only threshold wide enough to spare a cold-but-healthy drawer stops
+# recognising the biased one over the warm half of its own range: the same -38 °C
+# error would be corrected with the drawer set to -5 and left alone with it set to
+# +2, and the state would step ~35 °C on the crossing. The upper half of the test
+# closes that, and costs nothing on the models that never needed it.
+#
+# How far below its floor a reading must sit to be impossible rather than merely
+# cold. A drawer overshooting a super-freeze pull-down can sit several degrees
+# under the coldest setpoint it accepts; it does not sit fifteen.
+MY_ZONE_BIAS_MARGIN = 15.0
+# ...and how far above its ceiling the CORRECTED reading may still land and pass:
+# a drawer left open, or an appliance switched off in a warm room, really is above
+# its own maximum for a while.
+MY_ZONE_BIAS_HEADROOM = 10.0
+# My Zone setpoint parameters. A drawer's measure and its setpoint need not share
+# an index -- HFW7918ENMP measures on Z3 and is written on Z4 -- and the app itself
+# resolves the zones from the WRITE command this way (getAvailableRefrigeratorZones
+# maps tempSelZ3 -> MY_ZONE_1 and tempSelZ4 -> MY_ZONE_2).
+_MY_ZONE_SETPOINTS: tuple[str, ...] = ("tempSelZ4", "tempSelZ3")
+# Coordinator-held store for the latch (see HonMyZoneTempSensor).
+_MY_ZONE_BIAS_STORE = "_my_zone_temp_bias"
+
+
+def _my_zone_setpoint(appliance, key: str):
+    """The writable setpoint that governs the drawer whose measure is `key`.
+
+    Its own index first, so a fridge with two My Zones pairs Z3 with Z3 and Z4
+    with Z4; then the other My Zone indices, because HFW7918ENMP exposes no
+    writable tempSelZ3 at all and its Z3 drawer is written through tempSelZ4.
+    Returns the parameter object, or None when the appliance exposes no My Zone
+    setpoint (in which case nothing here can judge the reading).
+    """
+    own = f"tempSelZ{key[-1]}"
+    for name in (own, *_MY_ZONE_SETPOINTS):
+        found = find_settings_param(appliance, name)
+        if found is not None:
+            return found[1]
+    return None
+
+
+def _setpoint_bounds(param) -> tuple[float, float] | None:
+    """(coldest, warmest) value the setpoint accepts, or None if it declares none.
+
+    A range on both appliances of #75, but the app's own fixtures carry enum My
+    Zone setpoints too (HTW7720ENMP: tempSelZ3 enumValues ["0", "2", "5"]), and an
+    enum bounds the drawer just as well as a range does.
+
+    The enum branch is entered on the duck-type, never on `param_range` returning
+    None: a range whose bounds are inconsistent (max < min, step <= 0) is refused
+    by param_range too, and reading `.values` off a RANGE materialises its whole
+    grid -- on a malformed one, without end. Same rule as number._is_enum_param,
+    and the same reason.
+
+    Both bounds are the public ones, which a rule can widen at runtime
+    (rules._apply_fixed moves `min` down or `max` up when a fixed value falls
+    outside them). A colder floor only makes the caller judge less, and a warmer
+    ceiling only loosens the half of the test that is not the one deciding a
+    reading is impossible. The pristine schema values live in a private dict on
+    the parameter, and are not worth reaching into for that.
+    """
+    bounds = param_range(param)
+    if bounds is not None:
+        return bounds[0], bounds[1]
+    if all(hasattr(param, attr) for attr in ("min", "max", "step")):
+        return None
+    numeric: list[float] = []
+    for raw in param_values(param):
+        try:
+            numeric.append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    return (min(numeric), max(numeric)) if numeric else None
+
+
 # Oven (OV): state, cavity temperature, remaining time, meat probes.
 _OVEN: tuple[HonSensorEntityDescription, ...] = (
     _g_enum("state", "machMode", MACHINE_MODE_MAP,
@@ -1144,6 +1249,11 @@ async def async_setup_entry(
                 # Needs the appliance type + the coordinator's catalog to resolve the
                 # i18n key, neither of which a value_fn can see (#71).
                 entity_class = HonProgramNameSensor
+            elif app_type in _COOLING_TYPES and description.key in MY_ZONE_TEMP_KEYS:
+                # The drawer's measure can arrive with a constant cloud bias, and
+                # spotting it needs the appliance's write command -- a value_fn only
+                # ever sees the number itself (#75).
+                entity_class = HonMyZoneTempSensor
             elif app_type == APPLIANCE_AP:
                 entity_class = HonAirPurifierSensor
             else:
@@ -1275,6 +1385,82 @@ class HonProgramNameSensor(HonSensor):
             self._appliance_data.get("type"), raw
         )
         return label or raw
+
+
+class HonMyZoneTempSensor(HonSensor):
+    """My Zone drawer temperature, corrected for the cloud bias of issue #75.
+
+    The correction is applied only to an appliance that proves it needs one. The
+    reading has to be impossible for the band its own drawer setpoint declares --
+    below its floor by more than a probe can overshoot -- and adding the bias back
+    has to land it inside that band again. A device whose dictionary is sound never
+    trips the first half; a genuinely broken reading never passes the second.
+
+    The verdict is then LATCHED for the session, per appliance and per parameter.
+    Judging every sample instead would un-correct the sensor exactly when the
+    drawer is warm -- the biased reading of a drawer resting near the top of its
+    range climbs back inside the plausible band -- and the state would jump 38 °C
+    between two refreshes. The latch lives on the coordinator, so it is re-earned
+    from scratch after a restart: if the cloud ever fixes the dictionary, the next
+    start simply stops correcting, with no code change and no stale rule.
+
+    Scoped to REF/FR/FRE zones 3 and 4 by async_setup_entry, which is where the
+    app puts its My Zones (getTempSel: MY_ZONE_1 -> Z3, MY_ZONE_2 -> Z4); zones 1
+    and 2 are the fridge and the freezer and have never been seen biased.
+    """
+
+    @property
+    def native_value(self):
+        value = super().native_value
+        if not isinstance(value, (int, float)):
+            return value
+        if not self._bias_applies(float(value)):
+            return value
+        return float(value) + MY_ZONE_TEMP_BIAS
+
+    def _bias_applies(self, value: float) -> bool:
+        """True when this reading is the biased one, latching the verdict once."""
+        store = self._coordinator_store(_MY_ZONE_BIAS_STORE)
+        latch_key = f"{self._appliance_id}:{self.entity_description.attr_key}"
+        if store.get(latch_key):
+            return True
+        appliance = self._appliance
+        if appliance is None:
+            return False
+        setpoint = _my_zone_setpoint(appliance, self.entity_description.key)
+        if setpoint is None:
+            return False
+        bounds = _setpoint_bounds(setpoint)
+        if bounds is None:
+            return False
+        floor, ceiling = bounds
+        impossible = floor - MY_ZONE_BIAS_MARGIN
+        if value > impossible:
+            return False
+        # ...and the bias has to explain it. A reading so cold that adding 38 still
+        # leaves it under the drawer's own floor is not a biased measurement, it is
+        # a broken one, and shifting it would only make a wrong number look sane.
+        corrected = value + MY_ZONE_TEMP_BIAS
+        if not impossible <= corrected <= ceiling + MY_ZONE_BIAS_HEADROOM:
+            return False
+        store[latch_key] = True
+        # INFO, not debug: the state this entity reports from now on differs from
+        # what the cloud sent, and that has to be legible without turning debug on.
+        # No nickname in the message -- identity stays redacted at INFO.
+        _LOGGER.info(
+            "Sensor debug: appliance %s reports %s at %.1f °C, impossible for a "
+            "drawer its own setpoint bounds to %.1f..%.1f °C, and %.1f °C once the "
+            "known cloud bias is added back: correcting it by +%.0f °C for the rest "
+            "of this session (issue #75)",
+            redact_id(self._appliance_id),
+            self.entity_description.attr_key,
+            value,
+            floor,
+            ceiling,
+            corrected,
+            MY_ZONE_TEMP_BIAS,
+        )
+        return True
 
 
 class HonAirPurifierSensor(HonSensor):

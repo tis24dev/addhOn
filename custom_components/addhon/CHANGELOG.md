@@ -9,6 +9,29 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 ## [Unreleased]
 
+## [5.19.2] - 2026-08-26
+
+**Fixes**
+
+- **A fridge's My Zone drawer no longer reports an impossible temperature** (#75). Two
+  models publish the drawer's measured temperature about 38 °C below reality while its
+  setpoint stays correct -- a drawer set to -5 °C reported -43 °C -- and the other zones
+  of the same appliance are exact, so nothing about the appliance as a whole was wrong.
+  The reading is a real measurement and not the setpoint echoed back: with the setpoint
+  changed in one step, the reading did not follow it, it walked down one degree every
+  seven minutes towards its new resting point. Opening that drawer, and nothing else,
+  settles which probe it is -- the reading climbs while the drawer is open and falls
+  back once it is shut, which is the opposite of what a cooling coil does. Corrected, it
+  rests exactly on the temperature the drawer is set to.
+  The correction is applied only where a device proves it needs it, and never to the
+  fridge or the freezer zone. The reading has to be impossible for the band its own
+  drawer setpoint declares -- colder than any probe overshoots -- and adding the 38 °C
+  back has to land it inside that band again, so a drawer that is merely very cold is
+  left alone and a probe reporting nonsense is reported as it arrived rather than being
+  made to look sane. A fridge that reports its drawer correctly is passed through
+  untouched, and if the cloud ever fixes the reading at the source, the next Home
+  Assistant start simply stops correcting it.
+
 ## [5.19.1] - 2026-08-25
 
 **New Features**
