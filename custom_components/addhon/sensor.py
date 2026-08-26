@@ -1393,8 +1393,10 @@ class HonMyZoneTempSensor(HonSensor):
     The correction is applied only to an appliance that proves it needs one. The
     reading has to be impossible for the band its own drawer setpoint declares --
     below its floor by more than a probe can overshoot -- and adding the bias back
-    has to land it inside that band again. A device whose dictionary is sound never
-    trips the first half; a genuinely broken reading never passes the second.
+    has to land it where that drawer can really be: inside the declared band, give
+    or take the same tolerance below the floor and a little headroom above the
+    ceiling. A device whose dictionary is sound never trips the first half; a
+    genuinely broken reading never passes the second.
 
     The verdict is then LATCHED for the session, per appliance and per parameter.
     Judging every sample instead would un-correct the sensor exactly when the
@@ -1437,9 +1439,14 @@ class HonMyZoneTempSensor(HonSensor):
         impossible = floor - MY_ZONE_BIAS_MARGIN
         if value > impossible:
             return False
-        # ...and the bias has to explain it. A reading so cold that adding 38 still
-        # leaves it under the drawer's own floor is not a biased measurement, it is
-        # a broken one, and shifting it would only make a wrong number look sane.
+        # ...and the bias has to explain it: adding it has to land the reading back
+        # where that drawer can really be. The window is the declared band widened
+        # by the same tolerances the test uses on either side -- a drawer resting at
+        # its floor reads a little past it, and one left open sits above its ceiling
+        # for a while -- so a corrected value is allowed under the floor, but only
+        # as far as `impossible`. A reading so cold that adding 38 still leaves it
+        # further under than that is not a biased measurement, it is a broken one,
+        # and shifting it would only make a wrong number look sane.
         corrected = value + MY_ZONE_TEMP_BIAS
         if not impossible <= corrected <= ceiling + MY_ZONE_BIAS_HEADROOM:
             return False
