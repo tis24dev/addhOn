@@ -194,9 +194,11 @@ _COOLING_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
         icon="mdi:leaf",
         attr_key="energySavingStatus",
     ),
-    # Active-mode flags (0/1). Read-only mirrors of the boost/special modes; the
-    # engine also folds these into the derived modeZ1/modeZ2 (ref.py). Live-confirmed
-    # present on the real fridge (quickModeZ1/quickModeZ2/intelligenceMode/holidayMode).
+    # Active-mode flags (0/1). Read-only mirrors of the boost/special modes, and the
+    # ONLY running-mode signal a fridge shadow carries: the app derives its own per-zone
+    # mode from these same four booleans rather than reading a mode field, because no
+    # such field exists (issue #93). Live-confirmed present on the real fridge
+    # (quickModeZ1/quickModeZ2/intelligenceMode/holidayMode).
     HonBinarySensorEntityDescription(
         key="quick_cool",
         icon="mdi:snowflake",

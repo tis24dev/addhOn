@@ -97,14 +97,43 @@ class PerTypeGoldenTest(unittest.TestCase):
 class NativeFixesPinTest(unittest.TestCase):
     """Explicit pin of the app-priority FIXES (new code, no pyhOn bug)."""
 
-    def test_ref_modes_by_value(self) -> None:
-        s = _native_snapshot()
-        self.assertEqual(s["ref_holiday"]["modeZ1"], "holiday")
-        self.assertEqual(s["ref_freeze"]["modeZ2"], "super_freeze")
-        self.assertEqual((s["ref_autoset"]["modeZ1"], s["ref_autoset"]["modeZ2"]), ("auto_set", "auto_set"))
-        self.assertEqual(s["ref_both_z1"]["modeZ1"], "holiday")           # Z1 priority
-        self.assertEqual(s["ref_freeze_vs_autoset"]["modeZ2"], "super_freeze")  # Z2 priority
-        self.assertEqual((s["ref_off"]["modeZ1"], s["ref_off"]["modeZ2"]), ("no_mode", "no_mode"))
+    def test_ref_derives_no_mode_field_at_all(self) -> None:
+        """The REF layer must not synthesise `modeZ1`/`modeZ2` (issue #93).
+
+        This test used to pin the opposite -- the derived values and their priority
+        order. It is inverted rather than deleted because the derivation is easy to
+        reintroduce by reflex ("the fridge has modes, surely we should expose them") and
+        the damage is invisible: nothing reads the fields, so no entity breaks, but they
+        surface in `diagnostics.coverage.attributes_unmapped` and read as capabilities
+        the DEVICE failed to expose. That is what issue #93 reported.
+
+        The fields do not exist for Haier either: zero occurrences of `modeZ1`/`modeZ2`
+        in the decompiled app and its disassembly, and no `modeZ*` member in
+        `REF_PARAMS_ENUM` (apk/analysis/issue93-ref-unmapped-values.md section 2).
+
+        Every flag combination is exercised, not just the idle one: the old code emitted
+        a value on EVERY branch, `no_mode` included, so an all-zero fixture alone would
+        pass against a partially restored derivation.
+        """
+        snapshot = _native_snapshot()
+        ref_cases = {k: v for k, v in snapshot.items() if k.startswith("ref_")}
+        self.assertEqual(len(ref_cases), 6, "flag matrix shrank; re-check the coverage")
+        for case, values in ref_cases.items():
+            self.assertIsNone(values["modeZ1"], case)
+            self.assertIsNone(values["modeZ2"], case)
+
+    def test_ref_still_gets_the_base_derivation(self) -> None:
+        """Emptying the REF layer must not cost it `ApplianceExtra.attributes`.
+
+        `registry.get_extra` returns None for a type with no entry and `load_attributes`
+        then skips the extra altogether, so dropping the REF entry -- the tempting next
+        step once the class body is empty -- would silently remove `programName`, which
+        `select.ref_program` reads as its second fallback.
+        """
+        for case, values in _native_snapshot().items():
+            if case.startswith("ref_"):
+                self.assertEqual(values["programName"], "No Program", case)
+                self.assertTrue(values["available"], case)
 
     def test_pause_by_value(self) -> None:
         self.assertTrue(_native_snapshot()["td_online"]["pause"])

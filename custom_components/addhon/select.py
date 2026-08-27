@@ -854,12 +854,11 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
     # matched double-gated against the offered codes. NOT startProgram.program (only the
     # recovered default category).
     #
-    # Deliberately EXCLUDES the per-zone modeZ1/modeZ2: those are ENGINE-SYNTHETIC
-    # (client/engine/appliances/ref.py rewrites them from the boost flags by VALUE), so
-    # they only ever read holiday/auto_set/super_cool/super_freeze/"no_mode". Every offered
-    # value they could carry is already resolved by the FLAG path above, "no_mode" is not
-    # an offered code, and the engine clobbers any raw modeZ before the select sees it --
-    # so reading them here is strictly dead and cannot surface a program.
+    # There is no per-zone mode field to read here. `modeZ1`/`modeZ2` used to be
+    # synthesised by the engine from the boost flags and were excluded from this list for
+    # being strictly dead; issue #93 established that Haier has no such parameter either
+    # (zero occurrences in the decompiled app, none in REF_PARAMS_ENUM) and the derivation
+    # was removed. The FLAG path above already resolves everything they could have carried.
     #
     # iot_* DOWNLOAD PRESETS ARE NOT SHADOW-OBSERVABLE (proven, not merely dump-blocked):
     # an active iot_* download preset sets no flag and leaves NO program-identity field in

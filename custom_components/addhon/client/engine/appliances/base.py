@@ -13,9 +13,14 @@ duck-typed via `.value`/`str()`. The `isinstance` checks instead are against the
 native PARAMETER classes.
 
 Comparison helper: compare by VALUE (flags "1"/"0" as int 1/0), so the flags
-evaluate correctly. The fields it derives (ref `modeZ1`/`modeZ2`, the per-type
-`pause` attribute) are computed but currently not surfaced as entities (the Pause
-switch reads `machMode` directly).
+evaluate correctly. The per-type `pause` attribute it derives is computed but not
+surfaced as an entity (the Pause switch reads `machMode` directly).
+
+A derived field is not free: it is written into the SAME dict the shadow parameters
+land in, so diagnostics cannot tell it from cloud telemetry by shape and reports it as
+an unmapped DEVICE capability. That is what happened to the fridge's `modeZ1`/`modeZ2`
+in issue #93, and why they are gone (appliances/ref.py). `attributes_last_update`, which
+carries exactly the shadow parameter set, is the discriminator when reading a dump.
 """
 from __future__ import annotations
 
