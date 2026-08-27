@@ -1527,6 +1527,46 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
             "claims; add the new name there or the next dump will blame the device for it",
         )
 
+    def test_the_fridge_selects_identity_fields_count_as_mapped(self):
+        """A fixed-key entity's reads must reach `mapped_attrs`, not only `sources`.
+
+        `_CUSTOM_ENTITY_SOURCES` feeds `entities.sources` and nothing else, so naming the
+        select's seven attributes there while mapping none of them would report `prCode`
+        and `prStr` as unmapped device capabilities on the very dump whose `sources`
+        block names the entity that reads them -- rebuilding, for the two members nobody
+        had noticed, the contradiction issue #93 was about.
+
+        `programName` is deliberately NOT here: it is engine-derived, so it belongs to
+        the derived bucket. Counting it as mapped telemetry would put addhOn's own output
+        back into the device's denominator.
+        """
+        cov = diagnostics._coverage(
+            "REF",
+            {"prCode": "12", "prStr": "eco", "programName": "No Program"},
+            {},
+            FakeAppliance(commands={}),
+        )
+        self.assertEqual(cov["attributes_unmapped"], [])
+        self.assertEqual(cov["attributes_unmapped_derived"], ["programName"])
+
+    def test_the_mapped_identity_fields_track_the_selects_own_tuple(self):
+        """Computed from the select's tuple, not restated: a field added there is picked
+        up here, and one that becomes engine-derived drops out, with no second list to
+        forget."""
+        from custom_components.addhon.select import HonRefProgramSelect
+
+        mapped_attrs = diagnostics._mapped_sets("REF")[0]
+        expected = set(HonRefProgramSelect._REF_ACTIVE_PROGRAM_ATTRS) - set(
+            diagnostics._ENGINE_DERIVED_ATTRS
+        )
+        self.assertTrue(expected, "the tuple is now all engine-derived; re-check this")
+        self.assertTrue(expected <= mapped_attrs)
+        # The derived member of the tuple stays out. Only that one: `available` is also
+        # engine-derived and IS in `mapped_attrs`, because the connectivity binary really
+        # reads it -- which is why the derived bucket is a carve-out from the unmapped
+        # signal and not a blanket exclusion.
+        self.assertNotIn("programName", mapped_attrs)
+
     def test_a_type_that_maps_the_name_is_untouched(self):
         """The carve-out fires on the SIGNAL only, after the mapped subtraction, so a
         washer -- which really does read `programName` through `sensor.program_name` --

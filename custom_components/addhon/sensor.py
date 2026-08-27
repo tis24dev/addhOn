@@ -110,6 +110,7 @@ from .air_purifier import (
 )
 from .debug_utils import redact_id
 from .hon_commands import (
+    SYNTHETIC_CATEGORY,
     find_settings_param,
     get_command,
     param_range,
@@ -1641,9 +1642,14 @@ class HonMyZoneModeSensor(HonSensor):
 
     def __init__(self, coordinator, appliance_id, description) -> None:
         super().__init__(coordinator, appliance_id, description)
+        # Always assigned, even when the appliance declares no pinning program: the
+        # widening is the only writer, and `native_value` reads the list on every
+        # refresh to keep itself inside its own options. Leaving it to the platform
+        # default made that read depend on a base-class attribute this class does not
+        # own -- and on the one appliance shape where the widening finds nothing (a
+        # category-less startProgram), that is exactly the path taken.
         offered = _pinning_program_codes(self._appliance, description.attr_key)
-        if offered:
-            self._attr_options = sorted(set(description.options or ()) | offered)
+        self._attr_options = sorted(set(description.options or ()) | offered)
 
     @property
     def native_value(self):
@@ -1681,6 +1687,10 @@ def _pinning_program_codes(appliance, param_name: str) -> frozenset[str]:
         return frozenset()
     codes = set()
     for code, category in categories.items():
+        # Same placeholder skip as the lookup itself: widening `options` with the
+        # synthetic category would ADMIT the "_" state that skip exists to prevent.
+        if str(code) == SYNTHETIC_CATEGORY:
+            continue
         params = getattr(category, "parameters", None)
         param = params.get(param_name) if isinstance(params, dict) else None
         if param is not None and str(getattr(param, "typology", "")) == "fixed":

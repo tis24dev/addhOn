@@ -33,6 +33,11 @@ _LOGGER = logging.getLogger(__name__)
 # category exposes setParameters); "setParameters" as a fallback for other models.
 SETTINGS_COMMANDS: tuple[str, ...] = ("settings", "setParameters")
 
+# `HonCommand.categories` returns `{"_": self}` for a command that has no categories at
+# all (commands.py), so a caller walking categories sees this placeholder alongside real
+# program codes. It is not a program name and must never reach a user-facing state.
+SYNTHETIC_CATEGORY = "_"
+
 
 def get_commands(appliance) -> dict:
     """Command dictionary of the device, or {} if absent/invalid."""
@@ -99,6 +104,11 @@ def program_code_for_fixed_value(appliance, param_name: str, value) -> str | Non
         return None
     wanted = str(value).strip()
     for code, category in categories.items():
+        # Not a program: a category-less command reports itself under `SYNTHETIC_CATEGORY`,
+        # and its own parameters would otherwise be answered as if a program had pinned
+        # them. Returning that placeholder would put a bare "_" in front of the user.
+        if str(code) == SYNTHETIC_CATEGORY:
+            continue
         params = getattr(category, "parameters", None)
         param = params.get(param_name) if isinstance(params, dict) else None
         if param is None or str(getattr(param, "typology", "")) != "fixed":

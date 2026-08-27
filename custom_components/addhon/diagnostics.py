@@ -762,9 +762,14 @@ def _mapped_sets(
         STARTPROGRAM_COMMAND = ""
         _note_missing_registry("program_options", unavailable)
     try:
-        from .select import _AC_DIRECTION_SELECTS, _PROGRAM_OPTION_SELECTS
+        from .select import (
+            _AC_DIRECTION_SELECTS,
+            _PROGRAM_OPTION_SELECTS,
+            HonRefProgramSelect,
+        )
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
         _AC_DIRECTION_SELECTS, _PROGRAM_OPTION_SELECTS = (), ()
+        HonRefProgramSelect = None
         _note_missing_registry("select", unavailable)
     try:
         from .sensor import HOB_ZONE_TIME_ATTRS, SENSORS
@@ -915,6 +920,25 @@ def _mapped_sets(
             )
     if app_type in APPLIANCE_WASH_GROUP:
         mapped_params.update(PROGRAM_PARAM_NAMES)
+    if app_type in (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE) and HonRefProgramSelect:
+        # The fridge program select is a fixed-key entity, so the registry walk cannot
+        # see what it reads. `_CUSTOM_ENTITY_SOURCES` names those attributes, but that
+        # table feeds `entities.sources` ONLY -- never these two sets -- so without this
+        # line a fridge publishing `prCode` or `prStr` would have them reported as
+        # unmapped device capabilities on the very dump whose `sources` block names the
+        # entity that reads them. That contradiction is the one issue #93 was about, and
+        # naming the attributes in the source row without mapping them here would have
+        # rebuilt it for the two members nobody had noticed.
+        #
+        # DERIVED names are subtracted rather than listed: `programName` is written by
+        # `ApplianceExtra.attributes`, not by the appliance, so it belongs to
+        # `attributes_unmapped_derived` and must NOT be counted as mapped telemetry --
+        # that would put addhOn's own output back into the device's denominator. The set
+        # is computed from the select's own tuple so a field added there is picked up
+        # here, and a field that becomes engine-derived drops out, with no second list.
+        mapped_attrs |= (
+            set(HonRefProgramSelect._REF_ACTIVE_PROGRAM_ATTRS) - _ENGINE_DERIVED_ATTRS
+        )
     if app_type in (APPLIANCE_IH, APPLIANCE_HOB):
         # The per-zone remaining-time sensors are DERIVED from two attributes
         # each, so they are custom classes with no description row and the walk

@@ -284,6 +284,22 @@ class FakeStartProgram:
         self.parameters = {}
 
 
+class FakeCategorylessStartProgram:
+    """A startProgram with no categories at all.
+
+    `HonCommand.categories` answers `{"_": self}` in that case, so a walk over
+    categories sees the command itself under a placeholder key that is not a program
+    name (commands.py).
+    """
+
+    def __init__(self, parameters: dict) -> None:
+        self.parameters = parameters
+
+    @property
+    def categories(self) -> dict:
+        return {"_": self}
+
+
 class FakeApplianceModel:
     """Just enough appliance for the model-catalogue gate and the program lookup.
 
@@ -875,6 +891,49 @@ class Tier2GatingTest(unittest.IsolatedAsyncioTestCase):
         construction, so a slug the widening never saw must fall through, not leak."""
         entity = await self._my_zone_state("0")
         entity._attr_options = ["chiller"]
+        self.assertEqual(entity.native_value, "zero_fresh")
+
+    async def test_the_fixed_value_lookup_skips_the_synthetic_category(self) -> None:
+        """The helper's own contract, pinned apart from the sensor that uses it.
+
+        `program_code_for_fixed_value` is public in `hon_commands`, and the sensor's
+        options guard would mask a regression here (the placeholder never reaches the
+        allowed set, so it falls through anyway). Tested directly so the function is
+        answerable for itself.
+        """
+        from custom_components.addhon.hon_commands import program_code_for_fixed_value
+
+        appliance = FakeApplianceModel()
+        appliance.commands["startProgram"] = FakeCategorylessStartProgram(
+            {"tempSelZ3": FakeFixedParam("0")}
+        )
+        self.assertIsNone(
+            program_code_for_fixed_value(appliance, "tempSelZ3", "0")
+        )
+        # A real category with the same pinned value still answers.
+        appliance.commands["startProgram"] = FakeStartProgram(
+            {"zero_fresh": FakeCategory({"tempSelZ3": FakeFixedParam("0")})}
+        )
+        self.assertEqual(
+            program_code_for_fixed_value(appliance, "tempSelZ3", "0"), "zero_fresh"
+        )
+
+    async def test_my_zone_mode_never_reports_the_synthetic_category(self) -> None:
+        """A category-less startProgram must not be mistaken for a program.
+
+        `HonCommand.categories` reports such a command as `{"_": self}`, so a naive walk
+        answers "_" -- and because the same walk also widens `options`, the
+        out-of-options guard would have admitted it. The sensor would have shown a bare
+        "_", with no translation, as the drawer's mode.
+        """
+        appliance = FakeApplianceModel(zones="fridge|freezer|vtRoom1")
+        appliance.commands["startProgram"] = FakeCategorylessStartProgram(
+            {"tempSelZ3": FakeFixedParam("0")}
+        )
+        added = await _build_sensors("REF", {"tempSelZ3": "0"}, appliance=appliance)
+        entity = next(e for e in added if e._attr_unique_id == "x-1_my_zone_mode")
+        self.assertNotIn("_", entity._attr_options)
+        # ...and it falls through to the static table, which is the right answer here.
         self.assertEqual(entity.native_value, "zero_fresh")
 
     async def test_my_zone_mode_reaches_fr_and_fre_too(self) -> None:
