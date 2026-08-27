@@ -42,5 +42,10 @@ key to both languages at once. Use plain text: no emoji, no long dashes.
 python3 -B -m pytest tests/ -q
 ```
 
-CI also runs `hassfest` and HACS validation. Keep the manifest `version` bumped
-per change (major for breaking changes, e.g. entity friendly-name changes).
+CI also runs `hassfest` and HACS validation.
+
+Never edit `custom_components/addhon/manifest.json`, the `version` field
+included. The release tag is the source of truth: `release-intake` writes the
+version onto `dev` and commits it itself, and `release-guard` and
+`post-merge-release` refuse a release whose manifest and tag disagree. A bump by
+hand only breaks that check. See [docs/release-workflow.md](docs/release-workflow.md).
