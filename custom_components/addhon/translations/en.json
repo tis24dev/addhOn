@@ -582,6 +582,17 @@
       },
       "timer_mm": {
         "name": "Timer minutes"
+      },
+      "my_zone_mode": {
+        "name": "My Zone mode",
+        "state": {
+          "zero_fresh": "0 °C fresh",
+          "quick_cool": "Quick cool",
+          "chiller": "Chiller",
+          "cool_drink": "Cool drink",
+          "cheese": "Cheese",
+          "fruit_and_veg": "Fruit and vegetables"
+        }
       }
     },
     "binary_sensor": {

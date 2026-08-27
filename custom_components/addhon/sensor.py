@@ -109,7 +109,13 @@ from .air_purifier import (
     normalize_error,
 )
 from .debug_utils import redact_id
-from .hon_commands import find_settings_param, param_range, param_values
+from .hon_commands import (
+    find_settings_param,
+    get_command,
+    param_range,
+    param_values,
+    program_code_for_fixed_value,
+)
 from .program_labels import for_coordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -160,6 +166,14 @@ class HonSensorEntityDescription(SensorEntityDescription):
     # (value_fn returned None). For an experimental mapping that covers a single
     # confirmed raw value, an unconfirmed reading is not knowledge.
     unavailable_when_unmapped: bool = False
+    # Zone the MODEL CATALOGUE must declare for this entity to exist, on top of the
+    # `gated` shadow test. The shadow is not the criterion the app uses for a fridge: it
+    # splits `applianceModel.attributes.zones` on "|" and filters its zone cards on that
+    # alone. The distinction is not academic -- the app's own abandoned helper derived
+    # zones from the truthiness of `tempSelZ*` instead, and would have dropped a My Zone
+    # whose setpoint reads 0, which is a legitimate mode (#93). Defaults to None: no
+    # existing entity changes behaviour.
+    requires_zone: str | None = None
 
 
 # State + remaining time: identical for washer/washer-dryer/tumble dryer.
@@ -653,20 +667,74 @@ def _experimental_text(key: str, attr: str) -> HonSensorEntityDescription:
 
 def _g_enum(key: str, attr: str, mapping: dict[str, str], *,
             translation_key: str | None = None,
-            icon: str | None = None) -> HonSensorEntityDescription:
+            icon: str | None = None,
+            requires_zone: str | None = None,
+            extra_options: tuple[str, ...] = ()) -> HonSensorEntityDescription:
     """Capability-gated ENUM sensor: native_value is a machine key from `mapping`,
-    rendered per-language via the entity state translations."""
+    rendered per-language via the entity state translations.
+
+    `extra_options` declares states a SUBCLASS can report that the mapping alone cannot
+    produce. Options and state translations must match exactly, so a state reachable
+    only through a subclass still has to be declared here or it would surface as a raw
+    key in the UI."""
     return HonSensorEntityDescription(
         key=key,
         translation_key=translation_key,
         attr_key=attr,
         icon=icon,
         device_class=SensorDeviceClass.ENUM,
-        options=sorted(set(mapping.values())),
+        options=sorted(set(mapping.values()) | set(extra_options)),
         value_fn=_mapped(mapping),
         gated=True,
+        requires_zone=requires_zone,
     )
 
+
+# --- My Zone drawer mode (issue #93) ------------------------------------------
+#
+# `tempSelZ3` is the vtRoom1 drawer's MODE register, not a temperature. For the `myZone`
+# role -- the default for slot 1 when the model catalogue declares no `vtRoom1`
+# attribute -- the app builds a MODE_SELECTION card over it and never a temperature one.
+# A temperature spinner on `tempSelZ3` exists only behind a remote feature flag
+# ("My Zone Pro"), on Casarte Invista, and on the single-compartment uprights where Z3 is
+# the only setpoint there is. Reading it as degrees on a multidoor -- which is what the
+# reporter of #93 asked for -- would publish "0 °C" for a drawer that is simply set to
+# its Zero Fresh preset.
+MY_ZONE_MODE_KEY = "my_zone_mode"
+MY_ZONE_MODE_PARAM = "tempSelZ3"
+MY_ZONE_MODE_ZONE = "vtRoom1"
+
+# FALLBACK ONLY. The app resolves the value against the DEVICE'S OWN program catalogue
+# first and reaches its static table just for numbers no program explains; so does
+# `HonMyZoneModeSensor` below. This table is the second answer, not the first.
+#
+# "2" is `chiller` rather than `quick_cool` on purpose: the app's own 2-branch returns
+# QUICK_COOL only when it is running in demo mode, and COOL_DRINK only on Casarte and
+# one cube90 series. A real fridge that offers a Quick Cool program still reads
+# `quick_cool` here -- through the catalogue lookup, which is where that answer belongs.
+#
+# No entry for 17: the Holiday program's rules pin `tempSelZ3` (and `tempSelZ1`) to it,
+# and while Holiday runs the drawer is in none of its own modes. It falls through to
+# `unknown`, which is what the app shows too (NO_MODE_SELECTED).
+MY_ZONE_MODE_MAP: dict[str, str] = {
+    "0": "zero_fresh",
+    "2": "chiller",
+    "3": "cool_drink",
+    "4": "cheese",
+    "5": "fruit_and_veg",
+}
+
+# States only the catalogue lookup can produce, declared so they have a label. An ENUM
+# sensor may report nothing outside `options`, and options must match the state
+# translations exactly, so a state reachable only through the subclass still has to be
+# named here. `quick_cool` is the one the fallback table cannot reach: it is what a
+# fridge that OFFERS a Quick Cool program means by `tempSelZ3 = 2`, where the table --
+# correctly, for a fridge that does not -- says `chiller`.
+#
+# A model declaring some other drawer program would report its slug untranslated. That
+# is the visible, self-announcing kind of gap, and preferable to guessing at a
+# vocabulary: every drawer program seen so far is one of these.
+MY_ZONE_MODE_PROGRAM_ONLY: tuple[str, ...] = ("quick_cool",)
 
 # Fridge / fridge-freezer / freezer (REF/FR/FRE): per-zone temperatures +
 # ambient. Doors / ice-maker / eco are binary sensors (binary_sensor.py).
@@ -685,6 +753,50 @@ _COOLING: tuple[HonSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.HUMIDITY,
         state_class=SensorStateClass.MEASUREMENT,
         gated=True,
+    ),
+    # Fault register (issue #93). Two deliberate differences from the `errors` row the
+    # oven, dishwasher, wine cooler, hood and vacuum already carry:
+    #
+    # `normalize_error` and NOT the raw `_as_text` those five use. A fridge spells "no
+    # fault" four ways at once, and the app accepts all of them: its shared predicate
+    # returns false for '00', '100' and undefined, and the selector behind the fridge
+    # dashboard banner is `errors !== '00' && Number(errors) !== 0`. Publishing the bare
+    # value would give the same healthy appliance four different states depending on how
+    # its firmware spells zero.
+    #
+    # DIAGNOSTIC and not a headline reading, because a set bit alone is not a verdict
+    # here. The app decodes `errors` as a HEX BITMASK and then asks the cloud what each
+    # bit means (`config/troubleshooting`, keyed by brand, model and language); its own
+    # error banner stays dark until that round trip answers. There is no offline table to
+    # copy -- the whole `REF.` namespace holds exactly one error string, a generic status
+    # label -- and Haier ships no REF error push notification at all, while it does for
+    # the oven, washer, dryer, wine cooler, vacuum and water heater.
+    #
+    # The value is NOT decoded into per-bit codes on purpose. REF is the one type the app
+    # exempts from its own bitmask reduction on the REST path, precisely because the
+    # fridge Smart Check-Up wants every bit -- so what arrives here can carry several
+    # simultaneous faults, and rendering it as a single code would be a lie.
+    # Evidence: apk/analysis/issue93-ref-unmapped-values.md section 3.
+    HonSensorEntityDescription(
+        key="errors",
+        attr_key="errors",
+        # The app falls back to the singular `error` when `errors` is absent, and
+        # `COMMON_PARAMS_ENUM` declares both spellings for every appliance type.
+        attr_fallbacks=("error",),
+        icon="mdi:alert-circle-outline",
+        value_fn=normalize_error,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        gated=True,
+    ),
+    # Doubly gated: the shadow has to carry the register AND the model catalogue has to
+    # declare the drawer. See MY_ZONE_MODE_MAP above and HonMyZoneModeSensor below.
+    _g_enum(
+        MY_ZONE_MODE_KEY,
+        MY_ZONE_MODE_PARAM,
+        MY_ZONE_MODE_MAP,
+        icon="mdi:food-apple-outline",
+        requires_zone=MY_ZONE_MODE_ZONE,
+        extra_options=MY_ZONE_MODE_PROGRAM_ONLY,
     ),
 )
 
@@ -1217,6 +1329,26 @@ SENSORS: dict[str, tuple[HonSensorEntityDescription, ...]] = {
 }
 
 
+def _model_zones(appliance) -> frozenset[str]:
+    """Zones the MODEL CATALOGUE declares, or an empty set when it says nothing.
+
+    `applianceModel.attributes.zones` is the criterion the hOn app uses to decide which
+    fridge compartments exist -- it splits the string on "|" and filters its zone cards
+    on the result -- and it is per-model metadata, not telemetry, so it answers even for
+    a drawer whose shadow value has not moved in two years (#93).
+
+    Empty means "the catalogue did not answer", and a `requires_zone` gate then DENIES.
+    That is stricter than the app, which falls back to the union of every startProgram's
+    zone enum and shows all its cards when even that is missing. Deliberate: we do not
+    implement that fallback, and inventing an entity out of silence is the worse failure
+    -- an entity that should not exist cannot be told from one that should, while a
+    missing one is visible the moment somebody looks for it.
+    """
+    attributes = getattr(appliance, "model_attributes", None)
+    raw = attributes.get("zones") if isinstance(attributes, dict) else None
+    return frozenset(part for part in str(raw or "").split("|") if part)
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -1232,10 +1364,20 @@ async def async_setup_entry(
         attributes = attributes if isinstance(attributes, dict) else {}
         descriptions = SENSORS.get(app_type, ())
         created: list[str] = []
+        # Resolved once per appliance, and only when a description actually asks for it:
+        # every type but the fridge has no `requires_zone` row at all.
+        zones: frozenset[str] | None = None
         for description in descriptions:
             # Inferred from incomplete evidence: absent unless explicitly enabled.
             if description.experimental and not experimental:
                 continue
+            # Model-catalogue gate, on top of the shadow one below: the compartment has
+            # to be declared by the MODEL, not merely hinted at by a parameter value.
+            if description.requires_zone is not None:
+                if zones is None:
+                    zones = _model_zones(data.get("appliance"))
+                if description.requires_zone not in zones:
+                    continue
             # Capability-gating (Tier 2 only): skip the sensors whose attribute
             # is not exposed by the device. The historic types (gated=False) stay
             # always created, as before.
@@ -1249,6 +1391,11 @@ async def async_setup_entry(
                 # Needs the appliance type + the coordinator's catalog to resolve the
                 # i18n key, neither of which a value_fn can see (#71).
                 entity_class = HonProgramNameSensor
+            elif app_type in _COOLING_TYPES and description.key == MY_ZONE_MODE_KEY:
+                # Resolving the drawer's mode needs the appliance's own program
+                # catalogue, which a value_fn cannot see -- it only ever gets the
+                # number (#93, same reason as the two classes below).
+                entity_class = HonMyZoneModeSensor
             elif app_type in _COOLING_TYPES and description.key in MY_ZONE_TEMP_KEYS:
                 # The drawer's measure can arrive with a constant cloud bias, and
                 # spotting it needs the appliance's write command -- a value_fn only
@@ -1468,6 +1615,77 @@ class HonMyZoneTempSensor(HonSensor):
             MY_ZONE_TEMP_BIAS,
         )
         return True
+
+
+class HonMyZoneModeSensor(HonSensor):
+    """My Zone drawer mode, resolved the way the app resolves it.
+
+    `getMyZoneMappedMode` does not start from the value. It first asks
+    `getModeNameFromCommands` which startProgram category pins `tempSelZ3` to exactly
+    this number, and answers with that category's name; only for a value no program
+    explains does it fall back to a static table. So does this class, in the same order.
+
+    Two things follow from the catalogue coming first, and both are the point:
+
+    * the state shares its vocabulary with `select.ref_program`, because both are
+      startProgram category slugs -- so the sensor says `zero_fresh` where the select
+      offers `zero_fresh`, and the pair reads as one control surface;
+    * the ambiguous numbers resolve themselves. `2` is Quick Cool on a fridge that
+      offers a Quick Cool program and the chiller preset on one that does not, and the
+      device's own catalogue settles it without a brand or series list here.
+
+    `options` is therefore widened per entity: the description's static mapping cannot
+    know which program slugs a given model declares, and an ENUM sensor may not report a
+    state outside its options.
+    """
+
+    def __init__(self, coordinator, appliance_id, description) -> None:
+        super().__init__(coordinator, appliance_id, description)
+        offered = _pinning_program_codes(self._appliance, description.attr_key)
+        if offered:
+            self._attr_options = sorted(set(description.options or ()) | offered)
+
+    @property
+    def native_value(self):
+        appliance = self._appliance
+        if appliance is not None:
+            code = program_code_for_fixed_value(
+                appliance, self.entity_description.attr_key, self._get_attr(
+                    self.entity_description.attr_key
+                )
+            )
+            # Only a code this entity may actually report: `options` is frozen at
+            # construction, and a category added to the schema later (or a program the
+            # widening did not see) must not push the sensor into an out-of-options
+            # state. Falling through to the static table is the safe half of the app's
+            # own two-step anyway.
+            if code and code in (self._attr_options or ()):
+                return code
+        return super().native_value
+
+
+def _pinning_program_codes(appliance, param_name: str) -> frozenset[str]:
+    """Program slugs that PIN `param_name` to a fixed value, or an empty set.
+
+    The reportable domain, not the offered one: `program_code_for_fixed_value` can only
+    ever answer with a program that pins the parameter, so widening `options` by every
+    program the fridge offers would admit a dozen states the sensor can never reach
+    (`auto_set`, `holiday`, the `iot_*` presets) and leave them unlabelled.
+
+    Read from `categories` for the same reason the lookup is: both halves are answered
+    by one structure and cannot disagree about which slugs exist.
+    """
+    command = get_command(appliance, "startProgram")
+    categories = getattr(command, "categories", None) if command is not None else None
+    if not isinstance(categories, dict):
+        return frozenset()
+    codes = set()
+    for code, category in categories.items():
+        params = getattr(category, "parameters", None)
+        param = params.get(param_name) if isinstance(params, dict) else None
+        if param is not None and str(getattr(param, "typology", "")) == "fixed":
+            codes.add(str(code))
+    return frozenset(codes)
 
 
 class HonAirPurifierSensor(HonSensor):

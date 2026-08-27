@@ -69,6 +69,45 @@ def find_settings_param(
     return None
 
 
+def program_code_for_fixed_value(appliance, param_name: str, value) -> str | None:
+    """Program code whose `param_name` is PINNED to `value`, or None.
+
+    Some device settings are not free values but a program's signature: the fridge My
+    Zone drawer has no writable mode of its own, and each of its programs instead pins
+    `tempSelZ3` to one fixed number. Reading that number back out of the shadow says
+    which program is running -- so this is a lookup, not a guess.
+
+    It is what the official app does, and in the same order: `getMyZoneMappedMode` calls
+    `getModeNameFromCommands` FIRST and only falls back to a static value table for
+    numbers no program explains (apk/analysis/issue93-ref-unmapped-values.md section 4.4).
+
+    Deliberately restricted to FIXED parameters. A range or an enum member merely ALLOWS
+    a value; only `typology: "fixed"` means "this program is the reason the value is what
+    it is", so a free setpoint that happens to sit on a program's number is never
+    mistaken for that program running. `HonParameterFixed` is duck-typed through
+    `.typology` rather than imported, like every other reader in this module.
+
+    Returns the CATEGORY key, which the loader has already reduced to the same slug the
+    program select offers (`PROGRAMS.REF.ZERO_FRESH` -> `zero_fresh`), so callers can
+    compare it against the select's options without a second translation.
+    """
+    if value is None:
+        return None
+    command = get_command(appliance, "startProgram")
+    categories = getattr(command, "categories", None) if command is not None else None
+    if not isinstance(categories, dict):
+        return None
+    wanted = str(value).strip()
+    for code, category in categories.items():
+        params = getattr(category, "parameters", None)
+        param = params.get(param_name) if isinstance(params, dict) else None
+        if param is None or str(getattr(param, "typology", "")) != "fixed":
+            continue
+        if str(getattr(param, "value", "")).strip() == wanted:
+            return str(code)
+    return None
+
+
 def param_values(param) -> list[str]:
     """Allowed values (strings) of an enum parameter, or [] if not enumerated."""
     values = getattr(param, "values", None)
