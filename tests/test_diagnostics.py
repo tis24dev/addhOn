@@ -1389,8 +1389,8 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
     """Coverage noise partition: value-type envelope + scalar denylist + program slots
     move to *_meta; genuine signal stays in *_unmapped; nothing is dropped."""
 
-    def _coverage_ac(self):
-        app = FakeAppliance(commands={"settings": FakeCommand({
+    def _ac_appliance(self):
+        return FakeAppliance(commands={"settings": FakeCommand({
             # genuine writable control (no entity) -> command-param signal
             "humiditySel": FakeParam(value="50", typology="range", rng=(30, 70, 5)),
             # a MAPPED control (climate owns tempSel): counted into the denominator
@@ -1404,7 +1404,10 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
             "httpEndpoint": FakeParam(value="x", typology="fixed"),
             "operationName": FakeParam(value="x", typology="fixed"),
         })})
-        attrs = {
+
+    # Split out of `_coverage_ac` so a test can re-run the same fixture with one key
+    # removed and compare the two denominators (see the derived-names test below).
+    _AC_ATTRS = {
             # signal (scalar telemetry candidates)
             "errors": 0,
             "programName": "auto_set",
@@ -1429,14 +1432,112 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
             "program19": "y",
             # dotted writable mirror -> excluded from the attribute axis entirely
             "settings.machMode": "1",
-        }
-        return diagnostics._coverage("AC", attrs, {}, app)
+    }
+
+    def _coverage_ac(self):
+        return diagnostics._coverage("AC", self._AC_ATTRS, {}, self._ac_appliance())
 
     def test_signal_keeps_genuine_telemetry(self):
         cov = self._coverage_ac()
-        for k in ("errors", "programName", "weirdSensor", "programsCounter", "programClass"):
+        for k in ("errors", "weirdSensor", "programsCounter", "programClass"):
             self.assertIn(k, cov["attributes_unmapped"], k)
             self.assertNotIn(k, cov["attributes_unmapped_meta"], k)
+
+    def test_engine_derived_names_are_not_charged_to_the_device(self):
+        """`programName` is written by `ApplianceExtra.attributes`, not by the appliance.
+
+        Before issue #93 it landed in `attributes_unmapped` -- the list this module calls
+        the gold signal -- and told the reader their device exposed a value addhOn had
+        failed to map. It is addhOn's own output.
+
+        It is NAMED rather than dropped: silently vanishing from every list would make
+        the coverage section look lossy against the attributes block beside it.
+        """
+        cov = self._coverage_ac()
+        self.assertIn("programName", cov["attributes_unmapped_derived"])
+        self.assertNotIn("programName", cov["attributes_unmapped"])
+        self.assertNotIn("programName", cov["attributes_unmapped_meta"])
+
+    def test_derived_names_leave_the_denominator_too(self):
+        """They are not telemetry, so they must not inflate the coverage ratio either --
+        the same treatment statistics and meta already get. Measured by removing the name
+        from the fixture: if the denominator were still counting it, dropping it would
+        move `attributes_total`."""
+        with_name = self._coverage_ac()
+        self.assertEqual(with_name["attributes_unmapped_derived"], ["programName"])
+        without = diagnostics._coverage(
+            "AC",
+            {k: v for k, v in self._AC_ATTRS.items() if k != "programName"},
+            {},
+            self._ac_appliance(),
+        )
+        self.assertEqual(without["attributes_unmapped_derived"], [])
+        self.assertEqual(with_name["attributes_total"], without["attributes_total"])
+
+    def test_engine_derived_attrs_matches_the_engine(self):
+        """`_ENGINE_DERIVED_ATTRS` must name every field the engine writes itself.
+
+        A drift guard, not a restatement: the list is a carve-out from the coverage
+        SIGNAL, so a newly derived field that nobody adds here is silently reported as a
+        device capability the appliance failed to expose -- the exact failure of issue
+        #93, and one that no other test can see because nothing reads these fields.
+
+        The engine side is READ FROM SOURCE rather than imported: the assignments live
+        inside `attributes()` bodies and only run with a live appliance, so importing
+        would prove nothing. Two shapes are collected, which is all the engine uses:
+        `data["<name>"] = ...` in the per-type layers, and `self._attributes["<name>"]
+        = ...` in `Appliance`.
+        """
+        import ast as _ast
+        from pathlib import Path
+
+        engine = Path(diagnostics.__file__).resolve().parent / "client" / "engine"
+        sources = [engine / "appliance.py", *sorted((engine / "appliances").glob("*.py"))]
+        self.assertTrue(len(sources) > 5, "engine layout moved; this guard is blind")
+
+        written: set[str] = set()
+        for path in sources:
+            for node in _ast.walk(_ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, (_ast.Assign, _ast.AugAssign)):
+                    continue
+                targets = node.targets if isinstance(node, _ast.Assign) else [node.target]
+                for target in targets:
+                    if not isinstance(target, _ast.Subscript):
+                        continue
+                    key = target.slice
+                    if not (isinstance(key, _ast.Constant) and isinstance(key.value, str)):
+                        continue
+                    base = target.value
+                    is_data = isinstance(base, _ast.Name) and base.id == "data"
+                    is_attrs = (
+                        isinstance(base, _ast.Attribute)
+                        and base.attr == "_attributes"
+                        and isinstance(base.value, _ast.Name)
+                        and base.value.id == "self"
+                    )
+                    # `data["parameters"][name] = ...` writes a SHADOW parameter, not a
+                    # derived top-level field: its base is a Subscript, not a bare Name.
+                    if is_data or is_attrs:
+                        written.add(key.value)
+
+        self.assertEqual(
+            written,
+            set(diagnostics._ENGINE_DERIVED_ATTRS),
+            "the engine derives a different set of attributes than _ENGINE_DERIVED_ATTRS "
+            "claims; add the new name there or the next dump will blame the device for it",
+        )
+
+    def test_a_type_that_maps_the_name_is_untouched(self):
+        """The carve-out fires on the SIGNAL only, after the mapped subtraction, so a
+        washer -- which really does read `programName` through `sensor.program_name` --
+        keeps it out of every unmapped list, derived included, and still counts it.
+        """
+        cov = diagnostics._coverage(
+            "WM", {"programName": "cottons"}, {}, FakeAppliance(commands={})
+        )
+        self.assertEqual(cov["attributes_unmapped_derived"], [])
+        self.assertEqual(cov["attributes_unmapped"], [])
+        self.assertEqual(cov["attributes_total"], 1)
 
     def test_value_type_envelope_is_meta(self):
         cov = self._coverage_ac()
@@ -1465,6 +1566,10 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
         # which is silent and permanent -- whereas a double count is visible noise.
         # Dropping a row from the meta list without re-homing it leaves the three
         # disjointness assertions above green.
+        derived = set(cov["attributes_unmapped_derived"])
+        self.assertEqual(signal & derived, set())
+        self.assertEqual(meta & derived, set())
+        self.assertEqual(stats & derived, set())
         self.assertEqual(
             {
                 "errors", "programName", "weirdSensor", "programsCounter",
@@ -1473,7 +1578,7 @@ class DiagnosticsCoverageMetaTest(unittest.TestCase):
                 "highTransRate", "programStats", "cloudProgId", "forceDelete",
                 "program7", "program19",
             },
-            signal | meta | stats,
+            signal | meta | stats | derived,
         )
 
     def test_command_param_meta_split(self):
@@ -4184,6 +4289,7 @@ def _static_parameter_names() -> set[str]:
     from custom_components.addhon.select import (
         _AC_DIRECTION_SELECTS,
         _PROGRAM_OPTION_SELECTS,
+        HonRefProgramSelect,
     )
     from custom_components.addhon.sensor import HOB_ZONE_TIME_ATTRS, SENSORS
     from custom_components.addhon.switch import (
@@ -4199,11 +4305,16 @@ def _static_parameter_names() -> set[str]:
     # derived per-zone timers read -- so they belong in the allowed set for exactly
     # the reason the table fields do, and NOT because a custom row in
     # `diagnostics.py` names them. `_CUSTOM_ENTITY_SOURCES` stays unharvested.
+    # `_REF_ACTIVE_PROGRAM_ATTRS` joins them for the same reason and on the same terms:
+    # it is the fridge select's own literal tuple of the shadow fields it reads to
+    # recover a running program, and that select is a fixed-key entity with no
+    # description row for the walk to find (#93).
     names: set[str] = (
         set(AP_ENTITY_PARAMS)
         | set(HOB_ENTITY_PARAMS)
         | set(HOB_ZONE_TIME_ATTRS)
         | set(PROGRAM_PARAM_NAMES)
+        | set(HonRefProgramSelect._REF_ACTIVE_PROGRAM_ATTRS)
     )
     for registry in (SENSORS, BINARY_SENSORS):
         for descriptions in registry.values():
@@ -4300,13 +4411,29 @@ class EntitySourceTest(unittest.TestCase):
         )
 
     def test_a_runtime_resolved_parameter_is_null_and_not_guessed(self) -> None:
-        # The fridge program select picks whichever of PROGRAM_PARAM_NAMES the
-        # DEVICE happens to carry, so no static table can name it. The key is
-        # present and the value is null: "this entity exists, and this dump
-        # cannot say what it writes" -- which is a different claim from silence.
+        # The fridge program select picks whichever of PROGRAM_PARAM_NAMES the DEVICE
+        # happens to carry, and it sends whole startProgram/stopProgram commands rather
+        # than owning a named field, so no static table can say what it WRITES. The
+        # write half stays absent for that reason -- not guessed, not invented.
+        #
+        # What it READS is static and now stated (#93). Before that the whole row was
+        # null while the coverage block beside it accused `programName` of being
+        # unmapped: one dump, two sections, opposite claims about the same attribute.
         _result, entities = _ref_dump()
-        self.assertIn("select.ref_program", entities["sources"])
-        self.assertIsNone(entities["sources"]["select.ref_program"])
+        row = entities["sources"]["select.ref_program"]
+        self.assertEqual(
+            row["read"],
+            [
+                "intelligenceMode",
+                "holidayMode",
+                "quickModeZ1",
+                "quickModeZ2",
+                "programName",
+                "prStr",
+                "prCode",
+            ],
+        )
+        self.assertNotIn("write", row)
 
     def test_every_registered_entity_gets_exactly_one_row(self) -> None:
         # The join contract: `sources` and `by_domain` describe the same set of
@@ -4917,12 +5044,20 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         # A slack floor lets an ENTIRE table stop being walked unnoticed: the
         # sensor.* rows alone are over a hundred names, so deleting one table
         # would still leave the count high. The floor is therefore kept TIGHT
-        # against the real count (549 across the eleven types), and it has to be
+        # against the real count (562 across the eleven types), and it has to be
         # raised deliberately whenever a type or a table joins the sweep. A union
         # floor is also blind to a table that stops being walked for ONE type,
         # because the other ten keep the domain in the union: pin the SHAPE of the
         # sweep, per type, and not only a number.
-        self.assertGreater(seen, 540, f"the sweep shrank to {seen} names")
+        self.assertGreater(
+            seen,
+            # Measured 562 today (555 before the fridge program select declared its
+            # seven read names, #93). Raised deliberately, as the comment above
+            # requires -- and re-measured rather than incremented, because the 549 this
+            # line was pinned against had already drifted six names behind reality.
+            553,
+            f"the sweep shrank to {seen} names",
+        )
         self.assertEqual(
             {
                 "REF": {"binary_sensor", "number", "select", "sensor"},

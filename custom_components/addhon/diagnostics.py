@@ -220,9 +220,32 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "write_command": "stopProgram",
     },
     {"tag": "select.program", "types": APPLIANCE_WASH_GROUP},
+    # The fridge program select. It reads seven attributes and its row said nothing at
+    # all until issue #93, whose dump therefore printed `"select.ref_program": null`
+    # beside a coverage block accusing `programName` of being unmapped -- two sections
+    # of one document disagreeing about an entity that does read it.
+    #
+    # The four FLAGS come first because they are the only running-mode signal a fridge
+    # shadow really carries (`_REF_MODE_FLAG_TO_PROGRAM`); the three identity fields are
+    # the fallback behind them. `programName` is named here even though on every REF seen
+    # so far it is addhOn's own "No Program" constant: a source row states what an entity
+    # READS, not what the value turns out to be worth, and the select's offered-code
+    # double-gate is what makes reading a sentinel harmless.
+    #
+    # No `write`: the select sends whole startProgram/stopProgram commands and owns no
+    # named parameter -- the same reason `button.start_program` above stays null.
     {
         "tag": "select.ref_program",
         "types": (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE),
+        "read": (
+            "intelligenceMode",
+            "holidayMode",
+            "quickModeZ1",
+            "quickModeZ2",
+            "programName",
+            "prStr",
+            "prCode",
+        ),
     },
     # The air purifier's three fixed-key entities. Their parameters are already in
     # `AP_ENTITY_PARAMS` (which is why coverage sees them), but that frozenset says
@@ -302,6 +325,37 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
 #      This auto-catches future envelope blobs without a name list.
 #   2. NAME DENYLIST (the scalar residue value-type can't see): protocol/debug scalars
 #      and the program1..N definition slots. Matched lowercased, like _TO_REDACT.
+
+# Attributes this integration WRITES ITSELF, in `client/engine/appliances/*.attributes`
+# and in `Appliance.load_attributes`, before anything reads the dict. They are not device
+# capabilities, and listing them as unmapped telemetry accuses the appliance of a gap it
+# does not have -- which is exactly what issue #93 reported: a fridge whose diagnostics
+# named `programName`, `modeZ1` and `modeZ2` as unmapped values "returned by the API",
+# all three written by addhOn a moment earlier. `modeZ1`/`modeZ2` are gone (they were
+# dead); `programName` stays because the wash group, oven, dishwasher and wine cooler
+# genuinely read it.
+#
+# They are carved out of the SIGNAL only, after the mapped subtraction, so a type that
+# maps one of them is untouched: `available` is read by the connectivity binary and
+# `programName` by `sensor.program_name` on six types, so neither reaches this bucket
+# there. The fridge, which maps neither, is where the carve-out actually fires.
+#
+# NAMED rather than silently dropped: a reader who saw `programName` in the attributes
+# block and nowhere in the coverage lists would reasonably conclude the section is
+# lossy. `attributes_unmapped_derived` says where it went.
+#
+# `active` and `pause` join it because they are the same thing seen on another type:
+# `pause` is derived from `machMode` by the wash-group layers and read by nobody (the
+# Pause switch reads `machMode` itself), so on every washer it was being reported as an
+# unmapped device capability too.
+#
+# The independent check on any dump is `attributes_last_update`: it carries exactly the
+# shadow parameter set, and none of these names is ever in it.
+#
+# Kept honest by `test_engine_derived_attrs_matches_the_engine` (test_diagnostics.py),
+# which parses `client/engine/` for the assignments rather than trusting this list.
+_ENGINE_DERIVED_ATTRS = frozenset({"programName", "available", "active", "pause"})
+
 _COVERAGE_META_ATTRS = frozenset(
     {
         "resultcode",
@@ -1082,7 +1136,13 @@ def _coverage(
       * ``attributes_unmapped``            - mappable telemetry candidates (the gold);
       * ``attributes_unmapped_statistics`` - keys from the statistics container;
       * ``attributes_unmapped_meta``       - protocol envelope blobs (dict/list-valued)
-                                             + scalar debug/protocol noise + program slots.
+                                             + scalar debug/protocol noise + program slots;
+      * ``attributes_unmapped_derived``    - fields THIS INTEGRATION wrote into the
+                                             shadow dict itself (_ENGINE_DERIVED_ATTRS).
+                                             Not device capabilities, so they are neither
+                                             signal nor part of the denominator; named
+                                             rather than dropped so the section stays
+                                             legible against the attributes block.
     The command-param axis is split the same way (``command_params_unmapped`` vs
     ``command_params_unmapped_meta``).
 
@@ -1131,7 +1191,8 @@ def _coverage(
     stats_keys = set(statistics) if isinstance(statistics, Mapping) else set()
 
     # Partition: statistics carve-out first (unchanged contract), then meta/noise
-    # (value-type envelope OR scalar denylist OR program slot), the rest is signal.
+    # (value-type envelope OR scalar denylist OR program slot), then the fields this
+    # integration derived itself, and the rest is signal.
     unmapped_statistics = sorted(k for k in unmapped if k in stats_keys)
     rest = unmapped - set(unmapped_statistics)
     unmapped_meta = sorted(
@@ -1139,7 +1200,9 @@ def _coverage(
         for k in rest
         if isinstance(attributes.get(k), (Mapping, list)) or _is_meta_attr(k)
     )
-    unmapped_signal = sorted(rest - set(unmapped_meta))
+    rest -= set(unmapped_meta)
+    unmapped_derived = sorted(k for k in rest if k in _ENGINE_DERIVED_ATTRS)
+    unmapped_signal = sorted(rest - set(unmapped_derived))
 
     params_unmapped = settings_params - mapped_params
     params_meta = sorted(k for k in params_unmapped if k.lower() in _COVERAGE_META_PARAMS)
@@ -1149,13 +1212,21 @@ def _coverage(
     # Exclude statistics and meta (like writable mirrors already are) so that
     # `len(attributes_unmapped) / attributes_total` reads as a real coverage gap and
     # not a figure inflated by protocol/debug blobs.
-    attributes_total = len(read_only_bare) - len(unmapped_statistics) - len(unmapped_meta)
+    # ...and exclude the derived names too: they are not telemetry at all, so counting
+    # them would put addhOn's own output in the denominator of the device's coverage.
+    attributes_total = (
+        len(read_only_bare)
+        - len(unmapped_statistics)
+        - len(unmapped_meta)
+        - len(unmapped_derived)
+    )
 
     return {
         "attributes_total": attributes_total,
         "attributes_unmapped": unmapped_signal,
         "attributes_unmapped_statistics": unmapped_statistics,
         "attributes_unmapped_meta": unmapped_meta,
+        "attributes_unmapped_derived": unmapped_derived,
         # Symmetric with attributes_total: exclude the meta params (plumbing) so the
         # param-axis denominator is mapped controls + signal, not inflated by category/
         # endpoints/rule flags.
