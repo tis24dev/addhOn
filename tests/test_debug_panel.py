@@ -54,6 +54,17 @@ def _install_stubs() -> None:
     exceptions.ConfigEntryAuthFailed = getattr(
         exceptions, "ConfigEntryAuthFailed", type("ConfigEntryAuthFailed", (base_err,), {})
     )
+    if not hasattr(exceptions, "Unauthorized"):
+        class Unauthorized(base_err):
+            """The real one takes keyword-only detail arguments (context, user_id,
+            ...), so a bare Exception subclass would not survive the call site."""
+
+            def __init__(self, context=None, **details) -> None:
+                super().__init__()
+                self.context = context
+                self.details = details
+
+        exceptions.Unauthorized = Unauthorized
 
     helpers = _mod("homeassistant.helpers")
     entity = _mod("homeassistant.helpers.entity")
@@ -196,10 +207,28 @@ class FakeConfigEntries:
         return True
 
 
+class FakeUser:
+    def __init__(self, is_admin: bool) -> None:
+        self.is_admin = is_admin
+
+
+class FakeAuth:
+    """Minimal hass.auth: the debug switches resolve the calling user through it."""
+
+    def __init__(self) -> None:
+        self.users: dict = {}
+        self.lookups: list = []
+
+    async def async_get_user(self, user_id):
+        self.lookups.append(user_id)
+        return self.users.get(user_id)
+
+
 class FakeHass:
     def __init__(self, data=None) -> None:
         self.data = data or {}
         self.config_entries = FakeConfigEntries()
+        self.auth = FakeAuth()
 
 
 class FakeEntry:
@@ -384,6 +413,75 @@ class DebugSwitchTest(unittest.IsolatedAsyncioTestCase):
         # The switch wired its own listener so the Options flow / Reset button
         # propagate to it; without it the sync guarantee silently breaks.
         self.assertEqual([switch._async_entry_updated], entry.update_listeners)
+
+
+class DebugSwitchAdminGateTest(unittest.IsolatedAsyncioTestCase):
+    """Both toggles drive process-global log levels, and the two log-level services
+    are already admin-only. switch.turn_on carries no admin gate in Home Assistant,
+    so the entity has to enforce it itself or the same capability stays open to any
+    authenticated user (hacs/default#8674 review)."""
+
+    async def _switch(self, user_id, user=None, key=CONF_ENABLE_DEBUG, options=None):
+        entry = FakeEntry(options)
+        hass, switches = await _build_switches(entry)
+        if user is not None:
+            hass.auth.users[user_id] = user
+        switch = switches[key]
+        # Home Assistant sets the entity context to the service call before the
+        # handler runs; this is that context.
+        switch._context = types.SimpleNamespace(user_id=user_id)
+        return hass, entry, switch
+
+    async def test_turn_on_denied_for_non_admin(self) -> None:
+        from homeassistant.exceptions import Unauthorized
+
+        hass, entry, switch = await self._switch("u-guest", FakeUser(False))
+        with self.assertRaises(Unauthorized):
+            await switch.async_turn_on()
+        # Denied before any side effect: no option written, no state written.
+        self.assertEqual([], hass.config_entries.updates)
+        self.assertEqual(0, switch._write_count)
+        self.assertFalse(entry.options.get(CONF_ENABLE_DEBUG, False))
+
+    async def test_turn_off_denied_for_non_admin(self) -> None:
+        from homeassistant.exceptions import Unauthorized
+
+        hass, _entry, switch = await self._switch(
+            "u-guest", FakeUser(False), options={CONF_ENABLE_DEBUG: True}
+        )
+        with self.assertRaises(Unauthorized):
+            await switch.async_turn_off()
+        self.assertEqual([], hass.config_entries.updates)
+
+    async def test_unknown_user_is_denied(self) -> None:
+        from homeassistant.exceptions import Unauthorized
+
+        # The user id resolves to nothing (revoked/deleted): deny, never fall through.
+        hass, _entry, switch = await self._switch("u-ghost")
+        with self.assertRaises(Unauthorized):
+            await switch.async_turn_on()
+        self.assertEqual(["u-ghost"], hass.auth.lookups)
+
+    async def test_turn_on_allowed_for_admin(self) -> None:
+        hass, _entry, switch = await self._switch("u-admin", FakeUser(True))
+        await switch.async_turn_on()
+        self.assertEqual([{CONF_ENABLE_DEBUG: True}], hass.config_entries.updates)
+
+    async def test_call_without_user_is_trusted(self) -> None:
+        # Automations and internal calls carry no user, same as the admin services.
+        hass, _entry, switch = await self._switch(None)
+        await switch.async_turn_on()
+        self.assertEqual([], hass.auth.lookups)
+        self.assertEqual([{CONF_ENABLE_DEBUG: True}], hass.config_entries.updates)
+
+    async def test_mqtt_switch_is_gated_too(self) -> None:
+        from homeassistant.exceptions import Unauthorized
+
+        _hass, _entry, switch = await self._switch(
+            "u-guest", FakeUser(False), key=CONF_ENABLE_MQTT_DEBUG
+        )
+        with self.assertRaises(Unauthorized):
+            await switch.async_turn_on()
 
 
 class DebugSensorsTest(unittest.IsolatedAsyncioTestCase):

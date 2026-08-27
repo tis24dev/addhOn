@@ -583,9 +583,22 @@ def _install_service_helper_stubs() -> None:
     in an admin check, then delegate to hass.services.async_register, which is what
     the registration tests observe."""
     exc = _ensure_module("homeassistant.exceptions")
-    exc.Unauthorized = getattr(
-        exc, "Unauthorized", type("Unauthorized", (Exception,), {})
-    )
+    if not hasattr(exc, "Unauthorized"):
+        base = getattr(exc, "HomeAssistantError", Exception)
+
+        class Unauthorized(base):
+            """Mirror of homeassistant.exceptions.Unauthorized.
+
+            The real one takes keyword-only detail arguments (context, user_id,
+            entity_id, ...); a bare Exception subclass would raise TypeError on the
+            very call sites under test."""
+
+            def __init__(self, context=None, **details) -> None:
+                super().__init__()
+                self.context = context
+                self.details = details
+
+        exc.Unauthorized = Unauthorized
     helpers = _ensure_module("homeassistant.helpers")
     service = _ensure_module("homeassistant.helpers.service")
     helpers.service = service

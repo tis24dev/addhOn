@@ -12,7 +12,7 @@ from homeassistant.components.switch import SwitchEntity, SwitchEntityDescriptio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .ac_command import async_send_settings, settings_param
@@ -916,6 +916,10 @@ class HonDebugSwitch(HonAccountEntity, SwitchEntity):
     listener in ``__init__`` so the log levels are re-applied live (no reload). An
     entry update listener keeps the switch in sync when the same option is changed
     from the Options flow or the Reset button.
+
+    Admin-only: the option it writes drives process-global log levels, so the
+    entity route is gated the same way the log-level services are (see
+    ``_async_assert_admin``).
     """
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -939,10 +943,38 @@ class HonDebugSwitch(HonAccountEntity, SwitchEntity):
         return bool(self._entry_options.get(self._option_key, False))
 
     async def async_turn_on(self, **kwargs) -> None:
+        await self._async_assert_admin()
         await self._async_set(True)
 
     async def async_turn_off(self, **kwargs) -> None:
+        await self._async_assert_admin()
         await self._async_set(False)
+
+    async def _async_assert_admin(self) -> None:
+        """Admin gate, mirroring async_register_admin_service on the entity route.
+
+        Both toggles end in ``logging.getLogger().setLevel()``, which is global to
+        the Python process, and the two log-level services are already admin-only.
+        ``switch.turn_on`` carries no admin gate in Home Assistant, so without this
+        check any authenticated non-admin could reach the same capability from the
+        entity. Home Assistant sets the entity context to the calling service call
+        before the handler runs, so ``_context.user_id`` is the caller; a call with
+        no user attached (automation, internal) is trusted, exactly as the helper
+        does. The Reset debug button stays open on purpose: it only turns the
+        toggles off, which is not a privileged capability.
+        """
+        context = getattr(self, "_context", None)
+        user_id = getattr(context, "user_id", None)
+        if not user_id:
+            return
+        user = await self.hass.auth.async_get_user(user_id)
+        if user is None or not user.is_admin:
+            _LOGGER.debug(
+                "Switch debug: non-admin user denied on '%s' (entry=%s)",
+                self._option_key,
+                getattr(self._entry, "entry_id", None),
+            )
+            raise Unauthorized(context=context)
 
     async def _async_set(self, value: bool) -> None:
         options = self._entry_options
