@@ -71,32 +71,6 @@ device (Settings > Devices & Services > addhOn), alongside read-only diagnostics
 and quick-action buttons (refresh now, reset debug). A ready-to-paste dashboard
 card is in [`docs/debug-device.md`](docs/debug-device.md).
 
-## Supported Devices
-
-### Supported appliance types
-
-Air conditioners (AC), washing machines (WM), tumble dryers (TD), washer-dryers
-(WD), refrigerators and freezers (REF/FR/FRE), ovens (OV), dishwashers (DW), wine
-coolers (WC), hobs (IH/HOB), hoods (HO), coffee machines/kettles (KT), water
-heaters (WH) and robot vacuums (RVC). Air conditioners and laundry appliances have
-full control; the other types are exposed mainly as read-only sensors, with a few
-controls where they have been mapped.
-
-### Tested on real hardware
-
-- **AC Unit:** Haier AS35PBPHRA-PRE
-- **AC Unit:** Haier AD71S2SM3FA(H)
-- **Washing Machine:** Haier HW80-B14959TU1IT
-- **Washing Machine:** Candy TCA286TM5-S
-- **Tumble Dryer:** Haier HD100-C367GU1-IT
-- **Tumble Dryer:** Haier HD90-A3959 INT
-- **Refrigerator:** Haier HDPW5620CNPK
-- **Refrigerator:** HCW58F18EWMP
-- **Oven:** HWO60SM5T5BH
-- **WineCooler:** HWS77GDAU1
-
-Other hOn-compatible Haier appliances should work; feel free to test and report.
-
 ## Troubleshooting
 
 ### Capture debug logs
