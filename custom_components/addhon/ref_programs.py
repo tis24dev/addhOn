@@ -33,6 +33,7 @@ the entity unique_id vocabulary closed, NOT to gate on a model list).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from .const import PROGRAM_PARAM_NAMES
@@ -93,6 +94,10 @@ REF_DOWNLOAD_FAMILY = "download"
 # already labels, so the wording carries over unchanged. A seventh preset on a future
 # model gets no button and says so once, at DEBUG, from `download_codes` below: a
 # missing entity is visible the moment somebody looks for it, an invented one is not.
+# What a DOWNLOAD preset code looks like when it came from the cloud schema rather than
+# from a user. Used only to decide what may be written to a log line; see `download_codes`.
+_SCHEMA_SLUG_RE = re.compile(r"iot_[a-z0-9_]+")
+
 REF_DOWNLOAD_PRESETS: tuple[str, ...] = (
     "iot_daily_use",
     "iot_extra_cold",
@@ -414,10 +419,29 @@ def download_codes(appliance) -> list[str]:
         and REF_DOWNLOAD_FAMILY in _category_values(category, REF_FAMILY_PARAM)
     )
     if unnamed:
+        # NAMED only when the code is safe to name, COUNTED otherwise. A category key
+        # is not always a schema slug: `command_loader._add_favourites` files a copy of
+        # a program under `favouriteName`, the string the USER typed, and it inherits the
+        # base command's `programFamily` -- so a download-family favourite called "frigo
+        # di anna (casa al mare)" reaches this list and would print verbatim into
+        # home-assistant.log, which is the file people attach to an issue. This module
+        # follows the same rule as every other logger here: identity never reaches a log
+        # line unredacted.
+        #
+        # The shape test is the vocabulary this repository already owns -- every download
+        # preset in every catalogue seen, and every member of REF_DOWNLOAD_PRESETS, is
+        # `iot_` plus lowercase word characters -- so a genuinely new preset is still
+        # named, which is the whole point of the line: the fix for one is a tuple entry
+        # plus two labels. Anything else is counted, never silenced, so a reporter still
+        # learns that something was skipped.
+        nameable = [code for code in unnamed if _SCHEMA_SLUG_RE.fullmatch(code)]
         _LOGGER.debug(
-            "RefPrograms debug: download presets with no entity because this "
-            "repository does not name them: %s (see REF_DOWNLOAD_PRESETS)",
-            unnamed,
+            "RefPrograms debug: %d download preset(s) with no entity because this "
+            "repository does not name them: %s%s (see REF_DOWNLOAD_PRESETS)",
+            len(unnamed),
+            nameable,
+            "" if len(nameable) == len(unnamed)
+            else f" (+{len(unnamed) - len(nameable)} withheld: not schema slugs)",
         )
     return known
 

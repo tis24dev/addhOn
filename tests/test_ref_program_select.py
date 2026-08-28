@@ -1195,6 +1195,48 @@ class RefProgramClassificationTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ref-1_ref_preset_frigo di anna (casa al mare)", suffixes)
         self.assertIn("ref-1_ref_preset_iot_daily_use", suffixes)
 
+    async def test_the_skipped_preset_log_never_prints_user_text(self) -> None:
+        """A category key is not always a schema slug (CWE-532).
+
+        `command_loader._add_favourites` files a copy of a program under
+        `favouriteName` -- the string the USER typed -- inheriting the base command's
+        `programFamily`, so a download-family favourite reaches the "no entity for this
+        preset" DEBUG line. That line lands in home-assistant.log, which is the file
+        people attach to an issue, and this repository puts nothing identifying in a log.
+
+        The count still has to be right: withholding a name must not become silence, or
+        a reporter cannot tell that anything was skipped at all.
+        """
+        from custom_components.addhon import ref_programs
+
+        nickname = "frigo di anna (casa al mare)"
+        catalogue = _rmxs_categories()
+        catalogue[nickname] = _download(
+            ["fridge", "freezer"], {"tempSelZ1": FixedParam("4")}
+        )
+        catalogue["iot_future_preset"] = _download(
+            ["freezer"], {"tempSelZ2": FixedParam("-24")}
+        )
+        appliance = _fridge(
+            _rmxs_commands(
+                categories=catalogue,
+                programs=[*RMXS_PROGRAMS, nickname, "iot_future_preset"],
+            )
+        )["ref-1"]["appliance"]
+
+        with self.assertLogs(ref_programs._LOGGER.name, level="DEBUG") as logs:
+            ref_programs.download_codes(appliance)
+        blob = "\n".join(logs.output)
+
+        self.assertNotIn(nickname, blob)
+        self.assertNotIn("anna", blob)
+        # ...while a genuinely new schema preset IS named, which is the whole point of
+        # the line: the fix for one is a tuple entry plus two labels.
+        self.assertIn("iot_future_preset", blob)
+        # ...and the withheld one is still counted, never silently dropped.
+        self.assertIn("2 download preset(s)", blob)
+        self.assertIn("withheld", blob)
+
     async def test_a_named_preset_without_the_download_family_gets_no_button(
         self,
     ) -> None:
@@ -1292,38 +1334,6 @@ class RefProgramClassificationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             ["ref_program"], [e._attr_translation_key for e in added]
         )
-
-    def test_the_predicate_and_the_platforms_answer_one_question(self) -> None:
-        """The invariant behind the test above, stated directly on the functions.
-
-        Neither platform may add a condition of its own: `has_replacement_controls` is
-        what decides that the single select steps aside, so anything it does not know
-        about is a way for the replacement to fail to appear.
-        """
-        from custom_components.addhon.ref_programs import (
-            flag_codes,
-            has_replacement_controls,
-            my_zone_codes,
-        )
-
-        shapes = {
-            "no zones attribute": _fridge(_rmxs_commands(), zones=None),
-            "zones without the drawer": _fridge(_rmxs_commands(), zones="fridge"),
-            "full model": _fridge(_rmxs_commands()),
-            "no clearable flag": _fridge(
-                {
-                    **_rmxs_commands(),
-                    "stopProgram": RecordingCommand(
-                        {"onOffStatus": Param("0", values=["0"])}
-                    ),
-                }
-            ),
-        }
-        for label, data in shapes.items():
-            appliance = data["ref-1"]["appliance"]
-            replaced = has_replacement_controls(appliance)
-            built = bool(flag_codes(appliance)) or bool(my_zone_codes(appliance))
-            self.assertEqual(replaced, built, label)
 
 
 if __name__ == "__main__":

@@ -857,6 +857,87 @@ class RefModeSwitchTranslationTest(unittest.TestCase):
                     seen[name] = f"{platform}.{key}"
 
 
+class RefSupersessionInvariantTest(unittest.IsolatedAsyncioTestCase):
+    """The predicate and the platforms answer one question, measured on both platforms.
+
+    This lives here and not beside the other supersession tests because it is the only
+    file that can build the switch platform AND the select platform against one
+    appliance: the invariant is about what the two of them together really create, and
+    an assertion that recomputes `has_replacement_controls`' own definition -- as the
+    first version of this test did -- moves both sides together and can never fail.
+
+    What it protects: `select.ref_program` steps aside on the strength of that predicate,
+    so a shape where the predicate says yes and NEITHER platform builds anything leaves
+    the appliance with no mode control at all. That is exactly what happened while the
+    model-zone test lived in the select's own setup instead of inside `my_zone_codes`.
+    """
+
+    async def _controls(self, appliance) -> tuple[set[str], set[str]]:
+        data = _entry_data(appliance=appliance)
+        selects = await _build("select", data, client=RunningClient())
+        switches = await _build(
+            "switch", _entry_data(appliance=appliance), client=RunningClient()
+        )
+        return (
+            {e._attr_translation_key for e in selects},
+            {e._attr_translation_key for e in switches},
+        )
+
+    def _shapes(self) -> dict:
+        """Four fridges, chosen so each half of the predicate is exercised alone."""
+        no_zones = _appliance()
+        no_zones.model_attributes = {}
+        flags_only = _appliance()
+        flags_only.model_attributes = {"zones": "fridge|freezer"}
+        drawer_only = _appliance(
+            stop_params={"onOffStatus": {
+                "typology": "fixed", "category": "command", "mandatory": 0,
+                "fixedValue": "0",
+            }}
+        )
+        neither = _appliance(
+            stop_params={"onOffStatus": {
+                "typology": "fixed", "category": "command", "mandatory": 0,
+                "fixedValue": "0",
+            }}
+        )
+        neither.model_attributes = {"zones": "fridge|freezer"}
+        return {
+            "flags and drawer": _appliance(),
+            "no zones attribute at all": no_zones,
+            "zones without the drawer": flags_only,
+            "drawer but no clearable flag": drawer_only,
+            "neither": neither,
+        }
+
+    async def test_a_superseded_fridge_always_gets_a_replacement(self) -> None:
+        from custom_components.addhon.ref_programs import has_replacement_controls
+
+        for label, appliance in self._shapes().items():
+            selects, switches = await self._controls(appliance)
+            replaced = has_replacement_controls(appliance)
+            built = bool(switches) or ("my_zone_mode" in selects)
+            self.assertEqual(replaced, built, label)
+
+    async def test_no_fridge_is_left_without_a_mode_control(self) -> None:
+        """The harm, asserted directly. Whatever the predicate answers, the appliance
+        ends up with something: the per-mode controls, or the single select."""
+        for label, appliance in self._shapes().items():
+            selects, switches = await self._controls(appliance)
+            self.assertTrue(
+                switches or ("my_zone_mode" in selects) or ("ref_program" in selects),
+                f"{label}: no mode control at all",
+            )
+
+    async def test_the_single_select_and_its_replacements_never_coexist(self) -> None:
+        for label, appliance in self._shapes().items():
+            selects, switches = await self._controls(appliance)
+            if switches or "my_zone_mode" in selects:
+                self.assertNotIn("ref_program", selects, label)
+            else:
+                self.assertIn("ref_program", selects, label)
+
+
 class RefModeDiagnosticsRowTest(unittest.TestCase):
     """What the dump says the four switches touch, and on what terms.
 

@@ -128,14 +128,19 @@ class FakeDeviceRegistry:
         self._devices[:] = [d for d in self._devices if d.id != device_id]
 
 
-def _run(entries, coord_data=None, devices=(), issues=None):
+def _run(entries, coord_data=None, devices=(), issues=None, on_issue=None):
     # Always rebound, never left pointing at a previous test's list: a run that does not
     # ask about repairs must not append into one that does, or the assertions here would
-    # depend on collection order.
-    sink = [] if issues is None else issues
-    ir.async_create_issue = lambda hass, domain, key, **kw: sink.append(
-        (domain, key, kw)
-    )
+    # depend on collection order. `on_issue` is the escape hatch for the one test that
+    # needs the repair registry to FAIL -- binding it here rather than around the call
+    # is what keeps the rebind unconditional and the failing stub reachable.
+    if on_issue is not None:
+        ir.async_create_issue = on_issue
+    else:
+        sink = [] if issues is None else issues
+        ir.async_create_issue = lambda hass, domain, key, **kw: sink.append(
+            (domain, key, kw)
+        )
     reg = FakeRegistry(entries)
     er.async_get = lambda hass: reg
     er.async_entries_for_config_entry = lambda registry, entry_id: list(registry._entries)
@@ -404,22 +409,85 @@ class LegacyCleanupTest(unittest.TestCase):
     def test_a_broken_repair_registry_does_not_cost_the_purge(self) -> None:
         # The notice is a courtesy; the cleanup is the job. A Home Assistant whose repair
         # helper raises must not undo the removal or abort the setup.
+        #
+        # The failing stub is handed to `_run`, not assigned around it: `_run` rebinds
+        # `ir.async_create_issue` unconditionally (so no test appends into another
+        # test's list), which used to overwrite it before the cleanup ever ran -- this
+        # test passed while exercising the success path.
+        calls: list = []
+
         def _boom(*args, **kwargs):
+            calls.append(args)
             raise RuntimeError("no repairs here")
 
-        original = getattr(ir, "async_create_issue", None)
-        ir.async_create_issue = _boom
-        try:
-            removed, _detached = _run(
-                [FakeRegEntry("select.fridge_ref_program", "refid_ref_program")],
-                coord_data={
-                    "refid": {"type": "REF", "appliance": self._fridge_appliance()}
-                },
-            )
-        finally:
-            if original is not None:
-                ir.async_create_issue = original
+        removed, _detached = _run(
+            [FakeRegEntry("select.fridge_ref_program", "refid_ref_program")],
+            coord_data={
+                "refid": {"type": "REF", "appliance": self._fridge_appliance()}
+            },
+            on_issue=_boom,
+        )
+        # The raiser really ran -- otherwise this asserts nothing about the failure path.
+        self.assertEqual(1, len(calls))
         self.assertEqual(removed, ["select.fridge_ref_program"])
+
+    # --- #93: the My Zone mode sensor, replaced by the writable select.
+
+    def test_the_superseded_my_zone_sensor_is_removed(self) -> None:
+        # Shipped in 5.20.0 and suppressed here wherever the writable select is built,
+        # so on those fridges it would otherwise sit unavailable under the same name as
+        # the control that replaced it.
+        removed, _detached = _run(
+            [FakeRegEntry("sensor.fridge_my_zone_mode", "refid_my_zone_mode")],
+            coord_data={
+                "refid": {
+                    "type": "REF",
+                    "appliance": self._fridge_appliance(flags=False, drawer=True),
+                }
+            },
+        )
+        self.assertEqual(removed, ["sensor.fridge_my_zone_mode"])
+
+    def test_the_my_zone_sensor_survives_without_drawer_programs(self) -> None:
+        # A NARROWER predicate than the select's, and this is the case that proves it:
+        # the four mode switches supersede `select.ref_program`, but nothing replaces
+        # the sensor unless the DRAWER select is really built.
+        removed, _detached = _run(
+            [FakeRegEntry("sensor.fridge_my_zone_mode", "refid_my_zone_mode")],
+            coord_data={"refid": {"type": "REF", "appliance": self._fridge_appliance()}},
+        )
+        self.assertEqual(removed, [])
+
+    def test_the_my_zone_select_that_replaces_it_is_never_removed(self) -> None:
+        # The select carries the SAME unique_id suffix in another domain, which is why
+        # the rule is scoped -- removing by suffix alone would delete the replacement.
+        removed, _detached = _run(
+            [FakeRegEntry("select.fridge_my_zone_mode", "refid_my_zone_mode")],
+            coord_data={
+                "refid": {
+                    "type": "REF",
+                    "appliance": self._fridge_appliance(flags=False, drawer=True),
+                }
+            },
+        )
+        self.assertEqual(removed, [])
+
+    def test_the_my_zone_removal_raises_no_repair(self) -> None:
+        # The sensor was read-only: nothing could have called a service on it, so there
+        # is nothing to warn about. The notice is reserved for the control whose loss
+        # breaks automations silently.
+        issues: list = []
+        _run(
+            [FakeRegEntry("sensor.fridge_my_zone_mode", "refid_my_zone_mode")],
+            coord_data={
+                "refid": {
+                    "type": "REF",
+                    "appliance": self._fridge_appliance(flags=False, drawer=True),
+                }
+            },
+            issues=issues,
+        )
+        self.assertEqual([], issues)
 
     def test_legacy_power_removal_log_redacts_identity(self) -> None:
         # Privacy: the INFO removal log must carry the redacted id, never the

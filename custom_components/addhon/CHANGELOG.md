@@ -61,6 +61,10 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Fixes**
 
+- **The My Zone mode sensor is removed from the registry** where the writable select
+  replaced it, instead of being left behind unavailable under the same name as its
+  replacement. Only there: a fridge that gets the mode switches but has no drawer
+  programs keeps its sensor, because nothing took its place.
 - **A four-door fridge now gets its fourth door** (discussion #94). The zone was already
   reporting its temperature; only the door was missing, on an appliance that publishes it.
 - **My Zone mode no longer reports a whole-appliance preset as the drawer's state.** On
