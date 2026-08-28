@@ -959,28 +959,50 @@ class Tier2GatingTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIs(expected, entity.is_on, repr(raw))
 
-    async def test_the_sensor_steps_aside_where_the_select_is_built(self) -> None:
-        """One drawer, one entity with that name (#93).
+    async def test_the_sensor_is_built_but_hidden_where_the_select_is(self) -> None:
+        """One drawer, one VISIBLE entity with that name -- and still two entities (#93).
 
         `select.my_zone_mode` reports the same register under the same label, so on an
-        appliance whose catalogue lets the writable control be built the read-only half
-        must not also appear -- two identically-named entities on one device is the noise
-        this release set out to remove. Untested until now: every other fixture in this
-        class declares no `zone` ancillary, so `my_zone_codes` is empty there and the
-        suppression branch is never reached.
+        appliance whose catalogue lets the writable control be built the reading steps
+        behind it: created, and disabled at first registration, exactly like the four
+        flag readings the mode switches duplicate. 5.21.0 skipped creating it and purged
+        it from the registry instead; that cost the states only this class can report --
+        the static table's `chiller` / `cool_drink` / `cheese`, i.e. the modes set from
+        the fridge's own panel, for which the select must answer unknown.
+
+        Home Assistant reads the flag at FIRST registration only, so hiding takes
+        nothing away from a user who already has the entity enabled.
         """
         added = await _build_sensors(
             "REF", {"tempSelZ3": "0"}, appliance=_drawer_capable_fridge()
         )
-        self.assertNotIn("x-1_my_zone_mode", {e._attr_unique_id for e in added})
-        # ...and only that one: the suppression is keyed on the description, so a
-        # careless gate would take the whole `requires_zone` branch with it.
+        by_id = {e._attr_unique_id: e for e in added}
+        self.assertIn("x-1_my_zone_mode", by_id)
+        self.assertFalse(
+            by_id["x-1_my_zone_mode"]._attr_entity_registry_enabled_default
+        )
+        # ...and only that one: the decision is keyed on the description, so a careless
+        # gate would take the whole `requires_zone` branch with it.
         added_all = await _build_sensors(
             "REF",
             {"tempSelZ3": "0", "tempZ1": "5"},
             appliance=_drawer_capable_fridge(),
         )
         self.assertIn("x-1_temp_zone1", {e._attr_unique_id for e in added_all})
+
+    async def test_the_sensor_stays_visible_where_no_select_can_be_built(self) -> None:
+        """The other side of the same gate, and the reason it is answered per DEVICE and
+        not on the shared description row: a fridge whose catalogue carries no drawer
+        PROGRAM gets no select, so its reading is the only thing to watch and must be
+        enabled. A static flag on the row would have hidden it there too, permanently.
+        """
+        entity = await self._my_zone_state("0")
+        self.assertTrue(
+            getattr(entity, "_attr_entity_registry_enabled_default", True)
+        )
+        self.assertTrue(
+            getattr(entity.entity_description, "entity_registry_enabled_default", True)
+        )
 
     async def test_the_sensor_stays_where_no_select_can_be_built(self) -> None:
         """The other side of the same gate: a fridge whose catalogue carries no drawer

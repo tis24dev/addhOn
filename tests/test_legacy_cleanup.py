@@ -431,51 +431,44 @@ class LegacyCleanupTest(unittest.TestCase):
         self.assertEqual(1, len(calls))
         self.assertEqual(removed, ["select.fridge_ref_program"])
 
-    # --- #93: the My Zone mode sensor, replaced by the writable select.
+    # --- #93: the My Zone mode sensor is HIDDEN where the select appears, never removed.
 
-    def test_the_superseded_my_zone_sensor_is_removed(self) -> None:
-        # Shipped in 5.20.0 and suppressed here wherever the writable select is built,
-        # so on those fridges it would otherwise sit unavailable under the same name as
-        # the control that replaced it.
-        removed, _detached = _run(
-            [FakeRegEntry("sensor.fridge_my_zone_mode", "refid_my_zone_mode")],
-            coord_data={
-                "refid": {
-                    "type": "REF",
-                    "appliance": self._fridge_appliance(flags=False, drawer=True),
-                }
-            },
-        )
-        self.assertEqual(removed, ["sensor.fridge_my_zone_mode"])
+    def test_no_my_zone_entity_is_ever_removed(self) -> None:
+        """5.21.0 purged `sensor.<id>_my_zone_mode` wherever the drawer select could be
+        built. It is not purged any more, and the reversal is the point: the reading is
+        still created there, merely disabled at first registration
+        (`sensor.async_setup_entry`), exactly like the four flag readings behind their
+        mode switches. It has to survive because it answers where the select cannot --
+        `chiller`, `cool_drink`, `cheese` are register values no drawer PROGRAM pins, so
+        a mode set from the fridge's own panel leaves the select on unknown (#93,
+        reported by rmxs).
 
-    def test_the_my_zone_sensor_survives_without_drawer_programs(self) -> None:
-        # A NARROWER predicate than the select's, and this is the case that proves it:
-        # the four mode switches supersede `select.ref_program`, but nothing replaces
-        # the sensor unless the DRAWER select is really built.
-        removed, _detached = _run(
-            [FakeRegEntry("sensor.fridge_my_zone_mode", "refid_my_zone_mode")],
-            coord_data={"refid": {"type": "REF", "appliance": self._fridge_appliance()}},
-        )
-        self.assertEqual(removed, [])
+        Both domains, both catalogue shapes: the select carries the SAME unique_id
+        suffix as the sensor, so a rule reintroduced without a domain scope would take
+        the control with the reading.
+        """
+        for drawer in (True, False):
+            for entity_id in (
+                "sensor.fridge_my_zone_mode",
+                "select.fridge_my_zone_mode",
+            ):
+                removed, _detached = _run(
+                    [FakeRegEntry(entity_id, "refid_my_zone_mode")],
+                    coord_data={
+                        "refid": {
+                            "type": "REF",
+                            "appliance": self._fridge_appliance(
+                                flags=False, drawer=drawer
+                            ),
+                        }
+                    },
+                )
+                self.assertEqual(removed, [], f"{entity_id}, drawer={drawer}")
 
-    def test_the_my_zone_select_that_replaces_it_is_never_removed(self) -> None:
-        # The select carries the SAME unique_id suffix in another domain, which is why
-        # the rule is scoped -- removing by suffix alone would delete the replacement.
-        removed, _detached = _run(
-            [FakeRegEntry("select.fridge_my_zone_mode", "refid_my_zone_mode")],
-            coord_data={
-                "refid": {
-                    "type": "REF",
-                    "appliance": self._fridge_appliance(flags=False, drawer=True),
-                }
-            },
-        )
-        self.assertEqual(removed, [])
-
-    def test_the_my_zone_removal_raises_no_repair(self) -> None:
-        # The sensor was read-only: nothing could have called a service on it, so there
-        # is nothing to warn about. The notice is reserved for the control whose loss
-        # breaks automations silently.
+    def test_the_my_zone_sensor_raises_no_repair(self) -> None:
+        # The notice belongs to `select.ref_program` alone, whose loss makes
+        # `select.select_option` succeed while doing nothing. A registry holding only
+        # the drawer reading loses nothing and must stay silent.
         issues: list = []
         _run(
             [FakeRegEntry("sensor.fridge_my_zone_mode", "refid_my_zone_mode")],

@@ -1351,6 +1351,10 @@ async def async_setup_entry(
         # Resolved once per appliance, and only when a description actually asks for it:
         # every type but the fridge has no `requires_zone` row at all.
         zones: frozenset[str] | None = None
+        # Per APPLIANCE, never per description row: the same reading is a duplicate on a
+        # fridge whose catalogue carries drawer programs and the only thing to watch on
+        # one whose does not. Answered where the row is gated, used where it is built.
+        my_zone_hidden = False
         for description in descriptions:
             # Inferred from incomplete evidence: absent unless explicitly enabled.
             if description.experimental and not experimental:
@@ -1362,16 +1366,17 @@ async def async_setup_entry(
                     zones = _model_zones(data.get("appliance"))
                 if description.requires_zone not in zones:
                     continue
-                # The drawer's mode became WRITABLE where its programs exist (#93), and
-                # `select.my_zone_mode` reports the same value under the same label. Two
-                # identically-named entities on one device is the noise this release set
-                # out to remove, so the read-only half steps aside exactly where the
-                # writable one appears -- and stays everywhere it does not, which is
-                # every fridge whose catalogue carries no drawer program.
-                if description.key == MY_ZONE_MODE_KEY and my_zone_codes(
-                    data.get("appliance")
-                ):
-                    continue
+                # The drawer's mode became WRITABLE where its programs exist (#93), so
+                # on those fridges `select.my_zone_mode` reports the same register. The
+                # reading is still BUILT there -- it is hidden, exactly like the four
+                # flag readings the mode switches duplicate (`binary_sensor`, same
+                # issue). 5.21.0 suppressed and then purged it instead, which was the
+                # one place this repo answered the question with a deletion, and it
+                # costs the two things this class can say and a select cannot: the
+                # static table's `chiller` / `cool_drink` / `cheese`, i.e. the modes set
+                # from the fridge's own panel, for which the select must report unknown.
+                if description.key == MY_ZONE_MODE_KEY:
+                    my_zone_hidden = bool(my_zone_codes(data.get("appliance")))
             # Capability-gating (Tier 2 only): skip the sensors whose attribute
             # is not exposed by the device. The historic types (gated=False) stay
             # always created, as before.
@@ -1399,7 +1404,14 @@ async def async_setup_entry(
                 entity_class = HonAirPurifierSensor
             else:
                 entity_class = HonSensor
-            entities.append(entity_class(coordinator, appliance_id, description))
+            if entity_class is HonMyZoneModeSensor:
+                entities.append(
+                    entity_class(
+                        coordinator, appliance_id, description, hidden=my_zone_hidden
+                    )
+                )
+            else:
+                entities.append(entity_class(coordinator, appliance_id, description))
             created.append(description.key)
         # Derived sensors combine MULTIPLE attributes, so they cannot be a
         # description-table row (those read a single attr_key). Mean water per
@@ -1633,8 +1645,17 @@ class HonMyZoneModeSensor(HonSensor):
     state outside its options.
     """
 
-    def __init__(self, coordinator, appliance_id, description) -> None:
+    def __init__(
+        self, coordinator, appliance_id, description, hidden: bool = False
+    ) -> None:
         super().__init__(coordinator, appliance_id, description)
+        # Set only when this DEVICE also got the writable select for the same register
+        # (#93), the same way the four fridge flag readings step behind their switches.
+        # On the instance and not on the shared description row, because the answer is
+        # per appliance; Home Assistant reads the flag at FIRST registration only, so
+        # nobody who already has the entity loses it.
+        if hidden:
+            self._attr_entity_registry_enabled_default = False
         # Always assigned, even when the appliance declares no pinning program: the
         # widening is the only writer, and `native_value` reads the list on every
         # refresh to keep itself inside its own options. Leaving it to the platform

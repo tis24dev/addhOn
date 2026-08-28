@@ -584,7 +584,7 @@
         "name": "Timer minuti"
       },
       "my_zone_mode": {
-        "name": "Modalità My Zone",
+        "name": "Modalità My Zone (lettura)",
         "state": {
           "zero_fresh": "Fresco 0 °C",
           "quick_cool": "Raffreddamento rapido",

@@ -584,7 +584,7 @@
         "name": "Timer minutes"
       },
       "my_zone_mode": {
-        "name": "My Zone mode",
+        "name": "My Zone mode (reading)",
         "state": {
           "zero_fresh": "0 °C fresh",
           "quick_cool": "Quick cool",

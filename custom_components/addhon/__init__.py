@@ -508,18 +508,20 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
       where none of those can be built, so the id must also be one this session
       really superseded (`_superseded_ref_program_ids`). Scoped to the select
       domain for the same reason the panel light is: nothing else may match.
-    - The My Zone mode SENSOR (unique_id '<id>_my_zone_mode'), shipped in 5.20.0 and
-      replaced in #93 by a writable select of the same name. Conditional too, and on
-      a NARROWER predicate than the select above: the sensor steps aside only where
-      the drawer select is really built, so a fridge with the mode switches and no
-      drawer programs keeps its sensor. Scoped to the sensor domain, since the select
-      that replaces it carries the same unique_id suffix.
     - Everything that belonged to a per-zone CLONE of an induction hob
       ('<base>_z<N>_<key>'), which the session no longer creates. Double-anchored:
       the id must have the clone shape AND its base must be a hob in the current
       snapshot, so a genuinely zoned appliance of another type keeps its entities.
 
     Without this cleanup there would be orphan 'unavailable' entities with the '?' badge.
+
+    Deliberately NOT a rule here: the My Zone mode SENSOR ('<id>_my_zone_mode'). 5.21.0
+    removed it wherever the writable select could be built; it is now created there and
+    merely disabled at first registration (`sensor.async_setup_entry`), like the fridge
+    flag readings the mode switches duplicate. Removal was the wrong answer because the
+    reading is not a strict duplicate: it reports the panel-set drawer modes -- chiller,
+    cool drink, cheese -- that no drawer PROGRAM pins, and for which the select, which
+    may only report its own options, has to answer unknown (#93).
     """
     from homeassistant.helpers import entity_registry as er
 
@@ -538,7 +540,6 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
     }
     hob_ids = _hob_ids(coord_data)
     superseded_refs = _superseded_ref_program_ids(coord_data)
-    superseded_my_zones = _superseded_my_zone_ids(coord_data)
 
     registry = er.async_get(hass)
     checked = 0
@@ -578,18 +579,6 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
             removed_ref_programs += 1
             _LOGGER.info(
                 "Removed the fridge program select replaced by the per-mode controls: "
-                "id=%s",
-                redact_id(reg_entry.unique_id),
-            )
-        elif (
-            domain == "sensor"
-            and unique_id.endswith("_my_zone_mode")
-            and unique_id.removesuffix("_my_zone_mode") in superseded_my_zones
-        ):
-            registry.async_remove(reg_entry.entity_id)
-            removed += 1
-            _LOGGER.info(
-                "Removed the My Zone mode sensor replaced by the writable select: "
                 "id=%s",
                 redact_id(reg_entry.unique_id),
             )
@@ -643,39 +632,6 @@ def _raise_ref_program_repair(hass: HomeAssistant, entry: ConfigEntry) -> None:
         )
     except Exception:  # noqa: BLE001 - a notice must never cost a setup
         _LOGGER.debug("Setup debug: could not raise the ref_program repair", exc_info=True)
-
-
-def _superseded_my_zone_ids(coord_data) -> set[str]:
-    """Appliance ids whose My Zone mode SENSOR was replaced by the writable select (#93).
-
-    A sibling of `_superseded_ref_program_ids`, and deliberately NOT the same predicate.
-    `has_replacement_controls` is true as soon as the flag switches can be built, but the
-    read-only sensor steps aside only where the DRAWER select really appears -- so a
-    fridge with the four switches and no drawer programs keeps its sensor, and reusing
-    the broader predicate here would delete a live entity on the next start.
-
-    The condition is `my_zone_codes`, which is exactly what `sensor.async_setup_entry`
-    consults to skip creating it. One question, answered once, for the same reason the
-    program select's gate was folded into that function.
-    """
-    from .ref_programs import my_zone_codes
-
-    superseded: set[str] = set()
-    for appliance_id, device in (coord_data or {}).items():
-        if not isinstance(device, dict):
-            continue
-        if device.get("type") not in (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE):
-            continue
-        try:
-            if my_zone_codes(device.get("appliance")):
-                superseded.add(appliance_id)
-        except Exception:  # noqa: BLE001 - a degraded schema must not cost a setup
-            _LOGGER.debug(
-                "Setup debug: My Zone supersession check failed for id=%s",
-                redact_id(appliance_id),
-                exc_info=True,
-            )
-    return superseded
 
 
 def _superseded_ref_program_ids(coord_data) -> set[str]:
