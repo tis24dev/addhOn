@@ -9,6 +9,70 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 ## [Unreleased]
 
+**New Features**
+
+- **A fridge's modes are no longer one dropdown** (#93). Super Cool, Super Freeze,
+  Auto-set and Holiday are four separate settings on the appliance, not four values of
+  one setting: the reporter pointed out that the app lets My Zone sit at 0 °C while
+  Super Cool runs, and the appliance's own command catalogue agrees -- each mode writes
+  exactly one register and clears nothing else. They are now four switches, one per
+  mode, that can be on together. Turning one off clears only that mode, which is what
+  the official app does and what the single dropdown did not: its "off" sent the reset
+  that clears all four at once, so switching Super Cool off also switched Auto-set,
+  Super Freeze and Holiday off.
+- The **My Zone drawer's mode is now settable** on the fridges whose catalogue carries
+  it -- 0 °C fresh, Quick cool, Fruit and vegetables. It has no "off" because the
+  appliance has none: the drawer is always in one of its own modes.
+- The fridge's **downloaded presets** (Daily use, Extra cold, Extra ice, High
+  efficiency, Special food) each get a **button** that sends the preset. They are
+  buttons and not switches because the appliance keeps no record of which one ran: the
+  official app can only show the last one you sent from that phone.
+- **Zone temperatures are set with a slider** instead of a free-text box, over exactly
+  the degrees the appliance allows -- 1 to 9 for the fridge zone, -24 to -14 for the
+  freezer on the reported model. The wine cooler, the oven and the cooker hood keep the
+  box, and so does a zone whose temperatures the appliance publishes as a fixed list of
+  choices.
+
+**Changes**
+
+- The single fridge **program dropdown is no longer created** where the per-mode
+  controls above can be built, which is every fridge we have seen a diagnostics dump
+  for. Automations calling `select.select_option` on it must move to the new switches,
+  to the My Zone select, or to the preset buttons. It stays, unchanged, on a fridge
+  whose catalogue offers only downloaded presets.
+- The four fridge mode **readings** (`binary_sensor`) stay, and are **hidden by default
+  on a new install only where a switch really replaces them** — a fridge whose appliance
+  cannot clear a given mode on its own keeps that reading visible, because nothing there
+  took its place. Nobody loses one either way: a reading already in your registry keeps
+  working, and a hidden one is one click away in the entity settings.
+- The four readings are also **renamed** — "Super cool (reading)" and so on — so the
+  reading and the switch that acts on the same mode are no longer two entities with one
+  name on the same device.
+- The zone **setpoint controls are renamed** to say what they are ("Zone 1 target
+  temperature"), which they previously shared word for word with the measured-temperature
+  sensor beside them.
+- **The old program dropdown is removed from the entity registry** where it was replaced,
+  instead of being left behind as an unavailable entity with a "?" badge. This is
+  deliberate and it cannot be undone: its history ends there. On a fridge that keeps the
+  dropdown, nothing is touched.
+
+**Fixes**
+
+- **My Zone mode no longer reports a whole-appliance preset as the drawer's state.** On
+  a fridge whose downloaded presets also write the drawer's register, the mode sensor
+  answered with the first preset that happened to write the same number.
+- **A drawer that has modes no longer also offers a target temperature.** On the models
+  that declare both, two controls wrote one register and the temperature one published
+  0, 2 or 5 as degrees Celsius — "a drawer set to 0 °C fresh reads 0 °C".
+- **A zone temperature can no longer be set while a mode is driving it.** Auto set, Super
+  cool and Holiday each pin the fridge zone to a temperature of the appliance's choosing;
+  a value sent from Home Assistant was accepted and silently overwritten. The control now
+  says which mode owns the setpoint and asks you to switch it off first, which is what
+  the phone app does.
+- **A refused fridge command is reported in your language.** Starting a mode that the
+  cloud rejected produced an untranslated "Can't send command"; switching one off, on the
+  same appliance, produced a proper message. Both now answer the same way.
+
 ## [5.19.2] - 2026-08-26
 
 **Fixes**

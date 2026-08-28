@@ -669,16 +669,16 @@
         "name": "Risparmio Energetico"
       },
       "quick_cool": {
-        "name": "Super Cool"
+        "name": "Super Cool (lettura)"
       },
       "quick_freeze": {
-        "name": "Super Freeze"
+        "name": "Super Freeze (lettura)"
       },
       "auto_set": {
-        "name": "Auto-Set"
+        "name": "Auto-Set (lettura)"
       },
       "holiday_mode": {
-        "name": "Modalità Vacanza"
+        "name": "Modalità Vacanza (lettura)"
       },
       "filter_change": {
         "name": "Cambio Filtro"
@@ -906,29 +906,41 @@
       },
       "power": {
         "name": "Alimentazione"
+      },
+      "auto_set": {
+        "name": "Auto-Set"
+      },
+      "super_cool": {
+        "name": "Super Cool"
+      },
+      "super_freeze": {
+        "name": "Super Freeze"
+      },
+      "holiday_mode": {
+        "name": "Modalità Vacanza"
       }
     },
     "number": {
       "target_temp_zone1": {
-        "name": "Temperatura Zona 1"
+        "name": "Temperatura impostata Zona 1"
       },
       "target_temp_zone2": {
-        "name": "Temperatura Zona 2"
+        "name": "Temperatura impostata Zona 2"
       },
       "target_temp_zone3": {
-        "name": "Temperatura Zona 3"
+        "name": "Temperatura impostata Zona 3"
       },
       "target_temp_zone4": {
-        "name": "Temperatura Zona 4"
+        "name": "Temperatura impostata Zona 4"
       },
       "target_temp_upper": {
-        "name": "Temperatura Zona Superiore"
+        "name": "Temperatura impostata Zona Superiore"
       },
       "target_temp_lower": {
-        "name": "Temperatura Zona Inferiore"
+        "name": "Temperatura impostata Zona Inferiore"
       },
       "target_temp": {
-        "name": "Temperatura"
+        "name": "Temperatura impostata"
       },
       "target_temp_oven": {
         "name": "Temperatura Forno"
@@ -986,6 +998,14 @@
           "iot_extra_ice": "Extra ghiaccio",
           "iot_high_efficiency": "Alta efficienza",
           "iot_special_food_core": "Alimenti speciali"
+        }
+      },
+      "my_zone_mode": {
+        "name": "Modalità My Zone",
+        "state": {
+          "zero_fresh": "Fresco 0 °C",
+          "quick_cool": "Raffreddamento rapido",
+          "fruit_and_veg": "Frutta e verdura"
         }
       },
       "spin_speed": {
@@ -1077,6 +1097,24 @@
       "stop_program": {
         "name": "Ferma programma"
       },
+      "ref_preset_iot_daily_use": {
+        "name": "Applica uso quotidiano"
+      },
+      "ref_preset_iot_extra_cold": {
+        "name": "Applica extra freddo"
+      },
+      "ref_preset_iot_extra_cold_water": {
+        "name": "Applica extra freddo (acqua)"
+      },
+      "ref_preset_iot_extra_ice": {
+        "name": "Applica extra ghiaccio"
+      },
+      "ref_preset_iot_high_efficiency": {
+        "name": "Applica alta efficienza"
+      },
+      "ref_preset_iot_special_food_core": {
+        "name": "Applica alimenti speciali"
+      },
       "force_refresh": {
         "name": "Aggiorna ora"
       },
@@ -1114,6 +1152,9 @@
     },
     "program_not_supported": {
       "message": "Programma \"{program}\" non supportato da questo apparecchio."
+    },
+    "setpoint_owned_by_mode": {
+      "message": "{mode} è attiva e la temperatura la decide l'apparecchio. Spegni prima la modalità."
     },
     "purifier_not_running": {
       "message": "Il purificatore deve risultare in funzione per cambiare questa impostazione."

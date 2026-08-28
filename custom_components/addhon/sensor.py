@@ -110,14 +110,12 @@ from .air_purifier import (
 )
 from .debug_utils import redact_id
 from .hon_commands import (
-    SYNTHETIC_CATEGORY,
     find_settings_param,
-    get_command,
     param_range,
     param_values,
-    program_code_for_fixed_value,
 )
 from .program_labels import for_coordinator
+from .ref_programs import model_zones as _model_zones, my_zone_code_for_value, my_zone_codes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1330,24 +1328,9 @@ SENSORS: dict[str, tuple[HonSensorEntityDescription, ...]] = {
 }
 
 
-def _model_zones(appliance) -> frozenset[str]:
-    """Zones the MODEL CATALOGUE declares, or an empty set when it says nothing.
-
-    `applianceModel.attributes.zones` is the criterion the hOn app uses to decide which
-    fridge compartments exist -- it splits the string on "|" and filters its zone cards
-    on the result -- and it is per-model metadata, not telemetry, so it answers even for
-    a drawer whose shadow value has not moved in two years (#93).
-
-    Empty means "the catalogue did not answer", and a `requires_zone` gate then DENIES.
-    That is stricter than the app, which falls back to the union of every startProgram's
-    zone enum and shows all its cards when even that is missing. Deliberate: we do not
-    implement that fallback, and inventing an entity out of silence is the worse failure
-    -- an entity that should not exist cannot be told from one that should, while a
-    missing one is visible the moment somebody looks for it.
-    """
-    attributes = getattr(appliance, "model_attributes", None)
-    raw = attributes.get("zones") if isinstance(attributes, dict) else None
-    return frozenset(part for part in str(raw or "").split("|") if part)
+# `_model_zones` now lives in `ref_programs.model_zones`, imported above under its old
+# name. It moved because `select.my_zone_mode` gates on the same catalogue field, and
+# two copies of that rule could disagree about which drawers a fridge has (#93).
 
 
 async def async_setup_entry(
@@ -1378,6 +1361,16 @@ async def async_setup_entry(
                 if zones is None:
                     zones = _model_zones(data.get("appliance"))
                 if description.requires_zone not in zones:
+                    continue
+                # The drawer's mode became WRITABLE where its programs exist (#93), and
+                # `select.my_zone_mode` reports the same value under the same label. Two
+                # identically-named entities on one device is the noise this release set
+                # out to remove, so the read-only half steps aside exactly where the
+                # writable one appears -- and stays everywhere it does not, which is
+                # every fridge whose catalogue carries no drawer program.
+                if description.key == MY_ZONE_MODE_KEY and my_zone_codes(
+                    data.get("appliance")
+                ):
                     continue
             # Capability-gating (Tier 2 only): skip the sensors whose attribute
             # is not exposed by the device. The historic types (gated=False) stay
@@ -1648,17 +1641,20 @@ class HonMyZoneModeSensor(HonSensor):
         # default made that read depend on a base-class attribute this class does not
         # own -- and on the one appliance shape where the widening finds nothing (a
         # category-less startProgram), that is exactly the path taken.
-        offered = _pinning_program_codes(self._appliance, description.attr_key)
+        # The DRAWER's programs, not every program that pins the parameter (#93). The
+        # wider set was wrong on any fridge whose download presets also pin `tempSelZ3`
+        # -- damigioanna's HDPW5620CNPK declares five of them, pinning 2, 2, 5, 5 and 5 --
+        # because it admitted `iot_extra_cold` and `iot_daily_use` as reportable states of
+        # one drawer, and the lookup below then answered with them.
+        offered = frozenset(my_zone_codes(self._appliance))
         self._attr_options = sorted(set(description.options or ()) | offered)
 
     @property
     def native_value(self):
         appliance = self._appliance
         if appliance is not None:
-            code = program_code_for_fixed_value(
-                appliance, self.entity_description.attr_key, self._get_attr(
-                    self.entity_description.attr_key
-                )
+            code = my_zone_code_for_value(
+                appliance, self._get_attr(self.entity_description.attr_key)
             )
             # Only a code this entity may actually report: `options` is frozen at
             # construction, and a category added to the schema later (or a program the
@@ -1668,36 +1664,6 @@ class HonMyZoneModeSensor(HonSensor):
             if code and code in (self._attr_options or ()):
                 return code
         return super().native_value
-
-
-def _pinning_program_codes(appliance, param_name: str) -> frozenset[str]:
-    """Program slugs that PIN `param_name` to a fixed value, or an empty set.
-
-    The reportable domain, not the offered one: `program_code_for_fixed_value` can only
-    ever answer with a program that pins the parameter, so widening `options` by every
-    program the fridge offers would admit a dozen states the sensor can never reach
-    (`auto_set`, `holiday`, the `iot_*` presets) and leave them unlabelled.
-
-    Read from `categories` for the same reason the lookup is: both halves are answered
-    by one structure and cannot disagree about which slugs exist.
-    """
-    command = get_command(appliance, "startProgram")
-    categories = getattr(command, "categories", None) if command is not None else None
-    if not isinstance(categories, dict):
-        return frozenset()
-    codes = set()
-    for code, category in categories.items():
-        # Same placeholder skip as the lookup itself: widening `options` with the
-        # synthetic category would ADMIT the "_" state that skip exists to prevent.
-        if str(code) == SYNTHETIC_CATEGORY:
-            continue
-        params = getattr(category, "parameters", None)
-        param = params.get(param_name) if isinstance(params, dict) else None
-        if param is not None and str(getattr(param, "typology", "")) == "fixed":
-            codes.add(str(code))
-    return frozenset(codes)
-
-
 class HonAirPurifierSensor(HonSensor):
     """AP sensor whose availability can depend on the purifier being powered and
     on whether the reading could be interpreted at all.

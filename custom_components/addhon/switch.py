@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """Haier hOn switches: washer/dryer pause, AC toggles, wine-cooler and hood lights,
-and the cooker hood's power."""
+the cooker hood's power, and the fridge's independent boost modes."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -28,7 +28,10 @@ from .command_dispatch import CommandPatch, async_dispatch_patch
 from .const import (
     APPLIANCE_AC,
     APPLIANCE_AP,
+    APPLIANCE_FR,
+    APPLIANCE_FRE,
     APPLIANCE_HO,
+    APPLIANCE_REF,
     APPLIANCE_TD,
     APPLIANCE_WASH_GROUP,
     APPLIANCE_WC,
@@ -54,9 +57,11 @@ from .hood import (
 from .param_rollback import restore_params, snapshot_params
 from .program_options import (
     HonProgramOptionEntity,
+    async_send_program,
     normalize_code,
     option_choices,
 )
+from .ref_programs import REF_FLAG_TO_PARAM, STOPPROGRAM, flag_codes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -170,6 +175,111 @@ _SETTINGS_SWITCHES: dict[str, tuple[HonSettingsSwitchDescription, ...]] = {
     APPLIANCE_WC: _WC_SWITCHES,
     APPLIANCE_HO: _HOOD_SWITCHES,
 }
+
+
+# The fridge family, named here because the mode switches below are REF-shaped and the
+# `settings`-command table above deliberately does NOT list these types: a fridge's boost
+# modes are not settings parameters at all (see HonRefModeSwitch).
+_COOLING_TYPES: tuple[str, ...] = (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE)
+
+
+@dataclass(frozen=True, kw_only=True)
+class HonRefModeSwitchDescription:
+    """One INDEPENDENT fridge boost mode: a startProgram category and the flag it sets.
+
+    `program` is the code of the `startProgram` category that turns the mode ON, and it is
+    what `async_send_program` writes into the program parameter. `flag` is the single
+    shadow parameter that category sets, the one `stopProgram` clears, and the one the
+    switch reads back. `key` is the translation key and the unique_id suffix.
+
+    `key` and `program` are separate fields and NOT one string, because on this family they
+    genuinely differ: the device names the category `holiday` while the reading has always
+    been called `holiday_mode` here (binary_sensor.py). Collapsing them would either rename
+    a shipped translation key or send a program code the device does not declare.
+
+    A PLAIN dataclass, not a SwitchEntityDescription subclass, for the reason spelled out on
+    HonAirPurifierSwitchDescription: only an entity that publishes its description as
+    `entity_description` needs the Home Assistant base (issue #67, the AttributeError inside
+    `entity_platform._async_add_entity`). This one is kept in `_desc`, out of HA's reach,
+    exactly like HonSettingsSwitchDescription.
+    """
+
+    key: str            # translation_key + unique_id suffix
+    program: str        # the startProgram category code that switches the mode ON
+    flag: str           # the shadow/stopProgram parameter that IS the mode
+    icon: str
+
+
+# The four fridge modes that are INDEPENDENT AXES, not alternatives (issue #93, follow-up).
+#
+# THE BUG THIS TABLE EXISTS TO FIX. `select.ref_program` models the fridge as one
+# mutually-exclusive dropdown and clears it with a bare `stopProgram` (select.py), which
+# serialises every parameter that command declares -- on this family all FOUR flags. So
+# switching Super Cool off also switched Auto-set, Super Freeze and Holiday off. The
+# reporter of #93 (HFW7720EWMP) noticed the model was wrong from the other side: "You can
+# have my zone at 0 and also select super cool. Both are different settings on the app."
+#
+# HE IS RIGHT, AND THE CATALOGUE PROVES IT WITHOUT A FIELD TEST. In the app's own fixture
+# for this model family (`apk/decomp.txt:3495902`, HTW7720ENMP -- same `option` string as
+# his dump, `autoSet|superCool|superFreeze|holiday|quickCool|zeroFresh|fruitAndVeg`, same
+# seven categories) every startProgram category writes EXACTLY ONE parameter:
+#
+#   PROGRAMS.REF.AUTO_SET      -> intelligenceMode = 1   (fridge, freezer)
+#   PROGRAMS.REF.SUPER_COOL    -> quickModeZ1      = 1   (fridge)
+#   PROGRAMS.REF.SUPER_FREEZE  -> quickModeZ2      = 1   (freezer)
+#   PROGRAMS.REF.HOLIDAY       -> holidayMode      = 1   (fridge, vtRoom1)
+#
+# Nothing in the shadow says "the active program"; there are four booleans and no field
+# that could hold a single winner (`apk/analysis/deep/ref-active-program-detection.md`).
+# The mutual exclusion was our invention, borrowed from the washer.
+#
+# HOW THE APP TURNS ONE MODE OFF, observed rather than reasoned: the `commandHistory` of
+# `apk/dump/ref_10136/attributes.json`, sent by the OFFICIAL app (`deviceModel: "BVL"`,
+# `appVersion: "2.12.9"`, not by us), is `{"commandName": "stopProgram", "applianceType":
+# "REF", "parameters": {"intelligenceMode": "0"}}`. One parameter. The app never sends the
+# four-flag reset.
+#
+# HOW IT TURNS ONE ON, and we already do it right: the `commandHistory` of the #93 dump
+# `diagnostics/issue93-dumps/rmxs-HFW7720EWMP-2026-08-27.json` records OUR send
+# (`deviceModel: "addhon"`) `{"commandName": "startProgram", "programName":
+# "PROGRAMS.REF.AUTO_SET", "parameters": {"intelligenceMode": "1"}}`, carrying both a
+# `timestampAccepted` and a `timestampExecuted` -- accepted AND executed by his appliance.
+#
+# WHAT IS DELIBERATELY NOT HERE. The three My Zone programs (QUICK_COOL, ZERO_FRESH,
+# FRUIT_AND_VEG) write `tempSelZ3` to 2/0/5 and `stopProgram` does not touch that register
+# at all: the drawer has no "off", so it is a select and not a switch. The five `iot_*`
+# download presets write a `tempSel` triple and leave NO trace of their identity in the
+# shadow, so they cannot be read back and are buttons, not switches -- the app itself
+# recovers them only from its own device-local AsyncStorage (`@quickSet`). Both are
+# somebody else's entity; the argument is in `apk/analysis/issue93-ref-controls-shape.md`.
+#
+# The program/flag pairing itself is NOT restated here: it is `ref_programs`'
+# `REF_FLAG_TO_PARAM`, the same map `has_replacement_controls` consults to decide whether
+# `select.ref_program` steps aside. Two spellings of it would let the entity that steps
+# aside and the entities that replace it disagree about which flags exist.
+#
+# The icons match the four binary sensors that read the same flags, so the pair reads as
+# one control and one reading rather than as two unrelated entities.
+_REF_MODE_ICONS: dict[str, str] = {
+    "auto_set": "mdi:auto-mode",
+    "super_cool": "mdi:snowflake",
+    "super_freeze": "mdi:snowflake-variant",
+    "holiday": "mdi:palm-tree",
+}
+# `key` differs from `program` only for Holiday, whose reading has shipped as
+# `holiday_mode` since 5.x; renaming it would move a translation key and a unique_id for
+# nothing.
+_REF_MODE_KEYS: dict[str, str] = {"holiday": "holiday_mode"}
+
+_REF_MODE_SWITCHES: tuple[HonRefModeSwitchDescription, ...] = tuple(
+    HonRefModeSwitchDescription(
+        key=_REF_MODE_KEYS.get(code, code),
+        program=code,
+        flag=param,
+        icon=_REF_MODE_ICONS[code],
+    )
+    for code, param in REF_FLAG_TO_PARAM.items()
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -410,6 +520,53 @@ def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> l
             "Switch debug: settings switches '%s' id=%s type=%s -> %d %s",
             redact_id(data.get("name"), appliance_id), redact_id(appliance_id),
             app_type, len(created), created,
+        )
+    elif app_type in _COOLING_TYPES:
+        # The fridge modes are NOT a `_SETTINGS_SWITCHES` row and cannot be one: every row
+        # there is gated on `settings_param`, and a fridge's `settings` command declares
+        # only the `tempSel*` setpoints -- the modes live on startProgram/stopProgram. They
+        # also need two DIFFERENT commands, one per direction, which that description
+        # cannot express. Same shape as the hood's power switch, two lines up.
+        #
+        # The gate is `ref_programs.flag_codes` and NOT a private walk, because
+        # `has_replacement_controls` calls the very same function to decide whether
+        # `select.ref_program` steps aside: if the two disagreed by one condition, a fridge
+        # could lose the select and gain no switch.
+        buildable = set(flag_codes(appliance))
+        created_modes: list[str] = []
+        for desc in _REF_MODE_SWITCHES:
+            if not HonRefModeSwitch.supports(appliance, desc):
+                # A REJECTION is logged with the live verdict. The summary below names only
+                # what WAS built, so a fridge missing three of the four modes would
+                # otherwise read exactly like a fridge that never reached this branch --
+                # and "the integration does not offer that control" is the report this
+                # platform keeps receiving. The codes are derived data (schema slugs),
+                # never identity.
+                _LOGGER.debug(
+                    "Switch debug: no fridge '%s' switch for id=%s (needs program '%s' in "
+                    "the live startProgram enum AND parameter '%s' on '%s'; buildable=%s; "
+                    "commands=%s)",
+                    desc.key,
+                    redact_id(appliance_id),
+                    desc.program,
+                    desc.flag,
+                    STOPPROGRAM,
+                    sorted(buildable),
+                    _command_names(appliance),
+                )
+                continue
+            found.append(HonRefModeSwitch(coordinator, appliance_id, desc, client))
+            created_modes.append(desc.key)
+        if created_modes:
+            _LOGGER.info(
+                "Added %d fridge mode switches: id=%s",
+                len(created_modes),
+                redact_id(appliance_id),
+            )
+        _LOGGER.debug(
+            "Switch debug: fridge mode switches '%s' id=%s type=%s -> %d %s",
+            redact_id(data.get("name"), appliance_id), redact_id(appliance_id),
+            app_type, len(created_modes), created_modes,
         )
     else:
         _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
@@ -768,6 +925,191 @@ class HonHoodPowerSwitch(HonBaseEntity, SwitchEntity):
             raise
         except Exception as err:
             _LOGGER.error("Hood power switch: %s failed: %s", action, err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
+
+
+class HonRefModeSwitch(HonBaseEntity, SwitchEntity):
+    """One fridge boost mode, on its own axis: Auto-set, Super Cool, Super Freeze, Holiday.
+
+    Each of these is a SEPARATE register on the appliance, not one of four values of a
+    single one. Two can run at once -- Auto-set with Super Cool is the combination the
+    reporter of #93 described from the app -- and the catalogue permits it by construction,
+    because every startProgram category writes exactly one parameter and never clears
+    another. `_REF_MODE_SWITCHES` above carries the evidence.
+
+    TWO COMMANDS, ONE PER DIRECTION, which is why this is a class and not a settings-switch
+    row -- the same reason HonHoodPowerSwitch is a class, and this follows its shape:
+
+    * ON  -> `async_send_program(program)`. Setting the program SWAPS the active
+      `startProgram` command to the selected category, and that category's schema is what
+      supplies the single mandatory `<flag> = "1"` and the whole `ancillaryParameters`
+      block (programFamily/zone/remoteActionable/remoteVisible) that the official app also
+      sends. We name nothing: the body is the category's own. NOT a `CommandPatch` with the
+      `program` selector key, and this is not a style preference -- `_prepare` puts every
+      key of `patch.values` into `requested_order` (`command_dispatch.py`) and thence into
+      the payload, with no exclusion for the selector, so `program` would travel to the
+      cloud inside `parameters`, a field the app never sends, AND rewrite
+      `appliance.commands` permanently on the way (`hood.py`, "WHAT NO HOOD WRITE MAY
+      NAME"). The alternative does not exist either: without the selector a patch can only
+      name parameters of the ALREADY-ACTIVE category, so on a fridge sitting on `auto_set`
+      a patch naming `quickModeZ1` raises `Unknown parameters` before it reaches the wire.
+    * OFF -> one SPARSE `CommandPatch` on `stopProgram` carrying this mode's flag ALONE.
+      On every REF schema seen (the #93 dump, `apk/dump/ref_10136/commands.json`, and the
+      decomp fixture `3495902`) all four flags are `mandatory: 0` and the command declares
+      no `programRules`, so `_prepare` adds nothing: the body is exactly `{<flag>: "0"}`,
+      byte-for-byte the `stopProgram` the OFFICIAL app is recorded sending in
+      `apk/dump/ref_10136/attributes.json`. The full-command send that `select.ref_program`
+      still uses serialises all four zeroes instead, which is how switching one mode off
+      switched three others off -- the defect this class exists to remove.
+
+    A model is free to disagree with both of those, and we let it: a `stopProgram` that
+    marks a sibling flag mandatory, or that carries `programRules` cascading onto one, will
+    put that sibling in the body at the value the DEVICE pinned. That is the schema
+    speaking, and filtering it would be us overruling the appliance. No observed REF does
+    either; the regression test pins the one-key body against the #93 schema, so what is
+    guaranteed is that OUR code cannot reintroduce the four-flag reset.
+
+    NO OPTIMISTIC STATE. `is_on` is the bare shadow flag and nothing else; neither direction
+    writes what it hopes the answer will be. What does move before the next poll is the
+    engine's own reconciliation of a command the cloud ACCEPTED -- `sync_payload_to_params`
+    after the dispatcher's commit point for the off, and `sync_command_to_params` inside the
+    sender for the on -- and both are followed by `_async_request_command_refresh`, which
+    re-reads the device. On a FAILED write neither the refresh nor the state change happens:
+    the entity keeps reporting what the appliance last said, which is the honest answer
+    while a command is being refused.
+    """
+
+    @staticmethod
+    def supports(appliance, description: HonRefModeSwitchDescription) -> bool:
+        """True when this fridge declares BOTH directions of this one mode.
+
+        Delegates to `ref_programs.flag_codes`, which applies the two write-schema gates
+        together: the program code must be in the device's LIVE `startProgram` enum (the
+        ON), and the matching parameter must be declared by `stopProgram` (the OFF). One
+        function, because `has_replacement_controls` consults the same one to decide
+        whether `select.ref_program` steps aside -- a private copy here could drift and
+        leave a fridge with neither control.
+
+        Gated on the two WRITE schemas and deliberately NOT on the reported attribute. A
+        read gate looks at the shadow as it stood at SETUP, and a fridge that was
+        disconnected when Home Assistant restarted publishes nothing -- which would
+        silently remove four CONTROLS until the next reload, i.e. "the fridge was offline
+        at boot, therefore Super Cool can no longer be switched on". A control that cannot
+        be read is worth having; a control that vanishes because the appliance was asleep
+        is not. Both observed REF shadows publish all four flags
+        (`apk/analysis/deep/ref-active-program-detection.md`), so the read gate could only
+        ever subtract a working switch, and `is_on` returning None is the same honest
+        unknown HonHoodPowerSwitch already ships.
+
+        The two halves are independent on purpose. A fridge declaring `super_cool` and
+        `super_freeze` but a `stopProgram` that carries only `quickModeZ1` gets ONE switch:
+        a mode we can start and never stop would be strandable from Home Assistant, leaving
+        the user to walk to the appliance. A fridge with no `stopProgram` at all gets none,
+        which is the same line `HonRefProgramSelect.supports_appliance` already draws.
+        """
+        return description.program in flag_codes(appliance)
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        description: HonRefModeSwitchDescription,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._desc = description
+        self._attr_translation_key = description.key
+        self._attr_unique_id = f"{appliance_id}_{description.key}"
+        self._attr_icon = description.icon
+        _LOGGER.debug(
+            "Switch debug: initialized fridge mode switch '%s' id=%s program=%s flag=%s",
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
+            description.program,
+            description.flag,
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        # The bare shadow flag, which is the ONLY running-mode signal a fridge publishes:
+        # there is no program-identity field on any REF read path and the official app
+        # derives its own dashboard chips from these same four booleans
+        # (`apk/analysis/deep/ref-active-program-detection.md`, channel 1). Unknown rather
+        # than off when the reading is missing, exactly as HonHoodPowerSwitch decides it:
+        # a fridge that stopped reporting the flag has not told us the mode is off, and an
+        # entity that claims "off" invites an automation to "fix" it.
+        raw = self._get_attr(self._desc.flag)
+        if raw is None:
+            return None
+        return str(raw) == "1"
+
+    async def async_turn_on(self, **kwargs) -> None:
+        # No idle guard. Starting a mode that is already running is a no-op on the
+        # appliance, while a guard would read the CACHED flag -- which is stale for a mode
+        # someone switched off at the panel -- and swallow a command the user asked for.
+        # (The hood's fan does guard its off, for the opposite reason: there the write has
+        # a side effect, waking a dark panel. Here neither direction has one.)
+        await self._send(
+            "turn_on",
+            lambda appliance, client: async_send_program(
+                self.hass, client, appliance, self._desc.program
+            ),
+        )
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._send(
+            "turn_off",
+            lambda appliance, client: async_dispatch_patch(
+                self.hass,
+                client,
+                appliance,
+                CommandPatch(
+                    STOPPROGRAM,
+                    {self._desc.flag: "0"},
+                    action=f"{self._desc.key}_off",
+                ),
+            ),
+        )
+
+    async def _send(self, action: str, build) -> None:
+        """Run one direction's sender, then re-read the device.
+
+        `build` is a FACTORY and not an awaitable, for two reasons. The two directions do
+        not share a sender -- on goes through the program sender, off through the
+        transactional dispatcher -- so there is no single object to pass; and building the
+        awaitable inside the try is what makes a value the live schema rejects surface as
+        the same localized command error as a transport failure, without leaving an
+        un-awaited coroutine behind when the availability guard fires first.
+        """
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        try:
+            _LOGGER.debug(
+                "Switch debug: fridge mode %s '%s' id=%s program=%s flag=%s",
+                action,
+                self._desc.key,
+                redact_id(self._appliance_id),
+                self._desc.program,
+                self._desc.flag,
+            )
+            await build(appliance, client)
+            await self._async_request_command_refresh()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error(
+                "Fridge mode switch: %s '%s' failed: %s",
+                action, self._desc.key, err, exc_info=True,
+            )
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="command_error",

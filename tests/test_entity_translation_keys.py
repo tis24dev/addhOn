@@ -199,7 +199,7 @@ def _tk(description) -> str:
 
 def _collect_code_keys() -> dict[str, set[str]]:
     from custom_components.addhon import (
-        binary_sensor, fan, number, select, sensor, switch,
+        binary_sensor, fan, number, ref_programs, select, sensor, switch,
     )
 
     used: dict[str, set[str]] = {}
@@ -242,6 +242,10 @@ def _collect_code_keys() -> dict[str, set[str]]:
         {d.key for descs in switch._SETTINGS_SWITCHES.values() for d in descs}
         | {d.key for d in switch._PROGRAM_OPTION_SWITCHES}
         | {d.key for d in switch._AIR_PURIFIER_SWITCHES}
+        # The fridge boost modes: their own table, because they are neither settings
+        # parameters nor buffered program options -- one startProgram category for each
+        # direction's ON and a sparse stopProgram for its OFF.
+        | {d.key for d in switch._REF_MODE_SWITCHES}
         | {"pause", "debug_logging", "mqtt_realtime_debug"}
         # The cooker hood's power switch is a fixed-key class, not a table row: it
         # writes `onOffStatus`, which the hood's settings command does not declare,
@@ -254,6 +258,7 @@ def _collect_code_keys() -> dict[str, set[str]]:
         {
             "program",
             "ref_program",
+            select.HonRefMyZoneSelect._attr_translation_key,
             select.HonAirPurifierAromaSelect._attr_translation_key,
             select.HonAirPurifierPanelLightSelect._attr_translation_key,
             select.HonHobPowerLimitSelect._attr_translation_key,
@@ -261,7 +266,13 @@ def _collect_code_keys() -> dict[str, set[str]]:
         | {d.translation_key for d in select._PROGRAM_OPTION_SELECTS}
         | {d.translation_key for d in select._AC_DIRECTION_SELECTS}
     )
-    used["button"] = {"start_program", "stop_program", "force_refresh", "reset_debug"}
+    # The fridge preset buttons are one entity per download preset, and their keys are
+    # generated from the same closed tuple the entities are (#93). Harvested from that
+    # tuple rather than listed: a preset added there without its two labels must fail
+    # here, which is the whole job of this test.
+    used["button"] = {
+        "start_program", "stop_program", "force_refresh", "reset_debug",
+    } | {f"ref_preset_{code}" for code in ref_programs.REF_DOWNLOAD_PRESETS}
     # The fans are fixed-key entities, not description tables: each one has to
     # register itself here or the platform's key set silently loses it.
     used["fan"] = {

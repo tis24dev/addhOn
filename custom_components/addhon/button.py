@@ -15,6 +15,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonAccountEntity, HonBaseEntity
 from .const import (
+    APPLIANCE_FR,
+    APPLIANCE_FRE,
+    APPLIANCE_REF,
     APPLIANCE_WASH_GROUP,
     CONF_ENABLE_DEBUG,
     CONF_ENABLE_MQTT_DEBUG,
@@ -26,9 +29,13 @@ from .const import (
 from .debug_utils import command_names, param_snapshot, redact_id, redact_store
 from .logging_utils import reset_integration_log_level, silence_mqtt_noise
 from .param_rollback import restore_params, snapshot_params
-from .program_options import apply_pending_options
+from .program_options import apply_pending_options, async_send_program
+from .ref_programs import download_codes
 
 _LOGGER = logging.getLogger(__name__)
+
+# Fridge family (REF/FR/FRE): the QuickSet download presets, one button each (#93).
+_COOLING_TYPES = (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE)
 
 
 async def async_setup_entry(
@@ -50,6 +57,44 @@ async def async_setup_entry(
             app_type,
             command_names(data.get("appliance")),
         )
+        if app_type in _COOLING_TYPES:
+            # The fridge's QuickSet download presets (#93). One BUTTON per preset,
+            # because that is what they are: `apk/analysis/deep/`
+            # `ref-active-program-detection.md` proves across nine targets that a
+            # running preset sets no flag and leaves NO program-identity field in the
+            # shadow -- no prCode, no prStr, no prPhase, no machMode, `programName`
+            # stuck at addhOn's own "No Program", `activity` empty -- on both REF models
+            # anyone has dumped. The official app does not recover it either: it reads no
+            # shadow identity field (T5), runs no setpoint reverse-match (T6, and the
+            # static triples collide so it could not), and shows the last one only from
+            # its own device-local AsyncStorage `@quickSet` (T1, T8). Its card list is
+            # built from the write-side catalogue with `available` hardcoded true (T3):
+            # a "what you can SEND" menu.
+            #
+            # A switch would therefore have to lie about being off, and a select would
+            # have to lie about which one is current. A button claims nothing it cannot
+            # know, and is the only shape that survives contact with that evidence.
+            presets = download_codes(data.get("appliance"))
+            for code in presets:
+                entities.append(
+                    HonRefPresetButton(coordinator, appliance_id, code, client)
+                )
+            if presets:
+                _LOGGER.info(
+                    "Added %d REF preset buttons: id=%s -> %s",
+                    len(presets),
+                    redact_id(appliance_id),
+                    presets,
+                )
+            else:
+                _LOGGER.debug(
+                    "Button debug: no REF preset buttons for '%s' id=%s; needs a "
+                    "startProgram category with programFamily=download that this "
+                    "repository names (ref_programs.REF_DOWNLOAD_PRESETS)",
+                    data.get("name"),
+                    redact_id(appliance_id),
+                )
+            continue
         if app_type not in APPLIANCE_WASH_GROUP:
             _LOGGER.debug("Button debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
             continue
@@ -325,6 +370,92 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                 translation_key="command_error",
                 translation_placeholders={"error": str(err)},
             ) from err
+
+
+class HonRefPresetButton(HonBaseEntity, ButtonEntity):
+    """One fridge QuickSet download preset: press to send it (#93).
+
+    Fire-and-forget by construction, not by choice. The preset writes a `tempSel`
+    triple, sets no flag, and leaves nothing in the shadow that says it ran, so there is
+    no state to publish and no "stop" to offer -- pressing another preset, or moving a
+    setpoint, simply moves the setpoints again.
+
+    NOT a diagnostic and NOT a config entity, and the choice is worth stating because it
+    decides where a user finds them. Home Assistant's CONFIG category is for changing
+    the configuration of a device and DIAGNOSTIC for information about its health; both
+    fold the entity off the device's main card. These presets change the fridge and
+    freezer setpoints -- what the appliance is doing to the food, which is its primary
+    function -- and the app agrees about where they belong: the QuickSet cards render on
+    the REF dashboard itself (`QuicksetTab`, decomp.txt:2875962-2876099), not in a
+    settings screen. `button.start_program` and `button.stop_program` carry no category
+    for exactly this reason, while `force_refresh` and `reset_debug` carry CONFIG because
+    what they configure is the INTEGRATION. Statelessness was considered as an argument
+    for CONFIG and rejected: it is a property of the control, not of what it does.
+
+    The send goes through `async_send_program`, the same swap-aware path the program
+    selects use, and NOT through this module's `HonProgramCommandButton`: that class
+    exists to carry the washer's pending-program and pending-options buffers onto
+    `startProgram`, and none of that applies here. The preset's own fixed parameters ride
+    along in the swapped category's schema and are serialized by `command.send()`; we
+    never set them by hand, which is what keeps a per-model triple (IOT_EXTRA_ICE writes
+    `tempSelZ2` alone) correct without a table of triples in this repository.
+    """
+
+    _attr_icon = "mdi:snowflake-alert"
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        code: str,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._code = code
+        # `code` is always a member of `ref_programs.REF_DOWNLOAD_PRESETS`, a constant of
+        # this repository -- see that tuple for why the gate intersects with it. The
+        # unique_id suffix vocabulary therefore stays closed, which is the invariant
+        # `diagnostics._entity_section` rests its privacy argument on.
+        self._attr_unique_id = f"{appliance_id}_ref_preset_{code}"
+        self._attr_translation_key = f"ref_preset_{code}"
+        _LOGGER.debug(
+            "Button debug: init REF preset '%s' id=%s code=%s",
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
+            code,
+        )
+
+    async def async_press(self) -> None:
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        try:
+            _LOGGER.info(
+                "Button: REF preset '%s' -> startProgram id=%s",
+                self._code,
+                redact_id(self._appliance_id),
+            )
+            await async_send_program(self.hass, client, appliance, self._code)
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error(
+                "Button: REF preset '%s' error: %s", self._code, err, exc_info=True
+            )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        # The setpoints the preset writes ARE mirrored into the shadow, so the refresh
+        # is not cosmetic: `number.target_temp_zone1` and its siblings show the new
+        # values on the next poll. The preset's own identity is not recoverable and
+        # nothing here pretends otherwise.
+        await self._async_request_command_refresh()
 
 
 class HonForceRefreshButton(HonAccountEntity, ButtonEntity):

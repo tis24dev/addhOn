@@ -174,6 +174,163 @@ class LegacyCleanupTest(unittest.TestCase):
         )
         self.assertEqual(removed, [])
 
+    # --- #93: the fridge program select, replaced rather than dropped.
+
+    @staticmethod
+    def _fridge_appliance(*, flags=True, drawer=False, zones="fridge|freezer|vtRoom1"):
+        """A fridge whose live schema decides whether it was superseded.
+
+        Built as the production predicate reads it: the program enum off
+        `startProgram.program`, the clearable flags off `stopProgram`, and -- for the
+        drawer -- one category pinning `tempSelZ3`, zoned on the drawer alone.
+        """
+        class _Param:
+            def __init__(self, values=None, value=None, typology="enum"):
+                self.values = values
+                self.value = value
+                self.typology = typology
+
+        class _Cmd:
+            def __init__(self, parameters, categories=None):
+                self.parameters = parameters
+                if categories is not None:
+                    self.categories = categories
+
+        codes = []
+        categories = {}
+        if flags:
+            codes.append("super_cool")
+            categories["super_cool"] = _Cmd(
+                {"quickModeZ1": _Param(value="1", typology="fixed")}
+            )
+        if drawer:
+            codes.append("zero_fresh")
+            categories["zero_fresh"] = _Cmd(
+                {
+                    "tempSelZ3": _Param(value="0", typology="fixed"),
+                    "zone": _Param(values=["vtroom1"]),
+                    "programFamily": _Param(values=["dashboard"]),
+                }
+            )
+        commands = {
+            "startProgram": _Cmd({"program": _Param(values=codes)}, categories),
+            "stopProgram": _Cmd(
+                {"quickModeZ1": _Param(value="0", typology="fixed")}
+                if flags
+                else {"onOffStatus": _Param(value="0", typology="fixed")}
+            ),
+        }
+        return types.SimpleNamespace(
+            commands=commands,
+            model_attributes={} if zones is None else {"zones": zones},
+        )
+
+    def test_the_superseded_fridge_program_select_is_removed(self) -> None:
+        # Replaced, not dropped: four mode switches now write the same registers with a
+        # per-flag `off`. Left behind, the select would sit `unavailable` with the '?'
+        # badge -- and an automation calling `select.select_option` on it logs a WARNING
+        # and reports SUCCESS, which is the quietest way this change could fail.
+        removed, _detached = _run(
+            [FakeRegEntry("select.fridge_ref_program", "refid_ref_program")],
+            coord_data={"refid": {"type": "REF", "appliance": self._fridge_appliance()}},
+        )
+        self.assertEqual(removed, ["select.fridge_ref_program"])
+
+    def test_a_fridge_that_keeps_its_select_keeps_the_entity(self) -> None:
+        # THE reason this rule is conditional, and the only one of the five that is. A
+        # fridge offering no clearable flag and no drawer program still gets the select,
+        # so removing its registry entry would delete a LIVE entity on the next start.
+        removed, _detached = _run(
+            [FakeRegEntry("select.fridge_ref_program", "refid_ref_program")],
+            coord_data={
+                "refid": {
+                    "type": "REF",
+                    "appliance": self._fridge_appliance(flags=False),
+                }
+            },
+        )
+        self.assertEqual(removed, [])
+
+    def test_a_drawer_alone_also_supersedes_it(self) -> None:
+        # The other half of the predicate: no clearable flag, but the drawer select is
+        # buildable, so the single select does step aside and its entry must go.
+        removed, _detached = _run(
+            [FakeRegEntry("select.fridge_ref_program", "refid_ref_program")],
+            coord_data={
+                "refid": {
+                    "type": "REF",
+                    "appliance": self._fridge_appliance(flags=False, drawer=True),
+                }
+            },
+        )
+        self.assertEqual(removed, ["select.fridge_ref_program"])
+
+    def test_another_domain_with_the_same_suffix_is_kept(self) -> None:
+        # Scoped to `select` for the reason the panel-light rule is: an entity of another
+        # domain sharing the unique_id is a different entity.
+        removed, _detached = _run(
+            [FakeRegEntry("sensor.fridge_ref_program", "refid_ref_program")],
+            coord_data={"refid": {"type": "REF", "appliance": self._fridge_appliance()}},
+        )
+        self.assertEqual(removed, [])
+
+    def test_a_select_of_another_appliance_is_kept(self) -> None:
+        # Double-anchored: the id must be a superseded fridge in THIS snapshot, not just
+        # any entity whose unique_id ends the right way.
+        removed, _detached = _run(
+            [FakeRegEntry("select.other_ref_program", "otherid_ref_program")],
+            coord_data={"refid": {"type": "REF", "appliance": self._fridge_appliance()}},
+        )
+        self.assertEqual(removed, [])
+
+    def test_nothing_is_purged_without_a_snapshot(self) -> None:
+        # A degraded start postpones the purge instead of guessing, exactly like the
+        # tumble-dryer and hob rules.
+        removed, _detached = _run(
+            [FakeRegEntry("select.fridge_ref_program", "refid_ref_program")],
+            coord_data={},
+        )
+        self.assertEqual(removed, [])
+
+    def test_a_broken_schema_costs_the_purge_and_not_the_setup(self) -> None:
+        # The predicate reads a live schema, so it can raise on an appliance the cloud
+        # answered badly for. That must postpone this one removal, never abort setup and
+        # never take the other four rules with it.
+        class _Exploding:
+            @property
+            def commands(self):
+                raise RuntimeError("schema unreadable")
+
+            model_attributes = {"zones": "fridge|vtRoom1"}
+
+        removed, _detached = _run(
+            [
+                FakeRegEntry("select.fridge_ref_program", "refid_ref_program"),
+                FakeRegEntry("switch.foo_power", "ID_power"),
+            ],
+            coord_data={"refid": {"type": "REF", "appliance": _Exploding()}},
+        )
+        self.assertEqual(removed, ["switch.foo_power"])
+
+    def test_the_removal_log_redacts_identity(self) -> None:
+        import custom_components.addhon as init_mod
+
+        mac = "AA:BB:CC:DD:EE:FF"
+        with self.assertLogs(init_mod._LOGGER.name, level="INFO") as logs:
+            _run(
+                [FakeRegEntry("select.fridge_ref_program", f"{mac}_ref_program")],
+                coord_data={
+                    "AA:BB:CC:DD:EE:FF": {
+                        "type": "REF",
+                        "appliance": self._fridge_appliance(),
+                    }
+                },
+            )
+        blob = "\n".join(logs.output)
+        self.assertIn("Removed the fridge program select", blob)
+        self.assertNotIn(mac, blob)
+        self.assertNotIn("AA:BB", blob)
+
     def test_legacy_power_removal_log_redacts_identity(self) -> None:
         # Privacy: the INFO removal log must carry the redacted id, never the
         # entity_id (whose object_id is the nickname slug). INFO is not gated by

@@ -37,6 +37,7 @@ from homeassistant.exceptions import HomeAssistantError
 from .base_entity import HonBaseEntity
 from .client.engine.parameter.range import HonParameterRange
 from .const import DOMAIN, PROGRAM_PARAM_NAMES, PROGRAM_PENDING_OPTIONS
+from .client.engine.exceptions import ApiError
 from .debug_utils import redact_id
 from .hon_commands import get_command, get_commands, param_range, param_values
 from .param_rollback import restore_params, snapshot_params
@@ -134,7 +135,21 @@ async def async_send_program(hass, client, appliance, program_code: str) -> None
 
         client.run_command_sync(_inner())
 
-    await hass.async_add_executor_job(_do)
+    try:
+        await hass.async_add_executor_job(_do)
+    except ApiError as error:
+        # The REACHABLE refusal, translated here so every program sender answers it the
+        # same way the sparse dispatcher already does (`async_dispatch_patch`).
+        # `HonCommand._send_parameters` raises `ApiError` on a falsy api result and its
+        # message is the untranslated literal "Can't send command", which reached the
+        # user as "Comando non riuscito: Can't send command" -- the exact failure the
+        # dispatcher's own branch was written to remove. Without this the two halves of
+        # one fridge switch answered a single cloud refusal with two different messages:
+        # `command_rejected` on the off, this literal on the on.
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="command_rejected",
+        ) from error
 
 
 def startprogram_option_param(appliance, name: str):

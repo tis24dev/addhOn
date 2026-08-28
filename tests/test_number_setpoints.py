@@ -10,7 +10,9 @@ tempSelZ3[0..5]; no Z4/UZ/LZ. Verifies:
 - range (min/max/step) read from the REAL parameter at runtime, not hardcoded;
 - native_value read from the shadow (attributes);
 - async_set_native_value sends the `settings` command setting the parameter
-  (as int when the value is an int), via the generic hon_commands sender.
+  (as int when the value is an int), via the generic hon_commands sender;
+- the WIDGET each family asks for: a stepped cursor on the fridge family's declared
+  grids, a text box everywhere else and on every enum-typed setpoint (#93).
 
 Stdlib unittest with inline Home Assistant stubs (no HA install required). The
 stubs are getattr-guarded so they coexist with the other test modules in the
@@ -263,6 +265,22 @@ def _fridge_commands() -> dict:
     }
 
 
+def _rmxs_commands() -> dict:
+    """`settings` exactly as HFW7720EWMP declares it (issue #93 dump, 2026-08-27).
+
+    Nine whole degrees for the fridge zone, eleven for the freezer, and NO `tempSelZ3`:
+    on that model the My Zone is written through `startProgram`, which is why it has no
+    third setpoint to render at all."""
+    return {
+        "settings": RecordingCommand(
+            {
+                "tempSelZ1": RangeParam(3, 1, 9, 1),
+                "tempSelZ2": RangeParam(-18, -24, -14, 1),
+            }
+        )
+    }
+
+
 async def _build(app_type: str, appliance, attributes: dict, client=None) -> list:
     from custom_components.addhon import number
     from custom_components.addhon.const import DOMAIN
@@ -282,6 +300,23 @@ async def _build(app_type: str, appliance, attributes: dict, client=None) -> lis
     for ent in added:
         ent.hass = hass
     return added
+
+
+def _effective_mode(entity):
+    """The mode Home Assistant would actually render, resolved the way core resolves it.
+
+    `homeassistant/components/number/__init__.py` reads `_attr_mode` first, falls back
+    to `entity_description.mode`, and only then to `NumberMode.AUTO`; `_attr_mode` is
+    merely ANNOTATED on the class, so `hasattr` is False until an instance assigns it.
+    The stub `NumberEntity` here has no `mode` property, so the order is reproduced
+    rather than asserted on one half of it -- otherwise a per-instance override (the
+    enum setpoints) would be indistinguishable from the description's family default."""
+    from homeassistant.components.number import NumberMode
+
+    if hasattr(entity, "_attr_mode"):
+        return entity._attr_mode
+    mode = getattr(entity.entity_description, "mode", None)
+    return mode if mode is not None else NumberMode.AUTO
 
 
 class NumberSetpointTest(unittest.TestCase):
@@ -645,6 +680,124 @@ class NumberSetpointTest(unittest.TestCase):
         self.assertNotIn(
             "target_temp_zone3", [e.entity_description.key for e in added]
         )
+
+    # --- #93: the fridge family's setpoints are a small grid the DEVICE declares, so
+    # they are offered as a stepped cursor over that grid instead of a free-text field.
+    # Everything else, and every setpoint whose "grid" we derived ourselves, keeps the
+    # box.
+
+    def test_reported_fridge_setpoints_are_sliders_on_their_real_grid(self) -> None:
+        # The model from the issue. Both zones render as a cursor, and the notches are
+        # the DEVICE's own (1..9 and -24..-14, step 1) read live off the parameter --
+        # not the description's 0..100 fallback, which would draw a hundred meaningless
+        # positions and make the slider actively worse than the box it replaces.
+        from homeassistant.components.number import NumberMode
+
+        app = FakeAppliance(_rmxs_commands())
+        added = asyncio.run(_build("REF", app, {"tempSelZ1": "3", "tempSelZ2": "-18"}))
+        by_key = {e.entity_description.key: e for e in added}
+        z1, z2 = by_key["target_temp_zone1"], by_key["target_temp_zone2"]
+        self.assertEqual(_effective_mode(z1), NumberMode.SLIDER)
+        self.assertEqual(_effective_mode(z2), NumberMode.SLIDER)
+        self.assertEqual(
+            (z1.native_min_value, z1.native_max_value, z1.native_step), (1.0, 9.0, 1.0)
+        )
+        self.assertEqual(
+            (z2.native_min_value, z2.native_max_value, z2.native_step),
+            (-24.0, -14.0, 1.0),
+        )
+        # And that model has no third setpoint at all: tempSelZ3 is not in its settings.
+        self.assertNotIn("target_temp_zone3", by_key)
+
+    def test_only_the_fridge_family_asks_for_a_slider(self) -> None:
+        # The SCOPE of the change, asserted on the table rather than through one device.
+        # A cursor is right for a fridge's whole degrees and wrong for the wine cooler's
+        # tenths (5..20 step 0.1 = 151 notches, decomp.txt:3495741) and for the hood's
+        # minutes. Kills the mutant that moves the mode into _temp()'s own default and
+        # silently converts every other family with it.
+        from homeassistant.components.number import NumberMode
+
+        from custom_components.addhon import number as N
+
+        cooling = [
+            "target_temp_lower",
+            "target_temp_upper",
+            "target_temp_zone1",
+            "target_temp_zone2",
+            "target_temp_zone3",
+            "target_temp_zone4",
+        ]
+        self.assertEqual(
+            {
+                app_type: sorted(d.key for d in descs if d.mode == NumberMode.SLIDER)
+                for app_type, descs in N.NUMBERS.items()
+            },
+            {
+                "REF": cooling,
+                "FR": cooling,
+                "FRE": cooling,
+                "WC": [],
+                "OV": [],
+                "HO": [],
+            },
+        )
+
+    def test_wine_cooler_setpoint_stays_a_box_on_its_tenth_degree_grid(self) -> None:
+        # The counter-example that fixes the scope. The wine cooler declares
+        # tempSel 5..20 step 0.1 (decomp.txt:3495741): 151 notches a tenth of a degree
+        # apart, which is under the frontend's 256-step AUTO threshold and would
+        # therefore become a cursor if the mode were widened or delegated to AUTO. It
+        # keeps the box, and it keeps its real grid.
+        from homeassistant.components.number import NumberMode
+
+        commands = {
+            "settings": RecordingCommand({"tempSel": RangeParam("12.2", 5, 20, 0.1)})
+        }
+        app = FakeAppliance(commands)
+        added = asyncio.run(_build("WC", app, {"tempSel": "12.2"}))
+        ent = next(e for e in added if e.entity_description.key == "target_temp")
+        self.assertEqual(_effective_mode(ent), NumberMode.BOX)
+        self.assertEqual(
+            (ent.native_min_value, ent.native_max_value, ent.native_step),
+            (5.0, 20.0, 0.1),
+        )
+
+    def test_enum_setpoint_keeps_the_box_inside_the_slider_family(self) -> None:
+        # tempSelZ3 = {'0','2','5'} on the multidoor models. Its bounds are DERIVED
+        # (0..5 with a tiling step of gcd(2,3) = 1), so a cursor over that grid would
+        # offer 1, 3 and 4: three notches the cloud enum setter rejects and that can
+        # only produce `invalid_setpoint`. The per-instance override wins over the
+        # family's SLIDER, the description still carries SLIDER (so the row was not
+        # quietly moved out of the family), and the derived bounds are unchanged.
+        from homeassistant.components.number import NumberMode
+
+        commands = {
+            "settings": RecordingCommand({"tempSelZ3": EnumParam(["0", "2", "5"])})
+        }
+        app = FakeAppliance(commands)
+        added = asyncio.run(_build("REF", app, {}))
+        z3 = next(e for e in added if e.entity_description.key == "target_temp_zone3")
+        self.assertEqual(_effective_mode(z3), NumberMode.BOX)
+        self.assertEqual(z3.entity_description.mode, NumberMode.SLIDER)
+        self.assertEqual(
+            (z3.native_min_value, z3.native_max_value, z3.native_step), (0.0, 5.0, 1.0)
+        )
+
+    def test_uniform_enum_setpoint_also_keeps_the_box(self) -> None:
+        # Deliberate, and asserted so it cannot be loosened by accident: the gate is
+        # "the device declared a SET", not "the set happens to be uneven". {0,2,4} tiles
+        # exactly and still gets the box, because even then the bounds are OUR
+        # arithmetic rather than a grid the device published, and the membership check
+        # in async_set_native_value stays the authoritative guard for every enum.
+        from homeassistant.components.number import NumberMode
+
+        commands = {
+            "settings": RecordingCommand({"tempSelZ3": EnumParam(["0", "2", "4"])})
+        }
+        app = FakeAppliance(commands)
+        added = asyncio.run(_build("REF", app, {}))
+        z3 = next(e for e in added if e.entity_description.key == "target_temp_zone3")
+        self.assertEqual(_effective_mode(z3), NumberMode.BOX)
 
 
 if __name__ == "__main__":

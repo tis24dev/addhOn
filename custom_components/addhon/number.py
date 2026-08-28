@@ -85,6 +85,7 @@ from .program_options import (
     HonProgramOptionEntity,
     option_range,
 )
+from .ref_programs import REF_MY_ZONE_PARAM, active_mode_code, my_zone_codes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -116,28 +117,63 @@ class HonNumberEntityDescription(NumberEntityDescription):
     sparse: bool = False
 
 
-def _temp(key: str, param: str, translation_key=None) -> HonNumberEntityDescription:
-    """Temperature setpoint (C)."""
+def _temp(
+    key: str,
+    param: str,
+    translation_key=None,
+    mode: NumberMode = NumberMode.BOX,
+) -> HonNumberEntityDescription:
+    """Temperature setpoint (C).
+
+    `mode` is the WIDGET, never the validation: whatever it is, the value still has to
+    clear the live parameter's own range and step -- or, for an enum setpoint, the
+    membership check in `async_set_native_value` -- before anything leaves the process.
+    BOX by default so a new caller inherits the behaviour every setpoint has had since
+    Tier 3 shipped; the fridge family opts into SLIDER below, where the device declares
+    a grid small enough for a cursor to be the honest shape.
+    """
     return HonNumberEntityDescription(
         key=key,
         param=param,
         translation_key=translation_key,
         device_class=NumberDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        mode=NumberMode.BOX,
+        mode=mode,
         icon="mdi:thermometer",
     )
 
 
 # Fridge family (REF/FR/FRE): zone superset S7. On the real fridge Z1/Z2/Z3 appear;
 # Z4/UZ/LZ appear only on the models that expose them (gate).
+#
+# SLIDER rather than the shared BOX default (issue #93): the reported HFW7720EWMP
+# declares `tempSelZ1` as range 1..9 step 1 and `tempSelZ2` as range -24..-14 step 1
+# -- nine and eleven whole degrees -- and its owner asked for a discrete pick instead
+# of a free-text field, "like drop down within freezer temperature selection". The app
+# agrees: `dataSourceForDemo` (decomp.txt:2838247-2838365) gives each zone a
+# TEMPERATURE control over the declared grid, keyParam `tempSelZ1` / `tempSelZ2`, never
+# a typed field. A stepped cursor over min..max IS that grid, and it costs nothing
+# else: device class, degrees and unique_id are untouched, so no automation and no
+# history breaks.
+#
+# NOT AUTO: AUTO draws a cursor only while (max - min) / step <= 256 (the frontend's
+# AUTO_MODE_MAX_STEPS, `showNumberSlider` in src/data/number.ts), so the shape of the
+# control would be decided by a frontend constant and by whatever grid the next model
+# declares -- the same entity a cursor for one owner and a text box for the next, with
+# no change here. Every cooling grid we have evidence for is far under that bound (the
+# widest is the Switch Zone -18..+5, 23 steps), so AUTO buys an escape hatch that never
+# fires and pays for it with the guarantee.
+#
+# The scope stops at this table: the wine cooler's `tempSel` is 5..20 step 0.1
+# (decomp.txt:3495741), 151 notches a tenth of a degree apart that no cursor can aim
+# at, and nobody has asked for the oven's 50..280 step 5 to change shape.
 _COOLING_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
-    _temp("target_temp_zone1", "tempSelZ1"),
-    _temp("target_temp_zone2", "tempSelZ2"),
-    _temp("target_temp_zone3", "tempSelZ3"),
-    _temp("target_temp_zone4", "tempSelZ4"),
-    _temp("target_temp_upper", "tempSelUZ"),
-    _temp("target_temp_lower", "tempSelLZ"),
+    _temp("target_temp_zone1", "tempSelZ1", mode=NumberMode.SLIDER),
+    _temp("target_temp_zone2", "tempSelZ2", mode=NumberMode.SLIDER),
+    _temp("target_temp_zone3", "tempSelZ3", mode=NumberMode.SLIDER),
+    _temp("target_temp_zone4", "tempSelZ4", mode=NumberMode.SLIDER),
+    _temp("target_temp_upper", "tempSelUZ", mode=NumberMode.SLIDER),
+    _temp("target_temp_lower", "tempSelLZ", mode=NumberMode.SLIDER),
 )
 
 # Wine cellar (WC): per-zone target + generic (S7).
@@ -196,6 +232,10 @@ _HOOD_NUMBERS: tuple[HonNumberEntityDescription, ...] = (
         sparse=True,
     ),
 )
+
+# The fridge family, named because two rules below are its alone: the drawer-mode
+# exclusion and the mode-driven write guard.
+_COOLING_TYPES: tuple[str, ...] = (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE)
 
 NUMBERS: dict[str, tuple[HonNumberEntityDescription, ...]] = {
     APPLIANCE_REF: _COOLING_NUMBERS,
@@ -423,7 +463,32 @@ async def async_setup_entry(
             )
             continue
         created: list[str] = []
+        # The fridge family only, resolved once per appliance: whether this drawer has
+        # MODES rather than a temperature.
+        drawer_modes = my_zone_codes(appliance) if app_type in _COOLING_TYPES else []
         for description in NUMBERS.get(app_type, ()):
+            # A drawer that has modes does not also have a temperature (#93). The two
+            # controls were assumed to exclude each other from the data alone -- a model
+            # writes `tempSelZ3` either through `setParameters` or through its drawer
+            # programs -- and the catalogue this design came from disproves it:
+            # `decomp.txt:3495902` declares BOTH a `setParameters.tempSelZ3` enum
+            # ["0","2","5"] and the three programs pinning those same numbers. Left
+            # implicit, such a model gets `select.my_zone_mode` AND
+            # `number.target_temp_zone3`, both writing one register, and the number
+            # publishes 0/2/5 as DEGREES CELSIUS -- "a drawer set to Zero Fresh reads
+            # 0 °C", the exact misreading the My Zone sensor exists to prevent. The
+            # select wins because the value is a MODE: it is the only one of the two that
+            # can say what the register means.
+            if description.param == REF_MY_ZONE_PARAM and drawer_modes:
+                _LOGGER.debug(
+                    "Number debug: skip '%s' (param=%s) id=%s; the drawer has MODES "
+                    "(%s) and select.my_zone_mode owns the register",
+                    description.key,
+                    description.param,
+                    redact_id(appliance_id),
+                    drawer_modes,
+                )
+                continue
             found = find_settings_param(appliance, description.param)
             if found is None:
                 continue
@@ -452,6 +517,7 @@ async def async_setup_entry(
                     param,
                     client,
                     enum_set,
+                    mode_driven=app_type in _COOLING_TYPES,
                 )
             )
             created.append(description.key)
@@ -495,11 +561,15 @@ class HonNumber(HonBaseEntity, NumberEntity):
         param,
         client=None,
         enum_set: list[float] | None = None,
+        mode_driven: bool = False,
     ) -> None:
         super().__init__(coordinator, appliance_id, client)
         self.entity_description = description
         self._command_name = command_name
         self._param = param
+        # Fridge family only: while a boost mode runs, the appliance OWNS this setpoint
+        # and a write from here is discarded without a word. See `async_set_native_value`.
+        self._mode_driven = mode_driven
         # Discrete numeric set for an enum-typed setpoint (None for a normal range):
         # fixes the bounds AND the picked value is validated against it before sending.
         self._enum_set = enum_set
@@ -511,6 +581,21 @@ class HonNumber(HonBaseEntity, NumberEntity):
         # never the fabricated 0..100 default.
         if enum_set:
             self._fallback_range = (enum_set[0], enum_set[-1], _enum_step(enum_set))
+            # ...and it keeps the text box whatever its family's description asked for.
+            # The derived grid TILES the set, it does not equal it: `tempSelZ3` =
+            # {0, 2, 5} on the multidoor models (decomp.txt:3495902) yields step
+            # gcd(2, 3) = 1, so min..max step draws six notches of which three
+            # (1, 3, 4) are values the cloud enum setter rejects. A cursor promises that
+            # every notch it offers is reachable; here it would hand the user three that
+            # can only produce `invalid_setpoint`. A box asks for a number and answers a
+            # wrong one with that error, which is the honest shape for a set the device
+            # never published as a grid -- and it is why `_enum_step`'s "with
+            # NumberMode.BOX the step is mostly HA-side validation" still holds. The gate
+            # is "the device declared a SET", not "the set is uneven": even a set that
+            # tiles exactly has bounds that are OUR arithmetic, not the device's. Core's
+            # `NumberEntity.mode` reads `_attr_mode` before `entity_description.mode`, so
+            # this is a per-device override of the family default and nothing else.
+            self._attr_mode = NumberMode.BOX
         else:
             self._fallback_range = param_range(param) or (
                 description.fallback_min,
@@ -560,6 +645,35 @@ class HonNumber(HonBaseEntity, NumberEntity):
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="appliance_or_client_unavailable",
+            )
+        # A mode owns this setpoint right now: refuse, and name the mode.
+        #
+        # This is the app's own rule, not ours. Its REF `setParameters` handler
+        # (decomp.txt:2873608, exported beside `disableActivatedDefaultModes` at
+        # 2873755) reads all four shadow flags and, when ANY is on, sends the four-zero
+        # reset INSTEAD of the setpoint the user moved -- it will not write a temperature
+        # into a mode. The appliance agrees: the reporter's `settings.programRules` pin
+        # `tempSelZ1` to 1 under Super Cool, 5 under Auto-set and 17 under Holiday.
+        #
+        # We cannot see those pins coming. `HonRuleSet._attach_triggers` binds a trigger
+        # only when it is a parameter of the SAME command, and this fridge's `settings`
+        # declares none of the four flags, so the rules never fire here: the range stays
+        # 1..9 while the shadow reports 17, and a slider would clamp its handle to 9 next
+        # to a state that reads 17. Refusing the write is what keeps the control from
+        # promising something the appliance will silently undo; the state itself is left
+        # alone, so the 17 stays visible and true.
+        #
+        # Coarser than the rules strictly require -- Super Cool pins `tempSelZ1` and
+        # leaves `tempSelZ2` at `@tempSelZ2`, untouched -- and coarse on purpose, because
+        # the app draws the line at the same place and because a rule we cannot evaluate
+        # is not a rule we should second-guess.
+        if self._mode_driven and (
+            mode := active_mode_code(self._get_attr)
+        ) is not None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="setpoint_owned_by_mode",
+                translation_placeholders={"mode": mode},
             )
         # Enum setpoint: reject a value outside the discrete set up front (clear message,
         # no pointless cloud round-trip) instead of letting the cloud enum setter raise an

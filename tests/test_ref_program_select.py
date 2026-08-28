@@ -59,7 +59,7 @@ def _ref(commands: dict, attributes: dict | None = None, app_id: str = "ref-1") 
     }
 
 
-def _ref_commands(programs=None, with_stop=True) -> dict:
+def _ref_commands(programs=None, with_stop=True, stop_params=None) -> dict:
     commands = {
         # The fridge's setParameters command (no program param): must be ignored as a
         # program source, exactly like a real REF.
@@ -70,13 +70,188 @@ def _ref_commands(programs=None, with_stop=True) -> dict:
     }
     if with_stop:
         commands["stopProgram"] = RecordingCommand(
-            {
+            stop_params
+            if stop_params is not None
+            else {
                 "quickModeZ1": Param("0", values=["0"]),
                 "quickModeZ2": Param("0", values=["0"]),
                 "holidayMode": Param("0", values=["0"]),
             }
         )
     return commands
+
+
+def _surviving_commands(programs=None) -> dict:
+    """A fridge on which `select.ref_program` is still the RIGHT control (#93).
+
+    Its `stopProgram` declares nothing this enum's flag modes could clear, so no mode
+    switch is buildable, `has_replacement_controls` is false, and the single select stays
+    the appliance's only stop control. This is the shape every setup-level assertion about
+    the select has to use now that the default fixture -- three flag modes with their
+    `stopProgram` parameters -- is precisely the shape that supersedes it.
+    """
+    return _ref_commands(
+        programs=programs, stop_params={"onOffStatus": Param("0", values=["0"])}
+    )
+
+
+# rmxs's HFW7720EWMP (#93), live program enum, exactly as his dump prints it.
+RMXS_PROGRAMS = [
+    "auto_set", "fruit_and_veg", "holiday", "iot_daily_use", "iot_extra_cold",
+    "iot_extra_ice", "iot_high_efficiency", "iot_special_food_core", "quick_cool",
+    "super_cool", "super_freeze", "zero_fresh",
+]
+
+
+class FixedParam:
+    """A program category's PINNED parameter: `typology: "fixed"` plus its value."""
+
+    typology = "fixed"
+
+    def __init__(self, value) -> None:
+        self.value = value
+
+
+class EnumParam:
+    """A category's ancillary enum (`zone`, `programFamily`), engine-CLEANED.
+
+    `HonParameterEnum.values` pushes every member through `clean_value` -- strip "[]",
+    "|"->"_", lowercase (client/engine/parameter/enum.py) -- so the schema's `vtRoom1`
+    reaches any reader as `vtroom1`. The fixtures carry the cleaned spelling because that
+    is what production code sees, and it is why `ref_programs` folds case while
+    `model_zones` does not.
+    """
+
+    typology = "enum"
+
+    def __init__(self, values) -> None:
+        self.values = [str(value) for value in values]
+        self.value = self.values[0] if self.values else ""
+
+
+class Category:
+    def __init__(self, parameters=None) -> None:
+        self.parameters = parameters or {}
+
+
+class CategorisedStartProgram(RecordingCommand):
+    """A startProgram carrying the per-program catalogue, like the real engine.
+
+    `RecordingCommand` alone has `parameters` and nothing else, which is exactly the
+    shape of a fridge whose catalogue we cannot see -- kept, because that is the shape
+    every pre-existing test in this file uses.
+    """
+
+    def __init__(self, parameters, categories) -> None:
+        super().__init__(parameters)
+        self.categories = categories
+
+
+def _dashboard(zone, params=None):
+    return Category({
+        **(params or {}),
+        "zone": EnumParam(zone),
+        "programFamily": EnumParam(["dashboard"]),
+    })
+
+
+def _download(zone, params):
+    return Category({
+        **params,
+        "zone": EnumParam(zone),
+        "programFamily": EnumParam(["download"]),
+    })
+
+
+def _rmxs_categories() -> dict:
+    """The catalogue behind rmxs's enum.
+
+    Two sources, because no single one has it all. The enum, the four stopProgram flags
+    and the ancillary SHAPE come from his own dump
+    (diagnostics/issue93-dumps/rmxs-HFW7720EWMP-2026-08-27.json, which prints only the
+    ACTIVE category). The per-category parameters come from HTW7720ENMP, the 3-door twin
+    embedded in the APK at decomp.txt:3495902 -- same `series`, same `option` string,
+    same `sensor` string -- with its download presets filled in from
+    apk/dump/ref_10136/commands.json, the only production catalogue we hold that has any.
+    """
+    return {
+        "auto_set": _dashboard(
+            ["fridge", "freezer"], {"intelligenceMode": FixedParam("1")}
+        ),
+        "super_cool": _dashboard(["fridge"], {"quickModeZ1": FixedParam("1")}),
+        "super_freeze": _dashboard(["freezer"], {"quickModeZ2": FixedParam("1")}),
+        # Holiday's zone DOES name the drawer and its rules DO force tempSelZ3 to 17 --
+        # but through `programRules`, never as a parameter of its own, and the rules
+        # engine only mutates a parameter the command already declares. Both halves of
+        # the drawer gate reject it, independently.
+        "holiday": _dashboard(["fridge", "vtroom1"], {"holidayMode": FixedParam("1")}),
+        "zero_fresh": _dashboard(["vtroom1"], {"tempSelZ3": FixedParam("0")}),
+        "quick_cool": _dashboard(["vtroom1"], {"tempSelZ3": FixedParam("2")}),
+        "fruit_and_veg": _dashboard(["vtroom1"], {"tempSelZ3": FixedParam("5")}),
+        "iot_daily_use": _download(
+            ["fridge", "freezer", "vtroom1"],
+            {"tempSelZ1": FixedParam("4"), "tempSelZ2": FixedParam("-18"),
+             "tempSelZ3": FixedParam("5")},
+        ),
+        "iot_extra_cold": _download(
+            ["fridge", "freezer", "vtroom1"],
+            {"tempSelZ1": FixedParam("2"), "tempSelZ2": FixedParam("-24"),
+             "tempSelZ3": FixedParam("2")},
+        ),
+        "iot_extra_ice": _download(["freezer"], {"tempSelZ2": FixedParam("-24")}),
+        "iot_high_efficiency": _download(
+            ["fridge", "freezer", "vtroom1"],
+            {"tempSelZ1": FixedParam("6"), "tempSelZ2": FixedParam("-18"),
+             "tempSelZ3": FixedParam("5")},
+        ),
+        # The ONE download preset zoned on the drawer alone. It pins tempSelZ3 and its
+        # zone is exactly {vtRoom1}, so it passes two thirds of the drawer gate: this
+        # entry is what makes the programFamily third load-bearing rather than decorative.
+        "iot_special_food_core": _download(
+            ["vtroom1"], {"tempSelZ3": FixedParam("5")}
+        ),
+    }
+
+
+def _rmxs_commands(categories=None, programs=None, stop=True) -> dict:
+    commands = {
+        "settings": RecordingCommand({
+            "tempSelZ1": Param("3", values=[str(v) for v in range(1, 10)]),
+            "tempSelZ2": Param("-18", values=[str(v) for v in range(-24, -13)]),
+        }),
+        "startProgram": CategorisedStartProgram(
+            {"program": Param(
+                "auto_set",
+                values=list(RMXS_PROGRAMS if programs is None else programs),
+            )},
+            _rmxs_categories() if categories is None else categories,
+        ),
+    }
+    if stop:
+        commands["stopProgram"] = RecordingCommand({
+            "holidayMode": Param("0", values=["0"]),
+            "intelligenceMode": Param("0", values=["0"]),
+            "quickModeZ1": Param("0", values=["0"]),
+            "quickModeZ2": Param("0", values=["0"]),
+        })
+    return commands
+
+
+def _fridge(commands, attributes=None, zones="fridge|freezer|vtRoom1",
+            app_type="REF", app_id="ref-1") -> dict:
+    """`_ref` plus the model catalogue, which the drawer gate reads and `_ref` omits."""
+    return {
+        app_id: {
+            "type": app_type,
+            "name": "Fridge",
+            "appliance": types.SimpleNamespace(
+                commands=commands,
+                model_attributes={} if zones is None else {"zones": zones},
+            ),
+            "attributes": attributes or {},
+            "settings": {},
+        }
+    }
 
 
 class RefProgramSelectSetupTest(unittest.IsolatedAsyncioTestCase):
@@ -92,23 +267,48 @@ class RefProgramSelectSetupTest(unittest.IsolatedAsyncioTestCase):
         await select.async_setup_entry(hass, FakeEntry(), added.extend)
         return added
 
-    async def test_created_for_ref_with_program_and_stopprogram(self) -> None:
+    def _direct(self, commands):
+        """Build the select WITHOUT the platform gate.
+
+        The option list is unchanged behaviour and still worth pinning, but since #93 the
+        gate refuses to create this entity on a fridge that also gets the per-mode
+        controls -- which the default fixture now is. Constructing it directly keeps the
+        two questions apart: what the options ARE, and whether the entity is built.
+        """
+        from custom_components.addhon.select import HonRefProgramSelect
+
+        return HonRefProgramSelect(
+            FakeCoordinator(_ref(commands)), "ref-1", FakeClient()
+        )
+
+    async def test_not_created_when_flag_switches_can_be_built(self) -> None:
+        # THE REVERSAL (#93). This fixture offers `super_cool`/`super_freeze`/`holiday`
+        # AND a `stopProgram` declaring all three flags, so each becomes an independent
+        # switch that can be cleared on its own. Keeping the single select beside them
+        # would put two controls on the same registers with opposite meanings of `off`:
+        # the select's sends the four-flag reset the official app never sends.
         added = await self._setup(_ref(_ref_commands()))
+        self.assertEqual([], added)
+
+    async def test_created_where_no_per_mode_control_can_be_built(self) -> None:
+        # The other side of the same gate: nothing better exists here, so the select is
+        # still the right control and is still built.
+        added = await self._setup(_ref(_surviving_commands()))
         self.assertEqual(1, len(added))
         self.assertEqual("ref_program", added[0]._attr_translation_key)
 
     async def test_options_are_off_first_plus_live_enum(self) -> None:
         # off is always the first option; the rest is exactly the live enum SET. (Runtime
         # HonParameterProgram.values sorts, so we assert the set, not the input order.)
-        added = await self._setup(_ref(_ref_commands()))
-        options = added[0]._attr_options
+        options = self._direct(_ref_commands())._attr_options
         self.assertEqual("off", options[0])
         self.assertEqual(set(ROB_PROGRAMS), set(options[1:]))
 
     async def test_options_follow_a_different_live_enum(self) -> None:
         # Built from the live enum, NOT hard-coded: a different model -> different options.
-        added = await self._setup(_ref(_ref_commands(programs=["super_cool", "auto_set"])))
-        options = added[0]._attr_options
+        options = self._direct(
+            _ref_commands(programs=["super_cool", "auto_set"])
+        )._attr_options
         self.assertEqual("off", options[0])
         self.assertEqual({"super_cool", "auto_set"}, set(options[1:]))
 
@@ -126,7 +326,7 @@ class RefProgramSelectSetupTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_fr_and_fre_types_supported(self) -> None:
         for app_type in ("FR", "FRE"):
-            data = _ref(_ref_commands())
+            data = _ref(_surviving_commands())
             data["ref-1"]["type"] = app_type
             added = await self._setup(data)
             self.assertEqual(1, len(added), f"type {app_type} should get a select")
@@ -369,7 +569,7 @@ class RefProgramSelectBehaviourTest(unittest.IsolatedAsyncioTestCase):
         from custom_components.addhon import select as select_mod
 
         mac = "AA:BB:CC:DD:EE:FF"
-        data = _ref(_ref_commands(), app_id=mac)
+        data = _ref(_surviving_commands(), app_id=mac)
         coordinator = FakeCoordinator(data)
         hass = FakeHass(
             {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
@@ -548,6 +748,582 @@ class RefProgramStateTranslationTest(unittest.TestCase):
 
     def test_state_keys_identical_en_it(self) -> None:
         self.assertEqual(self._state_keys("en"), self._state_keys("it"))
+
+
+class RefMyZoneSelectTest(unittest.IsolatedAsyncioTestCase):
+    """The vtRoom1 drawer as a writable control (#93)."""
+
+    async def _setup(self, data) -> list:
+        from custom_components.addhon.const import DOMAIN
+        from custom_components.addhon import select
+
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
+        )
+        added: list = []
+        await select.async_setup_entry(hass, FakeEntry(), added.extend)
+        return added
+
+    async def _entity(self, attributes=None, **kwargs):
+        added = await self._setup(
+            _fridge(_rmxs_commands(), attributes or {}, **kwargs)
+        )
+        return next(
+            (e for e in added if e._attr_unique_id == "ref-1_my_zone_mode"), None
+        )
+
+    async def test_options_are_the_three_drawer_programs_coldest_first(self) -> None:
+        """Read off the catalogue, not off a list of slugs in this repository.
+
+        The order is the PINNED VALUE's: the register is a temperature scale at firmware
+        level (Holiday pins it to 17), so 0/2/5 is the drawer's own coldest-to-warmest
+        order and the order the app's mode card shows.
+        """
+        entity = await self._entity()
+        self.assertEqual(
+            ["zero_fresh", "quick_cool", "fruit_and_veg"], entity._attr_options
+        )
+
+    async def test_my_zone_offers_no_off(self) -> None:
+        """`stopProgram` declares the four flags and never touches `tempSelZ3`, so the
+        drawer has no "no mode" and nothing could send one. An option is something the
+        user can SELECT, and no command would carry this one."""
+        entity = await self._entity()
+        for absent in ("off", "none", "unknown"):
+            self.assertNotIn(absent, entity._attr_options, absent)
+
+    async def test_a_download_preset_zoned_on_the_drawer_is_not_a_drawer_mode(
+        self,
+    ) -> None:
+        """`IOT_SPECIAL_FOOD_CORE` pins tempSelZ3=5 AND declares zone=[vtRoom1] and
+        nothing else. It passes the pin test and the zone test and is still a QuickSet
+        preset. This is the single counterexample the programFamily condition exists
+        for -- delete that condition and this test is what fails."""
+        entity = await self._entity()
+        self.assertNotIn("iot_special_food_core", entity._attr_options)
+        for code in ("iot_daily_use", "iot_extra_cold", "iot_high_efficiency"):
+            self.assertNotIn(code, entity._attr_options, code)
+
+    async def test_holiday_is_not_a_drawer_mode(self) -> None:
+        """Its zone names the drawer and its rules force tempSelZ3 to 17, but it declares
+        no tempSelZ3 parameter of its own -- and the rules engine only mutates a
+        parameter the command already declares."""
+        entity = await self._entity()
+        self.assertNotIn("holiday", entity._attr_options)
+
+    async def test_current_option_reads_the_live_register(self) -> None:
+        for value, expected in (
+            ("0", "zero_fresh"), (0, "zero_fresh"),
+            ("2", "quick_cool"), ("5", "fruit_and_veg"),
+        ):
+            entity = await self._entity({"tempSelZ3": value})
+            self.assertEqual(expected, entity.current_option, repr(value))
+
+    async def test_the_reporters_own_dump_reads_zero_fresh(self) -> None:
+        """His shadow: tempSelZ3 = 0, untouched since 2024, with every flag clear except
+        intelligenceMode. Zero degrees is a MODE, and reading it as a target temperature
+        is what issue #93 asked us to do and we declined."""
+        entity = await self._entity({
+            "tempSelZ3": 0, "intelligenceMode": 1, "quickModeZ1": 0,
+            "quickModeZ2": 0, "holidayMode": 0, "programName": "No Program",
+        })
+        self.assertEqual("zero_fresh", entity.current_option)
+
+    async def test_current_option_is_unknown_while_holiday_pins_seventeen(self) -> None:
+        """17 is HOLIDAY's `programRules` value, outside the drawer's own vocabulary.
+        While Holiday runs the drawer is in none of its modes: the app shows
+        NO_MODE_SELECTED and `sensor.my_zone_mode` shows unknown, and so does this."""
+        for value in ("17", 17, "1", "", "-5", None):
+            entity = await self._entity({"tempSelZ3": value})
+            self.assertIsNone(entity.current_option, repr(value))
+
+    async def test_current_option_never_leaves_its_frozen_options(self) -> None:
+        """The catalogue is read at every refresh while options are frozen at
+        construction, so a category the cloud adds between two polls must fall through
+        to unknown rather than push the entity into a state it never offered."""
+        entity = await self._entity({"tempSelZ3": "0"})
+        entity._attr_options = ["quick_cool"]
+        self.assertIsNone(entity.current_option)
+
+    async def test_select_sends_startprogram_for_the_chosen_mode(self) -> None:
+        from custom_components.addhon.const import DOMAIN
+        from custom_components.addhon import select
+
+        commands = _rmxs_commands()
+        data = _fridge(commands, {"tempSelZ3": "0"})
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
+        )
+        added: list = []
+        await select.async_setup_entry(hass, FakeEntry(), added.extend)
+        entity = next(e for e in added if e._attr_unique_id == "ref-1_my_zone_mode")
+        entity.hass = hass
+
+        await entity.async_select_option("fruit_and_veg")
+
+        self.assertEqual(
+            "fruit_and_veg", commands["startProgram"].parameters["program"].value
+        )
+        self.assertEqual(1, commands["startProgram"].send_calls)
+        # stopProgram is never touched: the drawer has no off, and clearing the four
+        # flags is not what "change the drawer's mode" means.
+        self.assertEqual(0, commands["stopProgram"].send_calls)
+        self.assertEqual(1, coordinator.refreshes)
+
+    async def test_an_unoffered_mode_raises_and_sends_nothing(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+        from custom_components.addhon import select
+
+        commands = _rmxs_commands()
+        coordinator = FakeCoordinator(_fridge(commands))
+        entity = select.HonRefMyZoneSelect(
+            coordinator, "ref-1", ["zero_fresh", "quick_cool"], FakeClient()
+        )
+        entity.hass = FakeHass()
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await entity.async_select_option("iot_daily_use")
+        self.assertEqual("program_not_found", ctx.exception.translation_key)
+        self.assertEqual(0, commands["startProgram"].send_calls)
+        self.assertEqual(0, coordinator.refreshes)
+
+    async def test_the_model_must_declare_the_drawer(self) -> None:
+        """Both gates, not either. `zones` is the criterion the app filters its fridge
+        zone cards on, and it is model metadata rather than telemetry -- which is what
+        lets it answer for a register that has not moved in two years."""
+        for zones in ("fridge|freezer", None, ""):
+            entity = await self._entity(zones=zones)
+            self.assertIsNone(entity, repr(zones))
+
+    async def test_no_select_when_the_catalogue_carries_no_drawer_program(self) -> None:
+        """damigioanna's HDPW5620CNPK: `zones` DOES declare vtRoom1, five download
+        presets DO pin tempSelZ3, and there is no drawer mode among them. It writes its
+        drawer through a real `setParameters.tempSelZ3` range and already has
+        `number.target_temp_zone3`; the two controls exclude each other from the data,
+        with no rule anywhere naming the other entity."""
+        drawer = ("zero_fresh", "quick_cool", "fruit_and_veg")
+        catalogue = {
+            code: category
+            for code, category in _rmxs_categories().items()
+            if code not in drawer
+        }
+        added = await self._setup(
+            _fridge(
+                _rmxs_commands(
+                    categories=catalogue,
+                    programs=[c for c in RMXS_PROGRAMS if c not in drawer],
+                ),
+                {"tempSelZ3": "5"},
+            )
+        )
+        self.assertNotIn("ref-1_my_zone_mode", {e._attr_unique_id for e in added})
+
+    async def test_a_drawer_program_absent_from_the_live_enum_is_not_offered(
+        self,
+    ) -> None:
+        """The catalogue can carry more than the enum offers; the enum is the gate."""
+        added = await self._setup(
+            _fridge(
+                _rmxs_commands(
+                    programs=[c for c in RMXS_PROGRAMS if c != "fruit_and_veg"]
+                )
+            )
+        )
+        entity = next(e for e in added if e._attr_unique_id == "ref-1_my_zone_mode")
+        self.assertEqual(["zero_fresh", "quick_cool"], entity._attr_options)
+
+    async def test_reaches_fr_and_fre_too(self) -> None:
+        for app_type in ("FR", "FRE"):
+            added = await self._setup(_fridge(_rmxs_commands(), app_type=app_type))
+            self.assertIn(
+                "ref-1_my_zone_mode",
+                {e._attr_unique_id for e in added},
+                app_type,
+            )
+
+
+class RefProgramSelectSupersessionTest(unittest.IsolatedAsyncioTestCase):
+    """`select.ref_program` survives only where nothing better exists (#93)."""
+
+    async def _setup(self, data) -> list:
+        from custom_components.addhon.const import DOMAIN
+        from custom_components.addhon import select
+
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
+        )
+        added: list = []
+        await select.async_setup_entry(hass, FakeEntry(), added.extend)
+        return added
+
+    async def test_the_reporters_fridge_loses_the_single_select(self) -> None:
+        """HFW7720EWMP: four flag modes with all four stopProgram parameters, and three
+        drawer modes. Both replacements really appear on this same device, so keeping
+        the single select would leave two controls writing the same registers with
+        opposite meanings of `off`."""
+        added = await self._setup(_fridge(_rmxs_commands()))
+        keys = {e._attr_translation_key for e in added}
+        self.assertNotIn("ref_program", keys)
+        self.assertIn("my_zone_mode", keys)
+
+    async def test_a_fridge_with_only_download_presets_keeps_it(self) -> None:
+        """The one shape where nothing better can be built. The presets become buttons
+        with no state and no stop, so this select stays the appliance's only stop
+        control and its only reading -- and the buttons coexist with it by design, the
+        way the AC direction select coexists with the climate swing mode."""
+        presets = [c for c in RMXS_PROGRAMS if c.startswith("iot_")]
+        catalogue = {
+            code: category
+            for code, category in _rmxs_categories().items()
+            if code in presets
+        }
+        added = await self._setup(
+            _fridge(
+                _rmxs_commands(categories=catalogue, programs=presets),
+                zones="fridge|freezer",
+            )
+        )
+        self.assertEqual(["ref_program"], [e._attr_translation_key for e in added])
+
+    async def test_one_flag_alone_is_enough_to_supersede_it(self) -> None:
+        """The predicate is "a replacement really appears on this device", not "all of
+        them do": one switch that can be turned off on its own already makes the global
+        `off` the wrong control."""
+        catalogue = {"super_cool": _rmxs_categories()["super_cool"]}
+        commands = _rmxs_commands(categories=catalogue, programs=["super_cool"])
+        commands["stopProgram"] = RecordingCommand(
+            {"quickModeZ1": Param("0", values=["0"])}
+        )
+        added = await self._setup(_fridge(commands, zones="fridge|freezer"))
+        self.assertEqual([], added)
+
+    async def test_a_flag_the_device_cannot_clear_does_not_supersede_it(self) -> None:
+        """An ON with no OFF is not a switch. `stopProgram` here declares nothing this
+        enum can turn off, so no switch is buildable and the select stays."""
+        catalogue = {"super_cool": _rmxs_categories()["super_cool"]}
+        commands = _rmxs_commands(categories=catalogue, programs=["super_cool"])
+        commands["stopProgram"] = RecordingCommand(
+            {"onOffStatus": Param("0", values=["0"])}
+        )
+        added = await self._setup(_fridge(commands, zones="fridge|freezer"))
+        self.assertEqual(["ref_program"], [e._attr_translation_key for e in added])
+
+    async def test_no_stopprogram_still_means_no_select_at_all(self) -> None:
+        added = await self._setup(
+            _fridge(_rmxs_commands(stop=False), zones="fridge|freezer")
+        )
+        self.assertEqual([], added)
+
+
+class RefPresetButtonTest(unittest.IsolatedAsyncioTestCase):
+    """The `iot_*` download presets as fire-and-forget buttons (#93)."""
+
+    async def _setup(self, data) -> list:
+        from custom_components.addhon.const import DOMAIN
+        from custom_components.addhon import button
+
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
+        )
+        added: list = []
+        await button.async_setup_entry(hass, FakeEntry(), added.extend)
+        for entity in added:
+            entity.hass = hass
+        return [e for e in added if not getattr(e, "_addhon_account", False)]
+
+    async def test_one_button_per_offered_preset(self) -> None:
+        added = await self._setup(_fridge(_rmxs_commands()))
+        self.assertEqual(
+            [
+                "ref-1_ref_preset_iot_daily_use",
+                "ref-1_ref_preset_iot_extra_cold",
+                "ref-1_ref_preset_iot_extra_ice",
+                "ref-1_ref_preset_iot_high_efficiency",
+                "ref-1_ref_preset_iot_special_food_core",
+            ],
+            [e._attr_unique_id for e in added],
+        )
+
+    async def test_a_preset_the_model_does_not_offer_gets_no_button(self) -> None:
+        """`iot_extra_cold_water` is in this repository's vocabulary and not in his
+        enum. The gate is the device, the tuple is only what we can name."""
+        added = await self._setup(_fridge(_rmxs_commands()))
+        self.assertNotIn(
+            "ref-1_ref_preset_iot_extra_cold_water",
+            {e._attr_unique_id for e in added},
+        )
+
+    async def test_dashboard_programs_never_become_buttons(self) -> None:
+        """The four flag modes and the three drawer modes have their own controls; a
+        second fire-and-forget copy of them would be a control with no off."""
+        added = await self._setup(_fridge(_rmxs_commands()))
+        blob = " ".join(e._attr_unique_id for e in added)
+        for code in ("auto_set", "super_cool", "super_freeze", "holiday",
+                     "zero_fresh", "quick_cool", "fruit_and_veg"):
+            self.assertNotIn(code, blob, code)
+
+    async def test_a_catalogue_less_fridge_gets_no_buttons(self) -> None:
+        """No categories, no `programFamily`, no way to tell a preset from a mode. The
+        enum alone is not evidence: `RecordingCommand` is the shape of every fridge whose
+        catalogue we cannot read."""
+        added = await self._setup(_ref(_ref_commands()))
+        self.assertEqual([], added)
+
+    async def test_press_sends_the_preset_and_refreshes(self) -> None:
+        from custom_components.addhon import button
+
+        commands = _rmxs_commands()
+        coordinator = FakeCoordinator(_fridge(commands))
+        entity = button.HonRefPresetButton(
+            coordinator, "ref-1", "iot_extra_cold", FakeClient()
+        )
+        entity.hass = FakeHass()
+
+        await entity.async_press()
+
+        self.assertEqual(
+            "iot_extra_cold", commands["startProgram"].parameters["program"].value
+        )
+        self.assertEqual(1, commands["startProgram"].send_calls)
+        self.assertEqual(0, commands["stopProgram"].send_calls)
+        self.assertEqual(1, coordinator.refreshes)
+
+    async def test_press_failure_wraps_command_error_and_skips_refresh(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+        from custom_components.addhon import button
+
+        class FailingClient:
+            def run_command_sync(self, coro) -> None:
+                coro.close()
+                raise RuntimeError("cloud rejected")
+
+        coordinator = FakeCoordinator(_fridge(_rmxs_commands()))
+        entity = button.HonRefPresetButton(
+            coordinator, "ref-1", "iot_daily_use", FailingClient()
+        )
+        entity.hass = FakeHass()
+
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await entity.async_press()
+        self.assertEqual("command_error", ctx.exception.translation_key)
+        self.assertIn("cloud rejected", ctx.exception.translation_placeholders["error"])
+        self.assertEqual(0, coordinator.refreshes)
+
+    async def test_presets_are_main_controls_not_configuration(self) -> None:
+        """They change what the appliance does to the food, which is its primary
+        function -- not its configuration and not a diagnostic. The app puts its QuickSet
+        cards on the REF dashboard for the same reason."""
+        added = await self._setup(_fridge(_rmxs_commands()))
+        for entity in added:
+            self.assertIsNone(
+                getattr(entity, "_attr_entity_category", None), entity._attr_unique_id
+            )
+
+    async def test_the_unique_id_vocabulary_stays_closed(self) -> None:
+        """`diagnostics._entity_section` rests the privacy of the whole `sources` map on
+        every unique_id suffix being a constant of this repository. A favourite is filed
+        under the name the USER typed, so a code taken straight from the catalogue could
+        be a nickname; this pins that the suffix can only ever come from the tuple."""
+        from custom_components.addhon.ref_programs import REF_DOWNLOAD_PRESETS
+
+        added = await self._setup(_fridge(_rmxs_commands()))
+        for entity in added:
+            suffix = entity._attr_unique_id.removeprefix("ref-1_")
+            self.assertIn(
+                suffix.removeprefix("ref_preset_"), REF_DOWNLOAD_PRESETS, suffix
+            )
+
+
+class RefProgramClassificationTest(unittest.IsolatedAsyncioTestCase):
+    """The three sorters in `ref_programs`, attacked one condition at a time.
+
+    Every test here was written because a mutation of the production code left the whole
+    suite green: the conditions were argued for in prose and measured by nobody.
+    """
+
+    async def _setup(self, data) -> list:
+        from custom_components.addhon.const import DOMAIN
+        from custom_components.addhon import select
+
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
+        )
+        added: list = []
+        await select.async_setup_entry(hass, FakeEntry(), added.extend)
+        return added
+
+    async def _buttons(self, data) -> list:
+        from custom_components.addhon.const import DOMAIN
+        from custom_components.addhon import button
+
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass(
+            {DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}}
+        )
+        added: list = []
+        await button.async_setup_entry(hass, FakeEntry(), added.extend)
+        return [e for e in added if not getattr(e, "_addhon_account", False)]
+
+    async def test_a_favourite_named_download_never_becomes_a_button(self) -> None:
+        """The closed unique_id vocabulary, proven rather than asserted vacuously.
+
+        `command_loader._add_favourites` files a favourite under `favouriteName` -- the
+        string the USER typed -- into `startProgram`'s categories, inheriting the base
+        command's `programFamily`. So a `download`-family category can genuinely carry a
+        nickname, and `diagnostics._entity_section` rests the privacy of its whole
+        `sources` map on the opposite: "every unique_id suffix is a constant written in
+        this repository". Until this fixture carried one, dropping the intersection with
+        `REF_DOWNLOAD_PRESETS` left the suite green.
+        """
+        catalogue = _rmxs_categories()
+        catalogue["frigo di anna (casa al mare)"] = _download(
+            ["fridge", "freezer"], {"tempSelZ1": FixedParam("4")}
+        )
+        added = await self._buttons(
+            _fridge(
+                _rmxs_commands(
+                    categories=catalogue,
+                    programs=[*RMXS_PROGRAMS, "frigo di anna (casa al mare)"],
+                )
+            )
+        )
+        suffixes = [e._attr_unique_id for e in added]
+        self.assertNotIn("ref-1_ref_preset_frigo di anna (casa al mare)", suffixes)
+        self.assertIn("ref-1_ref_preset_iot_daily_use", suffixes)
+
+    async def test_a_named_preset_without_the_download_family_gets_no_button(
+        self,
+    ) -> None:
+        """The family is REQUIRED for a button, not merely consulted. A category we can
+        name but whose schema calls it a dashboard mode is not a QuickSet preset, and a
+        fire-and-forget send is the one shape that cannot be corrected by its own state."""
+        catalogue = _rmxs_categories()
+        catalogue["iot_daily_use"] = _dashboard(
+            ["fridge", "freezer"], {"tempSelZ1": FixedParam("4")}
+        )
+        added = await self._buttons(_fridge(_rmxs_commands(categories=catalogue)))
+        self.assertNotIn(
+            "ref-1_ref_preset_iot_daily_use", {e._attr_unique_id for e in added}
+        )
+        self.assertIn(
+            "ref-1_ref_preset_iot_extra_cold", {e._attr_unique_id for e in added}
+        )
+
+    async def test_a_multi_zone_dashboard_program_is_not_a_drawer_mode(self) -> None:
+        """The `zone` condition, finally measured.
+
+        Nothing in the other fixtures exercises it: HOLIDAY is excluded by the pin test
+        and the download presets by the family test, so the condition could be deleted
+        with the suite still green. A dashboard-family program that pins `tempSelZ3` AND
+        moves the fridge and the freezer is not the drawer being in a mode -- it is a
+        whole-appliance program that happens to write the drawer on its way past.
+        """
+        catalogue = _rmxs_categories()
+        catalogue["iot_daily_use"] = _dashboard(
+            ["fridge", "freezer", "vtroom1"], {"tempSelZ3": FixedParam("5")}
+        )
+        added = await self._setup(_fridge(_rmxs_commands(categories=catalogue)))
+        entity = next(e for e in added if e._attr_unique_id == "ref-1_my_zone_mode")
+        self.assertNotIn("iot_daily_use", entity._attr_options)
+        self.assertEqual(
+            ["zero_fresh", "quick_cool", "fruit_and_veg"], entity._attr_options
+        )
+
+    async def test_a_download_preset_never_explains_the_drawers_value(self) -> None:
+        """The read-side family filter, on the catalogue ORDER where it bites.
+
+        `program_code_for_fixed_value` answers with the FIRST category that pins the
+        number. Put a download preset pinning 2 ahead of `quick_cool` -- which is the
+        order `apk/dump/ref_10136/commands.json` really has -- and without the filter the
+        drawer is explained by a whole-appliance preset, the select's frozen options
+        reject it, and the state falls to unknown on a drawer that IS in a mode.
+        """
+        ordered = {}
+        ordered["iot_extra_cold"] = _rmxs_categories()["iot_extra_cold"]
+        for code, category in _rmxs_categories().items():
+            if code != "iot_extra_cold":
+                ordered[code] = category
+        added = await self._setup(
+            _fridge(_rmxs_commands(categories=ordered), {"tempSelZ3": "2"})
+        )
+        entity = next(e for e in added if e._attr_unique_id == "ref-1_my_zone_mode")
+        self.assertEqual("quick_cool", entity.current_option)
+
+    async def test_the_drawer_alone_supersedes_the_single_select(self) -> None:
+        """`has_replacement_controls`' drawer half, which nothing measured.
+
+        Drop `or bool(my_zone_codes(...))` and every supersession fixture still passed,
+        because they all have clearable flags. A fridge whose `stopProgram` can clear
+        nothing but whose catalogue carries the drawer programs would then keep
+        `select.ref_program` AND get `select.my_zone_mode`: two controls owning
+        `tempSelZ3`, which is the conflict the predicate exists to prevent.
+        """
+        commands = _rmxs_commands()
+        commands["stopProgram"] = RecordingCommand(
+            {"onOffStatus": Param("0", values=["0"])}
+        )
+        added = await self._setup(_fridge(commands))
+        keys = {e._attr_translation_key for e in added}
+        self.assertEqual({"my_zone_mode"}, keys)
+
+    async def test_a_model_that_declares_no_drawer_keeps_its_single_select(self) -> None:
+        """THE DEFECT THE REFUTERS FOUND, pinned so it cannot come back.
+
+        The model-zone test used to live in `select.async_setup_entry` while
+        `has_replacement_controls` -- which decides whether `select.ref_program` steps
+        aside -- never saw it. On the very catalogue this design was derived from
+        (`decomp.txt:3495902`: `vtZone` declared, `zones` absent) the two disagreed: the
+        predicate said a replacement existed, the select stepped aside, and the drawer
+        select was never built. The appliance ended up unable to reach `zero_fresh`,
+        `quick_cool` or `fruit_and_veg` at all.
+        """
+        commands = _rmxs_commands()
+        commands["stopProgram"] = RecordingCommand(
+            {"onOffStatus": Param("0", values=["0"])}
+        )
+        added = await self._setup(_fridge(commands, zones=None))
+        # No drawer select -- the model does not declare the compartment...
+        self.assertNotIn("my_zone_mode", {e._attr_translation_key for e in added})
+        # ...and therefore no supersession either: the appliance keeps a control.
+        self.assertEqual(
+            ["ref_program"], [e._attr_translation_key for e in added]
+        )
+
+    def test_the_predicate_and_the_platforms_answer_one_question(self) -> None:
+        """The invariant behind the test above, stated directly on the functions.
+
+        Neither platform may add a condition of its own: `has_replacement_controls` is
+        what decides that the single select steps aside, so anything it does not know
+        about is a way for the replacement to fail to appear.
+        """
+        from custom_components.addhon.ref_programs import (
+            flag_codes,
+            has_replacement_controls,
+            my_zone_codes,
+        )
+
+        shapes = {
+            "no zones attribute": _fridge(_rmxs_commands(), zones=None),
+            "zones without the drawer": _fridge(_rmxs_commands(), zones="fridge"),
+            "full model": _fridge(_rmxs_commands()),
+            "no clearable flag": _fridge(
+                {
+                    **_rmxs_commands(),
+                    "stopProgram": RecordingCommand(
+                        {"onOffStatus": Param("0", values=["0"])}
+                    ),
+                }
+            ),
+        }
+        for label, data in shapes.items():
+            appliance = data["ref-1"]["appliance"]
+            replaced = has_replacement_controls(appliance)
+            built = bool(flag_codes(appliance)) or bool(my_zone_codes(appliance))
+            self.assertEqual(replaced, built, label)
 
 
 if __name__ == "__main__":

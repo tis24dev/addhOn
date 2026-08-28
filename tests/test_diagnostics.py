@@ -5084,23 +5084,31 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         # A slack floor lets an ENTIRE table stop being walked unnoticed: the
         # sensor.* rows alone are over a hundred names, so deleting one table
         # would still leave the count high. The floor is therefore kept TIGHT
-        # against the real count (562 across the eleven types), and it has to be
-        # raised deliberately whenever a type or a table joins the sweep. A union
-        # floor is also blind to a table that stops being walked for ONE type,
-        # because the other ten keep the domain in the union: pin the SHAPE of the
-        # sweep, per type, and not only a number.
-        self.assertGreater(
+        # against the real count and has to be re-measured whenever a type or a
+        # table joins the sweep. A union floor is also blind to a table that stops
+        # being walked for ONE type, because the other ten keep the domain in the
+        # union: pin the SHAPE of the sweep, per type, and not only a number.
+        #
+        # TIGHT means tight. The count is asserted EXACTLY, not as a floor with
+        # slack: a floor raised to "one less than today" still hides every change
+        # smaller than the slack it was given, which is how five whole rows once
+        # slipped in unremarked. An exact count fails on any change in either
+        # direction and is re-measured, deliberately, by whoever made it.
+        self.assertEqual(
+            # Re-measured, never adjusted by arithmetic. 563 before #93; 572 after,
+            # which is the My Zone select's one read name plus the four fridge mode
+            # switches' four read and four write names.
+            572,
             seen,
-            # Measured 562 today (555 before the fridge program select declared its
-            # seven read names, #93). Raised deliberately, as the comment above
-            # requires -- and re-measured rather than incremented, because the 549 this
-            # line was pinned against had already drifted six names behind reality.
-            553,
-            f"the sweep shrank to {seen} names",
+            f"the sweep changed to {seen} names; re-measure and update this number "
+            f"deliberately, naming what joined or left it",
         )
         self.assertEqual(
             {
-                "REF": {"binary_sensor", "number", "select", "sensor"},
+                # `switch` joined in #93: the four fridge mode switches each declare
+                # their one flag as both a read and a write, so the domain is swept for
+                # the first time on this type.
+                "REF": {"binary_sensor", "number", "select", "sensor", "switch"},
                 "AC": {"binary_sensor", "climate", "select", "sensor", "switch"},
                 "WD": {"binary_sensor", "button", "number", "select", "sensor", "switch"},
                 "AP": {"binary_sensor", "fan", "number", "select", "sensor", "switch"},
@@ -5268,7 +5276,28 @@ _TABLE_MODULES = ("binary_sensor", "number", "select", "sensor", "switch")
 # for them INSTEAD and why that is right -- not that the table is new, internal,
 # experimental or special. `test_every_exemption_is_still_needed` deletes the
 # entry for you the day it stops being true, by failing.
-_TABLES_OUTSIDE_COVERAGE: dict[str, str] = {}
+_TABLES_OUTSIDE_COVERAGE: dict[str, str] = {
+    # The four fridge mode switches (#93). They name one parameter each --
+    # `intelligenceMode`, `quickModeZ1`, `quickModeZ2`, `holidayMode` -- and the dump
+    # already accounts for all four, twice:
+    #
+    #  * `_COOLING_BINARY` reads the same four attributes, so they are in `mapped_attrs`
+    #    and coverage has never called them unmapped;
+    #  * `_CUSTOM_ENTITY_SOURCES` carries an explicit `switch.<key>` row per mode naming
+    #    the flag on BOTH sides -- read from the shadow, written by name through a sparse
+    #    `stopProgram` -- so `entities.sources` states what each switch touches and the
+    #    drift guard sweeps those eight names.
+    #
+    # Adding the table to `_mapped_sets` would emit the same four names a third time
+    # under a tag the custom rows already own, and `_source_row` would then be building a
+    # row the table below states by hand. The exclusion is about the WALK, not about the
+    # dump: nothing this table names is missing from the dump.
+    "switch._REF_MODE_SWITCHES":
+        "Its four flags are already mapped by `_COOLING_BINARY` (shadow axis) and "
+        "already carry a per-switch `switch.<key>` row in `_CUSTOM_ENTITY_SOURCES` "
+        "naming each one as both read and write; walking the table would emit the same "
+        "four names a second time under a tag the custom rows already own.",
+}
 
 # Planted into a clone of every table at once, then looked for in the tags
 # `_mapped_sets` emits. The counter appended to it is fixed width, so no probe

@@ -322,6 +322,52 @@ class FakeApplianceModel:
             )
 
 
+class FakeEnumParam:
+    """A category ancillary (`zone`, `programFamily`), engine-CLEANED to lowercase."""
+
+    typology = "enum"
+
+    def __init__(self, values) -> None:
+        self.values = [str(value) for value in values]
+        self.value = self.values[0] if self.values else ""
+
+
+class FakeProgramParam:
+    """The `program` parameter of `startProgram`: the live enum of offered codes."""
+
+    typology = "enum"
+
+    def __init__(self, values) -> None:
+        self.values = list(values)
+        self.value = self.values[0] if self.values else ""
+
+
+def _drawer_capable_fridge():
+    """A fridge on which `select.my_zone_mode` really can be built (#93).
+
+    Everything `ref_programs.my_zone_codes` demands: the model declares the drawer, the
+    live `startProgram.program` enum offers the three codes, and each of their categories
+    pins `tempSelZ3`, is zoned on the drawer alone and is not a `download` preset. The
+    sensor must step aside on exactly this appliance, and only on it.
+    """
+    appliance = FakeApplianceModel(zones="fridge|freezer|vtRoom1", programs={})
+    codes = {"zero_fresh": "0", "quick_cool": "2", "fruit_and_veg": "5"}
+    categories = {
+        code: FakeCategory(
+            {
+                "tempSelZ3": FakeFixedParam(pinned),
+                "zone": FakeEnumParam(["vtroom1"]),
+                "programFamily": FakeEnumParam(["dashboard"]),
+            }
+        )
+        for code, pinned in codes.items()
+    }
+    start = FakeStartProgram(categories)
+    start.parameters = {"program": FakeProgramParam(list(codes))}
+    appliance.commands["startProgram"] = start
+    return appliance
+
+
 # The fridge of issue #93: a vtRoom1 drawer, and the three programs that drive it by
 # pinning tempSelZ3 -- the shape read off the sibling model's catalogue in the APK.
 def _my_zone_fridge(zones: str | None = "fridge|freezer|vtRoom1"):
@@ -875,6 +921,35 @@ class Tier2GatingTest(unittest.IsolatedAsyncioTestCase):
         for value in ("17", "1", "", "-5"):
             entity = await self._my_zone_state(value)
             self.assertIsNone(entity.native_value, value)
+
+    async def test_the_sensor_steps_aside_where_the_select_is_built(self) -> None:
+        """One drawer, one entity with that name (#93).
+
+        `select.my_zone_mode` reports the same register under the same label, so on an
+        appliance whose catalogue lets the writable control be built the read-only half
+        must not also appear -- two identically-named entities on one device is the noise
+        this release set out to remove. Untested until now: every other fixture in this
+        class declares no `zone` ancillary, so `my_zone_codes` is empty there and the
+        suppression branch is never reached.
+        """
+        added = await _build_sensors(
+            "REF", {"tempSelZ3": "0"}, appliance=_drawer_capable_fridge()
+        )
+        self.assertNotIn("x-1_my_zone_mode", {e._attr_unique_id for e in added})
+        # ...and only that one: the suppression is keyed on the description, so a
+        # careless gate would take the whole `requires_zone` branch with it.
+        added_all = await _build_sensors(
+            "REF",
+            {"tempSelZ3": "0", "tempZ1": "5"},
+            appliance=_drawer_capable_fridge(),
+        )
+        self.assertIn("x-1_temp_zone1", {e._attr_unique_id for e in added_all})
+
+    async def test_the_sensor_stays_where_no_select_can_be_built(self) -> None:
+        """The other side of the same gate: a fridge whose catalogue carries no drawer
+        PROGRAM keeps the reading, because nothing replaces it."""
+        entity = await self._my_zone_state("0")
+        self.assertEqual("zero_fresh", entity.native_value)
 
     async def test_my_zone_mode_options_admit_every_state_it_can_report(self) -> None:
         """An ENUM sensor may not report a state outside its options, and the catalogue

@@ -53,6 +53,10 @@ from .const import (
 )
 from .air_purifier import co_alarm, has_problem, is_engaged
 from .debug_utils import redact_id
+from .ref_programs import REF_FLAG_TO_PARAM, flag_codes
+
+# The fridge family, named because the mode-reading hiding rule below is its alone.
+_COOLING_TYPES: tuple[str, ...] = (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -199,6 +203,22 @@ _COOLING_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     # mode from these same four booleans rather than reading a mode field, because no
     # such field exists (issue #93). Live-confirmed present on the real fridge
     # (quickModeZ1/quickModeZ2/intelligenceMode/holidayMode).
+    #
+    # HIDDEN BY DEFAULT ONLY WHERE A SWITCH REPLACES THEM (issue #93, follow-up), and the
+    # decision is made per DEVICE in `async_setup_entry`, never here. `switch.py` now
+    # ships a writable switch on each of these four flags, reading the same attribute, so
+    # a fresh install would otherwise get two entities per mode -- one that acts and one
+    # that only watches. But the switch is gated on the WRITE schema (the program code in
+    # the live startProgram enum AND the flag on stopProgram) while these are gated on the
+    # shadow, so the two sets do not coincide: a fridge whose `stopProgram` declares only
+    # `quickModeZ1` gets one switch, and hiding all four readings there would leave it
+    # with a single control and no readings at all. A static flag on the row cannot tell
+    # those cases apart, so it is not one.
+    #
+    # Hidden and not REMOVED, either way: every dashboard, automation and history graph
+    # built on them since 5.x would go with them, and history cannot be given back. Home
+    # Assistant reads the flag only when an entity is registered for the FIRST time, so an
+    # existing user keeps all four enabled regardless.
     HonBinarySensorEntityDescription(
         key="quick_cool",
         icon="mdi:snowflake",
@@ -493,6 +513,15 @@ async def async_setup_entry(
         attributes = data.get("attributes", {})
         attributes = attributes if isinstance(attributes, dict) else {}
         created: list[str] = []
+        # Which fridge mode flags this appliance also exposes as a SWITCH (#93). Resolved
+        # once per device from the write schema -- the same `flag_codes` the switch
+        # platform gates on, so the two can never disagree about which readings have a
+        # control beside them. Empty for every other appliance type.
+        replaced_by_switch = (
+            {REF_FLAG_TO_PARAM[code] for code in flag_codes(data.get("appliance"))}
+            if app_type in _COOLING_TYPES
+            else frozenset()
+        )
         for description in BINARY_SENSORS.get(app_type, ()):
             # Inferred from incomplete evidence: absent unless explicitly enabled.
             if description.experimental and not experimental:
@@ -503,7 +532,14 @@ async def async_setup_entry(
                     description.key, data.get("name"), redact_id(appliance_id), description.attr_key,
                 )
                 continue
-            entities.append(HonBinarySensor(coordinator, appliance_id, description))
+            entities.append(
+                HonBinarySensor(
+                    coordinator,
+                    appliance_id,
+                    description,
+                    hidden=description.attr_key in replaced_by_switch,
+                )
+            )
             created.append(description.key)
         # Universal capability-gated binaries (any type that reports the attr).
         for description in _UNIVERSAL_GATED:
@@ -535,11 +571,20 @@ class HonBinarySensor(HonBaseEntity, BinarySensorEntity):
         coordinator,
         appliance_id: str,
         description: HonBinarySensorEntityDescription,
+        hidden: bool = False,
     ) -> None:
         super().__init__(coordinator, appliance_id)
         self.entity_description = description
         self._attr_translation_key = description.translation_key or description.key
         self._attr_unique_id = f"{appliance_id}_{description.key}"
+        # Set only when this DEVICE also got a control for the same register (#93).
+        # Assigned on the instance rather than declared on the description because the
+        # answer is per appliance: the same row is a duplicate on a fridge whose
+        # `stopProgram` can clear the flag and the only reading there is on one whose
+        # cannot. Home Assistant reads this at FIRST registration only, so it never
+        # removes anything from a user who already has the entity.
+        if hidden:
+            self._attr_entity_registry_enabled_default = False
 
     @property
     def available(self) -> bool:

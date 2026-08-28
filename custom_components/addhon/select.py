@@ -71,6 +71,14 @@ from .program_options import (
     normalize_code,
     option_choices,
 )
+from .ref_programs import (
+    REF_MY_ZONE_PARAM,
+    REF_MY_ZONE_ZONE,
+    REF_PARAM_TO_FLAG,
+    has_replacement_controls,
+    my_zone_code_for_value,
+    my_zone_codes,
+)
 
 # Air purifier aroma: the state attribute and the two custom-timing parameters.
 _AROMA_ATTR = "aromaStatus"
@@ -88,12 +96,13 @@ REF_PROGRAM_OFF = "off"
 # identity map (refrigeration.md section 1): superCool=quickModeZ1, superFreeze=quickModeZ2,
 # holiday=holidayMode, autoSet=intelligenceMode. Double-gated at read time: the code must
 # also be in the device's live program enum.
-_REF_MODE_FLAG_TO_PROGRAM: dict[str, str] = {
-    "quickModeZ1": "super_cool",
-    "quickModeZ2": "super_freeze",
-    "holidayMode": "holiday",
-    "intelligenceMode": "auto_set",
-}
+#
+# A VIEW of `ref_programs.REF_FLAG_TO_PARAM`, not a second copy. The same pairing now
+# also decides which flags become switches and therefore whether this select is built at
+# all (#93), and two independent spellings of it would let the entity that steps aside
+# and the entities that replace it disagree about which flags exist. The local name
+# stays because it reads as this class's own vocabulary at the two sites below.
+_REF_MODE_FLAG_TO_PROGRAM: dict[str, str] = dict(REF_PARAM_TO_FLAG)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -279,14 +288,56 @@ async def async_setup_entry(
             _command_names(appliance),
         )
         if app_type in _COOLING_TYPES:
-            # Fridge family (#40): one writable program/mode select, sends immediately.
+            # Fridge family. Two selects, and they are mutually exclusive by design.
+            #
+            # The My Zone drawer mode (#93) is the faithful control where the model
+            # declares the drawer AND its catalogue carries the drawer's programs. Not
+            # gated on the shadow, unlike `sensor.my_zone_mode`: the WRITE channel here
+            # is `startProgram`, which the catalogue proves exists, so a shadow that
+            # never mirrors `tempSelZ3` costs the read-back and not the control. That is
+            # the same rule `HonHobPowerLimitSelect` follows -- gated on the write
+            # schema, unknown for a value it cannot interpret, never a false map and
+            # never a raise.
+            # No extra condition here, deliberately. The model-zone test used to live at
+            # this call site, which made `has_replacement_controls` -- the predicate that
+            # decides whether `select.ref_program` steps aside -- answer a DIFFERENT
+            # question from the one that decides whether the replacement is built. On a
+            # catalogue declaring `vtZone` but no `zones` the two disagreed and the
+            # appliance ended up with no drawer control at all. The test now lives inside
+            # `my_zone_codes`, where both callers see it.
+            my_zone = my_zone_codes(appliance)
+            if my_zone:
+                entities.append(
+                    HonRefMyZoneSelect(coordinator, appliance_id, my_zone, client)
+                )
+                _LOGGER.info(
+                    "Added REF My Zone select: id=%s modes=%s",
+                    redact_id(appliance_id),
+                    my_zone,
+                )
+            else:
+                _LOGGER.debug(
+                    "Select debug: no My Zone select for '%s' id=%s; needs "
+                    "model zones to declare %s AND a startProgram category that pins "
+                    "%s, is zoned on the drawer alone, and is not a download preset",
+                    data.get("name"),
+                    redact_id(appliance_id),
+                    REF_MY_ZONE_ZONE,
+                    REF_MY_ZONE_PARAM,
+                )
+            # The single program select (#40) survives ONLY where nothing better exists.
+            # See `HonRefProgramSelect.supports_appliance` for the whole argument; the
+            # short version is that on a fridge that gets the flag switches or the drawer
+            # select it is not redundant, it is wrong -- its `off` sends a four-flag
+            # `stopProgram` that clears modes the user did not ask about.
             if HonRefProgramSelect.supports_appliance(appliance):
                 entities.append(HonRefProgramSelect(coordinator, appliance_id, client))
                 _LOGGER.info("Added REF program select: id=%s", redact_id(appliance_id))
             else:
                 _LOGGER.debug(
                     "Select debug: no REF program select for '%s' id=%s; "
-                    "needs startProgram(program enum) + stopProgram",
+                    "needs startProgram(program enum) + stopProgram, and no per-mode "
+                    "control (flag switches / My Zone select) on this same appliance",
                     data.get("name"),
                     redact_id(appliance_id),
                 )
@@ -828,8 +879,36 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
 
     @classmethod
     def supports_appliance(cls, appliance) -> bool:
-        """True if the device exposes startProgram with a populated program enum AND a
-        stopProgram command (so the ``off`` reset is real)."""
+        """True if this fridge exposes the commands AND has nothing better (#93).
+
+        The first two conditions are unchanged: a populated ``startProgram.program`` enum
+        to draw the options from, and a ``stopProgram`` so the ``off`` reset is real.
+
+        The third is new and is the reason this class is no longer the fridge's default
+        control. A single mutually-exclusive select is a faithful model only where the
+        appliance really has one mode at a time, and issue #93 established that it does
+        not: `stopProgram` declares four INDEPENDENT flags, `startProgram(zero_fresh)`
+        writes `tempSelZ3` without clearing `quickModeZ1`, and the app's own screen is
+        built per ZONE (`dataSourceForDemo`, decomp.txt:2838247-2838365) with two mode
+        drawers and a My Zone card, never one program list. Where we can build those
+        per-mode controls, keeping this one alongside them is not redundancy, it is a
+        second control writing the same registers with a different meaning of "off":
+        selecting ``off`` here sends the four-flag reset that the official app never
+        sends (it sends `stopProgram` with the single flag to clear --
+        apk/dump/ref_10136/attributes.json, commandHistory, `deviceModel: "BVL"`), so it
+        would clear three modes to turn one off.
+
+        Evaluated from THIS appliance's live schema, never from a model or series list,
+        and through `ref_programs.has_replacement_controls` so the entity that steps
+        aside and the entities that replace it are answering one question once. A fridge
+        whose enum carries only `iot_*` download presets has no replacement -- those
+        become fire-and-forget buttons with no state and no stop -- so it keeps this
+        select exactly as it is today, and the buttons coexist with it by design.
+
+        Consequence, stated because it is not small: on all three fridges we hold dumps
+        for the answer is now False, so this select is removed from every user we know
+        of. `docs/appliance-support.md` and the release notes have to say so.
+        """
         commands = getattr(appliance, "commands", None)
         commands = commands if isinstance(commands, dict) else {}
         if "stopProgram" not in commands:
@@ -847,7 +926,15 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
             )
             return False
         command, param_name = resolved
-        return bool(HonProgramSelect._program_values(command, param_name))
+        if not HonProgramSelect._program_values(command, param_name):
+            return False
+        if has_replacement_controls(appliance):
+            _LOGGER.debug(
+                "Select debug: REF program select superseded on this appliance by the "
+                "per-mode controls it would duplicate (see ref_programs)",
+            )
+            return False
+        return True
 
     # Shadow attributes carrying the ACTIVE program identity (cloud-persisted: what the
     # official app reads to show the running program, e.g. after an app reinstall),
@@ -956,6 +1043,149 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
             raise
         except Exception as err:
             _LOGGER.error("Select: REF program '%s' error: %s", option, err, exc_info=True)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_error",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        await self._async_request_command_refresh()
+
+
+class HonRefMyZoneSelect(HonBaseEntity, SelectEntity):
+    """The vtRoom1 (My Zone) drawer's mode, writable (#93).
+
+    `tempSelZ3` is not a temperature on these models, it is the drawer's MODE register.
+    For the `myZone` role -- the default for slot 1 when the model declares no `vtRoom1`
+    attribute -- the app builds a MODE_SELECTION card over it and never a temperature one
+    (`getVtRoomSource`, decomp.txt:2839249-2839271); a spinner exists only behind a
+    remote flag, on Casarte Invista, and on the single-compartment uprights where Z3 is
+    the only setpoint there is. 5.20.0 published that reading as `sensor.my_zone_mode`.
+    This is the same value made writable, and the write is the one the app uses: the
+    drawer's programs ARE the write channel, because on the reporter's HFW7720EWMP
+    `tempSelZ3` is not in `settings` at all.
+
+    THERE IS NO `off`, AND THAT IS THE DEVICE, NOT A SIMPLIFICATION. `stopProgram`
+    declares `holidayMode`, `intelligenceMode`, `quickModeZ1` and `quickModeZ2` and does
+    not touch `tempSelZ3`, so nothing can put the drawer into "no mode": it is always at
+    one of its own values, and the reporter's has been sitting on Zero Fresh, untouched,
+    since 2024. An option is something the user can SELECT, and there is no command that
+    would carry this one.
+
+    `current_option` is None -- HA shows unknown -- for a register value no drawer
+    program explains. The case that matters is 17: HOLIDAY's `programRules` force
+    `tempSelZ3 -> "17"`, which is outside the drawer's own vocabulary, and while Holiday
+    runs the drawer is in none of its modes. The app shows NO_MODE_SELECTED there
+    (decomp.txt:2841604) and `sensor.my_zone_mode` shows unknown, so all three agree.
+    Deliberately NOT done: no synthetic `holiday` or `unknown` option to render it, for
+    the same reason there is no `off` -- it would be an option nobody can pick, and
+    `binary_sensor.holiday_mode` already says Holiday is running.
+
+    Also deliberately NOT done: no fallback to the static value table
+    (`sensor.MY_ZONE_MODE_MAP`, which names 2 `chiller`, 3 `cool_drink`, 4 `cheese`). A
+    select may report only its own options, and those three labels are the app's second
+    answer for numbers no program explains -- i.e. exactly the numbers this select could
+    not send. Reporting one would show a state the control cannot reach.
+
+    The condition that would change any of this: a REF whose `stopProgram` declares
+    `tempSelZ3`, or whose catalogue carries a drawer program that clears the register.
+    Then the drawer would have an off, and this class would need one.
+    """
+
+    _attr_icon = "mdi:food-apple-outline"
+    _attr_translation_key = "my_zone_mode"
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        codes: list[str],
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._attr_unique_id = f"{appliance_id}_my_zone_mode"
+        # Frozen at construction from the LIVE catalogue, in the drawer's own
+        # coldest-first order (see ref_programs.my_zone_codes). A later shadow value
+        # outside this set must never add or drop a mode: in HA the options ARE part of
+        # the state, and an automation calling select.select_option has to keep working
+        # across a refresh.
+        self._attr_options = list(codes)
+        _LOGGER.debug(
+            "Select debug: init REF My Zone select '%s' id=%s options=%s",
+            redact_id(self._attr_unique_id, appliance_id),
+            redact_id(appliance_id),
+            self._attr_options,
+        )
+
+    @property
+    def current_option(self) -> str | None:
+        """The drawer's mode, resolved the way the app resolves it.
+
+        `getMyZoneMappedMode` does not start from the value: it asks
+        `getModeNameFromCommands` which startProgram category pins `tempSelZ3` to exactly
+        this number and answers with that category's name
+        (decomp.txt:2834689-2834780). So does this, through the SAME
+        `program_code_for_fixed_value` the 5.20.0 sensor uses -- narrowed to the drawer's
+        own programs, because on a fridge whose download presets also pin the register
+        the unrestricted lookup names one of them (see
+        `ref_programs.my_zone_code_for_value`).
+
+        The offered-options gate is kept even though the lookup is already narrowed to
+        the same list: `_attr_options` is frozen at construction while the catalogue is
+        read live, so a category the cloud adds between two polls must fall through to
+        unknown rather than push this entity into a state it never offered.
+        """
+        appliance = self._appliance
+        if appliance is None:
+            return None
+        code = my_zone_code_for_value(
+            appliance, self._get_attr(REF_MY_ZONE_PARAM)
+        )
+        if code is not None and code in (self._attr_options or ()):
+            return code
+        _LOGGER.debug(
+            "Select debug: My Zone id=%s %s=%r explained by no offered drawer "
+            "program -> unknown (17 is Holiday's rule, not a mode)",
+            redact_id(self._appliance_id),
+            REF_MY_ZONE_PARAM,
+            self._get_attr(REF_MY_ZONE_PARAM),
+        )
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in (self._attr_options or ()):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="program_not_found",
+                translation_placeholders={"program": option},
+            )
+        appliance = self._appliance
+        client = self._hon_client
+        if not appliance or not client:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="appliance_or_client_unavailable",
+            )
+        try:
+            _LOGGER.info(
+                "Select: REF My Zone '%s' -> startProgram id=%s",
+                option,
+                redact_id(self._appliance_id),
+            )
+            # `async_send_program` and not a `CommandPatch`: the write is a category
+            # SWAP, and the category's own fixed `tempSelZ3` is what travels. Building a
+            # patch would need the `program` selector key in `requested_order`, which
+            # would put it on the wire -- and the app's own body never carries it
+            # (apk/analysis/issue93-ref-controls-shape.md, "ON"). This is also the exact
+            # call the reporter's appliance has already accepted and executed:
+            # commandHistory, 2026-08-20, `deviceModel: "addhon"`, `timestampExecuted`
+            # present.
+            await async_send_program(self.hass, client, appliance, option)
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error(
+                "Select: REF My Zone '%s' error: %s", option, err, exc_info=True
+            )
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="command_error",

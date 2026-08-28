@@ -17,7 +17,7 @@ everywhere (a missing parameter does not generate an entity).
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 import logging
 
 from homeassistant.exceptions import HomeAssistantError
@@ -74,7 +74,13 @@ def find_settings_param(
     return None
 
 
-def program_code_for_fixed_value(appliance, param_name: str, value) -> str | None:
+def program_code_for_fixed_value(
+    appliance,
+    param_name: str,
+    value,
+    *,
+    codes: Collection[str] | None = None,
+) -> str | None:
     """Program code whose `param_name` is PINNED to `value`, or None.
 
     Some device settings are not free values but a program's signature: the fridge My
@@ -95,6 +101,18 @@ def program_code_for_fixed_value(appliance, param_name: str, value) -> str | Non
     Returns the CATEGORY key, which the loader has already reduced to the same slug the
     program select offers (`PROGRAMS.REF.ZERO_FRESH` -> `zero_fresh`), so callers can
     compare it against the select's options without a second translation.
+
+    `codes` NARROWS the walk to a caller-supplied set of program codes, and it is a
+    correction rather than an optimisation. The unrestricted walk answers with the FIRST
+    category that pins the number, and "a program pins this value" is not the same claim
+    as "this program is the reason the value is what it is" once several programs pin the
+    same parameter. On damigioanna's HDPW5620CNPK (apk/dump/ref_10136/commands.json)
+    five DOWNLOAD presets pin `tempSelZ3` to 2, 2, 5, 5 and 5, so an unrestricted lookup
+    calls the My Zone drawer `iot_extra_cold` at 2 and `iot_daily_use` at 5 -- a
+    whole-appliance preset reported as the state of one drawer. A caller that knows which
+    programs OWN the parameter passes them (`ref_programs.my_zone_code_for_value` passes
+    the drawer's); a caller with a parameter only one program can pin passes nothing and
+    gets exactly today's behaviour.
     """
     if value is None:
         return None
@@ -102,8 +120,11 @@ def program_code_for_fixed_value(appliance, param_name: str, value) -> str | Non
     categories = getattr(command, "categories", None) if command is not None else None
     if not isinstance(categories, dict):
         return None
+    allowed = None if codes is None else {str(code) for code in codes}
     wanted = str(value).strip()
     for code, category in categories.items():
+        if allowed is not None and str(code) not in allowed:
+            continue
         # Not a program: a category-less command reports itself under `SYNTHETIC_CATEGORY`,
         # and its own parameters would otherwise be answered as if a program had pinned
         # them. Returning that placeholder would put a bare "_" in front of the user.

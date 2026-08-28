@@ -204,6 +204,15 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "write": ("pause",),
     },
     {"tag": "button.start_program", "types": APPLIANCE_WASH_GROUP},
+    # The fridge's preset buttons (`button.ref_preset_iot_*`, #93) have NO row here, and
+    # the absence is the statement. Each sends a whole `startProgram` category and fixes
+    # no parameter of its own: the `tempSel` triple that travels is declared per program
+    # by the DEVICE's schema -- `IOT_EXTRA_ICE` writes `tempSelZ2` alone while
+    # `IOT_DAILY_USE` writes all three -- so any name written here would be a guess about
+    # a model, which is the one thing the rule at the top of this table forbids. They
+    # already appear in `entities.sources` as an explicit null, exactly like
+    # `button.start_program`, because `_entity_section` emits a key for every registry
+    # entity whether or not this table knows it.
     # The one row whose truth is per-APPLIANCE, not per-type. `button.py` hands
     # the stop button `command_parameters={"onOffStatus": "0"}` and applies each
     # only `if name in params`, so on a device whose `stopProgram` does not carry
@@ -246,6 +255,70 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
             "prStr",
             "prCode",
         ),
+    },
+    # The My Zone drawer select. Its row exists on the same terms as the one above --
+    # a fixed-key entity the registry walk cannot see -- and it is filled in from the
+    # start, which is the precedent that row set: it was null until #93, and the dump
+    # that followed accused `programName` of being unmapped while the entity beside it
+    # was reading it.
+    #
+    # `tempSelZ3` is one name and not a chain: it is a bare shadow key on these
+    # models, `_read_chain` expands nothing, and the reporter's dump prints it as
+    # such. The name is a literal of this repository twice over (`number` declares the
+    # Z3 setpoint, `sensor` declares `MY_ZONE_MODE_PARAM`), which is what makes it
+    # nameable here at all.
+    #
+    # NO `write` half, and this is the row where that decision is least obvious, so:
+    # the select DOES change `tempSelZ3`, but it changes it by starting a program whose
+    # category pins the value, and on the appliance this entity was built for
+    # `tempSelZ3` is not a parameter of `settings` at all. Naming it as a write would
+    # send a reader looking for a writable `tempSelZ3` that the device does not have --
+    # the exact misdirection `fan.purifier` below stays silent about `onOffStatus` to
+    # avoid. `commands` a few sections down says where the name really lives.
+    {
+        "tag": "select.my_zone_mode",
+        "types": (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE),
+        "read": ("tempSelZ3",),
+    },
+    # The four fridge mode switches (#93). One row each, keyed on the `switch.<key>` tag
+    # -- the `<domain>.<unique_id suffix>` join key -- because a row filed under any other
+    # name never joins and the entity reports a null source.
+    #
+    # `read` and `write` are the SAME single flag, which is unusual here and is the point:
+    # each switch owns exactly one register, reading it from the shadow and clearing it by
+    # name through a sparse `stopProgram`. `write` is honest even though the ON direction
+    # sends a whole `startProgram` category and names nothing: the OFF direction really
+    # does name that one parameter, which is the whole reason these entities exist.
+    #
+    # `binary_sensor.auto_set` and `switch.auto_set` are DISTINCT tags and both are
+    # correct -- the reading and the control are two entities on one register.
+    {
+        "tag": "switch.auto_set",
+        "types": (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE),
+        "read": ("intelligenceMode",),
+        "write": ("intelligenceMode",),
+        "write_command": "stopProgram",
+    },
+    {
+        "tag": "switch.super_cool",
+        "types": (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE),
+        "read": ("quickModeZ1",),
+        "write": ("quickModeZ1",),
+        "write_command": "stopProgram",
+    },
+    {
+        "tag": "switch.super_freeze",
+        "types": (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE),
+        "read": ("quickModeZ2",),
+        "write": ("quickModeZ2",),
+        "write_command": "stopProgram",
+    },
+    {
+        "tag": "switch.holiday_mode",
+        "types": (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE),
+        "read": ("holidayMode",),
+        "write": ("holidayMode",),
+        "write_command": "stopProgram",
     },
     # The air purifier's three fixed-key entities. Their parameters are already in
     # `AP_ENTITY_PARAMS` (which is why coverage sees them), but that frozenset says
@@ -1997,6 +2070,46 @@ def _attribute_values(attributes: Mapping) -> Mapping:
         return attributes
 
 
+def _drop_superseded_ref_program(mapped, app_type, appliance):
+    """Un-map what `select.ref_program` reads when THIS appliance does not get it (#93).
+
+    `_mapped_sets` is keyed by TYPE, and it has to be: the drift guard sweeps it per type
+    and both other callers reach it without an appliance. But since #93 the fridge program
+    select is per-APPLIANCE -- it steps aside wherever the per-mode controls can be built,
+    which is every fridge anyone has dumped -- so the type-level answer now claims
+    `prCode` and `prStr` are read by an entity that does not exist on this device. That is
+    the same contradiction the block in `_mapped_sets` was written to remove, running in
+    the opposite direction: there the dump accused the appliance of an unmapped parameter
+    an entity was reading, here it would quietly absolve a parameter nobody reads.
+
+    Narrowed here, where the appliance IS in hand, rather than by threading one down into
+    `_mapped_sets`: the type-level walk stays the single shared source both consumers use,
+    and this correction is one subtraction applied to its result.
+
+    `programName` is untouched either way -- it is engine-derived and was never in the
+    mapped set. On a fridge that keeps the select this is a no-op.
+    """
+    if app_type not in (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE):
+        return mapped
+    try:
+        # Imported here, and guarded, for the same reason every registry import in
+        # `_mapped_sets` is: a dump degrades, it never raises.
+        from .select import HonRefProgramSelect
+
+        if HonRefProgramSelect.supports_appliance(appliance):
+            return mapped
+        superseded = (
+            set(HonRefProgramSelect._REF_ACTIVE_PROGRAM_ATTRS) - _ENGINE_DERIVED_ATTRS
+        )
+    except Exception:
+        # Diagnostics must never cost the dump: an appliance whose schema trips the
+        # gate keeps the type-level answer, which is the pre-#93 behaviour.
+        _LOGGER.debug("Diagnostics: ref_program supersession check failed", exc_info=True)
+        return mapped
+    mapped_attrs, mapped_params, sources, missing = mapped
+    return (mapped_attrs - superseded, mapped_params, sources, missing)
+
+
 def _appliance_block(
     appliance_id: str,
     data: Mapping,
@@ -2062,6 +2175,7 @@ def _appliance_block(
     # makes `coverage.registries_unavailable` and `entities.sources` structurally
     # incapable of disagreeing.
     mapped = _mapped_sets(app_type)
+    mapped = _drop_superseded_ref_program(mapped, app_type, appliance)
     coverage = _coverage(app_type, attributes, statistics, appliance, mapped)
     # Built from `newest_stamp`, the third value of the SAME `_attribute_timestamps`
     # pass that produced the printed `attributes_last_update` map below, never from a
