@@ -829,7 +829,8 @@ class RefModeSwitchTranslationTest(unittest.TestCase):
         keys = {
             "switch": ("auto_set", "super_cool", "super_freeze", "holiday_mode"),
             "binary_sensor": ("auto_set", "quick_cool", "quick_freeze", "holiday_mode",
-                              "door_zone1", "door2_zone1", "connectivity"),
+                              "door_zone1", "door2_zone1", "door_zone2", "door_zone3",
+                              "door_zone4", "connectivity"),
             "select": ("my_zone_mode",),
             # `sensor.my_zone_mode` shares the select's name and is deliberately absent
             # here: the two never coexist. `sensor.async_setup_entry` skips the sensor on

@@ -653,6 +653,9 @@
       "door_zone3": {
         "name": "Porta Zona 3"
       },
+      "door_zone4": {
+        "name": "Porta Zona 4"
+      },
       "door_cavity1": {
         "name": "Porta Cavità 1"
       },

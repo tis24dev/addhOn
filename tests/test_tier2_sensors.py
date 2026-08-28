@@ -922,6 +922,43 @@ class Tier2GatingTest(unittest.IsolatedAsyncioTestCase):
             entity = await self._my_zone_state(value)
             self.assertIsNone(entity.native_value, value)
 
+    async def test_every_fridge_door_the_shadow_reports_becomes_an_entity(self) -> None:
+        """A four-door fridge gets four doors (discussion #94).
+
+        `doorStatusZ4` was the one zone the cooling table skipped: the reporter's
+        HCW58F18EWMP publishes it, `temp_zone4` was already there, and his diagnostics
+        printed `doorStatusZ4` under `attributes_unmapped` while `doorStatusZ3` sat two
+        lines away under `attributes_expected_absent`.
+        """
+        added = await _build_binary(
+            "REF",
+            {
+                "doorStatusZ1": "0", "door2StatusZ1": "0",
+                "doorStatusZ2": "0", "doorStatusZ4": "0",
+            },
+        )
+        self.assertEqual(
+            ["door_zone1", "door2_zone1", "door_zone2", "door_zone4"],
+            [e.entity_description.key for e in added
+             if e.entity_description.key.startswith("door")],
+        )
+
+    async def test_a_door_the_shadow_does_not_report_is_not_invented(self) -> None:
+        # The capability gate is what keeps the widened table honest: a two-door fridge
+        # must not grow two entities that will never leave `unknown`.
+        added = await _build_binary("REF", {"doorStatusZ1": "0"})
+        keys = {e.entity_description.key for e in added}
+        for absent in ("door_zone2", "door_zone3", "door_zone4"):
+            self.assertNotIn(absent, keys, absent)
+
+    async def test_the_fourth_door_reads_open_and_closed(self) -> None:
+        for raw, expected in (("0", False), ("1", True), (0, False), (1, True)):
+            added = await _build_binary("REF", {"doorStatusZ4": raw})
+            entity = next(
+                e for e in added if e.entity_description.key == "door_zone4"
+            )
+            self.assertIs(expected, entity.is_on, repr(raw))
+
     async def test_the_sensor_steps_aside_where_the_select_is_built(self) -> None:
         """One drawer, one entity with that name (#93).
 

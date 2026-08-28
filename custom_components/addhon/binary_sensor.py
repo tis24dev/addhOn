@@ -182,6 +182,13 @@ _COOLING_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     _door("door2_zone1", "door2StatusZ1"),
     _door("door_zone2", "doorStatusZ2"),
     _door("door_zone3", "doorStatusZ3"),
+    # Z4 was the one zone the table skipped, and a four-door fridge noticed
+    # (discussion #94, HCW58F18EWMP): its shadow publishes `doorStatusZ4` and the
+    # diagnostics printed it under `attributes_unmapped` while `doorStatusZ3` sat in
+    # `attributes_expected_absent` two lines away -- the dump saying, correctly, that we
+    # knew about the third door and not the fourth. The temperature side of that zone
+    # has always been here (`temp_zone4`), so the omission was the door alone.
+    _door("door_zone4", "doorStatusZ4"),
     HonBinarySensorEntityDescription(
         key="ice_maker",
         icon="mdi:snowflake",

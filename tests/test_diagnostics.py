@@ -5097,8 +5097,10 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         self.assertEqual(
             # Re-measured, never adjusted by arithmetic. 563 before #93; 572 after,
             # which is the My Zone select's one read name plus the four fridge mode
-            # switches' four read and four write names.
-            572,
+            # switches' four read and four write names; 573 once the fourth fridge door
+            # joined the cooling table (discussion #94). One name and not three: the
+            # sweep walks REF, and FR/FRE are not in its type list.
+            573,
             seen,
             f"the sweep changed to {seen} names; re-measure and update this number "
             f"deliberately, naming what joined or left it",

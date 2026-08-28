@@ -61,6 +61,8 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Fixes**
 
+- **A four-door fridge now gets its fourth door** (discussion #94). The zone was already
+  reporting its temperature; only the door was missing, on an appliance that publishes it.
 - **My Zone mode no longer reports a whole-appliance preset as the drawer's state.** On
   a fridge whose downloaded presets also write the drawer's register, the mode sensor
   answered with the first preset that happened to write the same number.
