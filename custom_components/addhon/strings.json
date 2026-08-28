@@ -1174,5 +1174,11 @@
     "speed_not_supported": {
       "message": "This purifier runs in discrete modes and has no fan speed. Set a preset mode instead of a percentage."
     }
+  },
+  "issues": {
+    "ref_program_select_replaced": {
+      "title": "The fridge program dropdown has been replaced",
+      "description": "Your fridge's single program dropdown (`select.…_ref_program`) was removed, because the appliance does not work that way: Super Cool, Super Freeze, Auto-set and Holiday are four independent settings and can run at the same time, and turning one off used to turn the other three off with it.\n\nThey are now four switches. The My Zone drawer has its own mode select, and each downloaded preset has a button that sends it.\n\n**Any automation or script that called `select.select_option` on the old entity needs updating.** It will not report an error: Home Assistant answers a call to an entity that no longer exists with a warning in the log and a successful service call, so the automation keeps running and does nothing.\n\nDismiss this notice once you have checked."
+    }
   }
 }

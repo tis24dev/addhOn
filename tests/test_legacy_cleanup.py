@@ -44,6 +44,13 @@ def _install_stubs() -> None:
     uc.UpdateFailed = getattr(uc, "UpdateFailed", type("UpdateFailed", (Exception,), {}))
     _mod("homeassistant.helpers.entity_registry")  # functions set per-test
     _mod("homeassistant.helpers.device_registry")   # idem
+    # The repair registry. Imported lazily by `_raise_ref_program_repair`, and that
+    # import is wrapped in a bare except -- so WITHOUT this stub the notice would fail
+    # silently and every assertion about it would pass for the wrong reason.
+    ir = _mod("homeassistant.helpers.issue_registry")
+    ir.IssueSeverity = getattr(
+        ir, "IssueSeverity", type("IssueSeverity", (), {"WARNING": "warning"})
+    )
     # The two entity BASE classes conftest does not install (it installs their
     # descriptions and device classes). The zone-clone trap below imports the real
     # hob tables to drive itself, which pulls the two platform modules in.
@@ -62,12 +69,14 @@ def _install_stubs() -> None:
     ha.helpers.update_coordinator = uc
     ha.helpers.entity_registry = sys.modules["homeassistant.helpers.entity_registry"]
     ha.helpers.device_registry = sys.modules["homeassistant.helpers.device_registry"]
+    ha.helpers.issue_registry = sys.modules["homeassistant.helpers.issue_registry"]
 
 
 _install_stubs()
 
 import homeassistant.helpers.device_registry as dr  # noqa: E402
 import homeassistant.helpers.entity_registry as er  # noqa: E402
+import homeassistant.helpers.issue_registry as ir  # noqa: E402
 from custom_components.addhon import (  # noqa: E402
     DOMAIN,
     _remove_legacy_entities,
@@ -119,7 +128,14 @@ class FakeDeviceRegistry:
         self._devices[:] = [d for d in self._devices if d.id != device_id]
 
 
-def _run(entries, coord_data=None, devices=()):
+def _run(entries, coord_data=None, devices=(), issues=None):
+    # Always rebound, never left pointing at a previous test's list: a run that does not
+    # ask about repairs must not append into one that does, or the assertions here would
+    # depend on collection order.
+    sink = [] if issues is None else issues
+    ir.async_create_issue = lambda hass, domain, key, **kw: sink.append(
+        (domain, key, kw)
+    )
     reg = FakeRegistry(entries)
     er.async_get = lambda hass: reg
     er.async_entries_for_config_entry = lambda registry, entry_id: list(registry._entries)
@@ -330,6 +346,80 @@ class LegacyCleanupTest(unittest.TestCase):
         self.assertIn("Removed the fridge program select", blob)
         self.assertNotIn(mac, blob)
         self.assertNotIn("AA:BB", blob)
+
+    def test_removing_the_select_raises_a_repair(self) -> None:
+        """The removal itself is silent, and so is the breakage it causes.
+
+        Home Assistant answers `select.select_option` on an entity that no longer exists
+        with a WARNING in the log and a SUCCESSFUL service call, so an automation that
+        used to set the fridge to Holiday keeps reporting as run and does nothing. The
+        repair is the only place a user is told.
+        """
+        issues: list = []
+        _run(
+            [FakeRegEntry("select.fridge_ref_program", "refid_ref_program")],
+            coord_data={"refid": {"type": "REF", "appliance": self._fridge_appliance()}},
+            issues=issues,
+        )
+        self.assertEqual(1, len(issues))
+        domain, key, kwargs = issues[0]
+        self.assertEqual(DOMAIN, domain)
+        self.assertEqual("ref_program_select_replaced", key)
+        self.assertFalse(kwargs["is_fixable"])
+        self.assertEqual("ref_program_select_replaced", kwargs["translation_key"])
+
+    def test_no_repair_when_nothing_was_removed(self) -> None:
+        # A fresh install, and every start after the one that did the removal: the purge
+        # is idempotent, so the notice must fire once and never again.
+        issues: list = []
+        _run(
+            [FakeRegEntry("sensor.fridge_temp_zone1", "refid_temp_zone1")],
+            coord_data={"refid": {"type": "REF", "appliance": self._fridge_appliance()}},
+            issues=issues,
+        )
+        self.assertEqual([], issues)
+
+    def test_no_repair_for_the_other_four_purges(self) -> None:
+        # Only THIS removal breaks something a user may still be calling. The legacy
+        # power switch and the dryer's washer sensors were dead entities; a notice for
+        # them would be noise.
+        issues: list = []
+        _run([FakeRegEntry("switch.foo_power", "ID_power")], issues=issues)
+        self.assertEqual([], issues)
+
+    def test_the_repair_carries_no_appliance_identity(self) -> None:
+        # One notice per config entry, and it names the generic keys, never this user's
+        # appliance -- the same rule the removal log follows.
+        issues: list = []
+        mac = "AA:BB:CC:DD:EE:FF"
+        _run(
+            [FakeRegEntry("select.fridge_ref_program", f"{mac}_ref_program")],
+            coord_data={mac: {"type": "REF", "appliance": self._fridge_appliance()}},
+            issues=issues,
+        )
+        blob = repr(issues)
+        self.assertNotIn(mac, blob)
+        self.assertNotIn("AA:BB", blob)
+
+    def test_a_broken_repair_registry_does_not_cost_the_purge(self) -> None:
+        # The notice is a courtesy; the cleanup is the job. A Home Assistant whose repair
+        # helper raises must not undo the removal or abort the setup.
+        def _boom(*args, **kwargs):
+            raise RuntimeError("no repairs here")
+
+        original = getattr(ir, "async_create_issue", None)
+        ir.async_create_issue = _boom
+        try:
+            removed, _detached = _run(
+                [FakeRegEntry("select.fridge_ref_program", "refid_ref_program")],
+                coord_data={
+                    "refid": {"type": "REF", "appliance": self._fridge_appliance()}
+                },
+            )
+        finally:
+            if original is not None:
+                ir.async_create_issue = original
+        self.assertEqual(removed, ["select.fridge_ref_program"])
 
     def test_legacy_power_removal_log_redacts_identity(self) -> None:
         # Privacy: the INFO removal log must carry the redacted id, never the

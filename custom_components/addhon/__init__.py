@@ -536,6 +536,9 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
     registry = er.async_get(hass)
     checked = 0
     removed = 0
+    # Counted apart from `removed` because this is the only rule whose removal BREAKS
+    # something a user may still be calling; see the repair below.
+    removed_ref_programs = 0
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
         checked += 1
         unique_id = reg_entry.unique_id or ""
@@ -565,6 +568,7 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
         ):
             registry.async_remove(reg_entry.entity_id)
             removed += 1
+            removed_ref_programs += 1
             _LOGGER.info(
                 "Removed the fridge program select replaced by the per-mode controls: "
                 "id=%s",
@@ -577,6 +581,8 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 "Removed duplicate per-zone entity of an induction hob: id=%s",
                 redact_id(reg_entry.unique_id),
             )
+    if removed_ref_programs:
+        _raise_ref_program_repair(hass, entry)
     _LOGGER.debug(
         "Setup debug: legacy cleanup completed for entry=%s, checked=%d, removed=%d",
         entry.entry_id,
@@ -584,6 +590,40 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
         removed,
     )
     _remove_zone_clone_devices(hass, entry, coord_data, hob_ids)
+
+
+def _raise_ref_program_repair(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Tell the user their fridge program select is gone, and what replaced it.
+
+    Raised ONLY when this run actually removed one, so it fires once and never on a
+    fresh install. The purge above is idempotent, so a later start removes nothing and
+    says nothing more.
+
+    A repair rather than a log line, because the way this breaks is silent: Home
+    Assistant answers `select.select_option` on an entity that no longer exists with a
+    WARNING in the log and a SUCCESSFUL service call, so an automation that used to set
+    the fridge to Holiday keeps reporting as run and does nothing. Nothing in the UI
+    would say so.
+
+    `is_fixable=False`: there is no button we could offer. The old option maps to three
+    different kinds of entity depending on which one it was -- a switch, the My Zone
+    select, or a preset button -- and only the person who wrote the automation knows
+    which they meant. The repair carries no appliance id or name: it is one notice per
+    config entry, and the entities it names are the generic keys, never this user's.
+    """
+    try:
+        from homeassistant.helpers import issue_registry as ir
+
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            "ref_program_select_replaced",
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="ref_program_select_replaced",
+        )
+    except Exception:  # noqa: BLE001 - a notice must never cost a setup
+        _LOGGER.debug("Setup debug: could not raise the ref_program repair", exc_info=True)
 
 
 def _superseded_ref_program_ids(coord_data) -> set[str]:

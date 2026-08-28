@@ -1174,5 +1174,11 @@
     "speed_not_supported": {
       "message": "Questo purificatore funziona a modalità discrete e non ha una velocità della ventola. Imposta una modalità preimpostata invece di una percentuale."
     }
+  },
+  "issues": {
+    "ref_program_select_replaced": {
+      "title": "Il menu a tendina dei programmi del frigo è stato sostituito",
+      "description": "Il menu a tendina unico dei programmi del frigo (`select.…_ref_program`) è stato rimosso, perché l'apparecchio non funziona così: Super Cool, Super Freeze, Auto-Set e Modalità Vacanza sono quattro impostazioni indipendenti e possono essere attive insieme, e spegnerne una ne spegneva altre tre.\n\nAdesso sono quattro interruttori. Il cassetto My Zone ha un suo selettore di modalità, e ogni preset scaricato ha un pulsante che lo invia.\n\n**Ogni automazione o script che chiamava `select.select_option` sulla vecchia entità va aggiornato.** Non segnalerà nessun errore: Home Assistant risponde a una chiamata verso un'entità che non esiste più con un avviso nel log e una chiamata di servizio riuscita, quindi l'automazione continua a girare senza fare niente.\n\nChiudi questo avviso quando hai controllato."
+    }
   }
 }

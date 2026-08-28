@@ -52,9 +52,12 @@ the notes were generated automatically carry a link to their diff instead of a s
   temperature"), which they previously shared word for word with the measured-temperature
   sensor beside them.
 - **The old program dropdown is removed from the entity registry** where it was replaced,
-  instead of being left behind as an unavailable entity with a "?" badge. This is
-  deliberate and it cannot be undone: its history ends there. On a fridge that keeps the
-  dropdown, nothing is touched.
+  instead of being left behind as an unavailable entity with a "?" badge, and a **repair
+  notice** tells you it happened and what replaced it. Worth reading if you automated it:
+  a call to an entity that no longer exists does not fail — Home Assistant logs a warning
+  and reports the service call as successful, so the automation keeps running and does
+  nothing. The removal is deliberate and cannot be undone: the entity's history ends
+  there. On a fridge that keeps the dropdown, nothing is touched.
 
 **Fixes**
 

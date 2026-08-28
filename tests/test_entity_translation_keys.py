@@ -311,6 +311,27 @@ class EntityTranslationKeyTest(unittest.TestCase):
     def test_no_platform_only_in_one_language(self) -> None:
         self.assertEqual(set(_load_entity_block("en")), set(_load_entity_block("it")))
 
+    def test_every_repair_notice_is_written_in_both_languages(self) -> None:
+        """A repair is the one string a user reads at the moment something broke.
+
+        Both halves are checked, not just the key: a notice with a title and no
+        description renders as a heading over an empty panel, which is worse than no
+        notice at all -- the user knows something happened and not what.
+        """
+        blocks = {}
+        for lang in ("en", "it"):
+            data = json.loads(
+                (COMPONENT / "translations" / f"{lang}.json").read_text(encoding="utf-8")
+            )
+            blocks[lang] = data.get("issues", {})
+        self.assertEqual(set(blocks["en"]), set(blocks["it"]))
+        for lang, block in blocks.items():
+            for key, text in block.items():
+                for half in ("title", "description"):
+                    self.assertTrue(
+                        (text.get(half) or "").strip(), f"[{lang}] issues.{key}.{half}"
+                    )
+
 
 def _code_translation_key_literals() -> set[str]:
     """Every `translation_key="..."` / `_attr_translation_key = "..."` literal in the
@@ -335,7 +356,11 @@ class CodeTranslationKeyLiteralsTest(unittest.TestCase):
             # The device-name translation_key (the "addhOn diagnostica" service
             # device) lives under the top-level "device" section, not under entity.
             device_keys = set(data.get("device", {}))
-            missing = used - (entity_keys | exc_keys | device_keys)
+            # Repair notices (`issue_registry.async_create_issue`) name their text under
+            # the top-level "issues" section, which is where Home Assistant reads a
+            # repair's title and description from -- not under entity or exceptions.
+            issue_keys = set(data.get("issues", {}))
+            missing = used - (entity_keys | exc_keys | device_keys | issue_keys)
             self.assertFalse(
                 missing,
                 f"[{lang}] translation_key literals used in code with no entity/exceptions "
