@@ -33,7 +33,6 @@ the entity unique_id vocabulary closed, NOT to gate on a model list).
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from .const import PROGRAM_PARAM_NAMES
@@ -94,9 +93,12 @@ REF_DOWNLOAD_FAMILY = "download"
 # already labels, so the wording carries over unchanged. A seventh preset on a future
 # model gets no button and says so once, at DEBUG, from `download_codes` below: a
 # missing entity is visible the moment somebody looks for it, an invented one is not.
-# What a DOWNLOAD preset code looks like when it came from the cloud schema rather than
-# from a user. Used only to decide what may be written to a log line; see `download_codes`.
-_SCHEMA_SLUG_RE = re.compile(r"iot_[a-z0-9_]+")
+# The parameter the engine injects into a user's saved favourite, and the only reliable
+# way to tell one from a catalogue program. `command_loader._add_favourites` copies the
+# base category, adds `HonParameterFixed("favourite", ...)` to the copy, and files it
+# under `favouriteName` -- the string the USER typed -- so a favourite is a category
+# whose KEY is free text and whose parameters carry this name.
+_FAVOURITE_PARAM = "favourite"
 
 REF_DOWNLOAD_PRESETS: tuple[str, ...] = (
     "iot_daily_use",
@@ -176,6 +178,24 @@ def program_categories(appliance) -> dict[str, Any]:
     categories at all, and that placeholder is not a program name. Admitting it would
     let a category-less startProgram's own parameters be read as if a program had pinned
     them, and put a bare "_" in front of the user (the 5.20.0 review found exactly that).
+
+    A user's saved FAVOURITE is skipped too, and that is the load-bearing half. A
+    favourite is a copy of a catalogue category filed under `favouriteName` -- free text
+    the user typed -- which inherits the base command's `programFamily` and its pinned
+    parameters, so it passes every classifier below and would become a `select` option, a
+    `unique_id` and a log line carrying that text. `diagnostics._entity_section` rests
+    the privacy of its whole `sources` map on the opposite ("every unique_id suffix is a
+    constant written in this repository"), and this module's loggers on the same rule
+    every other logger here follows.
+
+    Excluded on the ENGINE'S OWN MARKER and not on the shape of the name: `_add_favourites`
+    adds a `favourite` parameter to the copy, so the test is exact. A name-shape heuristic
+    is not: a favourite called `iot_something` is lowercase, underscored and
+    indistinguishable from a schema slug, and would have walked straight through it.
+
+    Skipping them costs nothing a user wanted: a favourite is a saved SEND, not one of the
+    appliance's own modes, and the code we would have to transmit for it is the catalogue
+    slug it was copied from.
     """
     command = get_command(appliance, STARTPROGRAM)
     categories = getattr(command, "categories", None) if command is not None else None
@@ -184,8 +204,14 @@ def program_categories(appliance) -> dict[str, Any]:
     return {
         str(code): category
         for code, category in categories.items()
-        if str(code) != SYNTHETIC_CATEGORY
+        if str(code) != SYNTHETIC_CATEGORY and not _is_favourite(category)
     }
+
+
+def _is_favourite(category) -> bool:
+    """True for a user's saved favourite rather than a catalogue program."""
+    params = getattr(category, "parameters", None)
+    return isinstance(params, dict) and _FAVOURITE_PARAM in params
 
 
 def _category_values(category, param_name: str) -> frozenset[str]:
@@ -419,29 +445,16 @@ def download_codes(appliance) -> list[str]:
         and REF_DOWNLOAD_FAMILY in _category_values(category, REF_FAMILY_PARAM)
     )
     if unnamed:
-        # NAMED only when the code is safe to name, COUNTED otherwise. A category key
-        # is not always a schema slug: `command_loader._add_favourites` files a copy of
-        # a program under `favouriteName`, the string the USER typed, and it inherits the
-        # base command's `programFamily` -- so a download-family favourite called "frigo
-        # di anna (casa al mare)" reaches this list and would print verbatim into
-        # home-assistant.log, which is the file people attach to an issue. This module
-        # follows the same rule as every other logger here: identity never reaches a log
-        # line unredacted.
-        #
-        # The shape test is the vocabulary this repository already owns -- every download
-        # preset in every catalogue seen, and every member of REF_DOWNLOAD_PRESETS, is
-        # `iot_` plus lowercase word characters -- so a genuinely new preset is still
-        # named, which is the whole point of the line: the fix for one is a tuple entry
-        # plus two labels. Anything else is counted, never silenced, so a reporter still
-        # learns that something was skipped.
-        nameable = [code for code in unnamed if _SCHEMA_SLUG_RE.fullmatch(code)]
+        # Safe to name in full: `program_categories` has already dropped the user's
+        # favourites, so every key that reaches here is a catalogue slug the cloud chose.
+        # Naming them is the whole point of the line -- the fix for a genuinely new
+        # preset is one tuple entry plus two labels, and a reporter has to be able to
+        # tell us WHICH one is missing.
         _LOGGER.debug(
             "RefPrograms debug: %d download preset(s) with no entity because this "
-            "repository does not name them: %s%s (see REF_DOWNLOAD_PRESETS)",
+            "repository does not name them: %s (see REF_DOWNLOAD_PRESETS)",
             len(unnamed),
-            nameable,
-            "" if len(nameable) == len(unnamed)
-            else f" (+{len(unnamed) - len(nameable)} withheld: not schema slugs)",
+            unnamed,
         )
     return known
 

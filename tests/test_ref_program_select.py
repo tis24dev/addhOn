@@ -134,6 +134,17 @@ class Category:
         self.parameters = parameters or {}
 
 
+def _favourite(base: Category) -> Category:
+    """A user's saved favourite, built the way the engine builds one.
+
+    `command_loader._add_favourites` copies a catalogue category, adds a `favourite`
+    parameter to the copy and files it under `favouriteName` -- so it inherits the
+    base's `programFamily`, its `zone` and its pinned parameters, and only that extra
+    parameter tells the two apart.
+    """
+    return Category({**base.parameters, "favourite": FixedParam("1")})
+
+
 class CategorisedStartProgram(RecordingCommand):
     """A startProgram carrying the per-program catalogue, like the real engine.
 
@@ -1195,47 +1206,75 @@ class RefProgramClassificationTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ref-1_ref_preset_frigo di anna (casa al mare)", suffixes)
         self.assertIn("ref-1_ref_preset_iot_daily_use", suffixes)
 
-    async def test_the_skipped_preset_log_never_prints_user_text(self) -> None:
-        """A category key is not always a schema slug (CWE-532).
-
-        `command_loader._add_favourites` files a copy of a program under
-        `favouriteName` -- the string the USER typed -- inheriting the base command's
-        `programFamily`, so a download-family favourite reaches the "no entity for this
-        preset" DEBUG line. That line lands in home-assistant.log, which is the file
-        people attach to an issue, and this repository puts nothing identifying in a log.
-
-        The count still has to be right: withholding a name must not become silence, or
-        a reporter cannot tell that anything was skipped at all.
-        """
-        from custom_components.addhon import ref_programs
-
-        nickname = "frigo di anna (casa al mare)"
+    def _with_favourites(self):
+        """The reporter's catalogue plus two favourites and one real new preset."""
         catalogue = _rmxs_categories()
-        catalogue[nickname] = _download(
-            ["fridge", "freezer"], {"tempSelZ1": FixedParam("4")}
+        catalogue["frigo di anna (casa al mare)"] = _favourite(
+            catalogue["iot_daily_use"]
         )
+        # The one a name-shape heuristic would have missed: lowercase, underscored,
+        # `iot_`-prefixed -- and still a string the user typed.
+        catalogue["iot_mio_preferito"] = _favourite(catalogue["iot_extra_cold"])
+        catalogue["cassetto di casa"] = _favourite(catalogue["zero_fresh"])
         catalogue["iot_future_preset"] = _download(
             ["freezer"], {"tempSelZ2": FixedParam("-24")}
         )
-        appliance = _fridge(
-            _rmxs_commands(
-                categories=catalogue,
-                programs=[*RMXS_PROGRAMS, nickname, "iot_future_preset"],
-            )
-        )["ref-1"]["appliance"]
+        codes = [
+            *RMXS_PROGRAMS,
+            "frigo di anna (casa al mare)",
+            "iot_mio_preferito",
+            "cassetto di casa",
+            "iot_future_preset",
+        ]
+        return _fridge(_rmxs_commands(categories=catalogue, programs=codes))
+
+    async def test_a_saved_favourite_is_never_a_catalogue_program(self) -> None:
+        """A favourite carries the user's own words, and must reach nothing (CWE-532).
+
+        `command_loader._add_favourites` copies a catalogue category, inherits its
+        `programFamily`, its `zone` and its pinned parameters, and files it under
+        `favouriteName`. So it passes every classifier on shape alone and would become a
+        select option, a `unique_id` and a log line carrying that text.
+
+        The engine's own marker is what excludes it -- the `favourite` parameter it adds
+        to the copy -- and not the shape of the name: `iot_mio_preferito` below is
+        lowercase, underscored and `iot_`-prefixed, and a slug heuristic waves it through.
+        """
+        from custom_components.addhon import ref_programs
+
+        appliance = self._with_favourites()["ref-1"]["appliance"]
+        codes = ref_programs.program_categories(appliance)
+        for typed in ("frigo di anna (casa al mare)", "iot_mio_preferito",
+                      "cassetto di casa"):
+            self.assertNotIn(typed, codes, typed)
+        # ...while the catalogue itself is untouched.
+        self.assertIn("zero_fresh", codes)
+        self.assertIn("iot_daily_use", codes)
+
+    async def test_no_favourite_reaches_an_entity_or_a_log(self) -> None:
+        from custom_components.addhon import ref_programs
+
+        data = self._with_favourites()
+        appliance = data["ref-1"]["appliance"]
+        typed = ("frigo di anna (casa al mare)", "iot_mio_preferito", "cassetto di casa")
 
         with self.assertLogs(ref_programs._LOGGER.name, level="DEBUG") as logs:
             ref_programs.download_codes(appliance)
         blob = "\n".join(logs.output)
-
-        self.assertNotIn(nickname, blob)
-        self.assertNotIn("anna", blob)
-        # ...while a genuinely new schema preset IS named, which is the whole point of
-        # the line: the fix for one is a tuple entry plus two labels.
+        for name in typed:
+            self.assertNotIn(name, blob, name)
+        # The genuinely new catalogue preset IS named: that is the point of the line,
+        # and the fix for it is one tuple entry plus two labels.
         self.assertIn("iot_future_preset", blob)
-        # ...and the withheld one is still counted, never silently dropped.
-        self.assertIn("2 download preset(s)", blob)
-        self.assertIn("withheld", blob)
+
+        buttons = await self._buttons(data)
+        selects = await self._setup(data)
+        surface = " ".join(
+            [e._attr_unique_id for e in buttons]
+            + [str(getattr(e, "_attr_options", "")) for e in selects]
+        )
+        for name in typed:
+            self.assertNotIn(name, surface, name)
 
     async def test_a_named_preset_without_the_download_family_gets_no_button(
         self,
