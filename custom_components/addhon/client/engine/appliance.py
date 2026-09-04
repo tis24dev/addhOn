@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any, Optional
 
+from ..catalog_repository import CommandCatalogRepository
 from ..helpers import parse_cloud_timestamp
 from .appliances import registry as _native_appliances
 from .attributes import HonAttribute
@@ -43,11 +44,23 @@ class HonAppliance:
     # recover a dead one promptly.
     _REALTIME_LIVENESS_TTL = 300  # seconds
 
-    def __init__(self, api: Any, info: dict[str, Any], zone: int = 0) -> None:
+    def __init__(
+        self,
+        api: Any,
+        info: dict[str, Any],
+        zone: int = 0,
+        *,
+        catalog_repository: CommandCatalogRepository | None = None,
+    ) -> None:
         if attributes := info.get("attributes"):
             info["attributes"] = {v["parName"]: v["parValue"] for v in attributes}
         self._info: dict[str, Any] = info
         self._api = api
+        self._catalog_repository = (
+            catalog_repository
+            if catalog_repository is not None
+            else CommandCatalogRepository(None, "en")
+        )
         self._appliance_model: dict[str, Any] = {}
         self._commands: dict[str, HonCommand] = {}
         self._statistics: dict[str, Any] = {}
@@ -263,11 +276,12 @@ class HonAppliance:
 
     # --- loading ---
     async def load_commands(self) -> None:
-        command_loader = HonCommandLoader(self.api, self)
-        await command_loader.load_commands()
-        self._commands = command_loader.commands
-        self._additional_data = command_loader.additional_data
-        self._appliance_model = command_loader.appliance_data
+        hydration = await HonCommandLoader(
+            self.api, self, self._catalog_repository
+        ).load_commands()
+        self._commands = hydration.commands
+        self._additional_data = hydration.additional_data
+        self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 
     async def load_attributes(self) -> None:
