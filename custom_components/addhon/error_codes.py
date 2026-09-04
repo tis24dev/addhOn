@@ -148,6 +148,12 @@ APPLIANCE_LOAD_FAILED = _reg(220, "appliance_load_failed", "Could not load appli
 APPLIANCE_DATA_MALFORMED = _reg(
     230, "appliance_data_malformed", "Malformed appliance data", ui=False
 )
+APPLIANCE_COMMANDS_UNAVAILABLE = _reg(
+    240,
+    "appliance_commands_unavailable",
+    "No usable command catalog",
+    ui=False,
+)
 # 3xx - realtime / AWS IoT (runtime only; validation never starts MQTT)
 AWS_TOKEN_FAILED = _reg(300, "aws_token_failed", "AWS IoT token request failed", ui=False)
 MQTT_CONNECT_TIMEOUT = _reg(310, "mqtt_connect_timeout", "MQTT connect timeout", ui=False)

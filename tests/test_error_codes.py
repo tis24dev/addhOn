@@ -83,6 +83,13 @@ class CatalogIntegrityTest(unittest.TestCase):
         # The MQTT subscribe timeout is the user's illustrative example.
         self.assertEqual(ec.MQTT_SUBSCRIBE_TIMEOUT.label, "ADDHON-320")
 
+    def test_appliance_commands_unavailable_is_runtime_240(self) -> None:
+        code = ec.APPLIANCE_COMMANDS_UNAVAILABLE
+        self.assertEqual(code.label, "ADDHON-240")
+        self.assertEqual(code.slug, "appliance_commands_unavailable")
+        self.assertFalse(code.ui)
+        self.assertFalse(code.requires_reauth)
+
 
 class ClassifyTest(unittest.TestCase):
     def test_coded_error_returns_its_code(self) -> None:
