@@ -286,6 +286,36 @@ _AC_IOT_COOL = {
 }
 
 
+# REAL washer-dryer category (apk/decomp.txt:3496065-3496305,
+# `PROGRAMS.WM_WD.IOT_WASH_RESISTANT_COLORED`, trimmed to the keys under test).
+# `programType` is W+D+S -- a WASH AND DRY program -- and it still ships the
+# `dryLevel <- dryOption==0 -> '0'` rule. In the app bundle ALL 72 categories carrying
+# that rule are W+D or W+D+S; not one plain-W program has it. So the rule is the
+# starting position of the dry switch, NOT a ban on drying: the app decides the
+# zeroing from `programType` (`mapCommandParameters` @decomp.txt:1009466-1009483,
+# W / W+S only) and leaves dryLevel at its defaultValue for everything else. Issue #99.
+_WD_WASH_DRY_REAL = {
+    "parameters": {
+        "dryLevel": {"typology": "enum", "category": "command", "mandatory": 0,
+                     "defaultValue": "1", "enumValues": [0, 1, 3, 4]},
+        "dryTime": {"typology": "range", "category": "command", "mandatory": 0,
+                    "minimumValue": "1", "maximumValue": "4", "incrementValue": "1"},
+        "temp": {"typology": "enum", "category": "command", "mandatory": 1,
+                 "defaultValue": "60", "enumValues": [0, 20, 30, 40, 60, 90]},
+    },
+    "ancillaryParameters": {
+        "dryOption": {"typology": "range", "category": "general", "mandatory": 1,
+                      "defaultValue": "0", "minimumValue": "0", "maximumValue": "1",
+                      "incrementValue": "1"},
+        "dryType": {"typology": "fixed", "category": "general", "mandatory": 1, "fixedValue": "C"},
+        "programType": {"typology": "fixed", "category": "general", "mandatory": 1,
+                        "fixedValue": "W+D+S"},
+        "programRules": {"category": "rule", "mandatory": 0, "typology": "fixed", "fixedValue": {
+            "dryLevel": {"dryOption": {"0": {"typology": "fixed", "fixedValue": "0"}}},
+        }},
+    },
+}
+
 _RULES = {
     # real AC: ecoMode=1 (with machMode fixed at 1) MUST constrain tempSel/windDir/windSpeed
     "ac_eco_nested": (_AC_IOT_COOL, [("ecoMode", "1")]),
@@ -304,6 +334,9 @@ _RULES = {
     "fixed_on_enum": ({"parameters": {"mode": _enum("cold", ["cold", "hot"]), "fan": _enum("low", ["low", "mid", "high"])},
                        "rules": {"r": _rule({"fan": {"mode": {"hot": {"typology": "fixed", "fixedValue": "high"}}}})}},
                       [("mode", "hot")]),
+    # `mode` DEFAULTS to "cold", one of the two trigger values. Step 0 (construction)
+    # therefore leaves temp at 20: rules apply when a value is SET, never on registration
+    # (`HonParameter.add_trigger`; issue #99). Step 1 sets mode and pins temp to 30.
     "pipe_split": ({"parameters": {"mode": _enum("cold", ["cold", "hot"]), "temp": _range()},
                     "rules": {"r": _rule({"temp": {"mode": {"cold|hot": {"typology": "fixed", "fixedValue": "30"}}}})}},
                    [("mode", "hot")]),
@@ -779,19 +812,23 @@ class ClusterBehaviorTest(unittest.TestCase):
         cmd.parameters["mode"].value = "hot"  # fires the bad rule -> must be swallowed
         self.assertEqual(cmd.parameters["temp"].value, 20)  # unchanged
 
-    def test_malformed_fixed_value_rule_skipped_at_construction(self) -> None:
-        # Same malformed rule, but the trigger value equals the param DEFAULT, so the
-        # immediate-fire runs during construction (patch()). Building the command must
-        # not raise -- the ValueError from _apply_fixed used to abort the whole load.
+    def test_a_trigger_value_equal_to_the_default_is_not_applied_at_construction(self) -> None:
+        # The trigger value equals the parameter's DEFAULT. pyhOn applied the rule right
+        # there, while building the command; the app has no build-time programRules pass
+        # at all (its one generic pass reads the trigger off the appliance record,
+        # `updateProgramRulesParameters` @decomp.txt:1028648). Constructing must leave
+        # the target alone -- and an explicit write must still pin it. Issue #99.
         attrs = {
             "parameters": {
                 "mode": _enum("hot", ["cold", "hot"]),  # default already == trigger
                 "temp": _range(default="20", lo="16", hi="30", inc="1"),
             },
-            "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "not-a-number"}}}})},
+            "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "26"}}}})},
         }
-        cmd = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())  # must not raise
-        self.assertEqual(cmd.parameters["temp"].value, 20)  # unchanged
+        cmd = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())
+        self.assertEqual(cmd.parameters["temp"].value, 20)  # untouched at build
+        cmd.parameters["mode"].value = "hot"
+        self.assertEqual(cmd.parameters["temp"].value, 26)  # still pinned on a real write
 
     def test_copy_rebinds_program_param_backrefs(self) -> None:
         # A HonParameterProgram carries `_command` (the base command); its value-setter
@@ -948,6 +985,22 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(c.parameters["tempSel"].value, 26)
         self.assertEqual(c.parameters["windDirectionHorizontal"].value, "4")
         self.assertEqual(c.parameters["windDirectionVertical"].value, "3")
+
+    def test_a_wash_and_dry_program_keeps_its_dry_levels(self) -> None:
+        # REAL washer-dryer W+D+S category (apk/decomp.txt:3496065-3496305). The app
+        # keeps dryLevel at its defaultValue here: it zeroes the dry parameters from
+        # `programType` (W / W+S only) and never runs the `dryOption` rule on its send
+        # path. We flatten ancillaryParameters into the one `parameters` dict, so
+        # `dryOption` becomes a trigger-carrying parameter and the rule fires at
+        # CONSTRUCTION (`add_trigger` fires immediately when the current value already
+        # equals the trigger value, and dryOption defaults to "0"). The enum collapses
+        # to ['0'] and a wash-and-dry program starts as wash-only. Issue #99.
+        c = NaCommand("startProgram", json.loads(json.dumps(_WD_WASH_DRY_REAL)),
+                      FakeAppliance(),
+                      category_name="PROGRAMS.WM_WD.IOT_WASH_RESISTANT_COLORED")
+        self.assertEqual(c.parameters["dryLevel"].values, ["0", "1", "3", "4"])
+        self.assertEqual(c.parameters["dryLevel"].value, "1")
+
 
 
 # REAL AC IOT_COOL ancillary block (apk/dump/ac_live), minus programRules which has its

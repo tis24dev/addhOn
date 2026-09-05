@@ -112,6 +112,16 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Fixes**
 
+- **A washer-dryer's wash-and-dry programmes no longer start as wash-only** (#99). The
+  drying level was being forced to zero, and locked there, before you ever saw the
+  control: every wash-and-dry programme carries a rule that reads "with the dry option
+  off, the dry level is zero", and addhOn was applying it while it built the command
+  rather than when something actually switched the dry option. The official app never
+  applies that rule -- it ships on the programmes that CAN dry, and it describes where
+  the dry switch starts, not what the programme is allowed to do. Rules now apply when a
+  value changes, which is what they are for. Setting a dry level that the appliance
+  accepts no longer fails with "Allowed values: ['0']", and a wash-and-dry cycle runs the
+  drying it was asked for.
 - **The My Zone mode sensor is removed from the registry** where the writable select
   replaced it, instead of being left behind unavailable under the same name as its
   replacement. Only there: a fridge that gets the mode switches but has no drawer

@@ -98,12 +98,33 @@ class HonParameter:
         return self._group
 
     def add_trigger(self, value: str, func: Callable[[Any], None], data: Any) -> None:
-        # Normalize both sides like `check_trigger` does: `_value` may be numeric
-        # (range/int) while the trigger value is always a string, so a raw `==`
-        # would miss `1 == "1"` and skip the immediate-fire for a param whose
-        # default already equals the trigger value.
-        if str(self._value).lower() == str(value).lower():
-            func(data)
+        """Register `func` to run when this parameter is SET to `value`. Never fires here.
+
+        pyhOn also fired the rule on registration whenever the parameter's default
+        already equalled the trigger value, so a rule could apply at COMMAND-BUILD time,
+        before anything had changed. The app has no such step: its only generic
+        `programRules` pass is `updateProgramRulesParameters` (decomp.txt:1028648), it
+        runs while building the program list, it reads the trigger value off the
+        APPLIANCE RECORD (`activeAppliance[getMappedParamName(trigger)]`,
+        decomp.txt:1028738-1028740), and it only assigns a value -- it never narrows a
+        parameter's value set.
+
+        That build-time fire broke every wash-and-dry program of every washer-dryer
+        (issue #99). `dryOption` is an ancillary descriptor that defaults to "0" and
+        carries the rule `dryLevel <- dryOption==0 -> "0"`; the app never reads it (it is
+        not a field of the appliance record), while we flatten ancillaryParameters into
+        the same `parameters` dict, so the rule fired on construction and collapsed
+        `dryLevel` from its real enum to ["0"] before the user ever saw an entity -- the
+        cycle then started as wash-only. In the app's own bundled catalogue all 72
+        categories carrying that rule are W+D or W+D+S, i.e. exactly the programs that
+        CAN dry: it is the starting position of the dry switch, not a ban.
+
+        Rules that depend on the device's current state still apply: the shadow sync and
+        every entity write go through the value setters, and `check_trigger` runs on each
+        accepted write. Static device config keeps its own build-time pass in
+        `HonRuleSet._apply_config_rules` ($installationType), which is the record-keyed
+        mechanism the app actually has.
+        """
         self._triggers.setdefault(value, []).append((func, data))
 
     def check_trigger(self, value: str | float) -> None:
