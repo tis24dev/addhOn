@@ -9,84 +9,16 @@ import copy
 from dataclasses import dataclass
 from typing import Any
 
-from . import device as _device
+from .command_catalog_contract import (
+    CommandCatalogRequest as CommandCatalogRequest,
+    CommandCatalogResponseError as CommandCatalogResponseError,
+    normalize_catalog_language as normalize_catalog_language,
+)
 
 CATALOG_OUTCOMES = frozenset(
     {"ok", "empty_payload", "invalid_payload", "missing_result", "nonzero_result"}
 )
 CATALOG_RESULT_CATEGORIES = frozenset({"zero", "missing", "nonzero", "other"})
-
-
-def normalize_catalog_language(value: Any) -> str:
-    """Return the lower-case base language, falling back to English."""
-    text = value.strip().lower() if isinstance(value, str) else ""
-    return text.split("-", 1)[0] or "en"
-
-
-@dataclass(frozen=True, slots=True)
-class CommandCatalogRequest:
-    """Immutable inputs for the official command-catalog request."""
-
-    appliance_type: str
-    appliance_model_id: str
-    mac_address: str
-    code: str
-    firmware_id: Any = None
-    firmware_version: Any = None
-    series: Any = None
-    series_version: Any = None
-    language: str = "en"
-
-    @classmethod
-    def from_appliance(
-        cls, appliance: Any, language: Any
-    ) -> "CommandCatalogRequest":
-        """Build request inputs without retaining the appliance or its info mapping."""
-        info = appliance.info if isinstance(appliance.info, dict) else {}
-        return cls(
-            appliance_type=str(appliance.appliance_type),
-            appliance_model_id=str(appliance.appliance_model_id),
-            mac_address=str(appliance.mac_address),
-            code=str(appliance.code),
-            firmware_id=info.get("eepromId"),
-            firmware_version=info.get("fwVersion"),
-            series=info.get("series"),
-            series_version=info.get("seriesVersion"),
-            language=normalize_catalog_language(language),
-        )
-
-    def params(self) -> dict[str, Any]:
-        """Create a fresh HTTP parameter mapping for each request."""
-        params: dict[str, Any] = {
-            "applianceType": self.appliance_type,
-            "applianceModelId": self.appliance_model_id,
-            "macAddress": self.mac_address,
-            "code": self.code,
-            "os": _device.OS,
-            "appVersion": _device.APP_VERSION,
-            "lang": normalize_catalog_language(self.language),
-        }
-        optional = (
-            ("firmwareId", self.firmware_id),
-            ("fwVersion", self.firmware_version),
-            ("series", self.series),
-            ("seriesVersion", self.series_version),
-        )
-        for name, value in optional:
-            if value:
-                params[name] = value
-        return params
-
-    def presence(self) -> dict[str, bool]:
-        """Return only privacy-safe discriminator-presence flags."""
-        return {
-            "firmware": bool(self.firmware_id),
-            "firmware_version": bool(self.firmware_version),
-            "series": bool(self.series),
-            "series_version": bool(self.series_version),
-            "language": bool(self.language),
-        }
-
 
 @dataclass(frozen=True, slots=True)
 class CommandCatalogProbe:
@@ -135,15 +67,6 @@ class CommandCatalogFetch:
 
     payload: dict[str, Any]
     probe: CommandCatalogProbe
-
-
-class CommandCatalogResponseError(Exception):
-    """A structurally unusable response carrying only a safe probe."""
-
-    def __init__(self, probe: CommandCatalogProbe) -> None:
-        self.probe = probe
-        super().__init__(f"Command catalog response rejected: {probe.outcome}")
-
 
 def _result_category(payload: dict[Any, Any]) -> str:
     if "resultCode" not in payload:
