@@ -35,6 +35,12 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- Command-catalog recovery for issue #94 now sends `seriesVersion` and the Home
+  Assistant base language, distinguishes an empty or invalid catalogue from success,
+  retries required refrigeration catalogues during initial hydration, and can reuse a
+  validated snapshot stored per config entry. Controls remain driven by the catalogue
+  returned for each appliance; this does not assume that every H4F306SDH1 exposes the
+  same commands.
 - The single fridge **program dropdown is no longer created** where the per-mode
   controls above can be built, which is every fridge we have seen a diagnostics dump
   for. Automations calling `select.select_option` on it must move to the new switches,
@@ -769,4 +775,3 @@ Dopo il deploy, verificare:
 - **Versione corrente:** 2.0.3 (fix applicati)
 - **Branch:** main
 - **Compatibility:** pyhOn >= 0.17.5
-
