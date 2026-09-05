@@ -16,6 +16,10 @@ from .client.auth_diagnostics import (
     AuthDiagnosticTrace,
     classify_failure_reason,
 )
+from .client.catalog_repository import (
+    CommandCatalogRepository,
+    CommandCatalogSnapshot,
+)
 # Aliased: `_run_on_hon_loop` binds a LOCAL named `phase` for the attribution it
 # samples, and shadowing the scope factory there would be a trap for the next edit.
 from .client.phase import phase as phase_scope
@@ -326,6 +330,9 @@ class HonClient:
         validation: bool = False,
         refresh_token: str = "",
         auth_diagnostics: bool = False,
+        *,
+        command_catalog_cache: Any = None,
+        language: Any = "en",
     ) -> None:
         self._email = email
         self._password = password
@@ -337,6 +344,10 @@ class HonClient:
         # and no per-appliance loads (issue #30). Runtime keeps the full setup.
         self._validation = validation
         self._auth_trace = AuthDiagnosticTrace(enabled=auth_diagnostics)
+        self._command_catalog_repository = CommandCatalogRepository(
+            command_catalog_cache,
+            language=language,
+        )
         # Last classified error code (for the downloadable diagnostics / log parity).
         self.last_error_code: Any = None
         # Login phase reached at the last failure ("authenticate"/"mfa_verify"/...), and a
@@ -683,6 +694,7 @@ class HonClient:
                     minimal=self._validation,
                     refresh_token=self._refresh_token,
                     auth_trace=self._auth_trace,
+                    catalog_repository=self._command_catalog_repository,
                 )
                 _LOGGER.debug("Hon instance created")
 
@@ -937,6 +949,22 @@ class HonClient:
         of trusting the mapping, for the same reason `setup_drops` is filtered above.
         """
         return getattr(self._hon_instance, "degraded_census", None)
+
+    def command_catalog_cache_snapshot(self) -> CommandCatalogSnapshot:
+        """Read a defensive command-catalog snapshot on its owning hOn loop."""
+
+        async def _read() -> CommandCatalogSnapshot:
+            return self._command_catalog_repository.snapshot()
+
+        return self._run_on_hon_loop(_read(), budget.CLOSE)
+
+    def command_catalog_census(self) -> list[dict[str, Any]]:
+        """Read the identity-free command-catalog census on its owning hOn loop."""
+
+        async def _read() -> list[dict[str, Any]]:
+            return self._command_catalog_repository.census()
+
+        return self._run_on_hon_loop(_read(), budget.CLOSE)
 
     def _needs_rehydration(self, appliance) -> bool:
         """Did setup append this appliance without its commands, for a retryable reason?

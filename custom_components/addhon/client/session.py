@@ -30,6 +30,7 @@ import aiohttp
 from . import factory
 from ..debug_utils import redact_mac
 from .budget import APPLIANCE_LIST, APPLIANCE_ONE, MQTT_START, budgeted
+from .catalog_repository import CommandCatalogRepository
 from .phase import PhaseTracker, phase
 from .transport.api import HonApi
 from .transport.auth import MFAChallengeRequired, NativeAuthError
@@ -100,6 +101,7 @@ class NativeHon:
         enable_mqtt: bool = True,
         minimal: bool = False,
         auth_trace: Any = None,
+        catalog_repository: CommandCatalogRepository | None = None,
     ) -> None:
         self._email = email
         self._password = password
@@ -112,6 +114,11 @@ class NativeHon:
         # full setup runs at runtime (minimal=False).
         self._minimal = minimal
         self._auth_trace = auth_trace
+        self._catalog_repository = (
+            catalog_repository
+            if catalog_repository is not None
+            else CommandCatalogRepository(None, "en")
+        )
         self._connection: HonConnection | None = None
         self._api: HonApi | None = None
         self._appliances: list[Any] = []
@@ -138,8 +145,8 @@ class NativeHon:
         # re-raises the REAL cause instead of a generic ADDHON-220 (the loss of cause
         # CR#6 had already fixed on the poll path).
         self._hydration_causes: list[tuple[str, Exception]] = []
-        # The subset a RETRY could still fix: appliances left partial by a transport
-        # fault, held by identity. Two readers, and both are the reason the fault
+        # The subset a RETRY could still fix: appliances left partial by a retryable
+        # hydration fault, held by identity. Two readers, and both are the reason the fault
         # boundary is not just a swallowed exception -- the all-failed guard below and
         # `needs_rehydration`, which makes the first coordinator refresh re-run
         # load_commands before any entity is created.
@@ -316,7 +323,12 @@ class NativeHon:
         # BEFORE the per-device try in the old code, so it aborted setup of ALL
         # appliances. mac_address is read here too (a property over the parsed info).
         try:
-            appliance = factory.create_appliance(self._api, appliance_data, zone=zone)
+            appliance = factory.create_appliance(
+                self._api,
+                appliance_data,
+                zone=zone,
+                catalog_repository=self._catalog_repository,
+            )
             mac_empty = appliance.mac_address == ""
         except self._APPLIANCE_BUILD_ERRORS as error:
             self._log_malformed(error, appliance_data)
@@ -367,7 +379,8 @@ class NativeHon:
                 appliance, zone, APPLIANCE_DATA_MALFORMED, error, retryable=False
             )
         except Exception as error:  # noqa: BLE001 - re-raised below when fatal
-            # TRANSPORT fault boundary (issue #76, cause 4). aiohttp.ClientError and
+            # RETRYABLE hydration fault boundary (issue #76, cause 4). Transport
+            # exceptions such as aiohttp.ClientError and
             # TimeoutError are not in _APPLIANCE_BUILD_ERRORS (TimeoutError derives from
             # OSError, not from any of those five), so a single slow appliance used to
             # escape here, unwind setup() and tear the whole config entry down.
@@ -384,7 +397,7 @@ class NativeHon:
             # DEBUG, never to home-assistant.log at WARNING (same rule as
             # _log_malformed).
             _LOGGER.warning(
-                "[%s] Appliance kept with partial data after a transport failure "
+                "[%s] Appliance kept with partial data after a retryable hydration failure "
                 "(%d so far this setup); the first coordinator refresh re-runs "
                 "load_commands before any entity is created",
                 code.label,
@@ -408,7 +421,7 @@ class NativeHon:
     ) -> None:
         """Remember an appliance that was appended without complete data.
 
-        Containing a TRANSPORT failure here is only half a fault boundary:
+        Containing a retryable hydration failure here is only half a fault boundary:
         `load_commands` is what CREATES the command entities, and the integration has
         no dynamic discovery, so an appliance left with empty `commands` would stay
         without select/number/switch/button/climate/fan entities until a MANUAL
@@ -429,7 +442,7 @@ class NativeHon:
             self._retryable_partials.append(appliance)
 
     def needs_rehydration(self, appliance: Any) -> bool:
-        """True if this appliance was appended without its commands by a TRANSPORT fault.
+        """True when retryable hydration left this appliance without its commands.
 
         By identity, not by mac: the caller holds the very object this session built.
         """

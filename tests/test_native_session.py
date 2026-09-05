@@ -66,9 +66,16 @@ _install_stubs()
 from custom_components.addhon import error_codes as ec  # noqa: E402
 from custom_components.addhon.client import factory  # noqa: E402
 from custom_components.addhon.client import session as session_mod  # noqa: E402
+from custom_components.addhon.client.catalog_repository import (  # noqa: E402
+    CommandCatalogRepository,
+)
+from custom_components.addhon.client.engine.command_hydration import (  # noqa: E402
+    CommandCatalogUnavailable,
+)
 from custom_components.addhon.client.session import NativeHon  # noqa: E402
 from custom_components.addhon.client.interfaces import HonSession  # noqa: E402
 from custom_components.addhon.client.transport.auth import NativeAuthError  # noqa: E402
+from custom_components.addhon.hon_client import HonClient  # noqa: E402
 
 
 def _run(coro):
@@ -187,6 +194,127 @@ class AuthTracePropagationTest(unittest.TestCase):
         _run(hon.close())
 
 
+class CatalogRepositoryPropagationTest(unittest.TestCase):
+    def test_factory_forwards_the_repository_to_native_session(self) -> None:
+        repository = CommandCatalogRepository(None, "it")
+
+        hon = factory.create_session(
+            "u@x",
+            "p",
+            enable_mqtt=False,
+            minimal=True,
+            catalog_repository=repository,
+        )
+
+        self.assertIs(repository, hon._catalog_repository)
+
+    def test_factory_forwards_the_repository_to_engine_appliance(self) -> None:
+        repository = CommandCatalogRepository(None, "it")
+
+        appliance = factory.create_appliance(
+            object(),
+            {"macAddress": "A", "applianceTypeName": "REF"},
+            catalog_repository=repository,
+        )
+
+        self.assertIs(repository, appliance._catalog_repository)
+
+    def test_native_session_forwards_one_repository_to_every_zone(self) -> None:
+        repository = CommandCatalogRepository(None, "it")
+        captured: list[CommandCatalogRepository] = []
+        data = [{"macAddress": "A", "applianceTypeName": "AC", "zone": "2"}]
+        events: list[str] = []
+        api = FakeApi(data, events)
+        original = factory.create_appliance
+
+        def fake_create_appliance(
+            api, data, zone=0, *, catalog_repository=None
+        ):
+            captured.append(catalog_repository)
+            return FakeAppliance(api, data, zone, events)
+
+        factory.create_appliance = fake_create_appliance
+        self.addCleanup(setattr, factory, "create_appliance", original)
+        hon = NativeHon(
+            "u@x",
+            "p",
+            enable_mqtt=False,
+            catalog_repository=repository,
+        )
+        hon._api = api
+
+        _run(hon.setup())
+
+        self.assertEqual(3, len(hon.appliances))
+        self.assertEqual([repository, repository, repository], captured)
+
+
+class CommandCatalogRetryBoundaryTest(unittest.TestCase):
+    def test_unavailable_catalog_retries_once_before_entity_discovery(self) -> None:
+        class RetryAppliance(FakeAppliance):
+            def __init__(self, api, data, zone, events) -> None:
+                super().__init__(api, data, zone, events)
+                self.command_loads = 0
+                self.updates = 0
+                self.attributes = {"parameters": {"status": "ok"}}
+                self.settings: dict = {}
+                self.statistics: dict = {}
+
+            async def load_commands(self) -> None:
+                self.command_loads += 1
+                if self.mac_address == "RETRY" and self.command_loads == 1:
+                    raise CommandCatalogUnavailable()
+
+            async def update(self) -> None:
+                self.updates += 1
+
+        repository = CommandCatalogRepository(None, "it")
+        data = [
+            {"macAddress": "RETRY", "applianceTypeName": "FRE"},
+            {"macAddress": "OK", "applianceTypeName": "WM"},
+        ]
+        events: list[str] = []
+        api = FakeApi(data, events)
+        original = factory.create_appliance
+
+        def fake_create_appliance(
+            api, data, zone=0, *, catalog_repository=None
+        ):
+            self.assertIs(repository, catalog_repository)
+            return RetryAppliance(api, data, zone, events)
+
+        factory.create_appliance = fake_create_appliance
+        self.addCleanup(setattr, factory, "create_appliance", original)
+        hon = NativeHon(
+            "u@x",
+            "p",
+            enable_mqtt=False,
+            catalog_repository=repository,
+        )
+        hon._api = api
+
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            _run(hon.setup())
+
+        by_mac = {appliance.mac_address: appliance for appliance in hon.appliances}
+        retry = by_mac["RETRY"]
+        self.assertEqual({"ADDHON-240": 1}, hon.degraded_census)
+        self.assertTrue(hon.needs_rehydration(retry))
+        self.assertIn(retry, hon.appliances)
+
+        client = HonClient(email="e@x", password="p")
+        client._api = hon
+        client._run_on_hon_loop = (  # type: ignore[assignment]
+            lambda coro, timeout=None: asyncio.run(coro)
+        )
+        client._update_appliance_sync(retry)
+        client._first_poll_done = True
+        client._update_appliance_sync(retry)
+
+        self.assertEqual(2, retry.command_loads)
+        self.assertEqual(2, retry.updates)
+
+
 class _Harness:
     """Patches create_appliance (factory) + NativeHon._make_mqtt + HonConnection/HonApi."""
 
@@ -205,7 +333,12 @@ class _Harness:
         t = self.test
         events = self.events
 
-        def fake_create_appliance(api, data, zone=0):
+        h.catalog_repositories = []
+
+        def fake_create_appliance(
+            api, data, zone=0, *, catalog_repository=None
+        ):
+            h.catalog_repositories.append(catalog_repository)
             return FakeAppliance(api, data, zone, events, fail=data.get("macAddress") in h.fail_macs)
 
         async def fake_make_mqtt(hon):  # hon = NativeHon instance (bound method)
@@ -589,7 +722,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         good = {"macAddress": "OK", "applianceTypeName": "WM"}
         h = _Harness(self, [bad, good])
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             if data.get("macAddress") == "BAD":
                 raise TypeError("malformed attributes in constructor")
             return FakeAppliance(api, data, zone, h.events)
@@ -623,7 +756,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         good = {"macAddress": "OK", "applianceTypeName": "WM"}
         h = _Harness(self, [bad, good])
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             cls = AttrFailAppliance if data.get("macAddress") == "BAD" else FakeAppliance
             return cls(api, data, zone, h.events)
 
@@ -653,7 +786,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         data = [{"macAddress": "A", "applianceTypeName": "REF"}]
         h = _Harness(self, data)
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return CancelAppliance(api, data, zone, h.events)
 
         async def fake_make_mqtt(hon):
@@ -680,7 +813,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         good = {"macAddress": "OK", "applianceTypeName": "WM"}
         h = _Harness(self, [bad, good])
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             cls = SlowAppliance if data.get("macAddress") == "BAD" else FakeAppliance
             return cls(api, data, zone, h.events)
 
@@ -712,7 +845,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         data = [{"macAddress": "A", "applianceTypeName": "REF"}]
         h = _Harness(self, data)
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return RejectedAppliance(api, data, zone, h.events)
 
         self._patch(factory, "create_appliance", fake_create_appliance)
@@ -737,7 +870,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         ]
         h = _Harness(self, data)
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return SlowAppliance(api, data, zone, h.events)
 
         self._patch(factory, "create_appliance", fake_create_appliance)
@@ -780,7 +913,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         ]
         h = _Harness(self, data)
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return Broken(api, data, zone, h.events)
 
         self._patch(factory, "create_appliance", fake_create_appliance)
@@ -821,7 +954,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         async def no_mqtt(hon):
             return None
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return SlowAppliance(api, data, zone, h.events)
 
         self._patch(factory, "create_appliance", fake_create_appliance)
@@ -873,7 +1006,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         nxt = {"macAddress": "N", "applianceTypeName": "WM"}
         h = _Harness(self, [zoned, nxt])
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             if data.get("macAddress") == "Z" and zone == 1:
                 raise TypeError("zone-1 constructor boom")
             return FakeAppliance(api, data, zone, h.events)
@@ -1302,7 +1435,7 @@ class SetupDropCensusTest(unittest.TestCase):
         data = [{"macAddress": "BAD", "applianceTypeName": "REF"}]
         h = _Harness(self, data)
 
-        def raising_create_appliance(api, data, zone=0):
+        def raising_create_appliance(api, data, zone=0, *, catalog_repository=None):
             raise KeyError("malformed attributes in constructor")
 
         async def fake_make_mqtt(hon):
@@ -1484,7 +1617,9 @@ class SetupDropCensusTest(unittest.TestCase):
             h = _Harness(self, [])
             h.install()
             if patch_factory:
-                def raising_create_appliance(api, data, zone=0):
+                def raising_create_appliance(
+                    api, data, zone=0, *, catalog_repository=None
+                ):
                     raise KeyError("constructor boom")
 
                 self._patch(factory, "create_appliance", raising_create_appliance)
@@ -1551,8 +1686,15 @@ class SetupDropCensusTest(unittest.TestCase):
         h.install()
         built = factory.create_appliance  # the harness fake, already installed
 
-        def create_with_a_timeout(api, data, zone=0):
-            appliance = built(api, data, zone=zone)
+        def create_with_a_timeout(
+            api, data, zone=0, *, catalog_repository=None
+        ):
+            appliance = built(
+                api,
+                data,
+                zone=zone,
+                catalog_repository=catalog_repository,
+            )
             if data.get("macAddress") == "C":
                 async def load_commands():
                     raise TimeoutError("hOn did not answer in time")

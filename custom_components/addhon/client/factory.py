@@ -30,6 +30,7 @@ def create_session(
     minimal: bool = False,
     refresh_token: str = "",
     auth_trace: Any = None,
+    catalog_repository: Any = None,
 ) -> Any:
     """Create the NATIVE hOn session (`client.session.NativeHon`).
 
@@ -53,6 +54,7 @@ def create_session(
         minimal=minimal,
         refresh_token=refresh_token,
         auth_trace=auth_trace,
+        catalog_repository=catalog_repository,
     )
 
 
@@ -70,11 +72,22 @@ def _native_engine_appliance_cls() -> Any:
     return _NATIVE_APPLIANCE_CLS
 
 
-def create_appliance(api: Any, appliance_data: dict, zone: int = 0) -> Any:
+def create_appliance(
+    api: Any,
+    appliance_data: dict,
+    zone: int = 0,
+    *,
+    catalog_repository: Any = None,
+) -> Any:
     """Build the NATIVE ROOT appliance.
 
     The whole engine (loader/commands/rules/program/parameters/attributes/per-type + ROOT)
     is ours. The returned object conforms to the Protocol `interfaces.Appliance`
     (duck-typing). Lazy import.
     """
-    return _native_engine_appliance_cls()(api, appliance_data, zone=zone)
+    return _native_engine_appliance_cls()(
+        api,
+        appliance_data,
+        zone=zone,
+        catalog_repository=catalog_repository,
+    )
