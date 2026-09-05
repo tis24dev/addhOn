@@ -36,7 +36,7 @@ import logging
 from typing import Any
 
 from .const import PROGRAM_PARAM_NAMES
-from .hon_commands import SYNTHETIC_CATEGORY, get_command
+from .hon_commands import SYNTHETIC_CATEGORY, find_settings_param, get_command
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -273,6 +273,42 @@ def flag_codes(appliance) -> list[str]:
     ]
 
 
+def _declares_my_zone(appliance) -> bool:
+    """Does the CATALOGUE say this fridge has the vtRoom1 drawer? Two positive signals.
+
+    `zones` is the first and remains the app's own capability gate
+    (`useRefrigeratorCommands`, decomp.txt:2843098-2843131). But denying on its silence
+    alone has a failure mode we can see in a real catalogue: `decomp.txt:3495902`
+    declares `vtZone = "1"`, three drawer categories pinning `tempSelZ3`, AND
+    `setParameters.tempSelZ3` as `enum ["0","2","5"]`, while carrying no `zones` at all.
+    There the drawer select was refused while the flag switches still suppressed
+    `select.ref_program`, so the three drawer programs kept no control that NAMES them.
+
+    The second signal is the app's own source of truth for that very list.
+    `myZoneModesByTemps` (decomp.txt:2841793-2841830) does not look at `startProgram` at
+    all: it reads `setParameters.parameters[tempSelZ3]` -- `tempSelZ4` for any zone that
+    is not VT_ROOM_1 -- and takes its `enumValues`. A declared `tempSelZ3` ENUM is
+    therefore the app saying, in the catalogue, that this register is the drawer's mode
+    selector. That is evidence of the same kind as `zones`, read from the same document,
+    and it is not an inference from silence.
+
+    Deliberately an ENUM and not any `tempSelZ3`: HDPW5620CNPK declares that register as
+    a RANGE, which is a real temperature the drawer scales over and already has
+    `number.target_temp_zone3`. A range must keep answering False here so the two
+    controls go on excluding each other from the data alone.
+    """
+    if REF_MY_ZONE_ZONE in model_zones(appliance):
+        return True
+    found = find_settings_param(appliance, REF_MY_ZONE_PARAM)
+    if found is None:
+        return False
+    _command_name, param = found
+    if str(getattr(param, "typology", "")) != "enum":
+        return False
+    values = getattr(param, "values", None)
+    return isinstance(values, (list, tuple)) and bool(values)
+
+
 def my_zone_codes(appliance) -> list[str]:
     """Offered vtRoom1 DRAWER modes, coldest first, or [].
 
@@ -315,7 +351,7 @@ def my_zone_codes(appliance) -> list[str]:
     up with no way to reach `zero_fresh`, `quick_cool` or `fruit_and_veg` at all. One
     question, answered once, is the only shape in which that cannot happen again.
     """
-    if REF_MY_ZONE_ZONE not in model_zones(appliance):
+    if not _declares_my_zone(appliance):
         return []
     offered = set(offered_codes(appliance))
     drawer = REF_MY_ZONE_ZONE.lower()
@@ -480,10 +516,25 @@ def active_mode_code(read_attr) -> str | None:
 
     Order is `REF_FLAG_TO_PARAM`'s, so the answer is stable when two modes are on.
     """
-    for code, param in REF_FLAG_TO_PARAM.items():
-        if str(read_attr(param)) == "1":
-            return code
-    return None
+    codes = active_mode_codes(read_attr)
+    return codes[0] if codes else None
+
+
+def active_mode_codes(read_attr) -> tuple[str, ...]:
+    """EVERY mode flag the shadow reports as running, in `REF_FLAG_TO_PARAM` order.
+
+    The flags are independent -- `stopProgram` declares four of them and the app's own
+    reset writes all four -- so "which mode owns this setpoint" and "which modes have to
+    be cleared before the setpoint can be written" are not the same question. The first
+    one names a mode for a message and is happy with the first hit; the second decides
+    what a write must contain, and answering it with one flag would leave the others
+    running while telling the user they were switched off.
+    """
+    return tuple(
+        code
+        for code, param in REF_FLAG_TO_PARAM.items()
+        if str(read_attr(param)) == "1"
+    )
 
 
 def has_replacement_controls(appliance) -> bool:
@@ -496,9 +547,10 @@ def has_replacement_controls(appliance) -> bool:
 
     Why those two and not the download buttons. The flag switches and the drawer select
     are what makes the single select WRONG, not merely redundant: `ref_program` is
-    mutually exclusive and its `off` sends a four-flag `stopProgram`, so with the
-    switches present two controls write the same registers with opposite meanings of
-    "off", and with the drawer select present two controls own `tempSelZ3`. The preset
+    mutually exclusive while the flags are four independent booleans, so with the
+    switches present two controls model the same registers incompatibly, and with the
+    drawer select present two controls own `tempSelZ3`. (Its `off` used to compound
+    this by clearing all four flags at once; it now writes only its own.) The preset
     buttons add no such conflict -- they send and forget -- so on the one shape where
     they are the ONLY thing we can build (an enum of `iot_*` and nothing else) the
     select survives and keeps being the appliance's only stop control and its only
@@ -511,4 +563,40 @@ def has_replacement_controls(appliance) -> bool:
     function exists to prevent -- an appliance whose select steps aside for a replacement
     that the caller then refuses to build.
     """
-    return bool(flag_codes(appliance)) or bool(my_zone_codes(appliance))
+    return bool(flag_codes(appliance) or my_zone_codes(appliance)) and not residual_codes(
+        appliance
+    )
+
+
+def residual_codes(appliance) -> list[str]:
+    """Offered programs that NO replacement control would carry, in enum order.
+
+    The safety net over an irreversible act. `has_replacement_controls` suppressing the
+    select also makes `__init__.py` DELETE it from the entity registry, and a boolean OR
+    cannot know what the replacements leave behind: each half answers only for its own
+    platform, so a code that is neither a flag, nor a drawer mode, nor a nameable
+    download preset simply stops having a control the moment the select goes.
+
+    On every catalogue this repository holds -- rmxs's HFW7720EWMP, roberglezz's
+    HCW58F18EWMP, HDPW5620CNPK and the APK's HTW7720ENMP once `_declares_my_zone` sees
+    its `tempSelZ3` enum -- this list is EMPTY, so it changes nothing that ships today.
+    It exists so that the next catalogue shape cannot delete a user's only control
+    silently: an entity kept is recoverable, an entity purged from the registry is not.
+    """
+    covered = (
+        set(flag_codes(appliance))
+        | set(my_zone_codes(appliance))
+        | set(download_codes(appliance))
+    )
+    # Catalogue programs ONLY. `offered_codes` is the raw live enum, and the engine
+    # injects the user's saved favourites into it under the name the USER typed
+    # (`command_loader._add_favourites`), so counting those would make this list
+    # non-empty on any fridge that ever saved one -- suppressing the suppression
+    # forever, and for a reason that has nothing to do with a missing control.
+    # `program_categories` is the same enum with favourites already dropped.
+    catalogue = program_categories(appliance)
+    return [
+        code
+        for code in offered_codes(appliance)
+        if code in catalogue and code not in covered
+    ]

@@ -376,27 +376,65 @@ class RefProgramSelectBehaviourTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(commands["startProgram"].parameters["program"].value)
         self.assertEqual(1, coordinator.refreshes)
 
-    async def test_off_sends_stopprogram_with_no_overrides(self) -> None:
-        # Production must call async_send_command for stopProgram with an EMPTY params dict:
-        # the device's own schema-fixed "0" flags do the global reset, and we must NOT
-        # inject overrides (which would hit the "missing param" raise). Spying the real call
-        # makes this mutation-proof against a regression that passed e.g. {"onOffStatus":"0"}.
-        from custom_components.addhon import select as select_mod
+    async def test_off_clears_the_flags_of_the_programs_it_offers(self) -> None:
+        """`off` names its own flags instead of sending the whole command.
 
-        calls: list = []
+        It used to go through the full-command sender with an empty override dict, which
+        serialises every parameter `stopProgram` declares. On this fixture the two are
+        the same three flags -- the select offers all three modes -- so the appliance
+        sees no change. What changes is that they are now NAMED, which is what the next
+        test can then hold this control to.
+        """
+        commands = _ref_commands()
+        entity, coordinator = self._entity(commands)
 
-        async def _spy(hass, client, appliance, command_name, params, **kwargs):
-            calls.append((command_name, dict(params)))
+        await entity.async_select_option("off")
 
-        original = select_mod.async_send_command
-        select_mod.async_send_command = _spy
-        try:
-            entity, _ = self._entity(_ref_commands())
-            await entity.async_select_option("off")
-        finally:
-            select_mod.async_send_command = original
+        patches = entity._hon_client.patches
+        self.assertEqual(1, len(patches))
+        self.assertEqual("stopProgram", patches[0].command_name)
+        self.assertEqual(
+            {"quickModeZ1": "0", "quickModeZ2": "0", "holidayMode": "0"},
+            dict(patches[0].values),
+        )
+        # `intelligenceMode` is not in this fixture's stopProgram: a flag the appliance
+        # does not declare must not be named, or the dispatcher rejects the whole patch.
+        self.assertNotIn("intelligenceMode", patches[0].values)
+        self.assertEqual(1, coordinator.refreshes)
 
-        self.assertEqual([("stopProgram", {})], calls)
+    async def test_off_leaves_alone_the_modes_this_select_does_not_offer(self) -> None:
+        """The residual select and the mode switches share `stopProgram`.
+
+        This is the shape #93's partial supersession creates: the enum carries a flag
+        mode that became a SWITCH and one program that did not, so the select survives
+        listing only the leftover. Sending the whole `stopProgram` for its `off` would
+        serialise `quickModeZ1` to "0" and switch Super Cool off -- a mode this select
+        does not offer, does not display, and whose switch the user set deliberately.
+        The official app never sends that reset either: its own commandHistory
+        (apk/dump/ref_10136/attributes.json) carries one parameter, the mode being
+        stopped.
+        """
+        commands = _rmxs_commands()
+        # Only Super Cool is clearable, so it is the one mode that becomes a switch.
+        commands["stopProgram"] = RecordingCommand(
+            {"quickModeZ1": Param("0", values=["0"])}
+        )
+        from custom_components.addhon.select import HonRefProgramSelect
+
+        coordinator = FakeCoordinator(_fridge(commands, {"tempSelZ3": "2"}))
+        entity = HonRefProgramSelect(coordinator, "ref-1", FakeClient())
+        entity.hass = FakeHass()
+        # The premise: the switch took `super_cool`, the drawer took its programs, the
+        # buttons took the presets, and this select is left with the leftovers.
+        self.assertNotIn("super_cool", entity._program_codes)
+        self.assertTrue(entity._program_codes, "the residual is not empty")
+
+        await entity.async_select_option("off")
+
+        patches = entity._hon_client.patches
+        self.assertEqual(1, len(patches))
+        self.assertEqual("stopProgram", patches[0].command_name)
+        self.assertEqual({}, dict(patches[0].values), "no foreign flag is written")
 
     async def test_select_program_is_swap_aware(self) -> None:
         # Setting program swaps the active startProgram command; we must send the NEW one.
@@ -1334,22 +1372,40 @@ class RefProgramClassificationTest(unittest.IsolatedAsyncioTestCase):
         entity = next(e for e in added if e._attr_unique_id == "ref-1_my_zone_mode")
         self.assertEqual("quick_cool", entity.current_option)
 
-    async def test_the_drawer_alone_supersedes_the_single_select(self) -> None:
-        """`has_replacement_controls`' drawer half, which nothing measured.
+    async def test_the_drawer_takes_tempselz3_and_leaves_the_rest_to_the_select(
+        self,
+    ) -> None:
+        """`has_replacement_controls`' drawer half, and what it must NOT take with it.
 
-        Drop `or bool(my_zone_codes(...))` and every supersession fixture still passed,
-        because they all have clearable flags. A fridge whose `stopProgram` can clear
-        nothing but whose catalogue carries the drawer programs would then keep
-        `select.ref_program` AND get `select.my_zone_mode`: two controls owning
-        `tempSelZ3`, which is the conflict the predicate exists to prevent.
+        A fridge whose `stopProgram` can clear nothing gets no flag switches, so
+        `auto_set`/`super_cool`/`super_freeze`/`holiday` are offered with no per-mode
+        control of their own. The drawer select is still built and still owns
+        `tempSelZ3`, so the conflict this case was written for -- two controls on that
+        one register -- must stay impossible; but suppressing `select.ref_program`
+        outright would strand the four flag programs, and its registry row is deleted
+        irreversibly. Both at once: the select survives carrying EXACTLY the residual,
+        and none of the drawer codes.
         """
         commands = _rmxs_commands()
         commands["stopProgram"] = RecordingCommand(
             {"onOffStatus": Param("0", values=["0"])}
         )
-        added = await self._setup(_fridge(commands))
+        appliance = _fridge(commands)
+        added = await self._setup(appliance)
         keys = {e._attr_translation_key for e in added}
-        self.assertEqual({"my_zone_mode"}, keys)
+        self.assertEqual({"my_zone_mode", "ref_program"}, keys)
+
+        from custom_components.addhon.ref_programs import my_zone_codes, residual_codes
+
+        program = next(e for e in added if e._attr_translation_key == "ref_program")
+        # The entity's OWN appliance: the platform resolves it from the coordinator
+        # snapshot, and recomputing the predicates on the fixture object would measure a
+        # different (empty) schema and pass for the wrong reason.
+        live = program._appliance
+        offered = set(program._attr_options) - {"off"}
+        self.assertEqual(set(residual_codes(live)), offered)
+        self.assertEqual({"auto_set", "super_cool", "super_freeze", "holiday"}, offered)
+        self.assertFalse(offered & set(my_zone_codes(live)))
 
     async def test_a_model_that_declares_no_drawer_keeps_its_single_select(self) -> None:
         """THE DEFECT THE REFUTERS FOUND, pinned so it cannot come back.
@@ -1373,6 +1429,57 @@ class RefProgramClassificationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             ["ref_program"], [e._attr_translation_key for e in added]
         )
+
+    async def test_a_declared_tempselz3_enum_is_the_drawer_even_without_zones(
+        self,
+    ) -> None:
+        """The app's own source for the drawer list, used as the second positive signal.
+
+        `myZoneModesByTemps` (decomp.txt:2841793-2841830) never looks at `startProgram`:
+        for VT_ROOM_1 it reads `setParameters.parameters.tempSelZ3` and takes its
+        `enumValues`. So a declared `tempSelZ3` ENUM is the catalogue itself saying the
+        register is the drawer's mode selector -- evidence of the same kind as `zones`,
+        and not an inference from its silence. `decomp.txt:3495902` carries exactly this
+        pair: `vtZone` declared, `zones` absent, `setParameters.tempSelZ3` enum
+        ["0","2","5"], and the three drawer categories pinning those very values. Before
+        this signal that fridge got the four switches, no drawer select, and its drawer
+        readable only as a bare temperature.
+        """
+        commands = _rmxs_commands()
+        commands["settings"] = RecordingCommand({
+            "tempSelZ1": Param("3", values=[str(v) for v in range(1, 10)]),
+            "tempSelZ2": Param("-18", values=[str(v) for v in range(-24, -13)]),
+            # Param() carries no typology; the drawer signal reads it, so use a
+            # double that has one.
+            "tempSelZ3": types.SimpleNamespace(
+                value="2", values=["0", "2", "5"], typology="enum"
+            ),
+        })
+        appliance = _fridge(commands, zones=None)
+        added = await self._setup(appliance)
+        keys = {e._attr_translation_key for e in added}
+
+        self.assertIn("my_zone_mode", keys)
+        # Everything is carried now, so the single select steps aside for real.
+        self.assertNotIn("ref_program", keys)
+
+    async def test_a_tempselz3_RANGE_is_a_temperature_and_not_the_drawer(self) -> None:
+        """The other half of the signal, and the reason it is an ENUM test.
+
+        HDPW5620CNPK declares `tempSelZ3` as a RANGE: a real temperature the drawer
+        scales over, already served by `number.target_temp_zone3`. A range must keep
+        answering no, so the number and the drawer select go on excluding each other
+        from the data alone.
+        """
+        commands = _rmxs_commands()
+        commands["settings"] = RecordingCommand({
+            "tempSelZ1": Param("3", values=[str(v) for v in range(1, 10)]),
+            "tempSelZ3": types.SimpleNamespace(
+                value="2", values=["0", "1", "2", "3", "4", "5"], typology="range"
+            ),
+        })
+        added = await self._setup(_fridge(commands, zones=None))
+        self.assertNotIn("my_zone_mode", {e._attr_translation_key for e in added})
 
 
 if __name__ == "__main__":

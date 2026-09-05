@@ -589,6 +589,7 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 "Removed duplicate per-zone entity of an induction hob: id=%s",
                 redact_id(reg_entry.unique_id),
             )
+    _reenable_unreplaced_ref_readings(hass, registry, entry, coord_data)
     if removed_ref_programs:
         _raise_ref_program_repair(hass, entry)
     _LOGGER.debug(
@@ -598,6 +599,115 @@ def _remove_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
         removed,
     )
     _remove_zone_clone_devices(hass, entry, coord_data, hob_ids)
+
+
+# The fridge family, restated here for the same reason every platform restates it:
+# the readings this reconciles exist only on these types.
+_REF_FAMILY = (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE)
+
+
+def _reenable_unreplaced_ref_readings(
+    hass: HomeAssistant, registry, entry: ConfigEntry, coord_data
+) -> None:
+    """Give back a fridge reading whose replacing CONTROL no longer exists.
+
+    `binary_sensor` and `sensor` hide a reading by setting
+    `_attr_entity_registry_enabled_default = False` when this appliance also got a
+    control for the same register. Home Assistant honours that at FIRST registration
+    only -- which is what keeps it from ever disabling an entity a user already has, and
+    is also the whole defect: the flag can only travel one way.
+
+    The two halves are not decided together. The hiding is written into the registry once
+    and stays; the control is re-decided from the live schema on EVERY setup. An
+    appliance whose catalogue is missing on a later run -- which is precisely what issue
+    #94 is about, and which the degraded path added for ADDHON-240 can now produce on
+    purpose -- builds no mode switches, so `hidden` computes False, and nothing acts on
+    it. The user ends with neither the switch nor the reading, no log line saying so
+    (the entity exists, merely disabled), and no way back short of enabling each row by
+    hand.
+
+    So reconcile instead of relying on first-registration semantics: for every flag with
+    no switch this run, re-enable the reading we ourselves disabled. Scoped hard --
+    `disabled_by` must be INTEGRATION, so a row the USER disabled is left alone.
+    """
+    if not isinstance(coord_data, dict) or not coord_data:
+        return
+    from homeassistant.helpers import entity_registry as er
+
+    from .binary_sensor import BINARY_SENSORS
+    from .ref_programs import REF_FLAG_TO_PARAM, flag_codes, my_zone_codes
+
+    restored = 0
+    for appliance_id, device in coord_data.items():
+        app_type = device.get("type") if isinstance(device, dict) else None
+        if app_type not in _REF_FAMILY:
+            continue
+        appliance = device.get("appliance")
+        try:
+            # Reading -> is it still replaced? Same predicates the two platforms gate
+            # on, so the answer here cannot drift from the answer that hid the row.
+            #
+            # The unique_id comes from the READING's own row, never from the flag code.
+            # Those are two different vocabularies and always have been: the protocol
+            # flags are `super_cool`, `super_freeze` and `holiday`, the binary sensors
+            # carrying them are `quick_cool`, `quick_freeze` and `holiday_mode`, and
+            # only `auto_set` is spelled the same on both sides. Naming the entity from
+            # the flag therefore found one row in four and skipped the other three in
+            # silence -- the failure this whole function exists to prevent. Resolving it
+            # through the description table instead, keyed on the register both halves
+            # already agree on (`attr_key`, the very field the hiding side matches on),
+            # leaves no second spelling to keep in step by hand.
+            attr_to_key = {
+                description.attr_key: description.key
+                for description in BINARY_SENSORS.get(app_type, ())
+            }
+            replacing = flag_codes(appliance)
+            unique_ids: dict[str, tuple[str, bool]] = {}
+            for code, param in REF_FLAG_TO_PARAM.items():
+                reading_key = attr_to_key.get(param)
+                if reading_key is None:
+                    continue
+                unique_ids[f"{appliance_id}_{reading_key}"] = (
+                    "binary_sensor",
+                    code in replacing,
+                )
+            unique_ids[f"{appliance_id}_my_zone_mode"] = (
+                "sensor",
+                bool(my_zone_codes(appliance)),
+            )
+        except Exception:  # noqa: BLE001 - a degraded schema must not cost a setup
+            _LOGGER.debug(
+                "Setup debug: reading reconciliation skipped for id=%s",
+                redact_id(appliance_id),
+                exc_info=True,
+            )
+            continue
+        for unique_id, (domain, still_replaced) in unique_ids.items():
+            if still_replaced:
+                continue
+            lookup = getattr(registry, "async_get_entity_id", None)
+            entity_id = lookup(domain, DOMAIN, unique_id) if callable(lookup) else None
+            if entity_id is None:
+                continue
+            row = getattr(registry, "entities", {}).get(entity_id)
+            disabler = getattr(er, "RegistryEntryDisabler", None)
+            integration = getattr(disabler, "INTEGRATION", None)
+            # Only a row WE disabled. A user who turned the reading off keeps it off.
+            if row is None or getattr(row, "disabled_by", None) is not integration:
+                continue
+            registry.async_update_entity(entity_id, disabled_by=None)
+            restored += 1
+            _LOGGER.info(
+                "Restored a fridge reading whose replacing control no longer exists: "
+                "id=%s",
+                redact_id(unique_id),
+            )
+    if restored:
+        _LOGGER.debug(
+            "Setup debug: re-enabled %d fridge reading(s) for entry=%s",
+            restored,
+            entry.entry_id,
+        )
 
 
 def _raise_ref_program_repair(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -824,13 +934,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         migrated["email"] = email
         hass.config_entries.async_update_entry(entry, data=migrated)
 
-    hon_client = HonClient(email=email, password=password, refresh_token=refresh_token)
+    from .command_catalog_store import CommandCatalogStore
+
+    catalog_store = CommandCatalogStore(hass, entry.entry_id)
+    command_catalog_cache = await catalog_store.async_load()
+    hon_client = HonClient(
+        email=email,
+        password=password,
+        refresh_token=refresh_token,
+        command_catalog_cache=command_catalog_cache,
+        language=getattr(hass.config, "language", None),
+    )
 
     # Initial client setup in executor (does not block HA's event loop)
     try:
         _LOGGER.debug("Setup debug: running HonClient.setup_sync in executor")
         await hass.async_add_executor_job(hon_client.setup_sync)
         _LOGGER.debug("Setup debug: HonClient.setup_sync completed")
+        await catalog_store.async_sync(hon_client)
     except asyncio.CancelledError:
         await _async_close_client(hon_client)
         raise
@@ -851,6 +972,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             _LOGGER.debug("Coordinator debug: starting hOn data update")
             data = await hon_client.async_get_appliances_data()
+            await catalog_store.async_sync(hon_client)
             # A runtime token refresh / background re-auth may have rotated the refresh
             # token during this fetch; persist it (only on a real change) so it survives a
             # restart -- not just the initial setup.
@@ -974,6 +1096,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN][entry.entry_id] = {
             "coordinator": coordinator,
             "client": hon_client,
+            "command_catalog_store": catalog_store,
             "integration_version": integration_version,
             # Baseline for _async_options_updated: the options already in effect at
             # the start of setup, so a later data-only entry write (token rotation) is
@@ -1060,6 +1183,14 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     been through async_unload_entry by the time Home Assistant removes it.
     """
     removed = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    catalog_store = (
+        removed.get("command_catalog_store") if isinstance(removed, dict) else None
+    )
+    if catalog_store is None:
+        from .command_catalog_store import CommandCatalogStore
+
+        catalog_store = CommandCatalogStore(hass, entry.entry_id)
+    await catalog_store.async_remove()
     _LOGGER.debug(
         "Remove debug: entry=%s dropped_record=%s",
         entry.entry_id,

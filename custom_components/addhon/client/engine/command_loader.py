@@ -22,22 +22,58 @@ already-clean values (the common case) the behavior is unchanged.
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import suppress
-from copy import copy
+from copy import copy, deepcopy
 from typing import Any, Optional
 
+from ...error_codes import APPLIANCE_COMMANDS_UNAVAILABLE, classify
+from ..catalog_repository import CachedCommandCatalog, CommandCatalogRepository
+from ..transport.command_catalog import (
+    CommandCatalogFetch,
+    CommandCatalogRequest,
+    CommandCatalogResponseError,
+    legacy_command_catalog_fetch,
+)
+from .command_hydration import (
+    CATALOG_REQUIRED_TYPES,
+    CommandCatalogUnavailable,
+    CommandHydration,
+)
 from .commands import HonCommand
 from .exceptions import NoAuthenticationException
 from .parameter.fixed import HonParameterFixed
 from .parameter.program import HonParameterProgram
 
+_LOGGER = logging.getLogger(__name__)
+
+
+class _SemanticCatalogError(Exception):
+    """Internal marker carrying only bounded parser counts."""
+
+    def __init__(self, raw_entries: int, parsed_commands: int) -> None:
+        self.raw_entries = raw_entries
+        self.parsed_commands = parsed_commands
+        super().__init__("Command catalog is not semantically usable")
+
 
 class HonCommandLoader:
     """Loads and parses the hOn command data."""
 
-    def __init__(self, api: Any, appliance: Any) -> None:
+    def __init__(
+        self,
+        api: Any,
+        appliance: Any,
+        catalog_repository: CommandCatalogRepository | None = None,
+    ) -> None:
         self._api = api
         self._appliance = appliance
+        self._repository = (
+            catalog_repository
+            if catalog_repository is not None
+            else CommandCatalogRepository(None, "en")
+        )
+        self._catalog_request: CommandCatalogRequest | None = None
         self._api_commands: dict[str, Any] = {}
         self._favourites: list[dict[str, Any]] = []
         self._command_history: list[dict[str, Any]] = []
@@ -67,15 +103,136 @@ class HonCommandLoader:
     def additional_data(self) -> dict[str, Any]:
         return self._additional_data
 
-    async def load_commands(self) -> None:
-        await self._load_data()
-        self._appliance_data = self._api_commands.pop("applianceModel", {})
-        self._get_commands()
-        self._add_favourites()
-        self._recover_last_command_states()
+    async def load_commands(self) -> CommandHydration:
+        """Build one complete live or cached candidate without touching the appliance."""
+        catalog, raw_favourites, raw_history = await self._load_data()
+        request = self._catalog_request
+        if request is None:  # pragma: no cover - _fetch_catalog always initializes it
+            raise RuntimeError("Command catalog request was not initialized")
 
-    async def _load_commands(self) -> None:
-        self._api_commands = await self._api.load_commands(self._appliance)
+        favourites, favourites_outcome = self._enrichment(
+            raw_favourites, "favourites"
+        )
+        history, history_outcome = self._enrichment(raw_history, "history")
+
+        if isinstance(catalog, CommandCatalogFetch):
+            try:
+                hydration = self._hydrate(
+                    catalog.payload,
+                    source="live",
+                    live_outcome=catalog.probe.outcome,
+                    favourites=(favourites, favourites_outcome),
+                    history=(history, history_outcome),
+                )
+            except _SemanticCatalogError as error:
+                return self._fallback_after_catalog_failure(
+                    request,
+                    probe=catalog.probe,
+                    failure="semantic",
+                    live_outcome=catalog.probe.outcome,
+                    live_failure=error,
+                    raw_entries=error.raw_entries,
+                    parsed_commands=error.parsed_commands,
+                    favourites=(favourites, favourites_outcome),
+                    history=(history, history_outcome),
+                )
+
+            if hydration.parsed_command_count == 0:
+                self._record(
+                    request,
+                    hydration,
+                    failure="semantic",
+                    code=None,
+                    probe=catalog.probe,
+                )
+                return hydration
+
+            try:
+                self._repository.replace(request, catalog.payload)
+            except ValueError as error:
+                # The cache is an OPTIMIZATION and its failure must never cost a live
+                # hydration that has ALREADY succeeded. `replace` rejects an incomplete
+                # identity (an empty applianceModelId is a shape this repo has seen --
+                # engine/appliance.py documents it) and any non-JSON value such as a
+                # non-finite float. Letting that escape would be worse than not caching:
+                # ValueError is in session._APPLIANCE_BUILD_ERRORS, so the appliance
+                # would be recorded malformed and NON-retryable, never requeued by
+                # needs_rehydration, and would lose every command entity permanently --
+                # reproducing identically on every reload.
+                _LOGGER.debug(
+                    "Command catalog cache write was rejected (%s); "
+                    "serving the live catalog and leaving the cache untouched",
+                    type(error).__name__,
+                )
+            self._record(request, hydration, failure=None, code=None, probe=catalog.probe)
+            return hydration
+
+        if isinstance(catalog, CommandCatalogResponseError):
+            return self._fallback_after_catalog_failure(
+                request,
+                probe=catalog.probe,
+                failure="structural",
+                live_outcome=catalog.probe.outcome,
+                live_failure=catalog,
+                raw_entries=catalog.probe.payload_entries,
+                parsed_commands=0,
+                favourites=(favourites, favourites_outcome),
+                history=(history, history_outcome),
+            )
+
+        if isinstance(catalog, BaseException):
+            code = classify(catalog, phase="load_appliance/commands").label
+            cached, hydration = self._cached_hydration(
+                request,
+                live_outcome=None,
+                favourites=(favourites, favourites_outcome),
+                history=(history, history_outcome),
+            )
+            if hydration is not None:
+                self._record(
+                    request,
+                    hydration,
+                    failure="transport",
+                    code=code,
+                    cache=cached,
+                )
+                return hydration
+            self._repository.record(
+                request,
+                source="none",
+                failure="transport",
+                live_outcome=None,
+                code=code,
+                raw_entries=0,
+                parsed_commands=0,
+                favourites=favourites_outcome,
+                history=history_outcome,
+                cache=cached,
+            )
+            raise catalog
+
+        invalid = TypeError("Command catalog fetch returned an invalid result")
+        return self._fallback_after_catalog_failure(
+            request,
+            failure="structural",
+            live_outcome="invalid_payload",
+            live_failure=invalid,
+            raw_entries=0,
+            parsed_commands=0,
+            favourites=(favourites, favourites_outcome),
+            history=(history, history_outcome),
+        )
+
+    async def _fetch_catalog(self) -> CommandCatalogFetch:
+        request = CommandCatalogRequest.from_appliance(
+            self._appliance, self._repository.language
+        )
+        self._catalog_request = request
+        fetcher = getattr(self._api, "fetch_command_catalog", None)
+        if callable(fetcher):
+            return await fetcher(request)
+        payload = await self._api.load_commands(self._appliance)
+        return legacy_command_catalog_fetch(payload, request)
 
     async def _load_favourites(self) -> None:
         self._favourites = await self._api.load_favourites(self._appliance)
@@ -83,11 +240,241 @@ class HonCommandLoader:
     async def _load_command_history(self) -> None:
         self._command_history = await self._api.load_command_history(self._appliance)
 
-    async def _load_data(self) -> None:
-        await asyncio.gather(
-            self._load_commands(),
+    async def _load_data(self) -> tuple[Any, Any, Any]:
+        results = await asyncio.gather(
+            self._fetch_catalog(),
             self._load_favourites(),
             self._load_command_history(),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, BaseException) and classify(result).requires_reauth:
+                raise result
+        favourites = self._favourites if results[1] is None else results[1]
+        history = self._command_history if results[2] is None else results[2]
+        return results[0], favourites, history
+
+    @staticmethod
+    def _enrichment(result: Any, name: str) -> tuple[list[dict[str, Any]], str]:
+        if isinstance(result, BaseException):
+            _LOGGER.debug(
+                "Command catalog %s enrichment failed (%s)",
+                name,
+                type(result).__name__,
+            )
+            return [], "raised"
+        if not isinstance(result, list):
+            return [], "invalid"
+        if not result:
+            return [], "empty"
+        if not all(isinstance(item, dict) for item in result):
+            return [], "invalid"
+        try:
+            return deepcopy(result), "ok"
+        except Exception as error:  # noqa: BLE001 - enrichment remains optional
+            _LOGGER.debug(
+                "Command catalog %s enrichment was invalid (%s)",
+                name,
+                type(error).__name__,
+            )
+            return [], "invalid"
+
+    def _hydrate(
+        self,
+        payload: dict[str, Any],
+        *,
+        source: str,
+        live_outcome: str | None,
+        favourites: tuple[list[dict[str, Any]], str],
+        history: tuple[list[dict[str, Any]], str],
+    ) -> CommandHydration:
+        raw_entries = len(payload) if isinstance(payload, dict) else 0
+        self._api_commands = {}
+        self._favourites = []
+        self._command_history = []
+        self._commands = {}
+        self._appliance_data = {}
+        self._additional_data = {}
+        try:
+            candidate = deepcopy(payload)
+            if not isinstance(candidate, dict):
+                raise TypeError("Command catalog payload is not a mapping")
+            appliance_model = candidate.pop("applianceModel", {})
+            model = appliance_model if isinstance(appliance_model, dict) else {}
+            self._parse_candidate(candidate, model)
+        except Exception as error:
+            raise _SemanticCatalogError(raw_entries, len(self._commands)) from error
+
+        parsed_commands = len(self._commands)
+        # BOTH halves are required, and the official app is the reason.
+        # `storeModelAndCommandsInDatabase` (decomp.txt:1786932-1786991) dereferences
+        # `payload.applianceModel.name/.id/.code/.applianceTypeId/.applianceTypeName/
+        # .brand/.connectivity/.attributes` with NO guard, while `options` and
+        # `settings` right beside it get explicit `if (!x)` fallbacks. The response
+        # path feeding it (decomp.txt:3629724-3629735) hands `response.data.payload`
+        # straight to that function without checking `resultCode` or the model. So the
+        # app treats `applianceModel` as MANDATORY in a usable catalog and would throw
+        # on a payload that lacks it: a catalog without it is not a thinner catalog,
+        # it is not a catalog. For a fridge it is also actively harmful -- the model
+        # attributes are where `zones` lives, and `ref_programs.model_zones` denies on
+        # its silence, so a modelless catalog mis-gates every zone-dependent control.
+        #
+        # The probe's `has_appliance_model` is a payload-shape descriptor next to
+        # `has_settings`/`has_start_program`, not evidence that a modelless catalog is
+        # a shape the vendor ships; reading it as such was the mistake that briefly
+        # relaxed this gate. Falling back is safe now: an unusable catalog degrades the
+        # appliance instead of failing the entry (client/session.py, ADDHON-240).
+        if self.appliance.appliance_type in CATALOG_REQUIRED_TYPES and (
+            not model or parsed_commands == 0
+        ):
+            raise _SemanticCatalogError(raw_entries, parsed_commands)
+
+        favourite_data, favourite_outcome = favourites
+        if favourite_data:
+            self._favourites = deepcopy(favourite_data)
+            try:
+                self._add_favourites()
+            except Exception as error:  # noqa: BLE001 - enrichment is optional
+                _LOGGER.debug(
+                    "Command catalog favourites enrichment was invalid (%s)",
+                    type(error).__name__,
+                )
+                favourite_outcome = "invalid"
+                self._parse_candidate(candidate, model)
+
+        history_data, history_outcome = history
+        if history_data:
+            self._command_history = deepcopy(history_data)
+            try:
+                self._recover_last_command_states()
+            except Exception as error:  # noqa: BLE001 - enrichment is optional
+                _LOGGER.debug(
+                    "Command catalog history enrichment was invalid (%s)",
+                    type(error).__name__,
+                )
+                history_outcome = "invalid"
+                self._parse_candidate(candidate, model)
+                if favourite_data and favourite_outcome == "ok":
+                    self._favourites = deepcopy(favourite_data)
+                    self._add_favourites()
+
+        return CommandHydration(
+            commands=self._commands,
+            appliance_model=self._appliance_data,
+            additional_data=self._additional_data,
+            source="cache" if source == "cache" else "live",
+            live_outcome=live_outcome,
+            raw_entry_count=raw_entries,
+            parsed_command_count=parsed_commands,
+            favourites_outcome=favourite_outcome,
+            history_outcome=history_outcome,
+        )
+
+    def _parse_candidate(
+        self, commands: dict[str, Any], appliance_model: dict[str, Any]
+    ) -> None:
+        self._api_commands = deepcopy(commands)
+        self._favourites = []
+        self._command_history = []
+        self._commands = {}
+        self._appliance_data = deepcopy(appliance_model)
+        self._additional_data = {}
+        self._get_commands()
+
+    def _cached_hydration(
+        self,
+        request: CommandCatalogRequest,
+        *,
+        live_outcome: str | None,
+        favourites: tuple[list[dict[str, Any]], str],
+        history: tuple[list[dict[str, Any]], str],
+    ) -> tuple[CachedCommandCatalog | None, CommandHydration | None]:
+        cached = self._repository.lookup(request)
+        if cached is None:
+            return None, None
+        try:
+            hydration = self._hydrate(
+                cached.payload,
+                source="cache",
+                live_outcome=live_outcome,
+                favourites=favourites,
+                history=history,
+            )
+        except _SemanticCatalogError:
+            return cached, None
+        return cached, hydration
+
+    def _fallback_after_catalog_failure(
+        self,
+        request: CommandCatalogRequest,
+        *,
+        failure: str,
+        live_outcome: str,
+        live_failure: BaseException,
+        raw_entries: int,
+        parsed_commands: int,
+        favourites: tuple[list[dict[str, Any]], str],
+        history: tuple[list[dict[str, Any]], str],
+        probe: Any = None,
+    ) -> CommandHydration:
+        cached, hydration = self._cached_hydration(
+            request,
+            live_outcome=live_outcome,
+            favourites=favourites,
+            history=history,
+        )
+        code = APPLIANCE_COMMANDS_UNAVAILABLE.label
+        if hydration is not None:
+            self._record(
+                request,
+                hydration,
+                failure=failure,
+                code=code,
+                cache=cached,
+                probe=probe,
+            )
+            return hydration
+        self._repository.record(
+            request,
+            source="none",
+            failure=failure,
+            live_outcome=live_outcome,
+            code=code,
+            raw_entries=raw_entries,
+            parsed_commands=parsed_commands,
+            favourites=favourites[1],
+            history=history[1],
+            cache=cached,
+            status=getattr(probe, "status", None),
+            sections=probe.sections() if probe is not None else None,
+        )
+        raise CommandCatalogUnavailable() from live_failure
+
+    def _record(
+        self,
+        request: CommandCatalogRequest,
+        hydration: CommandHydration,
+        *,
+        failure: str | None,
+        code: str | None,
+        cache: CachedCommandCatalog | None = None,
+        probe: Any = None,
+    ) -> None:
+        self._repository.record(
+            request,
+            source=hydration.source,
+            failure=failure,
+            live_outcome=hydration.live_outcome,
+            code=code,
+            raw_entries=hydration.raw_entry_count,
+            parsed_commands=hydration.parsed_command_count,
+            favourites=hydration.favourites_outcome,
+            history=hydration.history_outcome,
+            cache=cache,
+            status=getattr(probe, "status", None),
+            sections=probe.sections() if probe is not None else None,
         )
 
     @staticmethod
@@ -194,7 +581,8 @@ class HonCommandLoader:
             if (last_index := self._get_last_command_index(name)) is None:
                 continue
             last_command = self._command_history[last_index]
-            parameters = last_command.get("command", {}).get("parameters", {})
+            raw_parameters = last_command.get("command", {}).get("parameters", {})
+            parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
             command = self._set_last_category(command, name, parameters)
             for key, data in command.settings.items():
                 if parameters.get(key) is None:

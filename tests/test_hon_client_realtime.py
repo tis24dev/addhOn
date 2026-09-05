@@ -54,8 +54,12 @@ def _install_stubs() -> None:
 
 _install_stubs()
 
-from custom_components.addhon.hon_client import HonClient  # noqa: E402
+from custom_components.addhon.client.catalog_repository import (  # noqa: E402
+    CACHE_SCHEMA_VERSION,
+    CommandCatalogRepository,
+)
 from custom_components.addhon.error_codes import HonCodedError  # noqa: E402
+from custom_components.addhon.hon_client import HonClient  # noqa: E402
 
 
 class FakeSession:
@@ -92,6 +96,83 @@ def _client(appliances=None):
     c = HonClient(email="e@x", password="p")
     c._hon_instance = FakeSession(appliances or [])
     return c
+
+
+class CommandCatalogRepositoryOwnershipTest(unittest.TestCase):
+    def test_session_replacement_reuses_the_same_repository(self) -> None:
+        import custom_components.addhon.client.factory as factory
+
+        sessions = iter((FakeSession([]), FakeSession([])))
+        seen: list[CommandCatalogRepository] = []
+        original = factory.create_session
+
+        def create_session(email, password, **kwargs):
+            seen.append(kwargs["catalog_repository"])
+            return next(sessions)
+
+        factory.create_session = create_session
+        self.addCleanup(setattr, factory, "create_session", original)
+        client = HonClient(
+            email="e@x",
+            password="p",
+            command_catalog_cache={"version": 1, "records": {}},
+            language="pt-BR",
+        )
+        client._start_hon_loop = lambda: None  # type: ignore[assignment]
+        client._run_on_hon_loop = (  # type: ignore[assignment]
+            lambda coro, timeout=None: coro.close()
+        )
+
+        client.setup_sync()
+        client.setup_sync()
+
+        self.assertEqual(2, len(seen))
+        self.assertIs(seen[0], seen[1])
+        self.assertIs(client._command_catalog_repository, seen[0])
+        self.assertEqual("pt", seen[0].language)
+
+    def test_cache_readers_execute_on_the_dedicated_hon_thread(self) -> None:
+        client = HonClient(email="e@x", password="p")
+        repository = client._command_catalog_repository
+        caller_thread = threading.current_thread()
+        calls: list[threading.Thread] = []
+        hon_threads: list[threading.Thread] = []
+        snapshot = repository.snapshot
+        census = repository.census
+
+        def record_snapshot(since=None):
+            calls.append(threading.current_thread())
+            return snapshot()
+
+        def record_census():
+            calls.append(threading.current_thread())
+            return census()
+
+        repository.snapshot = record_snapshot  # type: ignore[method-assign]
+        repository.census = record_census  # type: ignore[method-assign]
+
+        def run_on_hon_loop(coro, timeout=None):
+            result: list[object] = []
+
+            def run() -> None:
+                result.append(asyncio.run(coro))
+
+            hon_thread = threading.Thread(target=run, name="catalog-owner")
+            client._hon_thread = hon_thread
+            hon_threads.append(hon_thread)
+            hon_thread.start()
+            hon_thread.join()
+            return result[0]
+
+        client._run_on_hon_loop = run_on_hon_loop  # type: ignore[assignment]
+        cache_snapshot = client.command_catalog_cache_snapshot()
+        cache_census = client.command_catalog_census()
+
+        self.assertEqual(CACHE_SCHEMA_VERSION, cache_snapshot.document["version"])
+        self.assertEqual([], cache_census)
+        self.assertEqual(hon_threads, calls)
+        self.assertIs(hon_threads[-1], client._hon_thread)
+        self.assertNotIn(caller_thread, calls)
 
 
 class AuthDiagnosticClientTest(unittest.TestCase):

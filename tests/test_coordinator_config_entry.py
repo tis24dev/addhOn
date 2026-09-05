@@ -181,5 +181,138 @@ class CoordinatorConfigEntryTest(unittest.TestCase):
         )
 
 
+class CommandCatalogLifecycleSourceTest(unittest.TestCase):
+    @staticmethod
+    def _functions() -> dict[str, ast.AsyncFunctionDef]:
+        tree = ast.parse(INIT.read_text(encoding="utf-8"))
+        return {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+        }
+
+    @staticmethod
+    def _attribute_calls(
+        function: ast.AsyncFunctionDef,
+        attribute: str,
+        receiver: str | None = None,
+    ) -> list[ast.Call]:
+        return [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == attribute
+            and (
+                receiver is None
+                or (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == receiver
+                )
+            )
+        ]
+
+    def test_cache_load_precedes_client_construction_with_language_and_document(
+        self,
+    ) -> None:
+        setup = self._functions()["async_setup_entry"]
+        loads = self._attribute_calls(setup, "async_load", "catalog_store")
+        constructors = [
+            node
+            for node in ast.walk(setup)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "HonClient"
+        ]
+        self.assertEqual(1, len(loads), "setup must load exactly one catalog store")
+        self.assertEqual(1, len(constructors), "setup must construct exactly one HonClient")
+        constructor = constructors[0]
+        self.assertLess(loads[0].lineno, constructor.lineno)
+        keywords = {keyword.arg: keyword.value for keyword in constructor.keywords}
+        self.assertIsInstance(keywords.get("command_catalog_cache"), ast.Name)
+        self.assertEqual("command_catalog_cache", keywords["command_catalog_cache"].id)
+        language = keywords.get("language")
+        self.assertIsInstance(language, ast.Call)
+        self.assertIsInstance(language.func, ast.Name)
+        self.assertEqual("getattr", language.func.id)
+        self.assertEqual(3, len(language.args))
+        self.assertIsInstance(language.args[0], ast.Attribute)
+        self.assertEqual("config", language.args[0].attr)
+        self.assertIsInstance(language.args[0].value, ast.Name)
+        self.assertEqual("hass", language.args[0].value.id)
+        self.assertIsInstance(language.args[1], ast.Constant)
+        self.assertEqual("language", language.args[1].value)
+        self.assertIsInstance(language.args[2], ast.Constant)
+        self.assertIsNone(language.args[2].value)
+
+    def test_store_sync_follows_setup_and_runs_inside_successful_poll(self) -> None:
+        functions = self._functions()
+        setup = functions["async_setup_entry"]
+        update = functions["async_update_data"]
+        setup_sync_references = [
+            node
+            for node in ast.walk(setup)
+            if isinstance(node, ast.Attribute)
+            and node.attr == "setup_sync"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "hon_client"
+        ]
+        all_syncs = self._attribute_calls(setup, "async_sync", "catalog_store")
+        update_syncs = self._attribute_calls(update, "async_sync", "catalog_store")
+        self.assertEqual(1, len(setup_sync_references))
+        self.assertEqual(2, len(all_syncs), "sync once after setup and once per poll")
+        self.assertEqual(1, len(update_syncs), "successful poll must sync its cache")
+        setup_only_sync = next(
+            sync for sync in all_syncs if sync.lineno != update_syncs[0].lineno
+        )
+        self.assertGreater(setup_only_sync.lineno, setup_sync_references[0].lineno)
+        polls = [
+            node
+            for node in ast.walk(update)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "async_get_appliances_data"
+        ]
+        self.assertEqual(1, len(polls))
+        self.assertGreater(update_syncs[0].lineno, polls[0].lineno)
+
+    def test_unload_retains_cache_and_entry_removal_awaits_deletion(self) -> None:
+        functions = self._functions()
+        unload = functions["async_unload_entry"]
+        remove = functions["async_remove_entry"]
+        self.assertEqual(
+            [], self._attribute_calls(unload, "async_remove", "catalog_store")
+        )
+        removals = self._attribute_calls(remove, "async_remove", "catalog_store")
+        self.assertEqual(1, len(removals))
+        awaited_calls = [
+            node.value
+            for node in ast.walk(remove)
+            if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
+        ]
+        self.assertIn(removals[0], awaited_calls)
+
+    def test_entry_bucket_keeps_the_exact_store_adapter(self) -> None:
+        setup = self._functions()["async_setup_entry"]
+        buckets = [
+            node
+            for node in ast.walk(setup)
+            if isinstance(node, ast.Dict)
+            and any(
+                isinstance(key, ast.Constant) and key.value == "command_catalog_store"
+                for key in node.keys
+            )
+        ]
+        self.assertEqual(1, len(buckets))
+        bucket = buckets[0]
+        values = {
+            key.value: value
+            for key, value in zip(bucket.keys, bucket.values, strict=True)
+            if isinstance(key, ast.Constant)
+        }
+        self.assertIsInstance(values["command_catalog_store"], ast.Name)
+        self.assertEqual("catalog_store", values["command_catalog_store"].id)
+
+
 if __name__ == "__main__":
     unittest.main()

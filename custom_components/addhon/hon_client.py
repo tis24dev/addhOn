@@ -16,6 +16,11 @@ from .client.auth_diagnostics import (
     AuthDiagnosticTrace,
     classify_failure_reason,
 )
+from .client.engine.command_hydration import CommandCatalogUnavailable
+from .client.catalog_repository import (
+    CommandCatalogRepository,
+    CommandCatalogSnapshot,
+)
 # Aliased: `_run_on_hon_loop` binds a LOCAL named `phase` for the attribution it
 # samples, and shadowing the scope factory there would be a trap for the next edit.
 from .client.phase import phase as phase_scope
@@ -326,6 +331,9 @@ class HonClient:
         validation: bool = False,
         refresh_token: str = "",
         auth_diagnostics: bool = False,
+        *,
+        command_catalog_cache: Any = None,
+        language: Any = "en",
     ) -> None:
         self._email = email
         self._password = password
@@ -337,6 +345,10 @@ class HonClient:
         # and no per-appliance loads (issue #30). Runtime keeps the full setup.
         self._validation = validation
         self._auth_trace = AuthDiagnosticTrace(enabled=auth_diagnostics)
+        self._command_catalog_repository = CommandCatalogRepository(
+            command_catalog_cache,
+            language=language,
+        )
         # Last classified error code (for the downloadable diagnostics / log parity).
         self.last_error_code: Any = None
         # Login phase reached at the last failure ("authenticate"/"mfa_verify"/...), and a
@@ -683,6 +695,7 @@ class HonClient:
                     minimal=self._validation,
                     refresh_token=self._refresh_token,
                     auth_trace=self._auth_trace,
+                    catalog_repository=self._command_catalog_repository,
                 )
                 _LOGGER.debug("Hon instance created")
 
@@ -938,6 +951,28 @@ class HonClient:
         """
         return getattr(self._hon_instance, "degraded_census", None)
 
+    def command_catalog_cache_snapshot(
+        self, since: int | None = None
+    ) -> CommandCatalogSnapshot:
+        """Read a defensive command-catalog snapshot on its owning hOn loop.
+
+        `since` is forwarded so an unchanged repository answers without deep-copying
+        every cached catalog -- this runs on the poll path, once a minute, forever.
+        """
+
+        async def _read() -> CommandCatalogSnapshot:
+            return self._command_catalog_repository.snapshot(since=since)
+
+        return self._run_on_hon_loop(_read(), budget.CLOSE)
+
+    def command_catalog_census(self) -> list[dict[str, Any]]:
+        """Read the identity-free command-catalog census on its owning hOn loop."""
+
+        async def _read() -> list[dict[str, Any]]:
+            return self._command_catalog_repository.census()
+
+        return self._run_on_hon_loop(_read(), budget.CLOSE)
+
     def _needs_rehydration(self, appliance) -> bool:
         """Did setup append this appliance without its commands, for a retryable reason?
 
@@ -990,7 +1025,23 @@ class HonClient:
                         getattr(self._api, "_phase_tracker", None),
                     ):
                         async with budget.budgeted(budget.APPLIANCE_ONE):
-                            await loader()
+                            try:
+                                await loader()
+                            except CommandCatalogUnavailable:
+                                # The ONE exception to "not tolerated" above. A second
+                                # ADDHON-240 is not a transport fault that a fresh
+                                # setup could clear: the catalog is structurally
+                                # unusable and no compatible cache exists, so failing
+                                # the first refresh here would loop the entry through
+                                # ConfigEntryNotReady forever and deliver LESS than the
+                                # degraded entry 5.21.x shipped. Degrade instead: this
+                                # appliance keeps its sensors and loses only its
+                                # command entities, and the others are untouched.
+                                _LOGGER.warning(
+                                    "Appliance still has no usable command catalog "
+                                    "after the rehydration attempt; keeping it without "
+                                    "command entities instead of failing the entry"
+                                )
                     _debug_appliance_consumption("after rehydrating commands", appliance)
 
             # Attempt 1: standard update()

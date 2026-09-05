@@ -198,8 +198,29 @@ _install_homeassistant_stubs()
 
 
 class FakeClient:
+    def __init__(self) -> None:
+        self.patches: list = []
+
     def run_command_sync(self, coro) -> None:
         asyncio.run(coro)
+
+    def dispatch_patch_sync(self, appliance, patch) -> bool:
+        """The sparse path, recorded.
+
+        A stand-in for `CommandDispatcher.dispatch`, not the thing itself: the real one
+        wants the whole `HonCommand` surface (category swap, canonical payload,
+        transaction rollback) and these fixtures are deliberately two-field doubles.
+        What it reproduces is the part the callers here are asserting on -- the patch
+        names its own keys, only those are applied, and the command is sent once. The
+        end-to-end proof that the wire body carries nothing else lives in
+        `test_issue_94_command_catalog`, on real engine commands.
+        """
+        self.patches.append(patch)
+        command = appliance.commands[patch.command_name]
+        for key, value in patch.values.items():
+            command.parameters[key].value = value
+        asyncio.run(command.send())
+        return True
 
 
 class FakeCoordinator:
@@ -227,15 +248,26 @@ class FakeHass:
 
 
 class Param:
-    def __init__(self, value=None, values=None) -> None:
+    def __init__(self, value=None, values=None, mandatory=0) -> None:
         self.value = value
         self.values = values
+        # The two fields the sparse dispatcher reads off a real engine parameter: what
+        # it transmits, and whether the body has to carry the key even unrequested.
+        self.mandatory = mandatory
+
+    @property
+    def intern_value(self) -> str:
+        return str(self.value)
 
 
 class RecordingCommand:
     def __init__(self, parameters=None) -> None:
         self.parameters = parameters or {}
         self.send_calls = 0
+        # The dispatcher re-resolves the live command through the appliance before it
+        # builds the body (a startProgram category swap). None keeps this double as its
+        # own active command, which is what every fixture here wants.
+        self.appliance = None
 
     async def send(self) -> None:
         self.send_calls += 1

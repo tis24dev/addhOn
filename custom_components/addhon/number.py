@@ -78,6 +78,7 @@ from .hon_commands import (
     async_send_command,
     command_param,
     find_settings_param,
+    get_command,
     param_range,
     param_values,
 )
@@ -85,7 +86,14 @@ from .program_options import (
     HonProgramOptionEntity,
     option_range,
 )
-from .ref_programs import REF_MY_ZONE_PARAM, active_mode_code, my_zone_codes
+from .ref_programs import (
+    REF_FLAG_TO_PARAM,
+    REF_MY_ZONE_PARAM,
+    STOPPROGRAM,
+    active_mode_code,
+    active_mode_codes,
+    my_zone_codes,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -670,10 +678,82 @@ class HonNumber(HonBaseEntity, NumberEntity):
         if self._mode_driven and (
             mode := active_mode_code(self._get_attr)
         ) is not None:
+            # DO WHAT THE APP DOES, not merely what it refuses.
+            #
+            # `disableActivatedDefaultModes` (decomp.txt:2873600-2873723) builds the
+            # four-zero reset FIRST, then tests the four shadow flags in turn and, on the
+            # first one that is not "0", dispatches that reset INSTEAD of the setpoint.
+            # The temperature is applied only on a later interaction, once the modes are
+            # off. Refusing alone reproduced half of that and left the other half to the
+            # user -- who has to find a switch that only exists when `flag_codes` admits
+            # the flag (offered in `startProgram` AND clearable in `stopProgram`). A
+            # shadow reporting a flag the catalogue does not declare therefore locked
+            # every fridge setpoint behind an error naming a control that is not there,
+            # with no way out of Home Assistant at all.
+            #
+            # Sending the reset removes the dead end at its root: the modes the appliance
+            # reports are cleared from the very control the user touched, exactly as in
+            # the app, whether or not a switch exists for them.
+            # Intersected with what THIS appliance declares. The app hard-codes all
+            # four keys because it builds its own body; our dispatcher validates the
+            # patch against the live schema and raises on a parameter `stopProgram` does
+            # not declare -- correctly, and this fridge family varies: HCW58F18EWMP
+            # declares three (no `intelligenceMode`), the H4F306SDH1 upright one.
+            # Clearing everything clearable is the most of the app's behaviour the
+            # appliance will actually accept.
+            #
+            # But the intersection is only safe once the RUNNING modes are inside it.
+            # `stopProgram` declaring `holidayMode` while `quickModeZ1` is the flag that
+            # is actually on would otherwise send `holidayMode=0`, change nothing, and
+            # still answer "the modes were switched off, set it again" -- an instruction
+            # the user cannot carry out, on every retry. So the running set is checked
+            # first and the whole write is refused when the catalogue cannot cover it.
+            stop = get_command(appliance, STOPPROGRAM)
+            stop_params = getattr(stop, "parameters", None) if stop is not None else None
+            stop_params = stop_params if isinstance(stop_params, dict) else {}
+            running = {
+                REF_FLAG_TO_PARAM[code]
+                for code in active_mode_codes(self._get_attr)
+            }
+            if not running.issubset(stop_params):
+                # At least one RUNNING mode has no off switch in this catalogue, so no
+                # message we could send would clear it. Sending the rest anyway is worse
+                # than refusing: the appliance would keep choosing the temperature, and
+                # the "modes were switched off, set it again" answer below would send
+                # the user round the same loop on every retry, forever. Say instead that
+                # this appliance cannot do it remotely, which is the truth.
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="setpoint_owned_by_mode",
+                )
+            clearable = {
+                flag: "0"
+                for flag in REF_FLAG_TO_PARAM.values()
+                if flag in stop_params
+            }
+            await async_dispatch_patch(
+                self.hass,
+                client,
+                appliance,
+                CommandPatch(
+                    STOPPROGRAM,
+                    clearable,
+                    action="clear_modes_for_setpoint",
+                ),
+            )
+            await self._async_request_command_refresh()
+            # Still an error, because the SETPOINT was not applied and Home Assistant
+            # must not leave the slider sitting on a value the appliance never took.
+            # The message says what happened and what to do, instead of naming a switch.
+            _LOGGER.info(
+                "Number: cleared the active fridge modes before the setpoint "
+                "(mode=%s) id=%s",
+                mode,
+                redact_id(self._appliance_id),
+            )
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
-                translation_key="setpoint_owned_by_mode",
-                translation_placeholders={"mode": mode},
+                translation_key="setpoint_cleared_modes",
             )
         # Enum setpoint: reject a value outside the discrete set up front (clear message,
         # no pointless cloud round-trip) instead of letting the cloud enum setter raise an

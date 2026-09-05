@@ -443,6 +443,8 @@ class CallSiteTableIsCompleteTest(unittest.TestCase):
         "resend_mfa_code_sync": "budget.COMMAND",
         "run_command_sync": "budget.COMMAND",
         "dispatch_patch_sync": "budget.COMMAND",
+        "command_catalog_cache_snapshot": "budget.CLOSE",
+        "command_catalog_census": "budget.CLOSE",
         "_update_appliance_sync": "budget.APPLIANCE_POLL",
     }
 

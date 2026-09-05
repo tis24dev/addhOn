@@ -35,6 +35,57 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- Command-catalog recovery for issue #94 now sends `seriesVersion` and the Home
+  Assistant base language, distinguishes an empty or invalid catalogue from success,
+  retries required refrigeration catalogues during initial hydration, and can reuse a
+  validated snapshot stored per config entry. Controls remain driven by the catalogue
+  returned for each appliance; this does not assume that every H4F306SDH1 exposes the
+  same commands. Cache reuse now also requires the appliance `code`; fallback with
+  incomplete firmware or series metadata expires after 30 days, storage synchronization
+  cannot fail setup or polling, and entry deletion retries transient storage failures.
+- **An unusable command catalogue no longer costs you the whole integration.** If the
+  cloud returns a catalogue addhOn cannot read and there is no stored snapshot to fall
+  back on, that appliance is kept with its sensors working and only its command
+  entities missing -- addhOn retries the catalogue once before creating any entity, and
+  then carries on. Previously this could stop the entry from loading at all on an
+  account with a single appliance.
+- **A stored catalogue is no longer reused forever.** Any snapshot older than 180 days
+  is discarded even when the firmware and series still match, because the cloud can
+  change what it returns without changing either. The 30-day limit on snapshots with
+  incomplete firmware or series metadata is unchanged.
+- The stored catalogue file is now marked private, so it is redacted where Home
+  Assistant redacts private storage. It is keyed by MAC address and holds the appliance
+  code, its firmware and series identifiers and the catalogue itself.
+- Failing to write the catalogue cache no longer discards a catalogue that was fetched
+  successfully, and an unchanged cache is no longer re-serialized on every poll.
+- **A fridge's drawer is recognised from the setting the app itself reads.** Some
+  refrigerators describe the My Zone drawer only through the `tempSelZ3` setting -- as a
+  list of choices, which is exactly where the official app takes the drawer's mode list
+  from -- without listing the compartment among the model's zones. Those drawers now get
+  the named mode selector (0 °C fresh, Quick cool, Fruit and vegetables) instead of a
+  bare temperature box showing the raw number. A drawer whose `tempSelZ3` is a
+  temperature range keeps its slider, unchanged.
+- **The fridge program dropdown is no longer removed when the per-mode controls do not
+  replace all of it.** It used to step aside as soon as any mode switch or drawer
+  selector existed, which on an unusual catalogue could leave the remaining programs with
+  no control at all -- and its removal is permanent. It now steps aside only when the
+  switches, the drawer selector and the preset buttons together cover every program the
+  appliance offers. When they do not, it stays and lists only what they leave out, so no
+  two controls ever command the same thing.
+- **Moving a fridge temperature while a mode is running now switches that mode off**,
+  the way the official app does, instead of only refusing. Previously the error told you
+  to turn the mode off first, which was impossible when the appliance does not offer a
+  switch for it -- every zone temperature stayed read-only until you walked to the
+  appliance. addhOn now switches the running modes off and asks you to set the
+  temperature again. Where the refrigerator cannot switch a running mode off at all, the
+  temperature is still refused, and the message now says that the appliance offers no
+  remote way to do it rather than pointing at a control that is not there.
+- **Fridge readings hidden behind a switch come back if the switch does not.** Super
+  Cool, Super Freeze, Auto-set, Holiday and the My Zone mode reading are hidden when the
+  same appliance also gets a control for them. That was written once and never revisited,
+  so an appliance that later started up without its command catalogue lost the control
+  and kept the reading hidden -- both gone, with nothing said. The reading is now given
+  back whenever its control is missing. A reading you disabled yourself stays disabled.
 - The single fridge **program dropdown is no longer created** where the per-mode
   controls above can be built, which is every fridge we have seen a diagnostics dump
   for. Automations calling `select.select_option` on it must move to the new switches,
@@ -73,11 +124,17 @@ the notes were generated automatically carry a link to their diff instead of a s
 - **A drawer that has modes no longer also offers a target temperature.** On the models
   that declare both, two controls wrote one register and the temperature one published
   0, 2 or 5 as degrees Celsius — "a drawer set to 0 °C fresh reads 0 °C".
-- **A zone temperature can no longer be set while a mode is driving it.** Auto set, Super
+- **A zone temperature is no longer accepted and then silently undone.** Auto set, Super
   cool and Holiday each pin the fridge zone to a temperature of the appliance's choosing;
-  a value sent from Home Assistant was accepted and silently overwritten. The control now
-  says which mode owns the setpoint and asks you to switch it off first, which is what
-  the phone app does.
+  a value sent from Home Assistant was taken by the cloud and overwritten by the
+  appliance, with nothing said. The write is now handled by the mode-clearing behaviour
+  described above instead of going out to be discarded.
+- **Turning the fridge program dropdown off no longer switches off unrelated modes.**
+  On a refrigerator that keeps the dropdown alongside the new mode switches, selecting
+  `off` sent a reset that cleared Super Cool, Super Freeze, Auto-set and Holiday all at
+  once, so stopping one thing switched off modes you had set from another control. It
+  now clears only the modes it lists. This is also what the phone app does: its own
+  command history sends one mode per message, never the four-way reset.
 - **A refused fridge command is reported in your language.** Starting a mode that the
   cloud rejected produced an untranslated "Can't send command"; switching one off, on the
   same appliance, produced a proper message. Both now answer the same way.
@@ -769,4 +826,3 @@ Dopo il deploy, verificare:
 - **Versione corrente:** 2.0.3 (fix applicati)
 - **Branch:** main
 - **Compatibility:** pyhOn >= 0.17.5
-
