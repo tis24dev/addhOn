@@ -40,7 +40,9 @@ the notes were generated automatically carry a link to their diff instead of a s
   retries required refrigeration catalogues during initial hydration, and can reuse a
   validated snapshot stored per config entry. Controls remain driven by the catalogue
   returned for each appliance; this does not assume that every H4F306SDH1 exposes the
-  same commands.
+  same commands. Cache reuse now also requires the appliance `code`; fallback with
+  incomplete firmware or series metadata expires after 30 days, storage synchronization
+  cannot fail setup or polling, and entry deletion retries transient storage failures.
 - The single fridge **program dropdown is no longer created** where the per-mode
   controls above can be built, which is every fridge we have seen a diagnostics dump
   for. Automations calling `select.select_option` on it must move to the new switches,

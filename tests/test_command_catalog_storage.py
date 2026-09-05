@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import sys
 import types
 import unittest
+from unittest.mock import AsyncMock, patch
 
 
 class FakeStore:
@@ -246,6 +248,92 @@ class CommandCatalogStoreTest(unittest.IsolatedAsyncioTestCase):
             FakeStore.saves,
         )
 
+    async def test_snapshot_failure_is_best_effort_and_redacted(self) -> None:
+        class FailingSnapshotClient:
+            def command_catalog_cache_snapshot(self) -> object:
+                raise RuntimeError("private snapshot detail")
+
+        adapter = CommandCatalogStore(self.hass, "entry-1")
+
+        with self.assertLogs(
+            "custom_components.addhon.command_catalog_store", logging.DEBUG
+        ) as captured:
+            await adapter.async_sync(FailingSnapshotClient())
+
+        self.assertEqual([], FakeStore.saves)
+        self.assertEqual(
+            [
+                "DEBUG:custom_components.addhon.command_catalog_store:"
+                "Command catalog cache snapshot failed (RuntimeError)"
+            ],
+            captured.output,
+        )
+        self.assertNotIn("private snapshot detail", "\n".join(captured.output))
+
+    async def test_snapshot_cancellation_propagates(self) -> None:
+        class CancelledSnapshotClient:
+            def command_catalog_cache_snapshot(self) -> object:
+                raise asyncio.CancelledError
+
+        adapter = CommandCatalogStore(self.hass, "entry-1")
+
+        with self.assertRaises(asyncio.CancelledError):
+            await adapter.async_sync(CancelledSnapshotClient())
+
+    async def test_cancelled_initial_sync_closes_started_client(self) -> None:
+        from custom_components import addhon
+
+        class Entry:
+            entry_id = "entry-1"
+            title = "Account"
+            options: dict[str, object] = {}
+            data = {"email": "user@example.com", "password": "secret"}
+
+        class Hass:
+            config = types.SimpleNamespace(language="en")
+
+            async def async_add_executor_job(self, target, *args):
+                return target(*args)
+
+        class Client:
+            instance = None
+
+            def __init__(self, **_kwargs) -> None:
+                type(self).instance = self
+                self.closed = False
+
+            def setup_sync(self) -> None:
+                return None
+
+            async def async_close(self) -> None:
+                self.closed = True
+
+        class StoreAdapter:
+            def __init__(self, _hass, _entry_id) -> None:
+                return None
+
+            async def async_load(self) -> dict[str, object]:
+                return {}
+
+            async def async_sync(self, _client) -> None:
+                raise asyncio.CancelledError
+
+        with (
+            patch.object(addhon, "_async_register_services"),
+            patch.object(addhon, "_apply_debug_options"),
+            patch("custom_components.addhon.hon_client.HonClient", Client),
+            patch(
+                "custom_components.addhon.command_catalog_store.CommandCatalogStore",
+                StoreAdapter,
+            ),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await addhon.async_setup_entry(Hass(), Entry())
+
+        self.assertIsNotNone(Client.instance)
+        assert Client.instance is not None
+        self.assertTrue(Client.instance.closed)
+
     async def test_remove_deletes_only_this_entries_store(self) -> None:
         FakeStore.documents = {
             "addhon_command_catalog_entry-1": {"version": 1},
@@ -259,23 +347,49 @@ class CommandCatalogStoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("addhon_command_catalog_entry-1", FakeStore.documents)
         self.assertIn("addhon_command_catalog_entry-2", FakeStore.documents)
 
-    async def test_remove_failure_is_best_effort_and_redacted(self) -> None:
+    async def test_remove_retries_a_transient_failure(self) -> None:
         adapter = CommandCatalogStore(self.hass, "entry-1")
-        FakeStore.remove_error = RuntimeError("private store detail")
+        remove = AsyncMock(side_effect=[RuntimeError("private store detail"), None])
+        adapter._store.async_remove = remove
 
         with self.assertLogs(
             "custom_components.addhon.command_catalog_store", logging.DEBUG
         ) as captured:
             await adapter.async_remove()
 
-        self.assertEqual([], FakeStore.removals)
+        self.assertEqual(2, remove.await_count)
         self.assertEqual(
             [
                 "DEBUG:custom_components.addhon.command_catalog_store:"
-                "Command catalog cache removal failed (RuntimeError)"
+                "Command catalog cache removal failed; retrying "
+                "(attempt 1/3, RuntimeError)"
             ],
             captured.output,
         )
+        self.assertNotIn("private store detail", "\n".join(captured.output))
+
+    async def test_remove_propagates_sanitized_error_after_three_failures(self) -> None:
+        adapter = CommandCatalogStore(self.hass, "entry-1")
+        remove = AsyncMock(side_effect=RuntimeError("private store detail"))
+        adapter._store.async_remove = remove
+
+        with self.assertLogs(
+            "custom_components.addhon.command_catalog_store", logging.WARNING
+        ) as captured:
+            with self.assertRaisesRegex(
+                RuntimeError, "^Command catalog cache removal failed$"
+            ):
+                await adapter.async_remove()
+
+        self.assertEqual(3, remove.await_count)
+        self.assertEqual(
+            [
+                "WARNING:custom_components.addhon.command_catalog_store:"
+                "Command catalog cache removal failed after 3 attempts (RuntimeError)"
+            ],
+            captured.output,
+        )
+        self.assertNotIn("private store detail", "\n".join(captured.output))
 
 
 if __name__ == "__main__":

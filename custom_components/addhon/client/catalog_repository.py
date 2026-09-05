@@ -21,7 +21,8 @@ from .transport.command_catalog import (
     normalize_catalog_language,
 )
 
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
+DEGRADED_CACHE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 CATALOG_SOURCES = frozenset({"live", "cache", "none"})
 CATALOG_FAILURES = frozenset({"transport", "structural", "semantic"})
@@ -41,6 +42,7 @@ _RECORD_FIELDS = (
     "version",
     "appliance_type",
     "appliance_model_id",
+    "code",
     "firmware_id",
     "firmware_version",
     "series",
@@ -186,6 +188,8 @@ class CommandCatalogRepository:
             request.appliance_model_id
         ):
             return None
+        if record["code"] != _request_text(request.code):
+            return None
         if record["language"] != normalize_catalog_language(request.language):
             return None
 
@@ -198,9 +202,13 @@ class CommandCatalogRepository:
             else:
                 degraded = True
 
+        age_seconds = self._age(record["stored_at"])
+        if degraded and age_seconds > DEGRADED_CACHE_MAX_AGE_SECONDS:
+            return None
+
         return CachedCommandCatalog(
             payload=copy.deepcopy(record["payload"]),
-            age_seconds=self._age(record["stored_at"]),
+            age_seconds=age_seconds,
             digest=record["digest"],
             degraded_match=degraded,
         )
@@ -225,6 +233,7 @@ class CommandCatalogRepository:
             "version": CACHE_SCHEMA_VERSION,
             "appliance_type": appliance_type,
             "appliance_model_id": appliance_model_id,
+            "code": _request_text(request.code),
             "firmware_id": _request_text(request.firmware_id),
             "firmware_version": _request_text(request.firmware_version),
             "series": _request_text(request.series),
@@ -352,6 +361,7 @@ class CommandCatalogRepository:
         for field in (
             "appliance_type",
             "appliance_model_id",
+            "code",
             "firmware_id",
             "firmware_version",
             "series",
@@ -378,6 +388,7 @@ class CommandCatalogRepository:
             "version": CACHE_SCHEMA_VERSION,
             "appliance_type": candidate["appliance_type"],
             "appliance_model_id": candidate["appliance_model_id"],
+            "code": candidate["code"],
             "firmware_id": candidate["firmware_id"],
             "firmware_version": candidate["firmware_version"],
             "series": candidate["series"],

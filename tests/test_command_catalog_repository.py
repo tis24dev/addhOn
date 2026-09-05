@@ -131,6 +131,7 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
                 "version": CACHE_SCHEMA_VERSION,
                 "appliance_type": "FRE",
                 "appliance_model_id": "4321",
+                "code": "CODE123",
                 "firmware_id": "EE",
                 "firmware_version": "1.2",
                 "series": "S",
@@ -180,6 +181,7 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
         mismatches = (
             {"appliance_type": "REF"},
             {"appliance_model_id": "9999"},
+            {"code": "OTHER"},
             {"language": "en"},
             {"firmware_id": "OTHER"},
             {"firmware_version": "9.9"},
@@ -220,11 +222,31 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
         assert cached is not None
         self.assertEqual(cached.age_seconds, 17)
 
+    def test_only_degraded_matches_expire_after_thirty_days(self) -> None:
+        self.repo.replace(_request(), _catalog())
+        degraded_request = _request(firmware_id=None)
+
+        self.repo._clock = lambda: NOW + 2_592_000  # type: ignore[attr-defined]
+        at_boundary = self.repo.lookup(degraded_request)
+        self.assertIsNotNone(at_boundary)
+        assert at_boundary is not None
+        self.assertTrue(at_boundary.degraded_match)
+
+        self.repo._clock = lambda: NOW + 2_592_001  # type: ignore[attr-defined]
+        self.assertIsNone(self.repo.lookup(degraded_request))
+        exact = self.repo.lookup(_request())
+        self.assertIsNotNone(exact)
+        assert exact is not None
+        self.assertFalse(exact.degraded_match)
+        self.assertEqual(2_592_001, exact.age_seconds)
+
     def test_bad_persisted_documents_and_records_are_ignored(self) -> None:
         self.repo.replace(_request(), _catalog())
         valid = self.repo.snapshot().document
         mutations = {
-            "schema": lambda document: document.__setitem__("version", 2),
+            "schema": lambda document: document.__setitem__(
+                "version", CACHE_SCHEMA_VERSION + 1
+            ),
             "records": lambda document: document.__setitem__("records", []),
             "payload": lambda document: document["records"]["AA:BB"].__setitem__(
                 "payload", []
@@ -247,6 +269,19 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
                 self.assertIsNone(loaded.lookup(_request()))
                 self.assertEqual(loaded.snapshot().document["records"], {})
                 self.assertEqual(loaded.snapshot().generation, 0)
+
+    def test_schema_one_document_without_code_is_ignored(self) -> None:
+        self.repo.replace(_request(), _catalog())
+        legacy = self.repo.snapshot().document
+        legacy["version"] = 1
+        legacy_record = legacy["records"]["AA:BB"]
+        legacy_record["version"] = 1
+        legacy_record.pop("code", None)
+
+        loaded = CommandCatalogRepository(legacy, language="it", clock=lambda: NOW)
+
+        self.assertIsNone(loaded.lookup(_request()))
+        self.assertEqual({}, loaded.snapshot().document["records"])
 
     def test_valid_persisted_document_is_loaded_defensively_at_generation_zero(self) -> None:
         self.repo.replace(_request(), _catalog())

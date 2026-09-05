@@ -841,6 +841,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Setup debug: running HonClient.setup_sync in executor")
         await hass.async_add_executor_job(hon_client.setup_sync)
         _LOGGER.debug("Setup debug: HonClient.setup_sync completed")
+        await catalog_store.async_sync(hon_client)
     except asyncio.CancelledError:
         await _async_close_client(hon_client)
         raise
@@ -851,8 +852,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("Unable to connect to hOn: %s", err)
         await _async_close_client(hon_client)
         _raise_setup_error(err)
-
-    await catalog_store.async_sync(hon_client)
 
     # Persist a rotated refresh token so the next restart keeps skipping the full login
     # (and the 2FA prompt). Single helper, change-guarded (see _persist_refresh_token).

@@ -55,6 +55,7 @@ def _install_stubs() -> None:
 _install_stubs()
 
 from custom_components.addhon.client.catalog_repository import (  # noqa: E402
+    CACHE_SCHEMA_VERSION,
     CommandCatalogRepository,
 )
 from custom_components.addhon.error_codes import HonCodedError  # noqa: E402
@@ -167,7 +168,7 @@ class CommandCatalogRepositoryOwnershipTest(unittest.TestCase):
         cache_snapshot = client.command_catalog_cache_snapshot()
         cache_census = client.command_catalog_census()
 
-        self.assertEqual(1, cache_snapshot.document["version"])
+        self.assertEqual(CACHE_SCHEMA_VERSION, cache_snapshot.document["version"])
         self.assertEqual([], cache_census)
         self.assertEqual(hon_threads, calls)
         self.assertIs(hon_threads[-1], client._hon_thread)

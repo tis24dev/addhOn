@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -14,6 +15,8 @@ _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 STORAGE_KEY_PREFIX = "addhon_command_catalog_"
+_REMOVE_ATTEMPTS = 3
+_REMOVE_RETRY_DELAY_SECONDS = 0.1
 
 
 class CommandCatalogStore:
@@ -43,25 +46,51 @@ class CommandCatalogStore:
 
     async def async_sync(self, client: Any) -> None:
         """Persist a new repository generation without crossing event-loop owners."""
-        snapshot = await self._hass.async_add_executor_job(
-            client.command_catalog_cache_snapshot
-        )
-        if snapshot.generation == self._saved_generation:
+        try:
+            snapshot = await self._hass.async_add_executor_job(
+                client.command_catalog_cache_snapshot
+            )
+            generation = snapshot.generation
+            document = snapshot.document
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            _LOGGER.debug(
+                "Command catalog cache snapshot failed (%s)", type(error).__name__
+            )
+            return
+        if generation == self._saved_generation:
             return
         try:
-            await self._store.async_save(snapshot.document)
+            await self._store.async_save(document)
         except Exception as error:
             _LOGGER.debug(
                 "Command catalog cache save failed (%s)", type(error).__name__
             )
             return
-        self._saved_generation = snapshot.generation
+        self._saved_generation = generation
 
     async def async_remove(self) -> None:
         """Remove only this config entry's command-catalog document."""
-        try:
-            await self._store.async_remove()
-        except Exception as error:
-            _LOGGER.debug(
-                "Command catalog cache removal failed (%s)", type(error).__name__
-            )
+        for attempt in range(1, _REMOVE_ATTEMPTS + 1):
+            try:
+                await self._store.async_remove()
+                return
+            except Exception as error:
+                if attempt == _REMOVE_ATTEMPTS:
+                    _LOGGER.warning(
+                        "Command catalog cache removal failed after %d attempts (%s)",
+                        _REMOVE_ATTEMPTS,
+                        type(error).__name__,
+                    )
+                    raise RuntimeError(
+                        "Command catalog cache removal failed"
+                    ) from None
+                _LOGGER.debug(
+                    "Command catalog cache removal failed; retrying "
+                    "(attempt %d/%d, %s)",
+                    attempt,
+                    _REMOVE_ATTEMPTS,
+                    type(error).__name__,
+                )
+                await asyncio.sleep(_REMOVE_RETRY_DELAY_SECONDS)
