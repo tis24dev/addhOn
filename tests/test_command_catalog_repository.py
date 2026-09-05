@@ -65,10 +65,12 @@ def _install_stubs() -> None:
 
 _install_stubs()
 
+from custom_components.addhon import diagnostics
 from custom_components.addhon.client.catalog_repository import (
     CACHE_SCHEMA_VERSION,
     CATALOG_ENRICHMENTS,
     CATALOG_FAILURES,
+    CATALOG_REQUEST_FLAGS,
     CATALOG_SOURCES,
     CommandCatalogRepository,
 )
@@ -358,6 +360,15 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
             CATALOG_ENRICHMENTS, frozenset({"ok", "empty", "raised", "invalid"})
         )
         self.assertIn("ok", CATALOG_OUTCOMES)
+
+
+class CommandCatalogDiagnosticsVocabularyTest(unittest.TestCase):
+    def test_diagnostics_allowlists_cannot_drift_from_the_producer(self) -> None:
+        self.assertEqual(CATALOG_SOURCES, diagnostics._CATALOG_SOURCES)
+        self.assertEqual(CATALOG_FAILURES, diagnostics._CATALOG_FAILURES)
+        self.assertEqual(CATALOG_OUTCOMES, diagnostics._CATALOG_OUTCOMES)
+        self.assertEqual(CATALOG_ENRICHMENTS, diagnostics._CATALOG_ENRICHMENTS)
+        self.assertEqual(CATALOG_REQUEST_FLAGS, diagnostics._CATALOG_REQUEST_FLAGS)
 
 
 if __name__ == "__main__":
