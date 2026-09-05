@@ -32,6 +32,19 @@ DEGRADED_CACHE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 # survive a cloud outage, and past this age an appliance simply ships degraded (with
 # its sensors) rather than resurrecting a catalog nobody has confirmed in half a year.
 CACHE_MAX_AGE_SECONDS = 180 * 24 * 60 * 60
+# How far the PERSISTED validation timestamp is allowed to fall behind the live one.
+#
+# A catalog that never changes is the normal case, not the exception, and re-confirming
+# it must renew its freshness -- otherwise the ages above are counted from the day of
+# install and expire a snapshot the cloud has been agreeing with all along. But writing
+# the whole document to the HA Store on every poll is exactly the cost the generation
+# short-circuit in `snapshot` exists to avoid, and a timestamp is the one field whose
+# value moves on its own every second.
+#
+# So the timestamp advances in steps of a day, in memory and on disk together: a record
+# reads at most a day older than the truth -- irrelevant against a 30-day floor -- and
+# steady state costs one extra store write per appliance per day.
+TIMESTAMP_PERSIST_INTERVAL_SECONDS = 24 * 60 * 60
 
 CATALOG_SOURCES = frozenset({"live", "cache", "none"})
 CATALOG_FAILURES = frozenset({"transport", "structural", "semantic"})
@@ -226,7 +239,12 @@ class CommandCatalogRepository:
         )
 
     def replace(self, request: CommandCatalogRequest, payload: Any) -> bool:
-        """Atomically replace one valid record and advance generation if changed."""
+        """Atomically replace one valid record and advance generation if changed.
+
+        Returns True when the persisted document has to be rewritten -- because the
+        content changed, or because the record's validation timestamp has drifted far
+        enough from the saved one to be worth a store write.
+        """
         mac = _request_text(request.mac_address)
         appliance_type = _request_text(request.appliance_type)
         appliance_model_id = _request_text(request.appliance_model_id)
@@ -257,7 +275,34 @@ class CommandCatalogRepository:
         }
         existing = self._records.get(mac)
         if existing is not None and self._same_content(existing, replacement):
-            return False
+            # The CONTENT did not move. The freshness did, and freshness is what the
+            # cache actually spends: `lookup` counts the age off `stored_at` and refuses
+            # the record past 30 days on a degraded match, 180 on an exact one. A fridge
+            # catalog does not change -- that is the normal case -- so keeping the first
+            # write's timestamp meant every cache aged out on a fixed schedule from the
+            # day of install, and the first outage after it lost the appliance's command
+            # entities while the cloud had confirmed that very catalog minutes earlier.
+            # Age now means "unconfirmed for this long", which is the only thing it was
+            # ever supposed to mean.
+            #
+            # Renewed in steps of a day, never on every confirmation (see the constant),
+            # and the in-memory value moves WITH the persisted one rather than ahead of
+            # it. Refreshing in memory on every poll and persisting only on drift looks
+            # equivalent and is not: the drift would then always be one poll interval,
+            # the generation would never move, and the saved timestamp would stay at the
+            # first write forever -- the very bug this branch is fixing, surviving a
+            # restart. Keeping one timestamp keeps the two answers from diverging.
+            #
+            # The cost of the granularity is that the age can read up to a day older
+            # than the truth, against floors of 30 and 180 days.
+            #
+            # `abs` because a clock that jumped BACKWARDS also leaves a stored value
+            # that no longer describes this record.
+            if abs(stored_at - existing["stored_at"]) < TIMESTAMP_PERSIST_INTERVAL_SECONDS:
+                return False
+            existing["stored_at"] = stored_at
+            self._generation += 1
+            return True
         self._records[mac] = replacement
         self._generation += 1
         return True

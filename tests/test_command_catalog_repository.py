@@ -73,6 +73,8 @@ from custom_components.addhon.client.catalog_repository import (
     CATALOG_FAILURES,
     CATALOG_REQUEST_FLAGS,
     CATALOG_SOURCES,
+    DEGRADED_CACHE_MAX_AGE_SECONDS,
+    TIMESTAMP_PERSIST_INTERVAL_SECONDS,
     CommandCatalogRepository,
 )
 from custom_components.addhon.client.transport.command_catalog import (
@@ -277,6 +279,65 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
 
         self.repo._clock = lambda: NOW + CACHE_MAX_AGE_SECONDS + 1  # type: ignore[attr-defined]
         self.assertIsNone(self.repo.lookup(_request()))
+
+    def test_a_re_confirmed_catalog_is_fresh_again_at_both_boundaries(self) -> None:
+        """Age must mean "unconfirmed for this long", not "written this long ago".
+
+        A fridge catalog does not change -- that is the ordinary case -- so counting
+        from the first write alone expired every cache on a fixed schedule from the day
+        of install. The next outage then dropped the appliance's command entities while
+        the cloud had returned that very catalog minutes earlier.
+        """
+        self.repo.replace(_request(), _catalog())
+        degraded_request = _request(firmware_id=None)
+
+        # A day short of the degraded ceiling, the cloud answers with the same catalog.
+        confirmed = NOW + DEGRADED_CACHE_MAX_AGE_SECONDS - 86_400
+        self.repo._clock = lambda: confirmed  # type: ignore[attr-defined]
+        self.repo.replace(_request(), _catalog())
+
+        # A full degraded lifetime later. Counted from the first write this is 59 days
+        # and both matches are gone; counted from the confirmation it is exactly 30.
+        self.repo._clock = lambda: confirmed + DEGRADED_CACHE_MAX_AGE_SECONDS  # type: ignore[attr-defined]
+        degraded = self.repo.lookup(degraded_request)
+        self.assertIsNotNone(degraded)
+        assert degraded is not None
+        self.assertTrue(degraded.degraded_match)
+        self.assertEqual(DEGRADED_CACHE_MAX_AGE_SECONDS, degraded.age_seconds)
+
+        # The absolute ceiling still bites, one second past the LAST confirmation.
+        self.repo._clock = lambda: confirmed + CACHE_MAX_AGE_SECONDS  # type: ignore[attr-defined]
+        self.assertIsNotNone(self.repo.lookup(_request()))
+        self.repo._clock = lambda: confirmed + CACHE_MAX_AGE_SECONDS + 1  # type: ignore[attr-defined]
+        self.assertIsNone(self.repo.lookup(_request()))
+
+    def test_the_renewed_timestamp_costs_at_most_one_store_write_a_day(self) -> None:
+        """The refresh must not undo the generation short-circuit.
+
+        A timestamp moves on its own every second, and the coordinator asks once a
+        minute for as long as the entry is loaded. Renewing the generation each time
+        would rewrite the whole document on every poll -- the exact cost
+        `snapshot(since=...)` exists to avoid.
+        """
+        self.repo.replace(_request(), _catalog())
+        generation = self.repo.snapshot().generation
+
+        for elapsed in (1, 60, TIMESTAMP_PERSIST_INTERVAL_SECONDS - 1):
+            with self.subTest(elapsed=elapsed):
+                self.repo._clock = lambda e=elapsed: NOW + e  # type: ignore[attr-defined]
+                self.assertFalse(self.repo.replace(_request(), _catalog()))
+                self.assertEqual(generation, self.repo.snapshot().generation)
+
+        # What that granularity costs, stated: below the interval the record still reads
+        # its previous age. A day of slack against floors of 30 and 180.
+        cached = self.repo.lookup(_request())
+        self.assertIsNotNone(cached)
+        assert cached is not None
+        self.assertEqual(TIMESTAMP_PERSIST_INTERVAL_SECONDS - 1, cached.age_seconds)
+
+        self.repo._clock = lambda: NOW + TIMESTAMP_PERSIST_INTERVAL_SECONDS  # type: ignore[attr-defined]
+        self.assertTrue(self.repo.replace(_request(), _catalog()))
+        self.assertEqual(generation + 1, self.repo.snapshot().generation)
 
     def test_bad_persisted_documents_and_records_are_ignored(self) -> None:
         self.repo.replace(_request(), _catalog())
