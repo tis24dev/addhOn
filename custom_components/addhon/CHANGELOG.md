@@ -58,6 +58,20 @@ the notes were generated automatically carry a link to their diff instead of a s
   code, its firmware and series identifiers and the catalogue itself.
 - Failing to write the catalogue cache no longer discards a catalogue that was fetched
   successfully, and an unchanged cache is no longer re-serialized on every poll.
+- **A fridge's drawer is recognised from the setting the app itself reads.** Some
+  refrigerators describe the My Zone drawer only through the `tempSelZ3` setting -- as a
+  list of choices, which is exactly where the official app takes the drawer's mode list
+  from -- without listing the compartment among the model's zones. Those drawers now get
+  the named mode selector (0 °C fresh, Quick cool, Fruit and vegetables) instead of a
+  bare temperature box showing the raw number. A drawer whose `tempSelZ3` is a
+  temperature range keeps its slider, unchanged.
+- **The fridge program dropdown is no longer removed when the per-mode controls do not
+  replace all of it.** It used to step aside as soon as any mode switch or drawer
+  selector existed, which on an unusual catalogue could leave the remaining programs with
+  no control at all -- and its removal is permanent. It now steps aside only when the
+  switches, the drawer selector and the preset buttons together cover every program the
+  appliance offers. When they do not, it stays and lists only what they leave out, so no
+  two controls ever command the same thing.
 - The single fridge **program dropdown is no longer created** where the per-mode
   controls above can be built, which is every fridge we have seen a diagnostics dump
   for. Automations calling `select.select_option` on it must move to the new switches,

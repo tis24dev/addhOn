@@ -75,9 +75,11 @@ from .ref_programs import (
     REF_MY_ZONE_PARAM,
     REF_MY_ZONE_ZONE,
     REF_PARAM_TO_FLAG,
+    flag_codes,
     has_replacement_controls,
     my_zone_code_for_value,
     my_zone_codes,
+    residual_codes,
 )
 
 # Air purifier aroma: the state attribute and the two custom-timing parameters.
@@ -851,6 +853,31 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
             self._program_codes = list(
                 HonProgramSelect._program_values(command, param_name).keys()
             )
+        # PARTIAL replacement: carry ONLY what the per-mode controls do not.
+        #
+        # `has_replacement_controls` already refuses to build this entity when the
+        # switches, the drawer select and the preset buttons cover the whole enum, which
+        # is the case on every catalogue this repository holds. It permits the entity
+        # when they do NOT -- and then a full option list would put two controls on the
+        # same registers with opposite meanings of "off" (this select's is the four-flag
+        # `stopProgram`; a switch clears one flag), and would hand back the drawer codes
+        # that `select.my_zone_mode` already owns.
+        #
+        # Restricting to the residual keeps both properties at once: no register has two
+        # writers, and no offered program is left with no control at all. It also drops
+        # the user's saved favourites from the list -- `residual_codes` is computed over
+        # catalogue programs only -- which is the correct side to err on for a value
+        # that is free text the user typed.
+        # Only when the residual is NON-EMPTY. An empty one means the replacements
+        # cover the enum, `supports_appliance` refuses the entity and production never
+        # reaches here; narrowing the list to nothing in that case would only break a
+        # direct construction of this class into a select with no options at all.
+        if flag_codes(self._appliance) or my_zone_codes(self._appliance):
+            residual = set(residual_codes(self._appliance))
+            if residual:
+                self._program_codes = [
+                    code for code in self._program_codes if code in residual
+                ]
         self._attr_options = [REF_PROGRAM_OFF, *self._program_codes]
         _LOGGER.debug(
             "Select debug: initialized REF program '%s' id=%s options=%s",

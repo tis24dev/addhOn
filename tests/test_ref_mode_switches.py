@@ -910,14 +910,55 @@ class RefSupersessionInvariantTest(unittest.IsolatedAsyncioTestCase):
             "neither": neither,
         }
 
+    async def test_every_offered_program_keeps_a_control(self) -> None:
+        """THE invariant, and the reason the predicate is no longer a bare OR.
+
+        Supersession does not merely delete an entity, it deletes a REGISTRY ROW
+        (`__init__.py`), which is irreversible. So the question that has to be true
+        before it happens is not "does some replacement exist" -- each half answers only
+        for its own platform -- but "is every offered catalogue program carried by
+        something". A code that is neither a clearable flag, nor a drawer mode, nor a
+        nameable download preset has to keep `select.ref_program`, and that select then
+        carries exactly those codes and no others.
+        """
+        from custom_components.addhon.ref_programs import (
+            download_codes,
+            flag_codes,
+            my_zone_codes,
+            program_categories,
+            residual_codes,
+        )
+
+        for label, appliance in self._shapes().items():
+            selects, switches = await self._controls(appliance)
+            residual = set(residual_codes(appliance))
+            carried = (
+                set(flag_codes(appliance))
+                | set(my_zone_codes(appliance))
+                | set(download_codes(appliance))
+            )
+            if residual:
+                self.assertIn("ref_program", selects, f"{label}: residual stranded")
+            from custom_components.addhon.ref_programs import offered_codes
+
+            self.assertEqual(
+                set(program_categories(appliance)) & set(offered_codes(appliance)),
+                carried | residual,
+                f"{label}: a catalogue program is carried by nothing",
+            )
+
     async def test_a_superseded_fridge_always_gets_a_replacement(self) -> None:
+        """Suppression implies the replacements really were built."""
         from custom_components.addhon.ref_programs import has_replacement_controls
 
         for label, appliance in self._shapes().items():
             selects, switches = await self._controls(appliance)
-            replaced = has_replacement_controls(appliance)
-            built = bool(switches) or ("my_zone_mode" in selects)
-            self.assertEqual(replaced, built, label)
+            if has_replacement_controls(appliance):
+                self.assertTrue(
+                    switches or ("my_zone_mode" in selects),
+                    f"{label}: superseded with nothing to supersede it",
+                )
+                self.assertNotIn("ref_program", selects, label)
 
     async def test_no_fridge_is_left_without_a_mode_control(self) -> None:
         """The harm, asserted directly. Whatever the predicate answers, the appliance
@@ -929,13 +970,43 @@ class RefSupersessionInvariantTest(unittest.IsolatedAsyncioTestCase):
                 f"{label}: no mode control at all",
             )
 
-    async def test_the_single_select_and_its_replacements_never_coexist(self) -> None:
+    async def test_the_single_select_never_overlaps_its_replacements(self) -> None:
+        """Coexistence is allowed; OVERLAP is not.
+
+        The old rule was "they never coexist", which was too strong in one direction and
+        too weak in the other: it forced the select out on a partial replacement (the
+        stranding this class exists to catch) while saying nothing about what the select
+        would carry if it stayed. What actually must not happen is two controls writing
+        the same register with opposite meanings of "off" -- so when the select survives
+        a partial replacement it carries the residual and nothing the switches or the
+        drawer select already own.
+        """
+        from custom_components.addhon.ref_programs import (
+            flag_codes,
+            my_zone_codes,
+            residual_codes,
+        )
+
         for label, appliance in self._shapes().items():
             selects, switches = await self._controls(appliance)
-            if switches or "my_zone_mode" in selects:
-                self.assertNotIn("ref_program", selects, label)
-            else:
+            replaced = bool(flag_codes(appliance) or my_zone_codes(appliance))
+            if not replaced:
                 self.assertIn("ref_program", selects, label)
+                continue
+            if "ref_program" not in selects:
+                self.assertFalse(residual_codes(appliance), label)
+                continue
+            entity = next(
+                e for e in await _build("select", _entry_data(appliance=appliance),
+                                        client=RunningClient())
+                if e._attr_translation_key == "ref_program"
+            )
+            offered = set(entity._attr_options) - {"off"}
+            self.assertEqual(set(residual_codes(appliance)), offered, label)
+            self.assertFalse(
+                offered & (set(flag_codes(appliance)) | set(my_zone_codes(appliance))),
+                f"{label}: the select still owns a replaced register",
+            )
 
 
 class RefModeDiagnosticsRowTest(unittest.TestCase):
