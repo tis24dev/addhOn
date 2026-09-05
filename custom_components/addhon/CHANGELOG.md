@@ -72,6 +72,19 @@ the notes were generated automatically carry a link to their diff instead of a s
   switches, the drawer selector and the preset buttons together cover every program the
   appliance offers. When they do not, it stays and lists only what they leave out, so no
   two controls ever command the same thing.
+- **Moving a fridge temperature while a mode is running now switches that mode off**,
+  the way the official app does, instead of only refusing. Previously the error told you
+  to turn the mode off first, which was impossible when the appliance does not offer a
+  switch for it -- every zone temperature stayed read-only until you walked to the
+  appliance. addhOn now clears every mode the appliance declares it can clear, and asks
+  you to set the temperature again; only a refrigerator that can clear none of them
+  still says so, and now says where to do it.
+- **Fridge readings hidden behind a switch come back if the switch does not.** Super
+  Cool, Super Freeze, Auto-set, Holiday and the My Zone mode reading are hidden when the
+  same appliance also gets a control for them. That was written once and never revisited,
+  so an appliance that later started up without its command catalogue lost the control
+  and kept the reading hidden -- both gone, with nothing said. The reading is now given
+  back whenever its control is missing. A reading you disabled yourself stays disabled.
 - The single fridge **program dropdown is no longer created** where the per-mode
   controls above can be built, which is every fridge we have seen a diagnostics dump
   for. Automations calling `select.select_option` on it must move to the new switches,

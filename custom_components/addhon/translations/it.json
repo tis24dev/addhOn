@@ -1156,8 +1156,11 @@
     "program_not_supported": {
       "message": "Programma \"{program}\" non supportato da questo apparecchio."
     },
+    "setpoint_cleared_modes": {
+      "message": "La temperatura la stava decidendo l'apparecchio, quindi le modalit\u00e0 attive sono state spente. Imposta di nuovo la temperatura."
+    },
     "setpoint_owned_by_mode": {
-      "message": "{mode} è attiva e la temperatura la decide l'apparecchio. Spegni prima la modalità."
+      "message": "\u00c8 attiva una modalit\u00e0 e la temperatura la decide l'apparecchio. Questo apparecchio non permette di spegnerla da remoto: usa il pannello sull'apparecchio."
     },
     "purifier_not_running": {
       "message": "Il purificatore deve risultare in funzione per cambiare questa impostazione."
