@@ -204,6 +204,14 @@ class CommandCatalogRequestTest(unittest.TestCase):
 
     def test_language_normalization_is_closed_to_a_base_fallback(self) -> None:
         self.assertEqual(normalize_catalog_language(" IT-it "), "it")
+        # The app resolves the tag against the languages it SHIPS, not against the
+        # device locale (decomp.txt:507774-507838 over the table at 483593-483650), so a
+        # regional tag survives only when the table declares it. `zh-hk` is declared;
+        # `pt-BR` is not, and the app sends `pt` there -- which truncation already gives.
+        self.assertEqual(normalize_catalog_language("zh-HK"), "zh-hk")
+        self.assertEqual(normalize_catalog_language(" ZH-hk "), "zh-hk")
+        self.assertEqual(normalize_catalog_language("pt-BR"), "pt")
+        self.assertEqual(normalize_catalog_language("zh-Hant"), "zh")
         for value in (None, "", "-regional", 4):
             with self.subTest(value=value):
                 self.assertEqual(normalize_catalog_language(value), "en")

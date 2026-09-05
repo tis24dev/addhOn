@@ -54,11 +54,29 @@ _PRESENCE_FLAGS = (
 )
 
 
+# The ONLY region-qualified tag the official app can send. Its translation table
+# (decomp.txt:483593-483650) is `cs de el en es fr he hr it nl pl pt ro ru sk sl sr tr uk
+# zh zh-hk ar hu nb fi sv lv et lt ...`: base codes throughout, with this one exception.
+# `findBestAvailableLanguage` (decomp.txt:507774-507838) returns the FULL tag only when
+# the table contains it, and otherwise falls back to the bare language code -- so a
+# pt-BR phone makes the app send `pt`, exactly what truncating gives, while a zh-HK phone
+# makes it send `zh-hk`, which truncating would turn into a different language.
+_APP_REGIONAL_TAGS = frozenset({"zh-hk"})
+
+
 def normalize_catalog_language(value: Any) -> str:
-    """Return the lower-case base language, falling back to English."""
+    """Return the language tag the official app would send, or English.
+
+    Truncating to the base subtag reproduces the app for every locale but one, because
+    the app resolves the tag against the languages it actually ships rather than against
+    the device locale. `_APP_REGIONAL_TAGS` carries that one.
+    """
     if not isinstance(value, str):
         return "en"
-    base, _, _ = value.strip().lower().partition("-")
+    tag = value.strip().lower()
+    if tag in _APP_REGIONAL_TAGS:
+        return tag
+    base, _, _ = tag.partition("-")
     return base or "en"
 
 
