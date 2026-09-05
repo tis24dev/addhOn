@@ -227,13 +227,13 @@ class HonRuleSet:
                     self._apply_enum(param, rule)
             except (ValueError, TypeError) as err:
                 # A malformed rule (non-numeric or off-grid `fixedValue`, bad enum
-                # value) must NOT abort the whole appliance's command-load. The
-                # immediate-fire in `HonParameter.add_trigger` runs at construction
-                # time, so an escaping ValueError from `_apply_fixed` (e.g. float("x")
-                # or an off-step value rejected by the range setter) would fail setup
-                # for every entity of the device. Roll the param back (a partial
-                # mutation is worse than an untouched one) then log and skip the bad
-                # rule; the runtime path already tolerates this via the entity write-path.
+                # value) must NOT take down the write that triggered it. This callback
+                # runs from `HonParameter.check_trigger`, i.e. inside a value setter on
+                # the entity write-path, so an escaping ValueError from `_apply_fixed`
+                # (e.g. float("x") or an off-step value rejected by the range setter)
+                # would surface as a failed user action against a parameter that is
+                # perfectly valid. Roll the param back (a partial mutation is worse than
+                # an untouched one) then log and skip the bad rule.
                 self._rollback(param, snapshot)
                 _LOGGER.debug(
                     "addhOn: skipping unapplicable rule for '%s' (trigger %s=%s): %s",

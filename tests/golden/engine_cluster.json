@@ -5593,7 +5593,7 @@
         "temp": {
           "category": "command",
           "group": "parameters",
-          "intern_value": "30",
+          "intern_value": "20",
           "key": "temp",
           "mandatory": 0,
           "max": 40,
@@ -5601,7 +5601,7 @@
           "step": 1,
           "triggers": {},
           "typology": "range",
-          "value": 30,
+          "value": 20,
           "values": [
             "10",
             "11",
