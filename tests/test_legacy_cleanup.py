@@ -198,7 +198,7 @@ class LegacyCleanupTest(unittest.TestCase):
         appliance = self._fridge_appliance(flags=False)
         coord = {"ID": {"type": "REF", "appliance": appliance}}
         entries = [
-            FakeRegEntry("binary_sensor.f_super_cool", "ID_super_cool",
+            FakeRegEntry("binary_sensor.f_quick_cool", "ID_quick_cool",
                          disabled_by="integration"),
             FakeRegEntry("sensor.f_my_zone_mode", "ID_my_zone_mode",
                          disabled_by="integration"),
@@ -207,7 +207,7 @@ class LegacyCleanupTest(unittest.TestCase):
 
         self.assertEqual([], removed, "reconciliation removes nothing")
         self.assertEqual(
-            {"binary_sensor.f_super_cool", "sensor.f_my_zone_mode"},
+            {"binary_sensor.f_quick_cool", "sensor.f_my_zone_mode"},
             {entity_id for entity_id, _ in _run.registry.updated},
         )
         for _entity_id, changes in _run.registry.updated:
@@ -219,7 +219,7 @@ class LegacyCleanupTest(unittest.TestCase):
         appliance = self._fridge_appliance(flags=True)
         coord = {"ID": {"type": "REF", "appliance": appliance}}
         entries = [
-            FakeRegEntry("binary_sensor.f_super_cool", "ID_super_cool",
+            FakeRegEntry("binary_sensor.f_quick_cool", "ID_quick_cool",
                          disabled_by="integration"),
         ]
         _run(entries, coord_data=coord)
@@ -230,11 +230,37 @@ class LegacyCleanupTest(unittest.TestCase):
         appliance = self._fridge_appliance(flags=False)
         coord = {"ID": {"type": "REF", "appliance": appliance}}
         entries = [
-            FakeRegEntry("binary_sensor.f_super_cool", "ID_super_cool",
+            FakeRegEntry("binary_sensor.f_quick_cool", "ID_quick_cool",
                          disabled_by="user"),
         ]
         _run(entries, coord_data=coord)
         self.assertEqual([], _run.registry.updated)
+
+    def test_every_flag_reading_is_named_the_way_it_was_registered(self) -> None:
+        """The vocabulary, pinned. This is the test that was missing.
+
+        The protocol flags (`super_cool`, `super_freeze`, `holiday`) and the readings
+        that carry them (`quick_cool`, `quick_freeze`, `holiday_mode`) are spelled
+        differently, and only `auto_set` is the same word on both sides. Building the
+        unique_id from the flag matched one row in four and skipped the other three
+        without a word -- the reconciliation looked like it worked because `auto_set`
+        answered. Asserting all four together is what makes that impossible again: any
+        row this function cannot name shows up here as one missing entity_id.
+        """
+        appliance = self._fridge_appliance(flags=False)
+        coord = {"ID": {"type": "REF", "appliance": appliance}}
+        readings = ("quick_cool", "quick_freeze", "auto_set", "holiday_mode")
+        entries = [
+            FakeRegEntry(f"binary_sensor.f_{key}", f"ID_{key}",
+                         disabled_by="integration")
+            for key in readings
+        ]
+        _run(entries, coord_data=coord)
+
+        self.assertEqual(
+            {f"binary_sensor.f_{key}" for key in readings},
+            {entity_id for entity_id, _ in _run.registry.updated},
+        )
 
     def test_legacy_power_switch_removed(self) -> None:
         removed, _detached = _run([FakeRegEntry("switch.foo_power", "ID_power")])

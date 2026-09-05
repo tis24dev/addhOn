@@ -634,23 +634,43 @@ def _reenable_unreplaced_ref_readings(
         return
     from homeassistant.helpers import entity_registry as er
 
+    from .binary_sensor import BINARY_SENSORS
     from .ref_programs import REF_FLAG_TO_PARAM, flag_codes, my_zone_codes
 
     restored = 0
     for appliance_id, device in coord_data.items():
-        if not isinstance(device, dict) or device.get("type") not in _REF_FAMILY:
+        app_type = device.get("type") if isinstance(device, dict) else None
+        if app_type not in _REF_FAMILY:
             continue
         appliance = device.get("appliance")
         try:
             # Reading -> is it still replaced? Same predicates the two platforms gate
             # on, so the answer here cannot drift from the answer that hid the row.
-            replaced = {
-                code: code in flag_codes(appliance) for code in REF_FLAG_TO_PARAM
+            #
+            # The unique_id comes from the READING's own row, never from the flag code.
+            # Those are two different vocabularies and always have been: the protocol
+            # flags are `super_cool`, `super_freeze` and `holiday`, the binary sensors
+            # carrying them are `quick_cool`, `quick_freeze` and `holiday_mode`, and
+            # only `auto_set` is spelled the same on both sides. Naming the entity from
+            # the flag therefore found one row in four and skipped the other three in
+            # silence -- the failure this whole function exists to prevent. Resolving it
+            # through the description table instead, keyed on the register both halves
+            # already agree on (`attr_key`, the very field the hiding side matches on),
+            # leaves no second spelling to keep in step by hand.
+            attr_to_key = {
+                description.attr_key: description.key
+                for description in BINARY_SENSORS.get(app_type, ())
             }
-            unique_ids = {
-                f"{appliance_id}_{code}": ("binary_sensor", still)
-                for code, still in replaced.items()
-            }
+            replacing = flag_codes(appliance)
+            unique_ids: dict[str, tuple[str, bool]] = {}
+            for code, param in REF_FLAG_TO_PARAM.items():
+                reading_key = attr_to_key.get(param)
+                if reading_key is None:
+                    continue
+                unique_ids[f"{appliance_id}_{reading_key}"] = (
+                    "binary_sensor",
+                    code in replacing,
+                )
             unique_ids[f"{appliance_id}_my_zone_mode"] = (
                 "sensor",
                 bool(my_zone_codes(appliance)),
