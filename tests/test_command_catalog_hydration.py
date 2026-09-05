@@ -255,6 +255,53 @@ class CommandCatalogHydrationTest(unittest.TestCase):
         self.assertEqual(observation["source"], "none")
         self.assertEqual(observation["failure"], "semantic")
 
+    def test_the_census_says_WHICH_sections_the_cloud_answered_with(self) -> None:
+        """The reason the shape flags exist: two vendor faults, one blank appliance.
+
+        Discussion #94's reporter sent a dump where his freezer had `commands: {}` and
+        nothing else -- no way to tell an empty body from a 200 that carried settings and
+        no `startProgram`. Those need different follow-ups, and only the second is a
+        catalogue we could partly use. The census now records the HTTP status and which
+        top-level sections came back, so the next dump answers it without another round
+        trip to the reporter.
+        """
+        payload = {
+            "applianceModel": {"options": {}},
+            "settings": {"setParameters": _command()},
+        }
+
+        self.load(TypedApi(_fetch(payload, self.request)))
+
+        observation = self.repo.census()[0]
+        self.assertEqual(200, observation["status"])
+        self.assertEqual(
+            {
+                "appliance_model": True,
+                "settings": True,
+                "set_parameters": True,
+                "start_program": False,
+                "stop_program": False,
+            },
+            observation["sections"],
+        )
+
+    def test_a_transport_fault_reports_no_shape_at_all(self) -> None:
+        """No response, no shape. `None`/all-false must not read as "the cloud said no
+        startProgram" -- that is a claim, and nothing was received to support it."""
+        self.repo.replace(self.request, _valid_catalog())
+
+        self.load(TypedApi(asyncio.TimeoutError()))
+
+        observation = self.repo.census()[0]
+        self.assertIsNone(observation["status"])
+        self.assertEqual(
+            {name: False for name in (
+                "appliance_model", "settings", "set_parameters",
+                "start_program", "stop_program",
+            )},
+            observation["sections"],
+        )
+
     def test_required_family_catalog_without_appliance_model_is_rejected(self) -> None:
         # A fridge catalog that parses commands but carries NO applianceModel is not a
         # thinner catalog -- the official app cannot consume it at all

@@ -19,6 +19,18 @@ CATALOG_OUTCOMES = frozenset(
     {"ok", "empty_payload", "invalid_payload", "missing_result", "nonzero_result"}
 )
 CATALOG_RESULT_CATEGORIES = frozenset({"zero", "missing", "nonzero", "other"})
+# The top-level sections a catalog payload may declare, in the order a reader wants
+# them. Booleans only: WHICH sections came back separates a vendor that answered with
+# metadata and no commands from one that answered with commands and no model, and both
+# collapse into the same empty appliance without this. Names are ours and closed, so a
+# census carrying them stays identity-free by construction.
+CATALOG_SECTION_FLAGS = (
+    "appliance_model",
+    "settings",
+    "set_parameters",
+    "start_program",
+    "stop_program",
+)
 
 @dataclass(frozen=True, slots=True)
 class CommandCatalogProbe:
@@ -39,6 +51,16 @@ class CommandCatalogProbe:
     request_series_version: bool
     request_language: bool
     code_length: int
+
+    def sections(self) -> dict[str, bool]:
+        """Which top-level sections the payload declared, as a fresh closed mapping."""
+        return {
+            "appliance_model": self.has_appliance_model,
+            "settings": self.has_settings,
+            "set_parameters": self.has_set_parameters,
+            "start_program": self.has_start_program,
+            "stop_program": self.has_stop_program,
+        }
 
     def as_dict(self) -> dict[str, str | int | bool | None]:
         """Return a fresh mapping containing only the declared safe fields."""

@@ -127,6 +127,7 @@ class HonCommandLoader:
             except _SemanticCatalogError as error:
                 return self._fallback_after_catalog_failure(
                     request,
+                    probe=catalog.probe,
                     failure="semantic",
                     live_outcome=catalog.probe.outcome,
                     live_failure=error,
@@ -142,6 +143,7 @@ class HonCommandLoader:
                     hydration,
                     failure="semantic",
                     code=None,
+                    probe=catalog.probe,
                 )
                 return hydration
 
@@ -162,12 +164,13 @@ class HonCommandLoader:
                     "serving the live catalog and leaving the cache untouched",
                     type(error).__name__,
                 )
-            self._record(request, hydration, failure=None, code=None)
+            self._record(request, hydration, failure=None, code=None, probe=catalog.probe)
             return hydration
 
         if isinstance(catalog, CommandCatalogResponseError):
             return self._fallback_after_catalog_failure(
                 request,
+                probe=catalog.probe,
                 failure="structural",
                 live_outcome=catalog.probe.outcome,
                 live_failure=catalog,
@@ -414,6 +417,7 @@ class HonCommandLoader:
         parsed_commands: int,
         favourites: tuple[list[dict[str, Any]], str],
         history: tuple[list[dict[str, Any]], str],
+        probe: Any = None,
     ) -> CommandHydration:
         cached, hydration = self._cached_hydration(
             request,
@@ -429,6 +433,7 @@ class HonCommandLoader:
                 failure=failure,
                 code=code,
                 cache=cached,
+                probe=probe,
             )
             return hydration
         self._repository.record(
@@ -442,6 +447,8 @@ class HonCommandLoader:
             favourites=favourites[1],
             history=history[1],
             cache=cached,
+            status=getattr(probe, "status", None),
+            sections=probe.sections() if probe is not None else None,
         )
         raise CommandCatalogUnavailable() from live_failure
 
@@ -453,6 +460,7 @@ class HonCommandLoader:
         failure: str | None,
         code: str | None,
         cache: CachedCommandCatalog | None = None,
+        probe: Any = None,
     ) -> None:
         self._repository.record(
             request,
@@ -465,6 +473,8 @@ class HonCommandLoader:
             favourites=hydration.favourites_outcome,
             history=hydration.history_outcome,
             cache=cache,
+            status=getattr(probe, "status", None),
+            sections=probe.sections() if probe is not None else None,
         )
 
     @staticmethod

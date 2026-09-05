@@ -2692,6 +2692,14 @@ class CommandCatalogDiagnosticsTest(unittest.TestCase):
     @staticmethod
     def _healthy_row() -> dict:
         return {
+            "status": 200,
+            "sections": {
+                "appliance_model": True,
+                "settings": True,
+                "set_parameters": True,
+                "start_program": False,
+                "stop_program": False,
+            },
             "source": "cache",
             "failure": "semantic",
             "live_outcome": "empty_payload",
@@ -2720,6 +2728,18 @@ class CommandCatalogDiagnosticsTest(unittest.TestCase):
                 "state": "recorded",
                 "rows": [
                     {
+                        # The shape of what came back: a 200 carrying a model and
+                        # settings but NO startProgram is a different vendor fault from
+                        # an empty body, and both reach a reporter as the same
+                        # controlless appliance without this pair.
+                        "status": 200,
+                        "sections": {
+                            "appliance_model": True,
+                            "settings": True,
+                            "set_parameters": True,
+                            "start_program": False,
+                            "stop_program": False,
+                        },
                         "source": "cache",
                         "failure": "semantic",
                         "live_outcome": "empty_payload",
@@ -2794,6 +2814,14 @@ class CommandCatalogDiagnosticsTest(unittest.TestCase):
                 return hash("ok")
 
         row = {
+            # A status outside the HTTP range, and a sections mapping carrying an extra
+            # producer-chosen key beside a truthy real one.
+            "status": 1_000_001,
+            "sections": {
+                "start_program": 1,
+                "settings": True,
+                "raw_mac": "AA:BB:CC:DD:EE:FF",
+            },
             "source": "Kitchen Freezer",
             "failure": "user@example.com",
             "live_outcome": Sneaky("AA:BB:CC:DD:EE:FF"),
@@ -2820,6 +2848,19 @@ class CommandCatalogDiagnosticsTest(unittest.TestCase):
                 "state": "recorded",
                 "rows": [
                     {
+                        "status": None,
+                        "sections": {
+                            # Absent keys stay None -- "not reported" is not the same
+                            # claim as "reported absent", and only the repository (which
+                            # writes over its own allowlist) may turn one into the other.
+                            "appliance_model": None,
+                            "settings": True,
+                            # A truthy int is not a bool and is refused like any other
+                            # value outside the closed type.
+                            "start_program": None,
+                            "set_parameters": None,
+                            "stop_program": None,
+                        },
                         "source": "other",
                         "failure": "other",
                         "live_outcome": "other",

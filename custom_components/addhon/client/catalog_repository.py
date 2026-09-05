@@ -17,6 +17,7 @@ from typing import Any
 
 from .transport.command_catalog import (
     CATALOG_OUTCOMES,
+    CATALOG_SECTION_FLAGS,
     CommandCatalogRequest,
     normalize_catalog_language,
 )
@@ -274,8 +275,17 @@ class CommandCatalogRepository:
         favourites: str,
         history: str,
         cache: CachedCommandCatalog | None = None,
+        status: int | None = None,
+        sections: Mapping[str, Any] | None = None,
     ) -> None:
-        """Record one bounded, identity-free runtime observation per local MAC."""
+        """Record one bounded, identity-free runtime observation per local MAC.
+
+        `status` and `sections` describe the SHAPE of what the cloud answered and are
+        both absent on a path that never received a response (a transport fault, or a
+        cache hit with no live attempt). They are the difference between "the appliance
+        ended up empty" and "the appliance ended up empty because `startProgram` was
+        missing while `settings` was not" -- two different vendor faults that otherwise
+        reach a reporter as the same blank dump."""
         safe_source = _require_token("source", source, CATALOG_SOURCES)
         safe_failure = _require_token(
             "failure", failure, CATALOG_FAILURES, optional=True
@@ -301,7 +311,17 @@ class CommandCatalogRepository:
             and re.fullmatch(r"[0-9a-f]{64}", cache.digest)
             else None
         )
+        # Bounded to the HTTP range, so a producer cannot smuggle a number through it.
+        safe_status = status if type(status) is int and 100 <= status <= 599 else None
+        sections = sections if isinstance(sections, Mapping) else {}
+        # Over the ALLOWLIST, never over the mapping received: iterating the argument
+        # would let a caller put its own key into the census.
+        safe_sections = {
+            name: bool(sections.get(name)) for name in CATALOG_SECTION_FLAGS
+        }
         self._observations[_request_text(request.mac_address)] = {
+            "status": safe_status,
+            "sections": safe_sections,
             "source": safe_source,
             "failure": safe_failure,
             "live_outcome": safe_outcome,

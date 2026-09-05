@@ -382,6 +382,16 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
         )
 
         expected = {
+            # Absent on this path by construction: a cache hit received no response, so
+            # there is no HTTP status and no payload whose sections could be described.
+            "status": None,
+            "sections": {
+                "appliance_model": False,
+                "settings": False,
+                "set_parameters": False,
+                "start_program": False,
+                "stop_program": False,
+            },
             "source": "cache",
             "failure": "semantic",
             "live_outcome": "empty_payload",
@@ -415,9 +425,25 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
             parsed_commands=1_000_001,
             favourites="ok",
             history="invalid",
+            # Out of the HTTP range, and a producer-chosen key beside a real one: both
+            # must be dropped rather than carried into a public dump.
+            status=99_999,
+            sections={"start_program": 1, "surprise": "AA:BB"},
         )
         census = self.repo.census()
         self.assertEqual(len(census), 1)
+        self.assertIsNone(census[0]["status"])
+        self.assertEqual(
+            {
+                "appliance_model": False,
+                "settings": False,
+                "set_parameters": False,
+                "start_program": True,
+                "stop_program": False,
+            },
+            census[0]["sections"],
+        )
+        self.assertNotIn("surprise", json.dumps(census))
         self.assertEqual(census[0]["source"], "live")
         self.assertIsNone(census[0]["raw_entries"])
         self.assertIsNone(census[0]["parsed_commands"])

@@ -3107,6 +3107,19 @@ _CATALOG_REQUEST_FLAGS = (
     "series_version",
     "language",
 )
+# Restated here rather than imported, exactly like every other vocabulary in this
+# module: the sanitizer must not be able to widen because a producer widened.
+_CATALOG_SECTION_FLAGS = (
+    "appliance_model",
+    "settings",
+    "set_parameters",
+    "start_program",
+    "stop_program",
+)
+# HTTP range. A status is the one number in this row that a reader needs unbounded
+# ranges for, and 100..599 is the only range it can legitimately fall in.
+_CATALOG_STATUS_MIN = 100
+_CATALOG_STATUS_MAX = 599
 _CATALOG_DIGEST_RE = re.compile(r"[0-9a-f]{12}")
 _CATALOG_MAX_ROWS = 50
 
@@ -3176,7 +3189,21 @@ def _catalog_row(raw: Mapping) -> dict:
     """Rebuild one observation without copying producer-owned keys or values."""
     request = raw.get("request")
     request = request if isinstance(request, Mapping) else {}
+    sections = raw.get("sections")
+    sections = sections if isinstance(sections, Mapping) else {}
     return {
+        # WHAT the cloud answered, not just that it answered badly. `raw_entries=3,
+        # parsed_commands=0` says something came back; these say a `startProgram` was
+        # missing while `settings` was not, which is a different vendor fault from the
+        # reverse and reaches a reporter as the same blank appliance without them.
+        # Both are absent on a path that never received a response.
+        "status": _bounded_int(
+            raw.get("status"), _CATALOG_STATUS_MIN, _CATALOG_STATUS_MAX
+        ),
+        "sections": {
+            name: _closed_bool(sections.get(name))
+            for name in _CATALOG_SECTION_FLAGS
+        },
         "source": _closed_token(raw.get("source"), _CATALOG_SOURCES),
         "failure": _closed_token(raw.get("failure"), _CATALOG_FAILURES),
         "live_outcome": _closed_token(
