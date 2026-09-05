@@ -76,9 +76,10 @@ the notes were generated automatically carry a link to their diff instead of a s
   the way the official app does, instead of only refusing. Previously the error told you
   to turn the mode off first, which was impossible when the appliance does not offer a
   switch for it -- every zone temperature stayed read-only until you walked to the
-  appliance. addhOn now clears every mode the appliance declares it can clear, and asks
-  you to set the temperature again; only a refrigerator that can clear none of them
-  still says so, and now says where to do it.
+  appliance. addhOn now switches the running modes off and asks you to set the
+  temperature again. Where the refrigerator cannot switch a running mode off at all, the
+  temperature is still refused, and the message now says that the appliance offers no
+  remote way to do it rather than pointing at a control that is not there.
 - **Fridge readings hidden behind a switch come back if the switch does not.** Super
   Cool, Super Freeze, Auto-set, Holiday and the My Zone mode reading are hidden when the
   same appliance also gets a control for them. That was written once and never revisited,
@@ -123,11 +124,17 @@ the notes were generated automatically carry a link to their diff instead of a s
 - **A drawer that has modes no longer also offers a target temperature.** On the models
   that declare both, two controls wrote one register and the temperature one published
   0, 2 or 5 as degrees Celsius — "a drawer set to 0 °C fresh reads 0 °C".
-- **A zone temperature can no longer be set while a mode is driving it.** Auto set, Super
+- **A zone temperature is no longer accepted and then silently undone.** Auto set, Super
   cool and Holiday each pin the fridge zone to a temperature of the appliance's choosing;
-  a value sent from Home Assistant was accepted and silently overwritten. The control now
-  says which mode owns the setpoint and asks you to switch it off first, which is what
-  the phone app does.
+  a value sent from Home Assistant was taken by the cloud and overwritten by the
+  appliance, with nothing said. The write is now handled by the mode-clearing behaviour
+  described above instead of going out to be discarded.
+- **Turning the fridge program dropdown off no longer switches off unrelated modes.**
+  On a refrigerator that keeps the dropdown alongside the new mode switches, selecting
+  `off` sent a reset that cleared Super Cool, Super Freeze, Auto-set and Holiday all at
+  once, so stopping one thing switched off modes you had set from another control. It
+  now clears only the modes it lists. This is also what the phone app does: its own
+  command history sends one mode per message, never the four-way reset.
 - **A refused fridge command is reported in your language.** Starting a mode that the
   cloud rejected produced an untranslated "Can't send command"; switching one off, on the
   same appliance, produced a proper message. Both now answer the same way.
