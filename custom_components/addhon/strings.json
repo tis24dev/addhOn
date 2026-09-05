@@ -1156,8 +1156,11 @@
     "program_not_supported": {
       "message": "Program \"{program}\" is not supported by this device."
     },
+    "setpoint_cleared_modes": {
+      "message": "The appliance was choosing this temperature, so the active modes were switched off. Set the temperature again."
+    },
     "setpoint_owned_by_mode": {
-      "message": "{mode} is running and the appliance is choosing this temperature. Switch the mode off first."
+      "message": "A mode is running and the appliance is choosing this temperature. This appliance offers no way to switch that mode off remotely -- use the panel on the appliance."
     },
     "purifier_not_running": {
       "message": "The purifier must be confirmed running to change this."

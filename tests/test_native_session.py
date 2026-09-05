@@ -66,9 +66,16 @@ _install_stubs()
 from custom_components.addhon import error_codes as ec  # noqa: E402
 from custom_components.addhon.client import factory  # noqa: E402
 from custom_components.addhon.client import session as session_mod  # noqa: E402
+from custom_components.addhon.client.catalog_repository import (  # noqa: E402
+    CommandCatalogRepository,
+)
+from custom_components.addhon.client.engine.command_hydration import (  # noqa: E402
+    CommandCatalogUnavailable,
+)
 from custom_components.addhon.client.session import NativeHon  # noqa: E402
 from custom_components.addhon.client.interfaces import HonSession  # noqa: E402
 from custom_components.addhon.client.transport.auth import NativeAuthError  # noqa: E402
+from custom_components.addhon.hon_client import HonClient  # noqa: E402
 
 
 def _run(coro):
@@ -187,6 +194,220 @@ class AuthTracePropagationTest(unittest.TestCase):
         _run(hon.close())
 
 
+class CatalogRepositoryPropagationTest(unittest.TestCase):
+    def test_factory_forwards_the_repository_to_native_session(self) -> None:
+        repository = CommandCatalogRepository(None, "it")
+
+        hon = factory.create_session(
+            "u@x",
+            "p",
+            enable_mqtt=False,
+            minimal=True,
+            catalog_repository=repository,
+        )
+
+        self.assertIs(repository, hon._catalog_repository)
+
+    def test_factory_forwards_the_repository_to_engine_appliance(self) -> None:
+        repository = CommandCatalogRepository(None, "it")
+
+        appliance = factory.create_appliance(
+            object(),
+            {"macAddress": "A", "applianceTypeName": "REF"},
+            catalog_repository=repository,
+        )
+
+        self.assertIs(repository, appliance._catalog_repository)
+
+    def test_native_session_forwards_one_repository_to_every_zone(self) -> None:
+        repository = CommandCatalogRepository(None, "it")
+        captured: list[CommandCatalogRepository] = []
+        data = [{"macAddress": "A", "applianceTypeName": "AC", "zone": "2"}]
+        events: list[str] = []
+        api = FakeApi(data, events)
+        original = factory.create_appliance
+
+        def fake_create_appliance(
+            api, data, zone=0, *, catalog_repository=None
+        ):
+            captured.append(catalog_repository)
+            return FakeAppliance(api, data, zone, events)
+
+        factory.create_appliance = fake_create_appliance
+        self.addCleanup(setattr, factory, "create_appliance", original)
+        hon = NativeHon(
+            "u@x",
+            "p",
+            enable_mqtt=False,
+            catalog_repository=repository,
+        )
+        hon._api = api
+
+        _run(hon.setup())
+
+        self.assertEqual(3, len(hon.appliances))
+        self.assertEqual([repository, repository, repository], captured)
+
+
+class CommandCatalogRetryBoundaryTest(unittest.TestCase):
+    def test_unavailable_catalog_retries_once_before_entity_discovery(self) -> None:
+        class RetryAppliance(FakeAppliance):
+            def __init__(self, api, data, zone, events) -> None:
+                super().__init__(api, data, zone, events)
+                self.command_loads = 0
+                self.updates = 0
+                self.attributes = {"parameters": {"status": "ok"}}
+                self.settings: dict = {}
+                self.statistics: dict = {}
+
+            async def load_commands(self) -> None:
+                self.command_loads += 1
+                if self.mac_address == "RETRY" and self.command_loads == 1:
+                    raise CommandCatalogUnavailable()
+
+            async def update(self) -> None:
+                self.updates += 1
+
+        repository = CommandCatalogRepository(None, "it")
+        data = [
+            {"macAddress": "RETRY", "applianceTypeName": "FRE"},
+            {"macAddress": "OK", "applianceTypeName": "WM"},
+        ]
+        events: list[str] = []
+        api = FakeApi(data, events)
+        original = factory.create_appliance
+
+        def fake_create_appliance(
+            api, data, zone=0, *, catalog_repository=None
+        ):
+            self.assertIs(repository, catalog_repository)
+            return RetryAppliance(api, data, zone, events)
+
+        factory.create_appliance = fake_create_appliance
+        self.addCleanup(setattr, factory, "create_appliance", original)
+        hon = NativeHon(
+            "u@x",
+            "p",
+            enable_mqtt=False,
+            catalog_repository=repository,
+        )
+        hon._api = api
+
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            _run(hon.setup())
+
+        by_mac = {appliance.mac_address: appliance for appliance in hon.appliances}
+        retry = by_mac["RETRY"]
+        self.assertEqual({"ADDHON-240": 1}, hon.degraded_census)
+        self.assertTrue(hon.needs_rehydration(retry))
+        self.assertIn(retry, hon.appliances)
+
+        client = HonClient(email="e@x", password="p")
+        client._api = hon
+        client._run_on_hon_loop = (  # type: ignore[assignment]
+            lambda coro, timeout=None: asyncio.run(coro)
+        )
+        client._update_appliance_sync(retry)
+        client._first_poll_done = True
+        client._update_appliance_sync(retry)
+
+        self.assertEqual(2, retry.command_loads)
+        self.assertEqual(2, retry.updates)
+
+
+class SingleApplianceCatalogDegradationTest(unittest.TestCase):
+    """The all-failed guard must not fire on an unusable catalog (issue #94).
+
+    On an account with ONE appliance every per-appliance failure is also a total
+    failure, so the guard's premise -- "at least one partial is retryable, and Home
+    Assistant retrying could still fix it" -- decides whether the user gets a
+    degraded entry or no entry at all. A transport fault genuinely can be fixed by a
+    retry. An unusable command catalog cannot: the retry re-parses the same cloud
+    answer into the same nothing, and the cache that would rescue it is empty by
+    construction on the first start after the upgrade that introduced it.
+    """
+
+    class _CatalogAppliance(FakeAppliance):
+        def __init__(self, api, data, zone, events, error) -> None:
+            super().__init__(api, data, zone, events)
+            self.error = error
+            self.command_loads = 0
+            self.updates = 0
+            self.attributes = {"parameters": {"status": "ok"}}
+            self.settings: dict = {}
+            self.statistics: dict = {}
+
+        async def load_commands(self) -> None:
+            self.command_loads += 1
+            raise self.error
+
+        async def update(self) -> None:
+            self.updates += 1
+
+    def _single_appliance_session(self, error):
+        repository = CommandCatalogRepository(None, "it")
+        data = [{"macAddress": "ONLY", "applianceTypeName": "FRE"}]
+        events: list[str] = []
+        api = FakeApi(data, events)
+        original = factory.create_appliance
+
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
+            return SingleApplianceCatalogDegradationTest._CatalogAppliance(
+                api, data, zone, events, error
+            )
+
+        factory.create_appliance = fake_create_appliance
+        self.addCleanup(setattr, factory, "create_appliance", original)
+        hon = NativeHon("u@x", "p", enable_mqtt=False, catalog_repository=repository)
+        hon._api = api
+        return hon
+
+    def test_unusable_catalog_alone_on_the_account_degrades_instead_of_failing(self) -> None:
+        hon = self._single_appliance_session(CommandCatalogUnavailable())
+
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            _run(hon.setup())
+
+        # The entry ships: the appliance is kept, its sensors work, and only its
+        # command entities are missing. On 5.21.x this same cloud answer produced a
+        # degraded entry too -- failing here would be a REGRESSION, not a hardening.
+        self.assertEqual(1, len(hon.appliances))
+        self.assertEqual({"ADDHON-240": 1}, hon.degraded_census)
+        # Still queued: one more attempt before entity discovery is worth spending.
+        self.assertTrue(hon.needs_rehydration(hon.appliances[0]))
+
+    def test_a_transport_fault_alone_on_the_account_still_fails_setup(self) -> None:
+        # CONTROL for the test above. Collapsing the two buckets back together -- or
+        # dropping the guard -- has to be caught here, or the exemption above would
+        # read as "the all-failed guard no longer works".
+        hon = self._single_appliance_session(TimeoutError())
+
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            with self.assertRaises(session_mod.HonCodedError):
+                _run(hon.setup())
+
+    def test_a_second_unusable_catalog_on_the_first_poll_is_tolerated(self) -> None:
+        # The other half. Exempting the setup guard alone would only move the brick
+        # one hop: the first-poll rehydration deliberately does NOT tolerate a second
+        # failure, so an appliance whose catalog stays unusable would still take the
+        # entry down through ConfigEntryNotReady.
+        hon = self._single_appliance_session(CommandCatalogUnavailable())
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            _run(hon.setup())
+        appliance = hon.appliances[0]
+
+        client = HonClient(email="e@x", password="p")
+        client._api = hon
+        client._run_on_hon_loop = (  # type: ignore[assignment]
+            lambda coro, timeout=None: asyncio.run(coro)
+        )
+        client._update_appliance_sync(appliance)
+
+        # Retried once, failed again, and the poll carried on to update().
+        self.assertEqual(2, appliance.command_loads)
+        self.assertEqual(1, appliance.updates)
+
+
 class _Harness:
     """Patches create_appliance (factory) + NativeHon._make_mqtt + HonConnection/HonApi."""
 
@@ -205,7 +426,12 @@ class _Harness:
         t = self.test
         events = self.events
 
-        def fake_create_appliance(api, data, zone=0):
+        h.catalog_repositories = []
+
+        def fake_create_appliance(
+            api, data, zone=0, *, catalog_repository=None
+        ):
+            h.catalog_repositories.append(catalog_repository)
             return FakeAppliance(api, data, zone, events, fail=data.get("macAddress") in h.fail_macs)
 
         async def fake_make_mqtt(hon):  # hon = NativeHon instance (bound method)
@@ -589,7 +815,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         good = {"macAddress": "OK", "applianceTypeName": "WM"}
         h = _Harness(self, [bad, good])
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             if data.get("macAddress") == "BAD":
                 raise TypeError("malformed attributes in constructor")
             return FakeAppliance(api, data, zone, h.events)
@@ -623,7 +849,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         good = {"macAddress": "OK", "applianceTypeName": "WM"}
         h = _Harness(self, [bad, good])
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             cls = AttrFailAppliance if data.get("macAddress") == "BAD" else FakeAppliance
             return cls(api, data, zone, h.events)
 
@@ -653,7 +879,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         data = [{"macAddress": "A", "applianceTypeName": "REF"}]
         h = _Harness(self, data)
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return CancelAppliance(api, data, zone, h.events)
 
         async def fake_make_mqtt(hon):
@@ -680,7 +906,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         good = {"macAddress": "OK", "applianceTypeName": "WM"}
         h = _Harness(self, [bad, good])
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             cls = SlowAppliance if data.get("macAddress") == "BAD" else FakeAppliance
             return cls(api, data, zone, h.events)
 
@@ -712,7 +938,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         data = [{"macAddress": "A", "applianceTypeName": "REF"}]
         h = _Harness(self, data)
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return RejectedAppliance(api, data, zone, h.events)
 
         self._patch(factory, "create_appliance", fake_create_appliance)
@@ -737,7 +963,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         ]
         h = _Harness(self, data)
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return SlowAppliance(api, data, zone, h.events)
 
         self._patch(factory, "create_appliance", fake_create_appliance)
@@ -780,7 +1006,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         ]
         h = _Harness(self, data)
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return Broken(api, data, zone, h.events)
 
         self._patch(factory, "create_appliance", fake_create_appliance)
@@ -821,7 +1047,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         async def no_mqtt(hon):
             return None
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             return SlowAppliance(api, data, zone, h.events)
 
         self._patch(factory, "create_appliance", fake_create_appliance)
@@ -873,7 +1099,7 @@ class NativeSessionSetupTest(unittest.TestCase):
         nxt = {"macAddress": "N", "applianceTypeName": "WM"}
         h = _Harness(self, [zoned, nxt])
 
-        def fake_create_appliance(api, data, zone=0):
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
             if data.get("macAddress") == "Z" and zone == 1:
                 raise TypeError("zone-1 constructor boom")
             return FakeAppliance(api, data, zone, h.events)
@@ -1302,7 +1528,7 @@ class SetupDropCensusTest(unittest.TestCase):
         data = [{"macAddress": "BAD", "applianceTypeName": "REF"}]
         h = _Harness(self, data)
 
-        def raising_create_appliance(api, data, zone=0):
+        def raising_create_appliance(api, data, zone=0, *, catalog_repository=None):
             raise KeyError("malformed attributes in constructor")
 
         async def fake_make_mqtt(hon):
@@ -1484,7 +1710,9 @@ class SetupDropCensusTest(unittest.TestCase):
             h = _Harness(self, [])
             h.install()
             if patch_factory:
-                def raising_create_appliance(api, data, zone=0):
+                def raising_create_appliance(
+                    api, data, zone=0, *, catalog_repository=None
+                ):
                     raise KeyError("constructor boom")
 
                 self._patch(factory, "create_appliance", raising_create_appliance)
@@ -1551,8 +1779,15 @@ class SetupDropCensusTest(unittest.TestCase):
         h.install()
         built = factory.create_appliance  # the harness fake, already installed
 
-        def create_with_a_timeout(api, data, zone=0):
-            appliance = built(api, data, zone=zone)
+        def create_with_a_timeout(
+            api, data, zone=0, *, catalog_repository=None
+        ):
+            appliance = built(
+                api,
+                data,
+                zone=zone,
+                catalog_repository=catalog_repository,
+            )
             if data.get("macAddress") == "C":
                 async def load_commands():
                     raise TimeoutError("hOn did not answer in time")

@@ -29,6 +29,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import device as _device
+from .command_catalog import (
+    CommandCatalogFetch,
+    CommandCatalogRequest,
+    CommandCatalogResponseError,
+    extract_command_catalog,
+)
 from .connection import HonConnection
 from .parse import APPLIANCE_LIST_PATH, parse_appliance_list, probe_appliance_list
 from .tokens import token_person_account_id
@@ -362,37 +368,27 @@ class HonApi:
                 _LOGGER.warning("hOn appliance response shape: <unreadable>", exc_info=True)
         return appliances
 
-    async def load_commands(self, appliance: Any) -> dict:
-        params: dict[str, Any] = {
-            "applianceType": appliance.appliance_type,
-            "applianceModelId": appliance.appliance_model_id,
-            "macAddress": appliance.mac_address,
-            "os": _device.OS,
-            "appVersion": _device.APP_VERSION,
-            "code": appliance.code,
-        }
-        if firmware_id := appliance.info.get("eepromId"):
-            params["firmwareId"] = firmware_id
-        if firmware_version := appliance.info.get("fwVersion"):
-            params["fwVersion"] = firmware_version
-        if series := appliance.info.get("series"):
-            params["series"] = series
-        url = f"{API_URL}/commands/v1/retrieve"
-        async with self._connection.get(url, params=params) as response:
+    async def fetch_command_catalog(
+        self, request: CommandCatalogRequest
+    ) -> CommandCatalogFetch:
+        """Fetch and structurally validate one command catalog."""
+        async with self._connection.get(
+            f"{API_URL}/commands/v1/retrieve", params=request.params()
+        ) as response:
             data = await response.json(content_type=None)
-        payload = data.get("payload") if isinstance(data, dict) else None
-        # Error-branch on any invalid shape (non-dict or empty payload) -> {}. The pop
-        # below REMOVES resultCode from the returned dict (the parser does not want it
-        # in the command entries) while validating it.
-        if not isinstance(payload, dict) or not payload:
-            # data is the raw cloud response (mirrors the device context: macAddress,
-            # etc.) and this ERROR is never gated -> redact identity before logging.
-            _LOGGER.error("hOn load_commands: invalid payload: %s", redact_identity(data))
+            status = getattr(response, "status", None)
+        return extract_command_catalog(data, status=status, request=request)
+
+    async def load_commands(
+        self, appliance: Any, language: str = "en"
+    ) -> dict[str, Any]:
+        """Compatibility wrapper returning the historical mapping-or-empty shape."""
+        request = CommandCatalogRequest.from_appliance(appliance, language)
+        try:
+            return (await self.fetch_command_catalog(request)).payload
+        except CommandCatalogResponseError as error:
+            _LOGGER.error("hOn command catalog rejected: %s", error.probe.as_dict())
             return {}
-        if payload.pop("resultCode", None) != "0":
-            _LOGGER.error("hOn load_commands: resultCode != 0: %s", redact_identity(data))
-            return {}
-        return payload
 
     async def load_command_history(self, appliance: Any) -> list:
         url = f"{API_URL}/commands/v1/appliance/{appliance.mac_address}/history"

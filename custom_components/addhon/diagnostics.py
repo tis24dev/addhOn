@@ -3087,6 +3087,42 @@ _FETCH_MAX_AGE_S = 315_360_000
 _ADDHON_LABEL_RE = re.compile(r"ADDHON-[0-9]{3}")
 _FETCH_MAX_LABEL_ROWS = 20
 
+# Closed vocabularies for the command-catalog census. These are intentionally
+# duplicated instead of imported from the native client: diagnostics is the trust
+# boundary, and tests compare these literals with the producer's declarations so a
+# new producer token is denied as ``other`` until this reader explicitly admits it.
+_CATALOG_STATES = frozenset(
+    {"recorded", "never_ran", "client_absent", "unreadable"}
+)
+_CATALOG_SOURCES = frozenset({"live", "cache", "none"})
+_CATALOG_FAILURES = frozenset({"transport", "structural", "semantic"})
+_CATALOG_OUTCOMES = frozenset(
+    {"ok", "empty_payload", "invalid_payload", "missing_result", "nonzero_result"}
+)
+_CATALOG_ENRICHMENTS = frozenset({"ok", "empty", "raised", "invalid"})
+_CATALOG_REQUEST_FLAGS = (
+    "firmware",
+    "firmware_version",
+    "series",
+    "series_version",
+    "language",
+)
+# Restated here rather than imported, exactly like every other vocabulary in this
+# module: the sanitizer must not be able to widen because a producer widened.
+_CATALOG_SECTION_FLAGS = (
+    "appliance_model",
+    "settings",
+    "set_parameters",
+    "start_program",
+    "stop_program",
+)
+# HTTP range. A status is the one number in this row that a reader needs unbounded
+# ranges for, and 100..599 is the only range it can legitimately fall in.
+_CATALOG_STATUS_MIN = 100
+_CATALOG_STATUS_MAX = 599
+_CATALOG_DIGEST_RE = re.compile(r"[0-9a-f]{12}")
+_CATALOG_MAX_ROWS = 50
+
 
 def _closed_token(value, allowed: frozenset) -> str | None:
     """A token of `allowed`, or "other". NEVER an object chosen by the writer.
@@ -3140,6 +3176,99 @@ def _label_token(value) -> str | None:
     if type(value) is not str or not _ADDHON_LABEL_RE.fullmatch(value):
         return None
     return value
+
+
+def _catalog_digest(value) -> str | None:
+    """Return only the producer's fixed-width, nonreversible digest prefix."""
+    if type(value) is not str or not _CATALOG_DIGEST_RE.fullmatch(value):
+        return None
+    return value
+
+
+def _catalog_row(raw: Mapping) -> dict:
+    """Rebuild one observation without copying producer-owned keys or values."""
+    request = raw.get("request")
+    request = request if isinstance(request, Mapping) else {}
+    sections = raw.get("sections")
+    sections = sections if isinstance(sections, Mapping) else {}
+    return {
+        # WHAT the cloud answered, not just that it answered badly. `raw_entries=3,
+        # parsed_commands=0` says something came back; these say a `startProgram` was
+        # missing while `settings` was not, which is a different vendor fault from the
+        # reverse and reaches a reporter as the same blank appliance without them.
+        # Both are absent on a path that never received a response.
+        "status": _bounded_int(
+            raw.get("status"), _CATALOG_STATUS_MIN, _CATALOG_STATUS_MAX
+        ),
+        "sections": {
+            name: _closed_bool(sections.get(name))
+            for name in _CATALOG_SECTION_FLAGS
+        },
+        "source": _closed_token(raw.get("source"), _CATALOG_SOURCES),
+        "failure": _closed_token(raw.get("failure"), _CATALOG_FAILURES),
+        "live_outcome": _closed_token(
+            raw.get("live_outcome"), _CATALOG_OUTCOMES
+        ),
+        "code": _label_token(raw.get("code")),
+        "raw_entries": _bounded_int(raw.get("raw_entries"), 0, _FETCH_MAX_INT),
+        "parsed_commands": _bounded_int(
+            raw.get("parsed_commands"), 0, _FETCH_MAX_INT
+        ),
+        "cache_age_s": _bounded_int(
+            raw.get("cache_age_s"), 0, _FETCH_MAX_AGE_S
+        ),
+        "digest": _catalog_digest(raw.get("digest")),
+        "favourites": _closed_token(
+            raw.get("favourites"), _CATALOG_ENRICHMENTS
+        ),
+        "history": _closed_token(raw.get("history"), _CATALOG_ENRICHMENTS),
+        "request": {
+            name: _closed_bool(request.get(name))
+            for name in _CATALOG_REQUEST_FLAGS
+        },
+    }
+
+
+def _catalog_state(state: str, rows: list[dict] | None = None) -> dict:
+    """Build the stable two-key envelope used by every catalog census state."""
+    return {"state": state, "rows": rows if rows is not None else []}
+
+
+async def _command_catalog(hass: HomeAssistant, entry: ConfigEntry) -> dict:
+    """Read and independently sanitize the native catalog census.
+
+    The client owns a dedicated event-loop thread, so its synchronous bridge is
+    invoked through Home Assistant's executor rather than on the HA loop. This whole
+    helper is guarded because diagnostics must remain downloadable while either loop
+    or the session is being torn down.
+    """
+    try:
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+        client = entry_data.get("client")
+        if client is None:
+            return _catalog_state("client_absent")
+        reader = getattr(client, "command_catalog_census", None)
+        if not callable(reader):
+            return _catalog_state("never_ran")
+        raw = await hass.async_add_executor_job(reader)
+        if not isinstance(raw, list):
+            return _catalog_state("unreadable")
+
+        rows: list[dict] = []
+        for candidate in raw:
+            if not isinstance(candidate, Mapping):
+                continue
+            rows.append(_catalog_row(candidate))
+            if len(rows) >= _CATALOG_MAX_ROWS:
+                break
+        if not rows:
+            return _catalog_state("never_ran" if not raw else "unreadable")
+        return _catalog_state("recorded", rows)
+    except Exception:  # noqa: BLE001 - diagnostics must degrade, never raise
+        # Deliberately omit ``exc_info``: an arbitrary reader exception may contain
+        # the same appliance/account identity this block exists to keep private.
+        _LOGGER.debug("Diagnostics debug: command catalog census unreadable")
+        return _catalog_state("unreadable")
 
 
 def _skip_census(raw) -> dict:
@@ -3453,6 +3582,11 @@ async def async_get_config_entry_diagnostics(
         # tokens, range-checked ints and a validated instant, so like `last_poll` it is
         # leak-proof by construction and skips _redact.
         "last_fetch": _last_fetch(hass, entry, now=now),
+        # Identity-free health for the schema that controls entity discovery. Read on
+        # the native client loop through HA's executor and rebuilt from diagnostics'
+        # own literals, so even a hostile/older producer cannot add a key or echo a
+        # token into a public dump.
+        "command_catalog": await _command_catalog(hass, entry),
         "appliances": appliances,
     }
 

@@ -36,7 +36,7 @@ import logging
 from typing import Any
 
 from .const import PROGRAM_PARAM_NAMES
-from .hon_commands import SYNTHETIC_CATEGORY, get_command
+from .hon_commands import SYNTHETIC_CATEGORY, find_settings_param, get_command
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -273,6 +273,42 @@ def flag_codes(appliance) -> list[str]:
     ]
 
 
+def _declares_my_zone(appliance) -> bool:
+    """Does the CATALOGUE say this fridge has the vtRoom1 drawer? Two positive signals.
+
+    `zones` is the first and remains the app's own capability gate
+    (`useRefrigeratorCommands`, decomp.txt:2843098-2843131). But denying on its silence
+    alone has a failure mode we can see in a real catalogue: `decomp.txt:3495902`
+    declares `vtZone = "1"`, three drawer categories pinning `tempSelZ3`, AND
+    `setParameters.tempSelZ3` as `enum ["0","2","5"]`, while carrying no `zones` at all.
+    There the drawer select was refused while the flag switches still suppressed
+    `select.ref_program`, so the three drawer programs kept no control that NAMES them.
+
+    The second signal is the app's own source of truth for that very list.
+    `myZoneModesByTemps` (decomp.txt:2841793-2841830) does not look at `startProgram` at
+    all: it reads `setParameters.parameters[tempSelZ3]` -- `tempSelZ4` for any zone that
+    is not VT_ROOM_1 -- and takes its `enumValues`. A declared `tempSelZ3` ENUM is
+    therefore the app saying, in the catalogue, that this register is the drawer's mode
+    selector. That is evidence of the same kind as `zones`, read from the same document,
+    and it is not an inference from silence.
+
+    Deliberately an ENUM and not any `tempSelZ3`: HDPW5620CNPK declares that register as
+    a RANGE, which is a real temperature the drawer scales over and already has
+    `number.target_temp_zone3`. A range must keep answering False here so the two
+    controls go on excluding each other from the data alone.
+    """
+    if REF_MY_ZONE_ZONE in model_zones(appliance):
+        return True
+    found = find_settings_param(appliance, REF_MY_ZONE_PARAM)
+    if found is None:
+        return False
+    _command_name, param = found
+    if str(getattr(param, "typology", "")) != "enum":
+        return False
+    values = getattr(param, "values", None)
+    return isinstance(values, (list, tuple)) and bool(values)
+
+
 def my_zone_codes(appliance) -> list[str]:
     """Offered vtRoom1 DRAWER modes, coldest first, or [].
 
@@ -315,7 +351,7 @@ def my_zone_codes(appliance) -> list[str]:
     up with no way to reach `zero_fresh`, `quick_cool` or `fruit_and_veg` at all. One
     question, answered once, is the only shape in which that cannot happen again.
     """
-    if REF_MY_ZONE_ZONE not in model_zones(appliance):
+    if not _declares_my_zone(appliance):
         return []
     offered = set(offered_codes(appliance))
     drawer = REF_MY_ZONE_ZONE.lower()
@@ -511,4 +547,40 @@ def has_replacement_controls(appliance) -> bool:
     function exists to prevent -- an appliance whose select steps aside for a replacement
     that the caller then refuses to build.
     """
-    return bool(flag_codes(appliance)) or bool(my_zone_codes(appliance))
+    return bool(flag_codes(appliance) or my_zone_codes(appliance)) and not residual_codes(
+        appliance
+    )
+
+
+def residual_codes(appliance) -> list[str]:
+    """Offered programs that NO replacement control would carry, in enum order.
+
+    The safety net over an irreversible act. `has_replacement_controls` suppressing the
+    select also makes `__init__.py` DELETE it from the entity registry, and a boolean OR
+    cannot know what the replacements leave behind: each half answers only for its own
+    platform, so a code that is neither a flag, nor a drawer mode, nor a nameable
+    download preset simply stops having a control the moment the select goes.
+
+    On every catalogue this repository holds -- rmxs's HFW7720EWMP, roberglezz's
+    HCW58F18EWMP, HDPW5620CNPK and the APK's HTW7720ENMP once `_declares_my_zone` sees
+    its `tempSelZ3` enum -- this list is EMPTY, so it changes nothing that ships today.
+    It exists so that the next catalogue shape cannot delete a user's only control
+    silently: an entity kept is recoverable, an entity purged from the registry is not.
+    """
+    covered = (
+        set(flag_codes(appliance))
+        | set(my_zone_codes(appliance))
+        | set(download_codes(appliance))
+    )
+    # Catalogue programs ONLY. `offered_codes` is the raw live enum, and the engine
+    # injects the user's saved favourites into it under the name the USER typed
+    # (`command_loader._add_favourites`), so counting those would make this list
+    # non-empty on any fridge that ever saved one -- suppressing the suppression
+    # forever, and for a reason that has nothing to do with a missing control.
+    # `program_categories` is the same enum with favourites already dropped.
+    catalogue = program_categories(appliance)
+    return [
+        code
+        for code in offered_codes(appliance)
+        if code in catalogue and code not in covered
+    ]

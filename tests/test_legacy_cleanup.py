@@ -85,9 +85,10 @@ from custom_components.addhon import (  # noqa: E402
 
 
 class FakeRegEntry:
-    def __init__(self, entity_id: str, unique_id: str) -> None:
+    def __init__(self, entity_id: str, unique_id: str, disabled_by=None) -> None:
         self.entity_id = entity_id
         self.unique_id = unique_id
+        self.disabled_by = disabled_by
 
     @property
     def domain(self) -> str:
@@ -98,10 +99,29 @@ class FakeRegistry:
     def __init__(self, entries) -> None:
         self._entries = list(entries)
         self.removed: list = []
+        self.updated: list = []
 
     def async_remove(self, entity_id: str) -> None:
         self.removed.append(entity_id)
         self._entries = [e for e in self._entries if e.entity_id != entity_id]
+
+    # -- the reading reconciliation reads the registry by unique_id ----------------
+    @property
+    def entities(self) -> dict:
+        return {e.entity_id: e for e in self._entries}
+
+    def async_get_entity_id(self, domain: str, platform: str, unique_id: str):
+        for entry in self._entries:
+            if entry.domain == domain and entry.unique_id == unique_id:
+                return entry.entity_id
+        return None
+
+    def async_update_entity(self, entity_id: str, **changes):
+        self.updated.append((entity_id, changes))
+        for entry in self._entries:
+            if entry.entity_id == entity_id:
+                for name, value in changes.items():
+                    setattr(entry, name, value)
 
 
 class FakeEntry:
@@ -142,6 +162,12 @@ def _run(entries, coord_data=None, devices=(), issues=None, on_issue=None):
             (domain, key, kw)
         )
     reg = FakeRegistry(entries)
+    # The production code compares `disabled_by` against this enum; without it on the
+    # stub the reconciliation would silently skip and the tests below could not fail.
+    if not hasattr(er, "RegistryEntryDisabler"):
+        er.RegistryEntryDisabler = types.SimpleNamespace(
+            INTEGRATION="integration", USER="user"
+        )
     er.async_get = lambda hass: reg
     er.async_entries_for_config_entry = lambda registry, entry_id: list(registry._entries)
     dev_reg = FakeDeviceRegistry(devices)
@@ -153,10 +179,63 @@ def _run(entries, coord_data=None, devices=(), issues=None, on_issue=None):
     coordinator = types.SimpleNamespace(data=coord_data or {})
     hass = types.SimpleNamespace(data={DOMAIN: {entry.entry_id: {"coordinator": coordinator}}})
     _remove_legacy_entities(hass, entry)
+    _run.registry = reg
     return reg.removed, dev_reg.detached
 
 
 class LegacyCleanupTest(unittest.TestCase):
+    # -- reading reconciliation (#93 / #94) ---------------------------------------
+
+    def test_a_reading_whose_switch_vanished_is_re_enabled(self) -> None:
+        """The half that first-registration semantics cannot do.
+
+        `binary_sensor` disables a flag reading when the same appliance also got a
+        switch, and Home Assistant honours that ONCE. If a later setup has no catalogue
+        -- issue #94's whole subject, and something the ADDHON-240 degraded path can now
+        produce -- no switch is built, `hidden` computes False, and nothing acts on it:
+        the user is left with neither control nor reading, silently.
+        """
+        appliance = self._fridge_appliance(flags=False)
+        coord = {"ID": {"type": "REF", "appliance": appliance}}
+        entries = [
+            FakeRegEntry("binary_sensor.f_super_cool", "ID_super_cool",
+                         disabled_by="integration"),
+            FakeRegEntry("sensor.f_my_zone_mode", "ID_my_zone_mode",
+                         disabled_by="integration"),
+        ]
+        removed, _ = _run(entries, coord_data=coord)
+
+        self.assertEqual([], removed, "reconciliation removes nothing")
+        self.assertEqual(
+            {"binary_sensor.f_super_cool", "sensor.f_my_zone_mode"},
+            {entity_id for entity_id, _ in _run.registry.updated},
+        )
+        for _entity_id, changes in _run.registry.updated:
+            self.assertEqual({"disabled_by": None}, changes)
+
+    def test_a_reading_whose_switch_still_exists_stays_disabled(self) -> None:
+        """The control. Re-enabling on a fridge that DID get its switches would put two
+        rows on one register back in front of the user."""
+        appliance = self._fridge_appliance(flags=True)
+        coord = {"ID": {"type": "REF", "appliance": appliance}}
+        entries = [
+            FakeRegEntry("binary_sensor.f_super_cool", "ID_super_cool",
+                         disabled_by="integration"),
+        ]
+        _run(entries, coord_data=coord)
+        self.assertEqual([], _run.registry.updated)
+
+    def test_a_reading_the_user_disabled_is_left_alone(self) -> None:
+        """Only a row WE disabled. A user's own choice is not ours to undo."""
+        appliance = self._fridge_appliance(flags=False)
+        coord = {"ID": {"type": "REF", "appliance": appliance}}
+        entries = [
+            FakeRegEntry("binary_sensor.f_super_cool", "ID_super_cool",
+                         disabled_by="user"),
+        ]
+        _run(entries, coord_data=coord)
+        self.assertEqual([], _run.registry.updated)
+
     def test_legacy_power_switch_removed(self) -> None:
         removed, _detached = _run([FakeRegEntry("switch.foo_power", "ID_power")])
         self.assertEqual(removed, ["switch.foo_power"])

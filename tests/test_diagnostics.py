@@ -40,6 +40,24 @@ def _mod(name: str) -> types.ModuleType:
     return module
 
 
+class _DiagnosticStore:
+    """Minimal HA Store used by config-entry removal tests."""
+
+    removals: list[str] = []
+
+    def __init__(self, hass, version, key, *, private: bool = False) -> None:
+        self._key = key
+
+    async def async_load(self):
+        return None
+
+    async def async_save(self, data) -> None:
+        return None
+
+    async def async_remove(self) -> None:
+        type(self).removals.append(self._key)
+
+
 def _install_stubs() -> None:
     ha = _mod("homeassistant")
 
@@ -78,6 +96,8 @@ def _install_stubs() -> None:
     uc.CoordinatorEntity = getattr(uc, "CoordinatorEntity", CoordinatorEntity)
     uc.DataUpdateCoordinator = getattr(uc, "DataUpdateCoordinator", type("DataUpdateCoordinator", (), {}))
     uc.UpdateFailed = getattr(uc, "UpdateFailed", type("UpdateFailed", (Exception,), {}))
+    storage = _mod("homeassistant.helpers.storage")
+    storage.Store = _DiagnosticStore
 
     const = _mod("homeassistant.const")
     for unit_cls in ("UnitOfTemperature", "UnitOfEnergy", "UnitOfTime", "UnitOfVolume", "UnitOfMass"):
@@ -182,6 +202,7 @@ def _install_stubs() -> None:
     helpers.entity_platform = ep
     helpers.entity_registry = er
     helpers.update_coordinator = uc
+    helpers.storage = storage
     components.sensor = sensor_mod
     components.binary_sensor = binary_mod
     components.number = number_mod
@@ -973,6 +994,7 @@ class AccountDeviceDiagnosticsTest(unittest.TestCase):
                 "platforms",
                 "last_poll",
                 "last_fetch",
+                "command_catalog",
                 "appliances",
             ],
             list(result),
@@ -2559,7 +2581,10 @@ class LastFetchDiagnosticsTest(unittest.TestCase):
         # family of question ("what did the cloud give us") and a reader who found
         # `last_poll` must fall over this one without being told it exists.
         result = self._dump(_FetchClient({"outcome": "ok", "count": 0}))
-        self.assertEqual(["last_poll", "last_fetch", "appliances"], list(result)[-3:])
+        self.assertEqual(
+            ["last_poll", "last_fetch", "command_catalog", "appliances"],
+            list(result)[-4:],
+        )
         # And it did not take over the first key, which `generated_at` owns.
         self.assertEqual("generated_at", next(iter(result)))
 
@@ -2618,6 +2643,262 @@ class LastFetchDiagnosticsTest(unittest.TestCase):
         self.assertEqual(2, len(result["appliances"]))
         self.assertIn("generated_at", result)
         self.assertIn("platforms", result)
+
+
+class _CatalogHass(FakeHass):
+    """A HA-loop double that makes executor-boundary violations observable."""
+
+    def __init__(self) -> None:
+        super().__init__(FakeCoordinator({}))
+        self.executor_calls = 0
+        self.in_executor_job = False
+
+    async def async_add_executor_job(self, target, *args):
+        self.executor_calls += 1
+        self.in_executor_job = True
+        try:
+            return target(*args)
+        finally:
+            self.in_executor_job = False
+
+
+class _CatalogClient(_FetchClient):
+    """Return a census only while diagnostics uses HA's executor boundary."""
+
+    def __init__(self, hass: _CatalogHass, census) -> None:
+        super().__init__()
+        self._hass = hass
+        self._census = census
+
+    def command_catalog_census(self):
+        if not self._hass.in_executor_job:
+            raise AssertionError("command catalog census bypassed the executor")
+        if isinstance(self._census, BaseException):
+            raise self._census
+        return self._census
+
+
+class CommandCatalogDiagnosticsTest(unittest.TestCase):
+    """Catalog health is useful without trusting any producer-owned value."""
+
+    def _dump(self, census):
+        hass = _CatalogHass()
+        hass.data[DOMAIN]["e1"]["client"] = _CatalogClient(hass, census)
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+        )
+        return result, hass
+
+    @staticmethod
+    def _healthy_row() -> dict:
+        return {
+            "status": 200,
+            "sections": {
+                "appliance_model": True,
+                "settings": True,
+                "set_parameters": True,
+                "start_program": False,
+                "stop_program": False,
+            },
+            "source": "cache",
+            "failure": "semantic",
+            "live_outcome": "empty_payload",
+            "code": "ADDHON-240",
+            "raw_entries": 0,
+            "parsed_commands": 2,
+            "cache_age_s": 17,
+            "digest": "0123456789ab",
+            "favourites": "raised",
+            "history": "empty",
+            "request": {
+                "firmware": True,
+                "firmware_version": True,
+                "series": True,
+                "series_version": True,
+                "language": True,
+            },
+        }
+
+    def test_a_recorded_census_has_the_literal_public_shape(self) -> None:
+        producer_row = self._healthy_row()
+        producer_row["private_model"] = "H4F306SDH1"
+        result, hass = self._dump([producer_row])
+        self.assertEqual(
+            {
+                "state": "recorded",
+                "rows": [
+                    {
+                        # The shape of what came back: a 200 carrying a model and
+                        # settings but NO startProgram is a different vendor fault from
+                        # an empty body, and both reach a reporter as the same
+                        # controlless appliance without this pair.
+                        "status": 200,
+                        "sections": {
+                            "appliance_model": True,
+                            "settings": True,
+                            "set_parameters": True,
+                            "start_program": False,
+                            "stop_program": False,
+                        },
+                        "source": "cache",
+                        "failure": "semantic",
+                        "live_outcome": "empty_payload",
+                        "code": "ADDHON-240",
+                        "raw_entries": 0,
+                        "parsed_commands": 2,
+                        "cache_age_s": 17,
+                        "digest": "0123456789ab",
+                        "favourites": "raised",
+                        "history": "empty",
+                        "request": {
+                            "firmware": True,
+                            "firmware_version": True,
+                            "series": True,
+                            "series_version": True,
+                            "language": True,
+                        },
+                    }
+                ],
+            },
+            result["command_catalog"],
+        )
+        self.assertEqual(1, hass.executor_calls)
+        self.assertNotIn("H4F306SDH1", json.dumps(result["command_catalog"]))
+
+    def test_every_empty_or_unreadable_state_has_the_same_top_level_keys(self) -> None:
+        absent = _CatalogHass()
+        client_absent = _run(
+            diagnostics.async_get_config_entry_diagnostics(absent, FakeEntry())
+        )["command_catalog"]
+
+        missing_reader = _CatalogHass()
+        missing_reader.data[DOMAIN]["e1"]["client"] = _FetchClient()
+        never_ran_missing = _run(
+            diagnostics.async_get_config_entry_diagnostics(
+                missing_reader, FakeEntry()
+            )
+        )["command_catalog"]
+
+        never_ran_empty, _ = self._dump([])
+        unreadable_shape, _ = self._dump("AA:BB:CC:DD:EE:FF")
+        unreadable_raise, _ = self._dump(
+            RuntimeError("catalog for user@example.com is unreadable")
+        )
+
+        cases = {
+            "client_absent": client_absent,
+            "never_ran_missing": never_ran_missing,
+            "never_ran_empty": never_ran_empty["command_catalog"],
+            "unreadable_shape": unreadable_shape["command_catalog"],
+            "unreadable_raise": unreadable_raise["command_catalog"],
+        }
+        expected_states = {
+            "client_absent": "client_absent",
+            "never_ran_missing": "never_ran",
+            "never_ran_empty": "never_ran",
+            "unreadable_shape": "unreadable",
+            "unreadable_raise": "unreadable",
+        }
+        for name, block in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual({"state", "rows"}, set(block))
+                self.assertEqual(expected_states[name], block["state"])
+                self.assertEqual([], block["rows"])
+
+    def test_hostile_rows_are_rebuilt_from_allowlisted_literals(self) -> None:
+        class Sneaky(str):
+            def __eq__(self, other):
+                return other == "ok" or str.__eq__(self, other)
+
+            def __hash__(self):
+                return hash("ok")
+
+        row = {
+            # A status outside the HTTP range, and a sections mapping carrying an extra
+            # producer-chosen key beside a truthy real one.
+            "status": 1_000_001,
+            "sections": {
+                "start_program": 1,
+                "settings": True,
+                "raw_mac": "AA:BB:CC:DD:EE:FF",
+            },
+            "source": "Kitchen Freezer",
+            "failure": "user@example.com",
+            "live_outcome": Sneaky("AA:BB:CC:DD:EE:FF"),
+            "code": "MODEL-H4F306SDH1",
+            "raw_entries": -1,
+            "parsed_commands": 1_000_001,
+            "cache_age_s": True,
+            "digest": "0123456789ab-AA:BB:CC:DD:EE:FF",
+            "favourites": "favorite-for-user@example.com",
+            "history": "serial-PLAINTEXT",
+            "request": {
+                "firmware": True,
+                "firmware_version": False,
+                "series": 1,
+                "series_version": "true",
+                "language": "it",
+                "raw_mac": "AA:BB:CC:DD:EE:FF",
+            },
+            "model": "H4F306SDH1",
+        }
+        result, _ = self._dump([row])
+        self.assertEqual(
+            {
+                "state": "recorded",
+                "rows": [
+                    {
+                        "status": None,
+                        "sections": {
+                            # Absent keys stay None -- "not reported" is not the same
+                            # claim as "reported absent", and only the repository (which
+                            # writes over its own allowlist) may turn one into the other.
+                            "appliance_model": None,
+                            "settings": True,
+                            # A truthy int is not a bool and is refused like any other
+                            # value outside the closed type.
+                            "start_program": None,
+                            "set_parameters": None,
+                            "stop_program": None,
+                        },
+                        "source": "other",
+                        "failure": "other",
+                        "live_outcome": "other",
+                        "code": None,
+                        "raw_entries": None,
+                        "parsed_commands": None,
+                        "cache_age_s": None,
+                        "digest": None,
+                        "favourites": "other",
+                        "history": "other",
+                        "request": {
+                            "firmware": True,
+                            "firmware_version": False,
+                            "series": None,
+                            "series_version": None,
+                            "language": None,
+                        },
+                    }
+                ],
+            },
+            result["command_catalog"],
+        )
+        blob = json.dumps(result["command_catalog"])
+        for private in (
+            "Kitchen Freezer",
+            "user@example.com",
+            "AA:BB:CC:DD:EE:FF",
+            "H4F306SDH1",
+            "PLAINTEXT",
+            "favorite-for",
+        ):
+            self.assertNotIn(private, blob)
+
+    def test_only_the_first_fifty_mapping_rows_are_emitted(self) -> None:
+        census = ["not-a-row"] * 10 + [self._healthy_row() for _ in range(60)]
+        result, _ = self._dump(census)
+        self.assertEqual(50, len(result["command_catalog"]["rows"]))
+        self.assertEqual(50, diagnostics._CATALOG_MAX_ROWS)
 
 
 # --- Task 10: air purifier coverage and passive future-capability capture -----
@@ -7538,8 +7819,10 @@ class SetupFailureRecordTest(unittest.TestCase):
         # to decide the global debug services can go.
         init = _addhon_init()
         hass = self._hass_with_record(self._record())
+        _DiagnosticStore.removals = []
         _run(init.async_remove_entry(hass, FakeEntry()))
         self.assertNotIn("e1", hass.data[DOMAIN])
+        self.assertEqual(["addhon_command_catalog_e1"], _DiagnosticStore.removals)
 
     def test_both_failure_branches_record_before_closing_the_client(self) -> None:
         # Source-level, because async_setup_entry is not behaviourally testable in this

@@ -245,8 +245,10 @@ class ApiRequestShapeTest(unittest.TestCase):
     def test_load_commands_request(self) -> None:
         body = {"payload": {"resultCode": "0"}}
         conn = FakeConnection(body)
-        app = FakeAppliance(eepromId="EE", fwVersion="1.2", series="S")
-        _run(_call(conn).load_commands(app))
+        app = FakeAppliance(
+            eepromId="EE", fwVersion="1.2", series="S", seriesVersion="V7"
+        )
+        _run(_call(conn).load_commands(app, "pt-BR"))
         method, url, kwargs = conn.calls[0]
         self.assertEqual(method, "GET")
         self.assertEqual(url, f"{API_URL}/commands/v1/retrieve")
@@ -262,6 +264,8 @@ class ApiRequestShapeTest(unittest.TestCase):
                 "firmwareId": "EE",
                 "fwVersion": "1.2",
                 "series": "S",
+                "seriesVersion": "V7",
+                "lang": "pt",
             },
         )
 
@@ -269,15 +273,20 @@ class ApiRequestShapeTest(unittest.TestCase):
         conn = FakeConnection({"payload": {"resultCode": "0"}})
         _run(_call(conn).load_commands(FakeAppliance()))
         params = conn.calls[0][2]["params"]
-        for absent in ("firmwareId", "fwVersion", "series"):
+        self.assertEqual(params["lang"], "en")
+        for absent in ("firmwareId", "fwVersion", "series", "seriesVersion"):
             self.assertNotIn(absent, params)
 
     def test_load_commands_optional_params_skip_falsy(self) -> None:
         # pyhOn uses `if value := info.get(...)`: a falsy value (e.g. "") does NOT go in params.
         conn = FakeConnection({"payload": {"resultCode": "0"}})
-        _run(_call(conn).load_commands(FakeAppliance(eepromId="", fwVersion=0, series="")))
+        _run(
+            _call(conn).load_commands(
+                FakeAppliance(eepromId="", fwVersion=0, series="", seriesVersion=None)
+            )
+        )
         params = conn.calls[0][2]["params"]
-        for absent in ("firmwareId", "fwVersion", "series"):
+        for absent in ("firmwareId", "fwVersion", "series", "seriesVersion"):
             self.assertNotIn(absent, params)
 
     def test_simple_get_requests(self) -> None:
@@ -413,15 +422,20 @@ class ApiHardeningTest(unittest.TestCase):
                 self.assertEqual(got, {})
 
     def test_load_commands_failure_redacts_identity_in_log(self) -> None:
-        # #33: both failure branches log the raw cloud response at ERROR (never
-        # gated); identity in the body must be redacted.
+        # The catalog log is built from a closed-vocabulary probe, never the body.
         mac = "AA:BB:CC:DD:EE:FF"
+        server_message = "SERVER-SECRET"
+        schema_leaf = "SCHEMA-SECRET"
         logger = "custom_components.addhon.client.transport.api"
         for body in (
-            {"macAddress": mac, "payload": {}},                   # invalid-payload branch
-            {"macAddress": mac, "payload": {"resultCode": "1"}},  # resultCode != 0 branch
-            {"meta": {"macAddress": mac}, "payload": {}},         # nested mac (recursion)
-            {"payload": {"resultCode": "1", "dev": {"macAddress": mac}}},  # nested mac
+            {"macAddress": mac, "message": server_message, "payload": {}},
+            {
+                "payload": {
+                    "resultCode": "1",
+                    "dev": {"macAddress": mac},
+                    "settings": {"secretCommand": schema_leaf},
+                }
+            },
         ):
             with self.subTest(body=body):
                 with self.assertLogs(logger, level="ERROR") as cm:
@@ -431,7 +445,10 @@ class ApiHardeningTest(unittest.TestCase):
                 self.assertEqual(got, {})
                 blob = "\n".join(cm.output)
                 self.assertNotIn(mac, blob)
-                self.assertIn("***", blob)
+                self.assertNotIn(server_message, blob)
+                self.assertNotIn(schema_leaf, blob)
+                self.assertNotIn("secretCommand", blob)
+                self.assertIn("outcome", blob)
 
     def test_commands_result_code_nonzero(self) -> None:
         body = {"payload": {"resultCode": "1", "settings": {}}}
