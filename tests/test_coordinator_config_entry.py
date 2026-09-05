@@ -307,7 +307,7 @@ class CommandCatalogLifecycleSourceTest(unittest.TestCase):
         bucket = buckets[0]
         values = {
             key.value: value
-            for key, value in zip(bucket.keys, bucket.values)
+            for key, value in zip(bucket.keys, bucket.values, strict=True)
             if isinstance(key, ast.Constant)
         }
         self.assertIsInstance(values["command_catalog_store"], ast.Name)

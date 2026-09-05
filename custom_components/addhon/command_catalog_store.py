@@ -43,7 +43,7 @@ class CommandCatalogStore:
         """Load a plain cache document, degrading corrupt storage to empty."""
         try:
             loaded = await self._store.async_load()
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - a corrupt cache degrades, never raises
             _LOGGER.debug(
                 "Command catalog cache load failed (%s)", type(error).__name__
             )
@@ -60,7 +60,7 @@ class CommandCatalogStore:
             document = snapshot.document
         except asyncio.CancelledError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - a cache read must not fail a poll
             _LOGGER.debug(
                 "Command catalog cache snapshot failed (%s)", type(error).__name__
             )
@@ -71,7 +71,7 @@ class CommandCatalogStore:
             return
         try:
             await self._store.async_save(document)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - an unwritable cache is not an outage
             _LOGGER.debug(
                 "Command catalog cache save failed (%s)", type(error).__name__
             )
@@ -84,7 +84,7 @@ class CommandCatalogStore:
             try:
                 await self._store.async_remove()
                 return
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - removal must not block teardown
                 if attempt == _REMOVE_ATTEMPTS:
                     _LOGGER.warning(
                         "Command catalog cache removal failed after %d attempts (%s)",
