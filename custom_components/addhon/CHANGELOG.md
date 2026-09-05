@@ -48,8 +48,7 @@ the notes were generated automatically carry a link to their diff instead of a s
   back on, that appliance is kept with its sensors working and only its command
   entities missing -- addhOn retries the catalogue once before creating any entity, and
   then carries on. Previously this could stop the entry from loading at all on an
-  account with a single appliance. A refrigerator whose catalogue lists commands but
-  omits the appliance model is read as it was before: usable.
+  account with a single appliance.
 - **A stored catalogue is no longer reused forever.** Any snapshot older than 180 days
   is discarded even when the firmware and series still match, because the cloud can
   change what it returns without changing either. The 30-day limit on snapshots with

@@ -255,28 +255,34 @@ class CommandCatalogHydrationTest(unittest.TestCase):
         self.assertEqual(observation["source"], "none")
         self.assertEqual(observation["failure"], "semantic")
 
-    def test_required_family_catalog_without_appliance_model_still_hydrates(self) -> None:
-        # A fridge catalog that PARSES COMMANDS but carries no applianceModel is a
-        # variant the probe tracks as its own state (`has_appliance_model`), i.e. it is
-        # observed in the field. 5.21.x read the missing key as an empty dict and
-        # shipped a working appliance; treating it as a semantic failure would send it
-        # down the fallback and -- with the cache empty, which it always is on the
-        # first upgraded start -- end in CommandCatalogUnavailable and a dead entry.
+    def test_required_family_catalog_without_appliance_model_is_rejected(self) -> None:
+        # A fridge catalog that parses commands but carries NO applianceModel is not a
+        # thinner catalog -- the official app cannot consume it at all
+        # (`storeModelAndCommandsInDatabase`, decomp.txt:1786932-1786991, dereferences
+        # `payload.applianceModel.*` unguarded while giving `options`/`settings` explicit
+        # fallbacks). For a fridge it is worse than useless: `zones` lives in the model
+        # attributes and `ref_programs.model_zones` denies on their silence, so a
+        # modelless catalog silently mis-gates every zone-dependent control.
         payload = {"settings": {"setParameters": _command()}}
+
+        with self.assertRaises(CommandCatalogUnavailable):
+            self.load(TypedApi(_fetch(payload, self.request)))
+
+    def test_required_family_catalog_with_zero_commands_is_rejected(self) -> None:
+        # The other half of the same gate: parsable model, no parsable command.
+        with self.assertRaises(CommandCatalogUnavailable):
+            self.load(TypedApi(_fetch({"applianceModel": {"options": {}}}, self.request)))
+
+    def test_a_rejected_required_catalog_still_prefers_a_compatible_cache(self) -> None:
+        # The gate sends the appliance to the cache, it does not strand it. With a
+        # validated snapshot the fridge keeps its controls across a bad cloud answer.
+        self.repo.replace(self.request, _valid_catalog())
+        payload = {"settings": {"setParameters": _command(fixed_value="0")}}
 
         hydration = self.load(TypedApi(_fetch(payload, self.request)))
 
-        self.assertEqual(hydration.source, "live")
-        self.assertEqual(hydration.parsed_command_count, 1)
-        self.assertIn("settings", hydration.commands)
-        self.assertEqual(self.repo.snapshot().generation, 1)
-
-    def test_required_family_catalog_with_zero_commands_is_still_rejected(self) -> None:
-        # CONTROL for the test above: relaxing the applianceModel half of the gate
-        # must not relax the half that matters. A fridge with no parsable command is
-        # unusable and still has to reach the cache fallback.
-        with self.assertRaises(CommandCatalogUnavailable):
-            self.load(TypedApi(_fetch({"applianceModel": {"options": {}}}, self.request)))
+        self.assertEqual(hydration.source, "cache")
+        self.assertEqual(self.repo.census()[0]["failure"], "semantic")
 
     def test_a_rejected_cache_write_does_not_lose_a_successful_live_catalog(self) -> None:
         # The cache is an OPTIMIZATION. `replace` validates the record and rejects an

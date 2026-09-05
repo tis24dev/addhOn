@@ -305,17 +305,26 @@ class HonCommandLoader:
             raise _SemanticCatalogError(raw_entries, len(self._commands)) from error
 
         parsed_commands = len(self._commands)
-        # A fridge that parsed ZERO commands is unusable and has to fall back to the
-        # cache. A MISSING applianceModel is NOT the same thing: 5.21.x read it as an
-        # empty dict and shipped a working appliance, and the probe carries
-        # `has_appliance_model` as its own state precisely because that variant is
-        # observed in the field. Raising on it converts a degraded-but-working entry
-        # into one that will not load at all, because the fallback ends in
-        # CommandCatalogUnavailable whenever the cache misses -- and the cache is
-        # ALWAYS empty on the first start after the upgrade that introduced it.
-        if (
-            self.appliance.appliance_type in CATALOG_REQUIRED_TYPES
-            and parsed_commands == 0
+        # BOTH halves are required, and the official app is the reason.
+        # `storeModelAndCommandsInDatabase` (decomp.txt:1786932-1786991) dereferences
+        # `payload.applianceModel.name/.id/.code/.applianceTypeId/.applianceTypeName/
+        # .brand/.connectivity/.attributes` with NO guard, while `options` and
+        # `settings` right beside it get explicit `if (!x)` fallbacks. The response
+        # path feeding it (decomp.txt:3629724-3629735) hands `response.data.payload`
+        # straight to that function without checking `resultCode` or the model. So the
+        # app treats `applianceModel` as MANDATORY in a usable catalog and would throw
+        # on a payload that lacks it: a catalog without it is not a thinner catalog,
+        # it is not a catalog. For a fridge it is also actively harmful -- the model
+        # attributes are where `zones` lives, and `ref_programs.model_zones` denies on
+        # its silence, so a modelless catalog mis-gates every zone-dependent control.
+        #
+        # The probe's `has_appliance_model` is a payload-shape descriptor next to
+        # `has_settings`/`has_start_program`, not evidence that a modelless catalog is
+        # a shape the vendor ships; reading it as such was the mistake that briefly
+        # relaxed this gate. Falling back is safe now: an unusable catalog degrades the
+        # appliance instead of failing the entry (client/session.py, ADDHON-240).
+        if self.appliance.appliance_type in CATALOG_REQUIRED_TYPES and (
+            not model or parsed_commands == 0
         ):
             raise _SemanticCatalogError(raw_entries, parsed_commands)
 
