@@ -30,7 +30,7 @@ from .air_purifier import (
     reports_attribute,
 )
 from .base_entity import HonBaseEntity, coordinator_data_map
-from .command_dispatch import async_dispatch_patch
+from .command_dispatch import CommandPatch, async_dispatch_patch
 from .const import (
     AC_ATTR_SWING_H,
     AC_ATTR_SWING_V,
@@ -62,7 +62,12 @@ from .const import (
 )
 from .debug_utils import redact_id, redact_store
 from .hob import HOB_POWER_LIMIT_PARAM, HOB_SETTINGS_COMMAND, power_limit_levels
-from .hon_commands import async_send_command, command_param, param_range
+from .hon_commands import (
+    async_send_command,
+    command_param,
+    get_command,
+    param_range,
+)
 from .program_labels import for_coordinator
 from .ac_command import async_send_settings, param_allowed_values, settings_param
 from .program_options import (
@@ -75,6 +80,7 @@ from .ref_programs import (
     REF_MY_ZONE_PARAM,
     REF_MY_ZONE_ZONE,
     REF_PARAM_TO_FLAG,
+    STOPPROGRAM,
     flag_codes,
     has_replacement_controls,
     my_zone_code_for_value,
@@ -330,8 +336,8 @@ async def async_setup_entry(
             # The single program select (#40) survives ONLY where nothing better exists.
             # See `HonRefProgramSelect.supports_appliance` for the whole argument; the
             # short version is that on a fridge that gets the flag switches or the drawer
-            # select it is not redundant, it is wrong -- its `off` sends a four-flag
-            # `stopProgram` that clears modes the user did not ask about.
+            # select it is not redundant, it is wrong -- a mutually-exclusive dropdown
+            # over registers the appliance drives independently.
             if HonRefProgramSelect.supports_appliance(appliance):
                 entities.append(HonRefProgramSelect(coordinator, appliance_id, client))
                 _LOGGER.info("Added REF program select: id=%s", redact_id(appliance_id))
@@ -859,9 +865,13 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
         # switches, the drawer select and the preset buttons cover the whole enum, which
         # is the case on every catalogue this repository holds. It permits the entity
         # when they do NOT -- and then a full option list would put two controls on the
-        # same registers with opposite meanings of "off" (this select's is the four-flag
-        # `stopProgram`; a switch clears one flag), and would hand back the drawer codes
-        # that `select.my_zone_mode` already owns.
+        # same registers (this select and the switch would both own the flag, and the
+        # select's exclusivity would make picking one mode read as stopping the others),
+        # and would hand back the drawer codes that `select.my_zone_mode` already owns.
+        #
+        # The `off` no longer widens that overlap: it names the flags of the programs it
+        # offers and nothing else. It used to be a bare full-command `stopProgram`, i.e.
+        # the four-flag reset, which turned the overlap into an active regression.
         #
         # Restricting to the residual keeps both properties at once: no register has two
         # writers, and no offered program is left with no control at all. It also drops
@@ -919,11 +929,14 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
         built per ZONE (`dataSourceForDemo`, decomp.txt:2838247-2838365) with two mode
         drawers and a My Zone card, never one program list. Where we can build those
         per-mode controls, keeping this one alongside them is not redundancy, it is a
-        second control writing the same registers with a different meaning of "off":
-        selecting ``off`` here sends the four-flag reset that the official app never
-        sends (it sends `stopProgram` with the single flag to clear --
+        second control over the same registers with a different model of them: one
+        winner at a time, where the appliance has four independent booleans.
+
+        Its ``off`` used to make that worse by sending the four-flag reset the official
+        app never sends (the app sends `stopProgram` with the single flag to clear --
         apk/dump/ref_10136/attributes.json, commandHistory, `deviceModel: "BVL"`), so it
-        would clear three modes to turn one off.
+        cleared three modes to turn one off. It now writes only the flags of the
+        programs it offers, which is why the residual case below is survivable at all.
 
         Evaluated from THIS appliance's live schema, never from a model or series list,
         and through `ref_programs.has_replacement_controls` so the entity that steps
@@ -1055,11 +1068,51 @@ class HonRefProgramSelect(HonBaseEntity, SelectEntity):
             )
         try:
             if option == REF_PROGRAM_OFF:
+                # Clear ONLY the flags this select can set.
+                #
+                # The bare `async_send_command(stopProgram, {})` this used to be goes
+                # through the FULL-command sender, which serialises every parameter the
+                # command declares -- on this family all four mode flags, at their
+                # default "0". That is the four-flag reset, and it is the same defect
+                # `switch.py`'s mode table was written to fix from the other side: the
+                # official app never sends it. Its own `commandHistory`
+                # (apk/dump/ref_10136/attributes.json, `deviceModel: "BVL"`) carries
+                # `{"commandName": "stopProgram", "parameters": {"intelligenceMode":
+                # "0"}}` -- one parameter, the mode being switched off.
+                #
+                # It stopped being merely unfaithful when this select started surviving
+                # alongside the per-mode switches (the residual case above). Two controls
+                # then share `stopProgram`, and stopping a residual program would switch
+                # off Super Cool, Auto-set and Holiday on the way past -- modes this
+                # select does not offer, does not display, and whose switches the user
+                # had set deliberately.
+                #
+                # A sparse patch carries the requested keys plus whatever the schema
+                # marks mandatory, so an `off` that owns no flag at all -- a select left
+                # with residual programs the shadow reports through `programName` rather
+                # than through a register -- still sends a real `stopProgram`, just
+                # without claiming any flag it has no business writing.
+                stop = get_command(appliance, STOPPROGRAM)
+                stop_params = (
+                    getattr(stop, "parameters", None) if stop is not None else None
+                )
+                stop_params = stop_params if isinstance(stop_params, dict) else {}
+                owned = {
+                    flag: "0"
+                    for flag, code in _REF_MODE_FLAG_TO_PROGRAM.items()
+                    if code in self._program_codes and flag in stop_params
+                }
                 _LOGGER.info(
-                    "Select: REF program off -> stopProgram id=%s",
+                    "Select: REF program off -> stopProgram flags=%s id=%s",
+                    sorted(owned),
                     redact_id(self._appliance_id),
                 )
-                await async_send_command(self.hass, client, appliance, "stopProgram", {})
+                await async_dispatch_patch(
+                    self.hass,
+                    client,
+                    appliance,
+                    CommandPatch(STOPPROGRAM, owned, action="ref_program_off"),
+                )
             else:
                 _LOGGER.info(
                     "Select: REF program '%s' -> startProgram id=%s",

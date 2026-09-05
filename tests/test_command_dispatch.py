@@ -52,8 +52,14 @@ _EXPECTED_LEGACY_CALL_EDGES = {
         "async_send_program._do": ("client.run_command_sync->_inner",),
         "async_send_program._do._inner": ("command.send",),
     },
+    # `HonRefProgramSelect.async_select_option` is deliberately NOT here any more, and
+    # the absence is the assertion. Its `off` used to reach the full-command sender with
+    # an empty override dict, which serialises every parameter `stopProgram` declares --
+    # on a fridge, all four mode flags at "0". That is the four-flag reset the official
+    # app never sends, and once the select began surviving beside the per-mode switches
+    # it was switching off modes the user had set from another entity. It now names its
+    # own flags in a sparse patch.
     "select.py": {
-        "HonRefProgramSelect.async_select_option": ("async_send_command",),
         "HonHobPowerLimitSelect.async_select_option": ("async_send_command",),
     },
     "switch.py": {
@@ -1930,7 +1936,6 @@ def test_mixed_platform_legacy_classes_keep_the_legacy_sender() -> None:
     legacy_only = {
         switch.HonWashingMachinePauseSwitch: "run_command_sync",
         select.HonAcDirectionSelect: "async_send_settings",
-        select.HonRefProgramSelect: "async_send_command",
         # Buffers onto startProgram instead of sending; the buffering IS its write
         # path, so losing it would be the same regression as losing a sender.
         number.HonProgramOptionNumber: "self._buffer(",
@@ -1953,6 +1958,12 @@ def test_mixed_platform_legacy_classes_keep_the_legacy_sender() -> None:
     mixed = {
         switch.HonSettingsSwitch: ("async_send_settings", "async_dispatch_patch"),
         number.HonNumber: ("async_send_command", "async_dispatch_patch"),
+        # Two write paths, neither of them the full-command sender: a program START
+        # goes out as the category's own body, and `off` as a sparse `stopProgram`
+        # naming only the flags this select offers. It sat in `legacy_only` while its
+        # `off` was a bare full command; that is precisely what made it switch off modes
+        # belonging to the per-mode switches beside it.
+        select.HonRefProgramSelect: ("async_send_program", "async_dispatch_patch"),
     }
     for entity_class, callees in mixed.items():
         source = inspect.getsource(entity_class)

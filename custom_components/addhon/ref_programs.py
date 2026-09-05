@@ -547,9 +547,10 @@ def has_replacement_controls(appliance) -> bool:
 
     Why those two and not the download buttons. The flag switches and the drawer select
     are what makes the single select WRONG, not merely redundant: `ref_program` is
-    mutually exclusive and its `off` sends a four-flag `stopProgram`, so with the
-    switches present two controls write the same registers with opposite meanings of
-    "off", and with the drawer select present two controls own `tempSelZ3`. The preset
+    mutually exclusive while the flags are four independent booleans, so with the
+    switches present two controls model the same registers incompatibly, and with the
+    drawer select present two controls own `tempSelZ3`. (Its `off` used to compound
+    this by clearing all four flags at once; it now writes only its own.) The preset
     buttons add no such conflict -- they send and forget -- so on the one shape where
     they are the ONLY thing we can build (an enum of `iot_*` and nothing else) the
     select survives and keeps being the appliance's only stop control and its only

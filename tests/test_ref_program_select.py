@@ -376,27 +376,65 @@ class RefProgramSelectBehaviourTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(commands["startProgram"].parameters["program"].value)
         self.assertEqual(1, coordinator.refreshes)
 
-    async def test_off_sends_stopprogram_with_no_overrides(self) -> None:
-        # Production must call async_send_command for stopProgram with an EMPTY params dict:
-        # the device's own schema-fixed "0" flags do the global reset, and we must NOT
-        # inject overrides (which would hit the "missing param" raise). Spying the real call
-        # makes this mutation-proof against a regression that passed e.g. {"onOffStatus":"0"}.
-        from custom_components.addhon import select as select_mod
+    async def test_off_clears_the_flags_of_the_programs_it_offers(self) -> None:
+        """`off` names its own flags instead of sending the whole command.
 
-        calls: list = []
+        It used to go through the full-command sender with an empty override dict, which
+        serialises every parameter `stopProgram` declares. On this fixture the two are
+        the same three flags -- the select offers all three modes -- so the appliance
+        sees no change. What changes is that they are now NAMED, which is what the next
+        test can then hold this control to.
+        """
+        commands = _ref_commands()
+        entity, coordinator = self._entity(commands)
 
-        async def _spy(hass, client, appliance, command_name, params, **kwargs):
-            calls.append((command_name, dict(params)))
+        await entity.async_select_option("off")
 
-        original = select_mod.async_send_command
-        select_mod.async_send_command = _spy
-        try:
-            entity, _ = self._entity(_ref_commands())
-            await entity.async_select_option("off")
-        finally:
-            select_mod.async_send_command = original
+        patches = entity._hon_client.patches
+        self.assertEqual(1, len(patches))
+        self.assertEqual("stopProgram", patches[0].command_name)
+        self.assertEqual(
+            {"quickModeZ1": "0", "quickModeZ2": "0", "holidayMode": "0"},
+            dict(patches[0].values),
+        )
+        # `intelligenceMode` is not in this fixture's stopProgram: a flag the appliance
+        # does not declare must not be named, or the dispatcher rejects the whole patch.
+        self.assertNotIn("intelligenceMode", patches[0].values)
+        self.assertEqual(1, coordinator.refreshes)
 
-        self.assertEqual([("stopProgram", {})], calls)
+    async def test_off_leaves_alone_the_modes_this_select_does_not_offer(self) -> None:
+        """The residual select and the mode switches share `stopProgram`.
+
+        This is the shape #93's partial supersession creates: the enum carries a flag
+        mode that became a SWITCH and one program that did not, so the select survives
+        listing only the leftover. Sending the whole `stopProgram` for its `off` would
+        serialise `quickModeZ1` to "0" and switch Super Cool off -- a mode this select
+        does not offer, does not display, and whose switch the user set deliberately.
+        The official app never sends that reset either: its own commandHistory
+        (apk/dump/ref_10136/attributes.json) carries one parameter, the mode being
+        stopped.
+        """
+        commands = _rmxs_commands()
+        # Only Super Cool is clearable, so it is the one mode that becomes a switch.
+        commands["stopProgram"] = RecordingCommand(
+            {"quickModeZ1": Param("0", values=["0"])}
+        )
+        from custom_components.addhon.select import HonRefProgramSelect
+
+        coordinator = FakeCoordinator(_fridge(commands, {"tempSelZ3": "2"}))
+        entity = HonRefProgramSelect(coordinator, "ref-1", FakeClient())
+        entity.hass = FakeHass()
+        # The premise: the switch took `super_cool`, the drawer took its programs, the
+        # buttons took the presets, and this select is left with the leftovers.
+        self.assertNotIn("super_cool", entity._program_codes)
+        self.assertTrue(entity._program_codes, "the residual is not empty")
+
+        await entity.async_select_option("off")
+
+        patches = entity._hon_client.patches
+        self.assertEqual(1, len(patches))
+        self.assertEqual("stopProgram", patches[0].command_name)
+        self.assertEqual({}, dict(patches[0].values), "no foreign flag is written")
 
     async def test_select_program_is_swap_aware(self) -> None:
         # Setting program swaps the active startProgram command; we must send the NEW one.
