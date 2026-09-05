@@ -824,7 +824,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         migrated["email"] = email
         hass.config_entries.async_update_entry(entry, data=migrated)
 
-    hon_client = HonClient(email=email, password=password, refresh_token=refresh_token)
+    from .command_catalog_store import CommandCatalogStore
+
+    catalog_store = CommandCatalogStore(hass, entry.entry_id)
+    command_catalog_cache = await catalog_store.async_load()
+    hon_client = HonClient(
+        email=email,
+        password=password,
+        refresh_token=refresh_token,
+        command_catalog_cache=command_catalog_cache,
+        language=getattr(hass.config, "language", None),
+    )
 
     # Initial client setup in executor (does not block HA's event loop)
     try:
@@ -842,6 +852,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _async_close_client(hon_client)
         _raise_setup_error(err)
 
+    await catalog_store.async_sync(hon_client)
+
     # Persist a rotated refresh token so the next restart keeps skipping the full login
     # (and the 2FA prompt). Single helper, change-guarded (see _persist_refresh_token).
     _persist_refresh_token(hass, entry, hon_client)
@@ -851,6 +863,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             _LOGGER.debug("Coordinator debug: starting hOn data update")
             data = await hon_client.async_get_appliances_data()
+            await catalog_store.async_sync(hon_client)
             # A runtime token refresh / background re-auth may have rotated the refresh
             # token during this fetch; persist it (only on a real change) so it survives a
             # restart -- not just the initial setup.
@@ -974,6 +987,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN][entry.entry_id] = {
             "coordinator": coordinator,
             "client": hon_client,
+            "command_catalog_store": catalog_store,
             "integration_version": integration_version,
             # Baseline for _async_options_updated: the options already in effect at
             # the start of setup, so a later data-only entry write (token rotation) is
@@ -1060,6 +1074,14 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     been through async_unload_entry by the time Home Assistant removes it.
     """
     removed = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    catalog_store = (
+        removed.get("command_catalog_store") if isinstance(removed, dict) else None
+    )
+    if catalog_store is None:
+        from .command_catalog_store import CommandCatalogStore
+
+        catalog_store = CommandCatalogStore(hass, entry.entry_id)
+    await catalog_store.async_remove()
     _LOGGER.debug(
         "Remove debug: entry=%s dropped_record=%s",
         entry.entry_id,

@@ -40,6 +40,24 @@ def _mod(name: str) -> types.ModuleType:
     return module
 
 
+class _DiagnosticStore:
+    """Minimal HA Store used by config-entry removal tests."""
+
+    removals: list[str] = []
+
+    def __init__(self, hass, version, key) -> None:
+        self._key = key
+
+    async def async_load(self):
+        return None
+
+    async def async_save(self, data) -> None:
+        return None
+
+    async def async_remove(self) -> None:
+        type(self).removals.append(self._key)
+
+
 def _install_stubs() -> None:
     ha = _mod("homeassistant")
 
@@ -78,6 +96,8 @@ def _install_stubs() -> None:
     uc.CoordinatorEntity = getattr(uc, "CoordinatorEntity", CoordinatorEntity)
     uc.DataUpdateCoordinator = getattr(uc, "DataUpdateCoordinator", type("DataUpdateCoordinator", (), {}))
     uc.UpdateFailed = getattr(uc, "UpdateFailed", type("UpdateFailed", (Exception,), {}))
+    storage = _mod("homeassistant.helpers.storage")
+    storage.Store = _DiagnosticStore
 
     const = _mod("homeassistant.const")
     for unit_cls in ("UnitOfTemperature", "UnitOfEnergy", "UnitOfTime", "UnitOfVolume", "UnitOfMass"):
@@ -182,6 +202,7 @@ def _install_stubs() -> None:
     helpers.entity_platform = ep
     helpers.entity_registry = er
     helpers.update_coordinator = uc
+    helpers.storage = storage
     components.sensor = sensor_mod
     components.binary_sensor = binary_mod
     components.number = number_mod
@@ -7538,8 +7559,10 @@ class SetupFailureRecordTest(unittest.TestCase):
         # to decide the global debug services can go.
         init = _addhon_init()
         hass = self._hass_with_record(self._record())
+        _DiagnosticStore.removals = []
         _run(init.async_remove_entry(hass, FakeEntry()))
         self.assertNotIn("e1", hass.data[DOMAIN])
+        self.assertEqual(["addhon_command_catalog_e1"], _DiagnosticStore.removals)
 
     def test_both_failure_branches_record_before_closing_the_client(self) -> None:
         # Source-level, because async_setup_entry is not behaviourally testable in this
