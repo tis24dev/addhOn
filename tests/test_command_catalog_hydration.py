@@ -255,6 +255,50 @@ class CommandCatalogHydrationTest(unittest.TestCase):
         self.assertEqual(observation["source"], "none")
         self.assertEqual(observation["failure"], "semantic")
 
+    def test_required_family_catalog_without_appliance_model_still_hydrates(self) -> None:
+        # A fridge catalog that PARSES COMMANDS but carries no applianceModel is a
+        # variant the probe tracks as its own state (`has_appliance_model`), i.e. it is
+        # observed in the field. 5.21.x read the missing key as an empty dict and
+        # shipped a working appliance; treating it as a semantic failure would send it
+        # down the fallback and -- with the cache empty, which it always is on the
+        # first upgraded start -- end in CommandCatalogUnavailable and a dead entry.
+        payload = {"settings": {"setParameters": _command()}}
+
+        hydration = self.load(TypedApi(_fetch(payload, self.request)))
+
+        self.assertEqual(hydration.source, "live")
+        self.assertEqual(hydration.parsed_command_count, 1)
+        self.assertIn("settings", hydration.commands)
+        self.assertEqual(self.repo.snapshot().generation, 1)
+
+    def test_required_family_catalog_with_zero_commands_is_still_rejected(self) -> None:
+        # CONTROL for the test above: relaxing the applianceModel half of the gate
+        # must not relax the half that matters. A fridge with no parsable command is
+        # unusable and still has to reach the cache fallback.
+        with self.assertRaises(CommandCatalogUnavailable):
+            self.load(TypedApi(_fetch({"applianceModel": {"options": {}}}, self.request)))
+
+    def test_a_rejected_cache_write_does_not_lose_a_successful_live_catalog(self) -> None:
+        # The cache is an OPTIMIZATION. `replace` validates the record and rejects an
+        # incomplete identity or a non-JSON value, and that rejection lands AFTER the
+        # hydration already succeeded. Letting it escape would be worse than not
+        # caching at all: ValueError is in session._APPLIANCE_BUILD_ERRORS, so the
+        # appliance would be filed malformed and NON-retryable, never requeued, and
+        # would lose every command entity permanently on every reload.
+        class RejectingRepository(CommandCatalogRepository):
+            def replace(self, request: Any, payload: Any) -> None:
+                raise ValueError("Command catalog request identity is incomplete")
+
+        repo = RejectingRepository(None, "it", clock=lambda: 1_700_000_000)
+        hydration = self.load(TypedApi(_fetch(_valid_catalog(), self.request)), repo)
+
+        self.assertEqual(hydration.source, "live")
+        self.assertEqual(hydration.parsed_command_count, 1)
+        self.assertIn("settings", hydration.commands)
+        # Nothing was cached, and the observation still reads as a clean live load.
+        self.assertEqual(repo.snapshot().generation, 0)
+        self.assertEqual(repo.census()[0]["source"], "live")
+
     def test_uncensused_family_accepts_empty_live_without_persisting_it(self) -> None:
         appliance = ApplianceDouble("OV")
         request = _request(appliance)

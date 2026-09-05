@@ -23,6 +23,14 @@ from .transport.command_catalog import (
 
 CACHE_SCHEMA_VERSION = 2
 DEGRADED_CACHE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+# Ceiling for EVERY cached catalog, exact matches included. The optional guards
+# (firmware/series) only notice a change the cloud ANNOUNCES; issue #94 is about the
+# backend quietly returning something different, which no discriminator can see. So an
+# exact match would otherwise be served forever, and every later outage would re-run
+# entity discovery from a frozen snapshot. Deliberately long: the cache exists to
+# survive a cloud outage, and past this age an appliance simply ships degraded (with
+# its sensors) rather than resurrecting a catalog nobody has confirmed in half a year.
+CACHE_MAX_AGE_SECONDS = 180 * 24 * 60 * 60
 
 CATALOG_SOURCES = frozenset({"live", "cache", "none"})
 CATALOG_FAILURES = frozenset({"transport", "structural", "semantic"})
@@ -75,7 +83,8 @@ class CommandCatalogSnapshot:
     """A defensive persistent document paired with its local generation."""
 
     generation: int
-    document: dict[str, Any]
+    # None means "nothing new since the generation you asked about" -- see snapshot().
+    document: dict[str, Any] | None
 
 
 def _json_value(value: Any) -> Any:
@@ -203,6 +212,8 @@ class CommandCatalogRepository:
                 degraded = True
 
         age_seconds = self._age(record["stored_at"])
+        if age_seconds > CACHE_MAX_AGE_SECONDS:
+            return None
         if degraded and age_seconds > DEGRADED_CACHE_MAX_AGE_SECONDS:
             return None
 
@@ -304,8 +315,18 @@ class CommandCatalogRepository:
             "request": request_flags,
         }
 
-    def snapshot(self) -> CommandCatalogSnapshot:
-        """Return a defensive persistent snapshot; observations are never included."""
+    def snapshot(self, *, since: int | None = None) -> CommandCatalogSnapshot:
+        """Return a defensive persistent snapshot; observations are never included.
+
+        `since` is the generation the caller has already persisted. When it matches,
+        the document is NOT built and `document` is None. The deep copy below is the
+        entire cost of this call -- every cached catalog for every appliance -- and the
+        coordinator asks once a minute for as long as the entry is loaded, on the hOn
+        loop the MQTT callbacks share. In steady state the generation never moves, so
+        without this the copy would be built and discarded on every single poll.
+        """
+        if since is not None and since == self._generation:
+            return CommandCatalogSnapshot(generation=self._generation, document=None)
         return CommandCatalogSnapshot(
             generation=self._generation,
             document={

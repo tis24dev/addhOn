@@ -31,6 +31,7 @@ from . import factory
 from ..debug_utils import redact_mac
 from .budget import APPLIANCE_LIST, APPLIANCE_ONE, MQTT_START, budgeted
 from .catalog_repository import CommandCatalogRepository
+from .engine.command_hydration import CommandCatalogUnavailable
 from .phase import PhaseTracker, phase
 from .transport.api import HonApi
 from .transport.auth import MFAChallengeRequired, NativeAuthError
@@ -151,6 +152,14 @@ class NativeHon:
         # `needs_rehydration`, which makes the first coordinator refresh re-run
         # load_commands before any entity is created.
         self._retryable_partials: list[Any] = []
+        # The subset of THOSE that also justifies failing the setup. A retry only
+        # deserves to take the whole config entry down when it could plausibly
+        # produce a different answer: a transport fault qualifies, an unusable
+        # catalog does not (it re-parses identically, and its cache is empty by
+        # construction on the first upgraded start). Kept apart from
+        # `_retryable_partials` so "requeue this appliance" and "fail the entry"
+        # cannot be forced to mean the same thing.
+        self._guard_partials: list[Any] = []
         # Reason -> count for appliances the cloud returned and this setup dropped,
         # and how many appliance OBJECTS the setup loop accounted for. Counted by
         # the tokens declared above, so the census carries no identity BY
@@ -378,6 +387,43 @@ class NativeHon:
             self._record_partial(
                 appliance, zone, APPLIANCE_DATA_MALFORMED, error, retryable=False
             )
+        except CommandCatalogUnavailable as error:
+            # The two meanings of "retryable" part company here, which is why this
+            # needs its own branch instead of the broad handler below.
+            #
+            # WORTH REHYDRATING: yes. The first coordinator refresh re-runs
+            # load_commands before any entity is created, and a catalog that was
+            # briefly unusable can be good by then -- so this stays queued, exactly as
+            # a transport fault does.
+            #
+            # WORTH FAILING THE SETUP OVER: no. If the catalog is unusable for a
+            # structural reason, the retry re-parses the SAME cloud answer into the
+            # SAME nothing, and the cache that would rescue it is empty by definition
+            # on the first start after the upgrade that introduced it. Arming the
+            # all-failed guard would turn one unusable catalog into a config entry
+            # that never loads on a single-appliance account (the common case) --
+            # strictly LESS than the degraded-but-working entry 5.21.x shipped, with
+            # sensors intact and only the command entities missing, and it would land
+            # on exactly the population issue #94 exists to help.
+            self._record_partial(
+                appliance,
+                zone,
+                error.error_code,
+                error,
+                retryable=True,
+                fatal_when_total=False,
+            )
+            # Leak-proof, same rule as the retryable branch: code label only at
+            # WARNING, the redacted mac stays at DEBUG.
+            _LOGGER.warning(
+                "[%s] Appliance kept without its command entities: the catalog is "
+                "unusable and no compatible cache exists; the rest of the entry loads",
+                error.error_code.label,
+            )
+            _LOGGER.debug(
+                "addhOn: no usable command catalog for %s",
+                redact_mac(appliance.mac_address),
+            )
         except Exception as error:  # noqa: BLE001 - re-raised below when fatal
             # RETRYABLE hydration fault boundary (issue #76, cause 4). Transport
             # exceptions such as aiohttp.ClientError and
@@ -418,6 +464,7 @@ class NativeHon:
         error: Exception,
         *,
         retryable: bool,
+        fatal_when_total: bool = True,
     ) -> None:
         """Remember an appliance that was appended without complete data.
 
@@ -435,11 +482,19 @@ class NativeHon:
         re-requesting a payload the parser cannot read produces the same payload, and
         failing the setup forever would leave the user with LESS than the degraded
         entry that ships today.
+
+        `fatal_when_total=False` splits the second reader off the first: the appliance
+        IS requeued for rehydration, but it does not count towards the all-failed
+        guard. That is the shape of an unusable command catalog -- one more attempt
+        before entity discovery is worth spending, while failing the entry over it is
+        not, because the retry re-parses the same cloud answer into the same nothing.
         """
         self._hydration_failures[f"{appliance.mac_address}#{zone}"] = code
         self._hydration_causes.append((redact_mac(appliance.mac_address), error))
         if retryable:
             self._retryable_partials.append(appliance)
+            if fatal_when_total:
+                self._guard_partials.append(appliance)
 
     def needs_rehydration(self, appliance: Any) -> bool:
         """True when retryable hydration left this appliance without its commands.
@@ -459,6 +514,7 @@ class NativeHon:
         self._hydration_failures.clear()
         self._hydration_causes.clear()
         self._retryable_partials.clear()
+        self._guard_partials.clear()
         # REBOUND, not cleared in place, unlike the three lines above. Two of those
         # three hold objects nothing outside this session reads; the third,
         # `_hydration_failures`, is reachable from another thread through
@@ -545,7 +601,7 @@ class NativeHon:
         # that ships today.
         if (
             self._appliances
-            and self._retryable_partials
+            and self._guard_partials
             and len(self._hydration_failures) >= len(self._appliances)
         ):
             # Re-raise the REAL cause, chained: with a single appliance (the common

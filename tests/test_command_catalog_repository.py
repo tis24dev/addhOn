@@ -67,6 +67,7 @@ _install_stubs()
 
 from custom_components.addhon import diagnostics
 from custom_components.addhon.client.catalog_repository import (
+    CACHE_MAX_AGE_SECONDS,
     CACHE_SCHEMA_VERSION,
     CATALOG_ENRICHMENTS,
     CATALOG_FAILURES,
@@ -240,6 +241,43 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
         self.assertFalse(exact.degraded_match)
         self.assertEqual(2_592_001, exact.age_seconds)
 
+    def test_snapshot_skips_the_document_when_the_generation_is_unchanged(self) -> None:
+        # The document is a deep copy of every cached catalog and the coordinator asks
+        # once a minute forever, on the loop the MQTT callbacks share. An unchanged
+        # repository must answer without building it.
+        self.repo.replace(_request(), _catalog())
+        current = self.repo.snapshot().generation
+
+        unchanged = self.repo.snapshot(since=current)
+        self.assertEqual(current, unchanged.generation)
+        self.assertIsNone(unchanged.document)
+
+        # A stale `since` still gets the full document, and so does no `since` at all.
+        self.assertIsNotNone(self.repo.snapshot(since=current - 1).document)
+        self.assertIsNotNone(self.repo.snapshot().document)
+
+        changed = _catalog()
+        changed["settings"]["setParameters"]["temp"]["description"] = "changed"
+        self.repo.replace(_request(), changed)
+        advanced = self.repo.snapshot(since=current)
+        self.assertEqual(current + 1, advanced.generation)
+        self.assertIsNotNone(advanced.document)
+
+    def test_even_an_exact_match_expires_at_the_absolute_ceiling(self) -> None:
+        # The optional guards only see a change the cloud ANNOUNCES. Issue #94 is about
+        # the backend quietly returning something else, so an exact match would
+        # otherwise be served from a frozen snapshot forever.
+        self.repo.replace(_request(), _catalog())
+
+        self.repo._clock = lambda: NOW + CACHE_MAX_AGE_SECONDS  # type: ignore[attr-defined]
+        at_boundary = self.repo.lookup(_request())
+        self.assertIsNotNone(at_boundary)
+        assert at_boundary is not None
+        self.assertFalse(at_boundary.degraded_match)
+
+        self.repo._clock = lambda: NOW + CACHE_MAX_AGE_SECONDS + 1  # type: ignore[attr-defined]
+        self.assertIsNone(self.repo.lookup(_request()))
+
     def test_bad_persisted_documents_and_records_are_ignored(self) -> None:
         self.repo.replace(_request(), _catalog())
         valid = self.repo.snapshot().document
@@ -257,6 +295,30 @@ class CommandCatalogRepositoryTest(unittest.TestCase):
             "digest": lambda document: document["records"]["AA:BB"].__setitem__(
                 "digest", "0" * 64
             ),
+            # The four below keep the DOCUMENT valid on purpose. Every pre-existing
+            # case above either trips the document gate first or is caught by a second
+            # guard further down, which left each of these as the only rejection for
+            # its own shape -- and therefore deletable with a green suite. The
+            # per-record version guard in particular is what has to work when
+            # CACHE_SCHEMA_VERSION next moves.
+            "record_version": lambda document: document["records"][
+                "AA:BB"
+            ].__setitem__("version", CACHE_SCHEMA_VERSION + 1),
+            # An EXTRA field, not a missing one: a missing field is also caught by the
+            # per-field text check, so only a superset isolates the field-set guard.
+            "record_field_set": lambda document: document["records"][
+                "AA:BB"
+            ].__setitem__("unexpected", "x"),
+            # `_valid_stored_text` is a type check and accepts "", so the empty-identity
+            # guard is the only thing standing between a blank type and a lookup.
+            "empty_identity": lambda document: document["records"][
+                "AA:BB"
+            ].__setitem__("appliance_type", ""),
+            # A record written with an un-normalised tag would never match a normalised
+            # request, so it is dead weight that must not be adopted.
+            "unnormalised_language": lambda document: document["records"][
+                "AA:BB"
+            ].__setitem__("language", "it-IT"),
         }
 
         for name, mutate in mutations.items():

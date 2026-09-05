@@ -145,7 +145,23 @@ class HonCommandLoader:
                 )
                 return hydration
 
-            self._repository.replace(request, catalog.payload)
+            try:
+                self._repository.replace(request, catalog.payload)
+            except ValueError as error:
+                # The cache is an OPTIMIZATION and its failure must never cost a live
+                # hydration that has ALREADY succeeded. `replace` rejects an incomplete
+                # identity (an empty applianceModelId is a shape this repo has seen --
+                # engine/appliance.py documents it) and any non-JSON value such as a
+                # non-finite float. Letting that escape would be worse than not caching:
+                # ValueError is in session._APPLIANCE_BUILD_ERRORS, so the appliance
+                # would be recorded malformed and NON-retryable, never requeued by
+                # needs_rehydration, and would lose every command entity permanently --
+                # reproducing identically on every reload.
+                _LOGGER.debug(
+                    "Command catalog cache write was rejected (%s); "
+                    "serving the live catalog and leaving the cache untouched",
+                    type(error).__name__,
+                )
             self._record(request, hydration, failure=None, code=None)
             return hydration
 
@@ -289,8 +305,17 @@ class HonCommandLoader:
             raise _SemanticCatalogError(raw_entries, len(self._commands)) from error
 
         parsed_commands = len(self._commands)
-        if self.appliance.appliance_type in CATALOG_REQUIRED_TYPES and (
-            not model or parsed_commands == 0
+        # A fridge that parsed ZERO commands is unusable and has to fall back to the
+        # cache. A MISSING applianceModel is NOT the same thing: 5.21.x read it as an
+        # empty dict and shipped a working appliance, and the probe carries
+        # `has_appliance_model` as its own state precisely because that variant is
+        # observed in the field. Raising on it converts a degraded-but-working entry
+        # into one that will not load at all, because the fallback ends in
+        # CommandCatalogUnavailable whenever the cache misses -- and the cache is
+        # ALWAYS empty on the first start after the upgrade that introduced it.
+        if (
+            self.appliance.appliance_type in CATALOG_REQUIRED_TYPES
+            and parsed_commands == 0
         ):
             raise _SemanticCatalogError(raw_entries, parsed_commands)
 

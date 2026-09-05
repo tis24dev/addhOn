@@ -18,6 +18,7 @@ class FakeStore:
     """Shared in-memory stand-in for Home Assistant's per-key Store."""
 
     constructed: tuple[object, int, str] | None = None
+    private: bool | None = None
     documents: dict[str, object] = {}
     load_error: Exception | None = None
     save_errors: list[Exception | None] = []
@@ -25,8 +26,11 @@ class FakeStore:
     saves: list[tuple[str, object]] = []
     removals: list[str] = []
 
-    def __init__(self, hass: object, version: int, key: str) -> None:
+    def __init__(
+        self, hass: object, version: int, key: str, *, private: bool = False
+    ) -> None:
         type(self).constructed = (hass, version, key)
+        type(self).private = private
         self._key = key
 
     async def async_load(self) -> object:
@@ -51,6 +55,7 @@ class FakeStore:
     @classmethod
     def reset(cls) -> None:
         cls.constructed = None
+        cls.private = None
         cls.documents = {}
         cls.load_error = None
         cls.save_errors = []
@@ -125,9 +130,11 @@ class FakeClient:
     def __init__(self, *snapshots: object) -> None:
         self._snapshots = list(snapshots)
         self.snapshot_reads = 0
+        self.since_values: list[object] = []
 
-    def command_catalog_cache_snapshot(self) -> object:
+    def command_catalog_cache_snapshot(self, since: object = None) -> object:
         self.snapshot_reads += 1
+        self.since_values.append(since)
         if len(self._snapshots) > 1:
             return self._snapshots.pop(0)
         return self._snapshots[0]
@@ -167,6 +174,10 @@ class CommandCatalogStoreTest(unittest.IsolatedAsyncioTestCase):
             (self.hass, 1, "addhon_command_catalog_entry-1"),
             FakeStore.constructed,
         )
+        # The document is keyed by MAC and carries firmware/series identifiers plus the
+        # raw cloud catalog, so the file must be marked private. Pinned here because
+        # nothing else in the suite would notice the flag being dropped.
+        self.assertIs(True, FakeStore.private)
         self.assertEqual(persisted_document, await adapter.async_load())
 
     async def test_invalid_or_unreadable_load_degrades_to_an_empty_document(self) -> None:
@@ -206,6 +217,33 @@ class CommandCatalogStoreTest(unittest.IsolatedAsyncioTestCase):
             [client.command_catalog_cache_snapshot] * 3,
             self.hass.executor_jobs,
         )
+        # The already-persisted generation is handed to the repository so an unchanged
+        # one can answer without deep-copying every cached catalog. Poll 1 has nothing
+        # saved yet (0); polls 2 and 3 ask about what they just saved (1).
+        self.assertEqual([0, 0, 1], client.since_values)
+        self.assertEqual(
+            [
+                (
+                    "addhon_command_catalog_entry-1",
+                    {"version": 1, "records": {"fresh": {}}},
+                )
+            ],
+            FakeStore.saves,
+        )
+
+    async def test_an_unchanged_repository_is_not_saved_again(self) -> None:
+        # What the `since` hand-off buys: the repository answers "nothing new" with no
+        # document at all, and the store must treat that as a no-op rather than writing
+        # None over a good file.
+        adapter = CommandCatalogStore(self.hass, "entry-1")
+        client = FakeClient(
+            _snapshot(1, "fresh"),
+            types.SimpleNamespace(generation=1, document=None),
+        )
+
+        await adapter.async_sync(client)
+        await adapter.async_sync(client)
+
         self.assertEqual(
             [
                 (
@@ -250,7 +288,7 @@ class CommandCatalogStoreTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_snapshot_failure_is_best_effort_and_redacted(self) -> None:
         class FailingSnapshotClient:
-            def command_catalog_cache_snapshot(self) -> object:
+            def command_catalog_cache_snapshot(self, since: object = None) -> object:
                 raise RuntimeError("private snapshot detail")
 
         adapter = CommandCatalogStore(self.hass, "entry-1")
@@ -272,7 +310,7 @@ class CommandCatalogStoreTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_snapshot_cancellation_propagates(self) -> None:
         class CancelledSnapshotClient:
-            def command_catalog_cache_snapshot(self) -> object:
+            def command_catalog_cache_snapshot(self, since: object = None) -> object:
                 raise asyncio.CancelledError
 
         adapter = CommandCatalogStore(self.hass, "entry-1")
@@ -333,6 +371,103 @@ class CommandCatalogStoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(Client.instance)
         assert Client.instance is not None
         self.assertTrue(Client.instance.closed)
+
+    async def test_a_successful_poll_persists_the_cache_through_the_real_setup(
+        self,
+    ) -> None:
+        """Execute the poll closure `async_setup_entry` actually builds.
+
+        The lifecycle guards in tests/test_coordinator_config_entry.py parse the source
+        and compare line numbers, so they hold for any arrangement of the same tokens:
+        wrapping the sync in `if False:`, moving it into an `except` branch or dropping
+        the `await` leaves them green while the on-disk cache silently stops updating.
+        This runs the closure instead, and the assertion is a real save.
+        """
+        from custom_components import addhon
+
+        captured: dict[str, object] = {}
+
+        class _CoordinatorBuilt(BaseException):
+            """Stops setup once the poll closure exists; not a failure mode.
+
+            BaseException on purpose: setup wraps the coordinator construction in a
+            broad `except Exception` that would file this sentinel as a setup failure.
+            """
+
+        class CapturingCoordinator:
+            def __init__(self, _hass, _logger, **kwargs) -> None:
+                captured["update_method"] = kwargs["update_method"]
+                raise _CoordinatorBuilt
+
+        class Entry:
+            entry_id = "entry-1"
+            title = "Account"
+            options: dict[str, object] = {}
+            data = {"email": "user@example.com", "password": "secret"}
+
+        class Hass:
+            config = types.SimpleNamespace(language="en")
+            data: dict = {}
+
+            async def async_add_executor_job(self, target, *args):
+                return target(*args)
+
+        class Client:
+            def __init__(self, **_kwargs) -> None:
+                self._generation = 0
+
+            def setup_sync(self) -> None:
+                return None
+
+            async def async_close(self) -> None:
+                return None
+
+            async def async_get_appliances_data(self) -> dict:
+                # A poll that changed something: the repository generation advances.
+                self._generation += 1
+                return {}
+
+            def command_catalog_cache_snapshot(self, since: object = None) -> object:
+                if since == self._generation:
+                    return types.SimpleNamespace(
+                        generation=self._generation, document=None
+                    )
+                return types.SimpleNamespace(
+                    generation=self._generation,
+                    document={
+                        "version": 1,
+                        "records": {"poll-%d" % self._generation: {}},
+                    },
+                )
+
+        with (
+            patch.object(addhon, "_async_register_services"),
+            patch.object(addhon, "_apply_debug_options"),
+            patch.object(addhon, "_persist_refresh_token"),
+            patch.object(addhon, "DataUpdateCoordinator", CapturingCoordinator),
+            patch("custom_components.addhon.hon_client.HonClient", Client),
+        ):
+            with self.assertRaises(_CoordinatorBuilt):
+                await addhon.async_setup_entry(Hass(), Entry())
+
+            # Setup syncs too, but nothing is cached yet at generation 0, so the
+            # repository correctly reports "nothing new" and no file is written.
+            self.assertEqual([], FakeStore.saves)
+
+            update_method = captured["update_method"]
+            assert callable(update_method)
+            await update_method()
+
+        # THE assertion: one poll, one advanced generation, one real save.
+        self.assertEqual(
+            [
+                (
+                    "addhon_command_catalog_entry-1",
+                    {"version": 1, "records": {"poll-1": {}}},
+                )
+            ],
+            FakeStore.saves,
+        )
 
     async def test_remove_deletes_only_this_entries_store(self) -> None:
         FakeStore.documents = {

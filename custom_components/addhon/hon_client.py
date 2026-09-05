@@ -16,6 +16,7 @@ from .client.auth_diagnostics import (
     AuthDiagnosticTrace,
     classify_failure_reason,
 )
+from .client.engine.command_hydration import CommandCatalogUnavailable
 from .client.catalog_repository import (
     CommandCatalogRepository,
     CommandCatalogSnapshot,
@@ -950,11 +951,17 @@ class HonClient:
         """
         return getattr(self._hon_instance, "degraded_census", None)
 
-    def command_catalog_cache_snapshot(self) -> CommandCatalogSnapshot:
-        """Read a defensive command-catalog snapshot on its owning hOn loop."""
+    def command_catalog_cache_snapshot(
+        self, since: int | None = None
+    ) -> CommandCatalogSnapshot:
+        """Read a defensive command-catalog snapshot on its owning hOn loop.
+
+        `since` is forwarded so an unchanged repository answers without deep-copying
+        every cached catalog -- this runs on the poll path, once a minute, forever.
+        """
 
         async def _read() -> CommandCatalogSnapshot:
-            return self._command_catalog_repository.snapshot()
+            return self._command_catalog_repository.snapshot(since=since)
 
         return self._run_on_hon_loop(_read(), budget.CLOSE)
 
@@ -1018,7 +1025,23 @@ class HonClient:
                         getattr(self._api, "_phase_tracker", None),
                     ):
                         async with budget.budgeted(budget.APPLIANCE_ONE):
-                            await loader()
+                            try:
+                                await loader()
+                            except CommandCatalogUnavailable:
+                                # The ONE exception to "not tolerated" above. A second
+                                # ADDHON-240 is not a transport fault that a fresh
+                                # setup could clear: the catalog is structurally
+                                # unusable and no compatible cache exists, so failing
+                                # the first refresh here would loop the entry through
+                                # ConfigEntryNotReady forever and deliver LESS than the
+                                # degraded entry 5.21.x shipped. Degrade instead: this
+                                # appliance keeps its sensors and loses only its
+                                # command entities, and the others are untouched.
+                                _LOGGER.warning(
+                                    "Appliance still has no usable command catalog "
+                                    "after the rehydration attempt; keeping it without "
+                                    "command entities instead of failing the entry"
+                                )
                     _debug_appliance_consumption("after rehydrating commands", appliance)
 
             # Attempt 1: standard update()

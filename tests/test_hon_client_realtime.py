@@ -140,7 +140,7 @@ class CommandCatalogRepositoryOwnershipTest(unittest.TestCase):
         snapshot = repository.snapshot
         census = repository.census
 
-        def record_snapshot():
+        def record_snapshot(since=None):
             calls.append(threading.current_thread())
             return snapshot()
 

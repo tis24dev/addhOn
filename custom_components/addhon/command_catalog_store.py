@@ -26,10 +26,16 @@ class CommandCatalogStore:
         from homeassistant.helpers.storage import Store
 
         self._hass = hass
+        # private=True: the records are keyed by MAC address and carry the appliance
+        # code, firmware/series identifiers and the raw cloud catalog. Every other
+        # surface in this integration redacts that identity (logs, diagnostics,
+        # census), and this file is the one place it lands on disk -- and in every
+        # Home Assistant backup.
         self._store = Store(
             hass,
             STORAGE_VERSION,
             f"{STORAGE_KEY_PREFIX}{entry_id}",
+            private=True,
         )
         self._saved_generation = 0
 
@@ -48,7 +54,7 @@ class CommandCatalogStore:
         """Persist a new repository generation without crossing event-loop owners."""
         try:
             snapshot = await self._hass.async_add_executor_job(
-                client.command_catalog_cache_snapshot
+                client.command_catalog_cache_snapshot, self._saved_generation
             )
             generation = snapshot.generation
             document = snapshot.document
@@ -59,7 +65,9 @@ class CommandCatalogStore:
                 "Command catalog cache snapshot failed (%s)", type(error).__name__
             )
             return
-        if generation == self._saved_generation:
+        # `document is None` is the repository saying "unchanged since the generation
+        # you passed", which is the common case on every poll after the first.
+        if document is None or generation == self._saved_generation:
             return
         try:
             await self._store.async_save(document)

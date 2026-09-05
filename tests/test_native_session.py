@@ -315,6 +315,99 @@ class CommandCatalogRetryBoundaryTest(unittest.TestCase):
         self.assertEqual(2, retry.updates)
 
 
+class SingleApplianceCatalogDegradationTest(unittest.TestCase):
+    """The all-failed guard must not fire on an unusable catalog (issue #94).
+
+    On an account with ONE appliance every per-appliance failure is also a total
+    failure, so the guard's premise -- "at least one partial is retryable, and Home
+    Assistant retrying could still fix it" -- decides whether the user gets a
+    degraded entry or no entry at all. A transport fault genuinely can be fixed by a
+    retry. An unusable command catalog cannot: the retry re-parses the same cloud
+    answer into the same nothing, and the cache that would rescue it is empty by
+    construction on the first start after the upgrade that introduced it.
+    """
+
+    class _CatalogAppliance(FakeAppliance):
+        def __init__(self, api, data, zone, events, error) -> None:
+            super().__init__(api, data, zone, events)
+            self.error = error
+            self.command_loads = 0
+            self.updates = 0
+            self.attributes = {"parameters": {"status": "ok"}}
+            self.settings: dict = {}
+            self.statistics: dict = {}
+
+        async def load_commands(self) -> None:
+            self.command_loads += 1
+            raise self.error
+
+        async def update(self) -> None:
+            self.updates += 1
+
+    def _single_appliance_session(self, error):
+        repository = CommandCatalogRepository(None, "it")
+        data = [{"macAddress": "ONLY", "applianceTypeName": "FRE"}]
+        events: list[str] = []
+        api = FakeApi(data, events)
+        original = factory.create_appliance
+
+        def fake_create_appliance(api, data, zone=0, *, catalog_repository=None):
+            return SingleApplianceCatalogDegradationTest._CatalogAppliance(
+                api, data, zone, events, error
+            )
+
+        factory.create_appliance = fake_create_appliance
+        self.addCleanup(setattr, factory, "create_appliance", original)
+        hon = NativeHon("u@x", "p", enable_mqtt=False, catalog_repository=repository)
+        hon._api = api
+        return hon
+
+    def test_unusable_catalog_alone_on_the_account_degrades_instead_of_failing(self) -> None:
+        hon = self._single_appliance_session(CommandCatalogUnavailable())
+
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            _run(hon.setup())
+
+        # The entry ships: the appliance is kept, its sensors work, and only its
+        # command entities are missing. On 5.21.x this same cloud answer produced a
+        # degraded entry too -- failing here would be a REGRESSION, not a hardening.
+        self.assertEqual(1, len(hon.appliances))
+        self.assertEqual({"ADDHON-240": 1}, hon.degraded_census)
+        # Still queued: one more attempt before entity discovery is worth spending.
+        self.assertTrue(hon.needs_rehydration(hon.appliances[0]))
+
+    def test_a_transport_fault_alone_on_the_account_still_fails_setup(self) -> None:
+        # CONTROL for the test above. Collapsing the two buckets back together -- or
+        # dropping the guard -- has to be caught here, or the exemption above would
+        # read as "the all-failed guard no longer works".
+        hon = self._single_appliance_session(TimeoutError())
+
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            with self.assertRaises(session_mod.HonCodedError):
+                _run(hon.setup())
+
+    def test_a_second_unusable_catalog_on_the_first_poll_is_tolerated(self) -> None:
+        # The other half. Exempting the setup guard alone would only move the brick
+        # one hop: the first-poll rehydration deliberately does NOT tolerate a second
+        # failure, so an appliance whose catalog stays unusable would still take the
+        # entry down through ConfigEntryNotReady.
+        hon = self._single_appliance_session(CommandCatalogUnavailable())
+        with self.assertLogs(session_mod._LOGGER, level="WARNING"):
+            _run(hon.setup())
+        appliance = hon.appliances[0]
+
+        client = HonClient(email="e@x", password="p")
+        client._api = hon
+        client._run_on_hon_loop = (  # type: ignore[assignment]
+            lambda coro, timeout=None: asyncio.run(coro)
+        )
+        client._update_appliance_sync(appliance)
+
+        # Retried once, failed again, and the poll carried on to update().
+        self.assertEqual(2, appliance.command_loads)
+        self.assertEqual(1, appliance.updates)
+
+
 class _Harness:
     """Patches create_appliance (factory) + NativeHon._make_mqtt + HonConnection/HonApi."""
 

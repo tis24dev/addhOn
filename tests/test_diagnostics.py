@@ -45,7 +45,7 @@ class _DiagnosticStore:
 
     removals: list[str] = []
 
-    def __init__(self, hass, version, key) -> None:
+    def __init__(self, hass, version, key, *, private: bool = False) -> None:
         self._key = key
 
     async def async_load(self):
