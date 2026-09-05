@@ -91,6 +91,7 @@ from .ref_programs import (
     REF_MY_ZONE_PARAM,
     STOPPROGRAM,
     active_mode_code,
+    active_mode_codes,
     my_zone_codes,
 )
 
@@ -700,22 +701,36 @@ class HonNumber(HonBaseEntity, NumberEntity):
             # declares three (no `intelligenceMode`), the H4F306SDH1 upright one.
             # Clearing everything clearable is the most of the app's behaviour the
             # appliance will actually accept.
+            #
+            # But the intersection is only safe once the RUNNING modes are inside it.
+            # `stopProgram` declaring `holidayMode` while `quickModeZ1` is the flag that
+            # is actually on would otherwise send `holidayMode=0`, change nothing, and
+            # still answer "the modes were switched off, set it again" -- an instruction
+            # the user cannot carry out, on every retry. So the running set is checked
+            # first and the whole write is refused when the catalogue cannot cover it.
             stop = get_command(appliance, STOPPROGRAM)
             stop_params = getattr(stop, "parameters", None) if stop is not None else None
             stop_params = stop_params if isinstance(stop_params, dict) else {}
+            running = {
+                REF_FLAG_TO_PARAM[code]
+                for code in active_mode_codes(self._get_attr)
+            }
+            if not running.issubset(stop_params):
+                # At least one RUNNING mode has no off switch in this catalogue, so no
+                # message we could send would clear it. Sending the rest anyway is worse
+                # than refusing: the appliance would keep choosing the temperature, and
+                # the "modes were switched off, set it again" answer below would send
+                # the user round the same loop on every retry, forever. Say instead that
+                # this appliance cannot do it remotely, which is the truth.
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="setpoint_owned_by_mode",
+                )
             clearable = {
                 flag: "0"
                 for flag in REF_FLAG_TO_PARAM.values()
                 if flag in stop_params
             }
-            if not clearable:
-                # Nothing to send: the catalogue offers no way to clear any mode. The
-                # write still must not go out -- the appliance would silently undo it --
-                # but the message must not point at a control that does not exist.
-                raise HomeAssistantError(
-                    translation_domain=DOMAIN,
-                    translation_key="setpoint_owned_by_mode",
-                )
             await async_dispatch_patch(
                 self.hass,
                 client,

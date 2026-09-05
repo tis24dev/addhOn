@@ -1098,5 +1098,41 @@ class RefModeDiagnosticsRowTest(unittest.TestCase):
         self.assertNotIn("write", row)
 
 
+class RefActiveModeReadingTest(unittest.TestCase):
+    """`active_mode_codes` against `active_mode_code`, which is built on it."""
+
+    @staticmethod
+    def _shadow(**flags: str):
+        return lambda param: flags.get(param)
+
+    def test_every_running_flag_is_reported_in_declaration_order(self) -> None:
+        from custom_components.addhon.ref_programs import (
+            active_mode_code,
+            active_mode_codes,
+        )
+
+        # The four flags are independent: `stopProgram` declares all four and the app's
+        # own reset writes all four. Two of them can be on at once, and a caller that
+        # has to CLEAR them needs both -- naming only the first would leave the other
+        # running while telling the user it was switched off.
+        read = self._shadow(quickModeZ1="1", holidayMode="1", intelligenceMode="0")
+        self.assertEqual(("super_cool", "holiday"), active_mode_codes(read))
+        # The singular is the head of the same answer, so the two cannot disagree.
+        self.assertEqual("super_cool", active_mode_code(read))
+
+    def test_nothing_running_is_an_empty_answer_on_both(self) -> None:
+        from custom_components.addhon.ref_programs import (
+            active_mode_code,
+            active_mode_codes,
+        )
+
+        # A shadow that omits the flags entirely, not merely one reporting "0": an
+        # appliance whose catalogue never declared them reads as None, and `str(None)`
+        # must not be mistaken for a running mode.
+        read = self._shadow(quickModeZ2="0")
+        self.assertEqual((), active_mode_codes(read))
+        self.assertIsNone(active_mode_code(read))
+
+
 if __name__ == "__main__":
     unittest.main()

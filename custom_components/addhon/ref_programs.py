@@ -516,10 +516,25 @@ def active_mode_code(read_attr) -> str | None:
 
     Order is `REF_FLAG_TO_PARAM`'s, so the answer is stable when two modes are on.
     """
-    for code, param in REF_FLAG_TO_PARAM.items():
-        if str(read_attr(param)) == "1":
-            return code
-    return None
+    codes = active_mode_codes(read_attr)
+    return codes[0] if codes else None
+
+
+def active_mode_codes(read_attr) -> tuple[str, ...]:
+    """EVERY mode flag the shadow reports as running, in `REF_FLAG_TO_PARAM` order.
+
+    The flags are independent -- `stopProgram` declares four of them and the app's own
+    reset writes all four -- so "which mode owns this setpoint" and "which modes have to
+    be cleared before the setpoint can be written" are not the same question. The first
+    one names a mode for a message and is happy with the first hit; the second decides
+    what a write must contain, and answering it with one flag would leave the others
+    running while telling the user they were switched off.
+    """
+    return tuple(
+        code
+        for code, param in REF_FLAG_TO_PARAM.items()
+        if str(read_attr(param)) == "1"
+    )
 
 
 def has_replacement_controls(appliance) -> bool:

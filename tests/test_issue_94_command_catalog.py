@@ -348,6 +348,38 @@ class Issue94CommandCatalogTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.translation_key, "setpoint_owned_by_mode")
         self.assertEqual([], connection.post_calls, "nothing could be cleared")
 
+    async def test_a_running_mode_the_catalogue_cannot_clear_refuses_the_write(
+        self,
+    ) -> None:
+        """Clearing SOMETHING is not the same as clearing the mode that is on.
+
+        The shadow reports `quickModeZ2`; this catalogue's `stopProgram` declares
+        `holidayMode` and nothing else. Sending every clearable flag would put
+        `holidayMode=0` on the wire, change nothing, and still answer "the modes were
+        switched off, set the temperature again" -- an instruction the user cannot carry
+        out, returning them to the same error on every retry. The write has to be
+        refused, and the message has to be the one that says this appliance cannot do it
+        remotely.
+        """
+        catalog = copy.deepcopy(CATALOG)
+        catalog["stopProgram"]["parameters"] = {
+            "holidayMode": {
+                "typology": "fixed", "category": "command",
+                "mandatory": 0, "fixedValue": "0",
+            }
+        }
+        connection = _CatalogConnection()
+        connection._catalog = {"payload": {**catalog, "resultCode": "0"}}
+        target, _ = await self._fridge_setpoint(connection)
+
+        with self.assertRaises(HomeAssistantError) as raised:
+            await target.async_set_native_value(-19)
+
+        self.assertEqual(raised.exception.translation_key, "setpoint_owned_by_mode")
+        self.assertEqual(
+            [], connection.post_calls, "a write that cannot clear the mode is not sent"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
