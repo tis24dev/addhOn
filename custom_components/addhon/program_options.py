@@ -36,10 +36,21 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .base_entity import HonBaseEntity
 from .client.engine.parameter.range import HonParameterRange
-from .const import DOMAIN, PROGRAM_PARAM_NAMES, PROGRAM_PENDING_OPTIONS
+from .const import (
+    DOMAIN,
+    PROGRAM_PARAM_NAMES,
+    PROGRAM_PENDING_OPTIONS,
+    PROGRAM_PENDING_STORE,
+)
 from .client.engine.exceptions import ApiError
 from .debug_utils import redact_id
-from .hon_commands import get_command, get_commands, param_range, param_values
+from .hon_commands import (
+    SYNTHETIC_CATEGORY,
+    get_command,
+    get_commands,
+    param_range,
+    param_values,
+)
 from .param_rollback import restore_params, snapshot_params
 
 _LOGGER = logging.getLogger(__name__)
@@ -373,16 +384,79 @@ class HonProgramOptionEntity(HonBaseEntity):
     def _active_option_param(self):
         """Resolve this param off the ACTIVE startProgram command's parameters only.
 
-        Program-accurate (and cheap) vs the cached ``_option_param`` (the merged-across-
-        categories superset): selecting a program SWAPS the active ``startProgram`` command,
-        so a per-program range/value must come from the current command, not the merged
-        cache (PR #38 / Greptile P2). Never calls ``available_settings`` (no range
-        enumeration). Returns None if the command/param is absent."""
+        The ACTIVE command is the LAST STARTED program, not the selected one: the category
+        swap happens in button.py at Start, and `HonCommandLoader._set_last_category`
+        re-points it from the command history on every load. Selecting a program in the
+        select writes the pending store and nothing else, so this reflects the user's
+        choice only after they have actually started it. `_selected_option_param` is the
+        program-accurate resolver; this stays as its second-best fallback (it IS the right
+        answer while a cycle runs, when no program is pending).
+
+        Never calls ``available_settings`` (no range enumeration). Returns None if the
+        command/param is absent."""
         command = startprogram_command(self._appliance)
         params = getattr(command, "parameters", None) if command is not None else None
         if isinstance(params, dict):
             return params.get(self._param)
         return None
+
+    def _selected_program_code(self) -> str | None:
+        """The BUFFERED program code -- the one the user has actually picked -- or None.
+
+        ``select.async_select_option`` writes ONLY ``PROGRAM_PENDING_STORE`` (no send, no
+        category swap), so this store is the only place the current choice exists before
+        Start. ``SYNTHETIC_CATEGORY`` is refused: it is the ``{"_": self}`` placeholder a
+        category-less command reports and never a program code."""
+        code = self._coordinator_store(PROGRAM_PENDING_STORE).get(self._appliance_id)
+        if code is None or str(code) in ("", SYNTHETIC_CATEGORY):
+            return None
+        return str(code)
+
+    def _category_option_param(self):
+        """Resolve this param off the SELECTED program's startProgram CATEGORY, or None.
+
+        ``HonCommand.categories`` holds one command object per program, each with its OWN
+        ``parameters`` -- the schema the hOn app itself rebuilds its option set from
+        (``normalize`` @decomp.txt:1773682, see apk/analysis/issue98-99-program-options-
+        and-wd-dry.md). A program that does not expose this option simply has no such key,
+        and one that pins it carries a ``HonParameterFixed``. Cheap: one dict lookup per
+        read, no ``available_settings``, no range enumeration.
+
+        Returns None when nothing is pending, when the program parameter is not
+        category-backed (a ``prCode``-typed enum keys the store by code, not by category
+        name, so the lookup misses), or when the category omits the param."""
+        code = self._selected_program_code()
+        if code is None:
+            return None
+        command = startprogram_command(self._appliance)
+        categories = getattr(command, "categories", None) if command is not None else None
+        if not isinstance(categories, dict):
+            return None
+        category = categories.get(code)
+        params = getattr(category, "parameters", None) if category is not None else None
+        if isinstance(params, dict):
+            return params.get(self._param)
+        return None
+
+    def _selected_option_param(self, drop: tuple[str, ...] = ()):
+        """This param as the SELECTED program declares it, else the widest fallback.
+
+        Order: the pending program's category, then the active command, then the cached
+        merged superset. A candidate is taken only when it is genuinely SETTABLE there
+        (``is_settable_option``); otherwise the walk continues. That last clause is the
+        load-bearing one and it is deliberate: a program that pins the option leaves this
+        returning the merged param, so the control keeps the value set it has today
+        instead of degenerating into an empty select or a zero-width number. HIDING such a
+        control is issue #98's own request and belongs to the ``available`` gate, which is
+        a separate, user-visible decision -- not something to smuggle in through a
+        resolver.
+
+        ``drop`` is the description's sentinel tuple, passed through so a sentinel-only
+        candidate is not mistaken for a usable one."""
+        for candidate in (self._category_option_param(), self._active_option_param()):
+            if candidate is not None and is_settable_option(candidate, drop):
+                return candidate
+        return self._option_param
 
     @property
     def available(self) -> bool:

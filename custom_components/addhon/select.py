@@ -776,40 +776,67 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
         self._attr_unique_id = f"{appliance_id}_opt_{description.key}"
         if description.icon:
             self._attr_icon = description.icon
-        label_map = description.label_map or {}
-        # The param is resolved + cached once by the mixin; materialize its codes here.
-        choices = (
-            option_choices(self._option_param, description.drop)
-            if self._option_param is not None
-            else []
-        )
-        # raw schema value -> base label (label map, raw value as fallback).
-        base_keys = {raw: label_map.get(raw, raw) for raw in choices}
-        # Collision-aware disambiguation (PR #38 / Greptile P2): when two EXPOSED raw codes
-        # share a label (DRY_LEVEL_LABELS_TD maps e.g. 1 & 12 both to "iron_dry"), suffixing
-        # ONLY the colliding ones with their raw code keeps every code selectable and keeps
-        # the reverse map injective. Non-colliding labels keep their translatable
-        # `state.<key>`; a suffixed colliding key renders literally (rare-model-only).
-        self._raw_to_key: dict[str, str] = disambiguate_labels(base_keys)
-        self._key_to_raw: dict[str, str] = {key: raw for raw, key in self._raw_to_key.items()}
-        # One distinct option per exposed raw code (keys are now unique; order preserved).
-        self._attr_options = list(self._raw_to_key.values())
+        self._label_map = description.label_map or {}
+        # The option set is rebuilt whenever the resolved parameter changes -- which is what
+        # selecting another program does, since each startProgram category carries its own
+        # parameter object (issue #98). Built eagerly here so a construction-time schema
+        # error surfaces at setup rather than on the first frontend read.
+        self._raw_to_key: dict[str, str] = {}
+        self._key_to_raw: dict[str, str] = {}
+        self._maps_param = None
+        self._maps_built = False
+        self._rebuild_maps()
         _LOGGER.debug(
             "Select debug: init option select '%s' id=%s param=%s options=%s",
             redact_id(self._attr_unique_id, appliance_id),
             redact_id(appliance_id),
             description.param,
-            self._attr_options,
+            list(self._raw_to_key.values()),
         )
+
+    def _rebuild_maps(self) -> None:
+        """Rebuild the raw<->label maps from the parameter of the SELECTED program.
+
+        Memoized on the resolved parameter OBJECT (compared with ``is``, so no id() reuse
+        can alias two categories, and the reference keeps the object alive to guarantee
+        it): a program change resolves to a different category's parameter and rebuilds,
+        while a program that does not narrow this option resolves to the same merged
+        parameter and costs one identity check."""
+        param = self._selected_option_param(self._desc.drop)
+        if self._maps_built and param is self._maps_param:
+            return
+        self._maps_param = param
+        self._maps_built = True
+        choices = option_choices(param, self._desc.drop) if param is not None else []
+        # raw schema value -> base label (label map, raw value as fallback).
+        base_keys = {raw: self._label_map.get(raw, raw) for raw in choices}
+        # Collision-aware disambiguation (PR #38 / Greptile P2): when two EXPOSED raw codes
+        # share a label (DRY_LEVEL_LABELS_TD maps e.g. 1 & 12 both to "iron_dry"), suffixing
+        # ONLY the colliding ones with their raw code keeps every code selectable and keeps
+        # the reverse map injective. Non-colliding labels keep their translatable
+        # `state.<key>`; a suffixed colliding key renders literally (rare-model-only).
+        self._raw_to_key = disambiguate_labels(base_keys)
+        self._key_to_raw = {key: raw for raw, key in self._raw_to_key.items()}
+
+    @property
+    def options(self) -> list[str]:
+        # One distinct option per exposed raw code (keys are unique; order preserved).
+        self._rebuild_maps()
+        return list(self._raw_to_key.values())
 
     @property
     def current_option(self) -> str | None:
         raw = self._current_raw()
         if raw is None:
             return None
+        self._rebuild_maps()
+        # None when the live device value is outside what the SELECTED program offers (the
+        # machine still reports the finished cycle's setting). HA renders that as unknown,
+        # which is honest: the value is not one the pending program would accept.
         return self._raw_to_key.get(normalize_code(raw))
 
     async def async_select_option(self, option: str) -> None:
+        self._rebuild_maps()
         raw = self._key_to_raw.get(option)
         if raw is None:
             raise HomeAssistantError(
@@ -817,7 +844,7 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
                 translation_key="invalid_setpoint",
                 translation_placeholders={
                     "value": option,
-                    "allowed": ", ".join(self._attr_options),
+                    "allowed": ", ".join(self._raw_to_key.values()),
                 },
             )
         self._buffer(raw)

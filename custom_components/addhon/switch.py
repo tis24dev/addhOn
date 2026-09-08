@@ -1221,12 +1221,16 @@ class HonProgramOptionSwitch(HonProgramOptionEntity, SwitchEntity):
         self._attr_unique_id = f"{appliance_id}_opt_{description.key}"
         if description.icon:
             self._attr_icon = description.icon
-        # Resolve on/off tokens from the device schema (the param is resolved + cached once
-        # by the mixin): off = "0" (or the lowest value), on = the first value that is not
-        # off. Handles plain 0/1 AND value-pair ranges such as antiCreaseTime[0,360].
-        choices = option_choices(self._option_param) if self._option_param is not None else []
-        self._off = "0" if "0" in choices else (choices[0] if choices else "0")
-        self._on = next((c for c in choices if c != self._off), "1")
+        # Resolve on/off tokens from the device schema: off = "0" (or the lowest value), on =
+        # the first value that is not off. Handles plain 0/1 AND value-pair ranges such as
+        # antiCreaseTime[0,360]. Re-resolved per SELECTED program (issue #98): a program that
+        # offers a different pair -- antiCreaseTime[0,360] on one, [0,180] on another -- must
+        # buffer ITS token, not the one the merged superset happened to be widest on.
+        self._off = "0"
+        self._on = "1"
+        self._tokens_param = None
+        self._tokens_built = False
+        self._refresh_tokens()
         _LOGGER.debug(
             "Switch debug: init option switch '%s' id=%s param=%s off=%s on=%s",
             redact_id(self._attr_unique_id, appliance_id),
@@ -1236,17 +1240,34 @@ class HonProgramOptionSwitch(HonProgramOptionEntity, SwitchEntity):
             self._on,
         )
 
+    def _refresh_tokens(self) -> None:
+        """Re-resolve the on/off tokens when the selected program changes the parameter.
+
+        Memoized on the resolved parameter OBJECT (``is``, not id(), and the reference keeps
+        it alive) exactly as the option select's map cache is."""
+        param = self._selected_option_param()
+        if self._tokens_built and param is self._tokens_param:
+            return
+        self._tokens_param = param
+        self._tokens_built = True
+        choices = option_choices(param) if param is not None else []
+        self._off = "0" if "0" in choices else (choices[0] if choices else "0")
+        self._on = next((c for c in choices if c != self._off), "1")
+
     @property
     def is_on(self) -> bool | None:
         raw = self._current_raw()
         if raw is None:
             return None
+        self._refresh_tokens()
         return normalize_code(raw) != self._off
 
     async def async_turn_on(self, **kwargs) -> None:
+        self._refresh_tokens()
         self._buffer(self._on)
 
     async def async_turn_off(self, **kwargs) -> None:
+        self._refresh_tokens()
         self._buffer(self._off)
 
 
