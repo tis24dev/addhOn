@@ -51,6 +51,7 @@ appliance id): only the entity domain and the code-authored unique_id suffix.
 """
 from __future__ import annotations
 
+import importlib
 import logging
 import re
 from collections.abc import Mapping
@@ -644,6 +645,79 @@ def _command_schema(appliance) -> dict:
     return out
 
 
+# The two bounds on `program_options`. Placed here rather than in the bounds block near
+# the top of the module for the same reason `_CONN_CATEGORY_MAX_CHARS` is: they are only
+# meaningful next to the section that reads them.
+#
+# The PROGRAM cap is a malformed-catalogue backstop and not a summary. The largest real
+# catalogue this repository has measured is 154 categories on a washer, so 256 cannot
+# truncate any appliance seen so far and still stops a runaway schema from turning a
+# support artifact into something nobody can open. When it does bite, the sibling
+# `per_program_truncated` flag says so -- silence about a dropped row would read as an
+# appliance that simply has fewer programs, which is exactly the wrong conclusion for the
+# section a maintainer uses to decide what a program supports. Sorted order is kept so the
+# programs retained are deterministic and two dumps stay diffable.
+_PROGRAM_MATRIX_MAX_PROGRAMS = 256
+
+# The bound on the one CLOUD-CONTROLLED string this section prints: the value a program
+# pins an option to. Real ones are a temperature, a spin speed, a flag or a single word
+# (`dashboard`, `download`, `series`), so 64 characters is already several times more than
+# any of them needs. No truncation flag, and for the same reason `_CONN_CATEGORY_MAX_CHARS`
+# needs none: a pinned value long enough to be cut is not a value, it is a payload, and the
+# cap exists to stop it becoming one rather than to summarise it.
+_PROGRAM_MATRIX_VALUE_MAX_CHARS = 64
+
+
+def _option_drops() -> dict[str, tuple[str, ...]]:
+    """`param name -> sentinel values the entity gate ignores`, from the real tables.
+
+    The gate does not ask "has this parameter >= 2 values" but "has it >= 2 values that
+    are not SENTINELS": `dryLevel` ships `("", "0", "11")` as `DRY_LEVEL_SENTINELS`, so a
+    parameter offering only those creates no entity. `_program_option_matrix` calling
+    `is_settable_option(param)` with no `drop` therefore reported such a parameter as
+    `settable` while no control existed for it -- breaking the one property that section
+    promises, that its verdict is the entity gate's verdict (PR #103 review, coderabbitai).
+
+    Read off the description tables rather than re-declaring the sentinel tuple here, so
+    there is nothing to keep in sync: a description that gains a `drop` is honoured with no
+    change to this module. `getattr` because only the select descriptions carry the field
+    today.
+
+    Guarded per import exactly as `_mapped_sets` is, and degrading the same way: a platform
+    module that will not import costs its own drops, which can only make the section
+    LOOSER (a sentinel-only parameter reads as settable) and never invent a restriction.
+
+    Drops are unioned when two descriptions name the same parameter -- the WM and TD
+    `dryLevel` rows do. Today they carry the identical tuple, so the union is exact; if
+    they ever diverge it would make this section stricter than the looser of the two, which
+    is the safe direction for a report a maintainer reads as "no control here".
+    """
+    drops: dict[str, tuple[str, ...]] = {}
+    tables: list = []
+    for module, names in (
+        ("select", ("_PROGRAM_OPTION_SELECTS",)),
+        ("switch", ("_PROGRAM_OPTION_SWITCHES",)),
+        ("number", ("_PROGRAM_OPTION_NUMBERS",)),
+    ):
+        try:
+            imported = importlib.import_module(f".{module}", __package__)
+            tables.extend(getattr(imported, name, ()) for name in names)
+        except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+            continue
+    for table in tables:
+        for desc in table:
+            drop = tuple(getattr(desc, "drop", ()) or ())
+            if not drop:
+                continue
+            param = str(getattr(desc, "param", "") or "")
+            if not param:
+                continue
+            merged = dict.fromkeys(drops.get(param, ()))
+            merged.update(dict.fromkeys(drop))
+            drops[param] = tuple(merged)
+    return drops
+
+
 def _program_option_matrix(appliance) -> dict:
     """Which options each PROGRAM of ``startProgram`` really supports (issue #98).
 
@@ -665,8 +739,11 @@ def _program_option_matrix(appliance) -> dict:
       ``settable`` -- present with >= 2 reachable values: a real choice for this program
 
     Settability is decided by ``program_options.is_settable_option``, the SAME predicate
-    the entity gate uses, so a reader comparing this section against the entities cannot
-    be misled by two different definitions of "settable".
+    the entity gate uses AND with the same sentinel tuples (``_option_drops``), so a reader
+    comparing this section against the entities cannot be misled by two different
+    definitions of "settable". Passing the predicate without the sentinels was enough to
+    break that: a sentinel-only ``dryLevel`` read as settable while no control for it
+    existed (PR #103 review).
 
     Favourites and the ``{"_": self}`` placeholder are dropped by
     ``ref_programs.program_categories``: a favourite is keyed by text the USER typed, and
@@ -725,8 +802,13 @@ def _program_option_matrix(appliance) -> dict:
     )
     if not union:
         return {}
+    # The sentinel tuples the entity gate ignores, so `settable` here means what it means
+    # there (see `_option_drops`).
+    drops = _option_drops()
+    ordered = sorted(categories.items())
+    truncated = len(ordered) > _PROGRAM_MATRIX_MAX_PROGRAMS
     per_program: dict[str, dict] = {}
-    for code, category in sorted(categories.items()):
+    for code, category in ordered[:_PROGRAM_MATRIX_MAX_PROGRAMS]:
         params = getattr(category, "parameters", None)
         params = params if isinstance(params, dict) else {}
         absent: list[str] = []
@@ -736,10 +818,12 @@ def _program_option_matrix(appliance) -> dict:
             param = params.get(name)
             if param is None:
                 absent.append(name)
-            elif is_settable_option(param):
+            elif is_settable_option(param, drops.get(name, ())):
                 settable.append(name)
             else:
-                fixed[name] = str(getattr(param, "value", ""))
+                fixed[name] = str(getattr(param, "value", ""))[
+                    :_PROGRAM_MATRIX_VALUE_MAX_CHARS
+                ]
         row: dict = {}
         if settable:
             row["settable"] = settable
@@ -753,6 +837,11 @@ def _program_option_matrix(appliance) -> dict:
         "categories_total": len(getattr(command, "categories", {}) or {}),
         "union_params": union,
         "per_program": per_program,
+        # Emitted only when true, and a SIBLING of the map rather than a key inside it, for
+        # the reason `attributes_last_update_truncated` is: every key of `per_program` is a
+        # cloud-chosen program code, so a reserved `truncated` entry could not be told apart
+        # from a program actually named that.
+        **({"per_program_truncated": True} if truncated else {}),
     }
 
 

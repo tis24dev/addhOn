@@ -756,7 +756,26 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
                 sorted(cleared) if isinstance(cleared, dict) else None,
             )
         _LOGGER.debug("Select debug: after selection store=%s", redact_store(store))
-        self.async_write_ha_state()
+        # Re-render the WHOLE coordinator, not just this select. The option entities now
+        # derive their value set, range and on/off tokens from the pending program
+        # (`HonProgramOptionEntity._selected_option_param`), and their buffered values were
+        # just cleared above -- neither is visible until something writes their state, so a
+        # bare `self.async_write_ha_state()` left every option control showing the previous
+        # program's choices until the next poll, up to a whole scan interval later. A user
+        # picking one of those stale values would then be refused by the write-time check
+        # (PR #103 review, greptile P1).
+        #
+        # The coordinator broadcast is deliberately preferred over a dispatcher signal: it
+        # is exactly what every poll already does, costs one state write per entity and no
+        # I/O, and needs no per-entity subscribe/unsubscribe bookkeeping. It is wider than
+        # this appliance (the account's other appliances re-render too), which is the price
+        # paid for not introducing a signal layer for a single caller.
+        #
+        # This select's own state rides along: a CoordinatorEntity registers
+        # `_handle_coordinator_update` as a listener when it is added to hass, so the
+        # broadcast covers it and a separate `async_write_ha_state()` would only write it
+        # twice.
+        self.coordinator.async_update_listeners()
 
 
 class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):

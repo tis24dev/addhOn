@@ -230,6 +230,12 @@ class FakeCoordinator:
         self.refreshes = 0
         self.last_update_success = True
         self.last_exception = None
+        # `DataUpdateCoordinator.async_update_listeners`: a program change re-renders every
+        # entity of the coordinator, because the option controls read the pending program.
+        self.listener_broadcasts = 0
+
+    def async_update_listeners(self) -> None:
+        self.listener_broadcasts += 1
 
     async def async_refresh(self) -> None:
         self.refreshes += 1

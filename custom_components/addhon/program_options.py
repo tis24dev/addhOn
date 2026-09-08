@@ -441,21 +441,39 @@ class HonProgramOptionEntity(HonBaseEntity):
     def _selected_option_param(self, drop: tuple[str, ...] = ()):
         """This param as the SELECTED program declares it, else the widest fallback.
 
-        Order: the pending program's category, then the active command, then the cached
-        merged superset. A candidate is taken only when it is genuinely SETTABLE there
-        (``is_settable_option``); otherwise the walk continues. That last clause is the
-        load-bearing one and it is deliberate: a program that pins the option leaves this
-        returning the merged param, so the control keeps the value set it has today
-        instead of degenerating into an empty select or a zero-width number. HIDING such a
-        control is issue #98's own request and belongs to the ``available`` gate, which is
-        a separate, user-visible decision -- not something to smuggle in through a
-        resolver.
+        A program IS pending -> its own category, and on failure the merged superset. The
+        active command is deliberately NOT consulted in this branch: it describes the last
+        program STARTED (see ``_active_option_param``), so preferring it over the merged
+        param would answer a question about the selected program with a different
+        program's narrower value set -- the very substitution this resolver exists to
+        remove (PR #103 review, sourcery-ai + greptile).
+
+        NOTHING is pending -> the active command, then the merged superset. Here the
+        active command is the right answer rather than a stale one: with no selection to
+        honour, the program whose category is loaded is what the machine last ran or is
+        running, which is the PR #38 behaviour this preserves.
+
+        A candidate is taken only when it is genuinely SETTABLE there
+        (``is_settable_option``); otherwise the walk falls through to the merged param.
+        That clause is load-bearing and deliberate: a program that pins or omits the
+        option leaves the control on the merged param, keeping the value set it has today
+        instead of degenerating into an empty select or a zero-width number. It does mean
+        the control stays writable with values that program will not take -- HIDING it is
+        issue #98's own request and belongs to the ``available`` gate, a separate and
+        user-visible decision (an unavailable entity breaks the automations that write it)
+        and not something to smuggle in through a resolver. Until then the two outcomes
+        are the documented ones: an absent option is skipped by
+        ``apply_pending_options`` at Start, and a pinned one is refused by the engine
+        setter with ``command_error``.
 
         ``drop`` is the description's sentinel tuple, passed through so a sentinel-only
         candidate is not mistaken for a usable one."""
-        for candidate in (self._category_option_param(), self._active_option_param()):
-            if candidate is not None and is_settable_option(candidate, drop):
-                return candidate
+        if self._selected_program_code() is not None:
+            candidate = self._category_option_param()
+        else:
+            candidate = self._active_option_param()
+        if candidate is not None and is_settable_option(candidate, drop):
+            return candidate
         return self._option_param
 
     @property

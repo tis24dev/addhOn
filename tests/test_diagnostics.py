@@ -8175,6 +8175,75 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         matrix = self._matrix({"_": FakeCommand(params)}, active="_")
         self.assertEqual({}, matrix)
 
+    def test_a_sentinel_only_parameter_is_not_called_settable(self) -> None:
+        # PR #103 review (coderabbitai): the entity gate ignores DRY_LEVEL_SENTINELS, so a
+        # dryLevel offering only ("", "0", "11") creates NO control. Reporting it as settable
+        # broke the one property this section promises -- that its verdict is the gate's.
+        # Mutation-proof: calling is_settable_option without the drops puts dryLevel in
+        # `settable` for the sentinel category.
+        categories = {
+            "cotton": FakeCommand({
+                "dryLevel": FakeParam(value="12", typology="enum", values=["12", "13", "14"]),
+            }),
+            "sentinel_only": FakeCommand({
+                "dryLevel": FakeParam(value="0", typology="enum", values=["0", "11"]),
+            }),
+        }
+        matrix = self._matrix(categories)
+
+        self.assertEqual({"settable": ["dryLevel"]}, matrix["per_program"]["cotton"])
+        self.assertEqual(
+            {"fixed": {"dryLevel": "0"}}, matrix["per_program"]["sentinel_only"]
+        )
+
+    def test_the_drops_come_from_the_real_description_tables(self) -> None:
+        # Not a re-declared constant: the map is read off the shipped descriptions, so a
+        # description that gains a `drop` is honoured with no change to diagnostics.py.
+        from custom_components.addhon.const import DRY_LEVEL_SENTINELS
+
+        drops = diagnostics._option_drops()
+        self.assertIn("dryLevel", drops)
+        self.assertEqual(set(DRY_LEVEL_SENTINELS), set(drops["dryLevel"]))
+        # Only the parameters that really declare sentinels are in the map.
+        self.assertNotIn("spinSpeed", drops)
+
+    def test_a_runaway_catalogue_is_bounded_and_says_so(self) -> None:
+        # PR #103 review (greptile P2). The cap cannot bite on a real appliance (the largest
+        # measured catalogue is 154 categories), so the flag appearing at all means the
+        # schema is malformed -- and a dropped program must never read as a program the
+        # appliance does not have.
+        cap = diagnostics._PROGRAM_MATRIX_MAX_PROGRAMS
+        categories = {
+            f"program_{index:04d}": FakeCommand({
+                "spinSpeed": FakeParam(value="800", typology="enum", values=["0", "800"]),
+            })
+            for index in range(cap + 5)
+        }
+        matrix = self._matrix(categories, active="program_0000")
+
+        self.assertEqual(cap, len(matrix["per_program"]))
+        self.assertTrue(matrix["per_program_truncated"])
+        # The raw count is untouched, so the withholding is measurable.
+        self.assertEqual(cap + 5, matrix["categories_total"])
+        # Deterministic: the retained programs are the first in sorted order.
+        self.assertEqual("program_0000", min(matrix["per_program"]))
+
+    def test_a_catalogue_within_the_cap_carries_no_truncation_flag(self) -> None:
+        self.assertNotIn("per_program_truncated", self._matrix(self._catalogue()))
+
+    def test_a_pinned_value_is_length_bounded(self) -> None:
+        # The one cloud-controlled string the section prints.
+        cap = diagnostics._PROGRAM_MATRIX_VALUE_MAX_CHARS
+        categories = {
+            "cotton": FakeCommand({
+                "programFamily": FakeParam(
+                    value="x" * (cap * 3), typology="fixed", values=["x" * (cap * 3)]
+                ),
+            }),
+        }
+        matrix = self._matrix(categories)
+        self.assertEqual(cap, len(matrix["per_program"]["cotton"]["fixed"]["programFamily"]))
+
     def test_an_unimportable_program_options_costs_the_section_not_the_dump(self) -> None:
         # Same contract `RegistryDegradationTest` pins for the seven platform modules: a
         # module that will not import costs its own tables and never the walk. Mutation-

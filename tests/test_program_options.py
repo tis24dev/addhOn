@@ -147,6 +147,12 @@ class FakeCoordinator:
         self.refreshes = 0
         self.last_update_success = True
         self.last_exception = None
+        # `DataUpdateCoordinator.async_update_listeners`: a program change re-renders every
+        # entity of the coordinator, because the option controls read the pending program.
+        self.listener_broadcasts = 0
+
+    def async_update_listeners(self) -> None:
+        self.listener_broadcasts += 1
 
     async def async_refresh(self) -> None:
         self.refreshes += 1
@@ -817,6 +823,27 @@ class ProgramDependencyTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("washer-1", coordinator.pending_options)
         self.assertEqual({}, coordinator.pending_options)
 
+    async def test_selecting_a_program_re_renders_every_option_entity(self) -> None:
+        # PR #103 review (greptile P1): the option controls derive their value set, range and
+        # on/off tokens from the pending program, and their buffered values are cleared on a
+        # change -- neither is visible until something writes their state. Selecting used to
+        # write only THIS select, leaving every option control on the previous program's
+        # choices until the next poll. Mutation-proof: a bare `async_write_ha_state()` leaves
+        # `listener_broadcasts` at 0.
+        from custom_components.addhon.select import HonProgramSelect
+
+        start = RecordingCommand({"program": Param(values={"1": "Cotone", "2": "Sintetici"})})
+        coordinator = FakeCoordinator(_washer({"startProgram": start}))
+        entity = HonProgramSelect(coordinator, "washer-1", FakeClient())
+        self._attach(entity)
+
+        await entity.async_select_option("Sintetici")
+
+        self.assertEqual(1, coordinator.listener_broadcasts)
+        # Still a pure buffer write: no command, no refresh.
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual(0, coordinator.refreshes)
+
     async def test_reselecting_same_program_keeps_pending_options(self) -> None:
         # FIX#1 guard: re-selecting the SAME program is not a change, so the buffered
         # options (chosen for that very program) are PRESERVED, not wiped.
@@ -1157,6 +1184,29 @@ class SelectedProgramTest(unittest.IsolatedAsyncioTestCase):
         entity = self._select(coordinator, "spinSpeed", "spin_speed")
         coordinator.pending_programs = {"washer-1": "eco"}
         self.assertEqual(["0", "400", "800"], entity.options)
+
+    async def test_a_pinning_program_never_borrows_the_last_started_value_set(self) -> None:
+        # PR #103 review (sourcery-ai + greptile P1): when the pending program cannot answer,
+        # the fallback must be the MERGED superset and never the active command. The active
+        # command is the last program STARTED, so preferring it would answer a question about
+        # the selected program with another program's narrower set -- exactly the substitution
+        # this resolver exists to remove. Mutation-proof: walking category -> active -> merged
+        # returns the active `["0", "400"]` here.
+        command, coordinator = self._appliance(
+            {
+                # The widest variant, so `available_settings` caches THIS one as merged.
+                "cotton": {"spinSpeed": SetParam(["0", "400", "800", "1000"])},
+                "rapid_30_min": {"spinSpeed": SetParam(["0", "400"])},
+                "eco": {"spinSpeed": SetParam(["800"])},
+            },
+            active="rapid_30_min",
+        )
+        entity = self._select(coordinator, "spinSpeed", "spin_speed")
+        # Idle after `rapid_30_min`: with nothing pending the active command still answers.
+        self.assertEqual(["0", "400"], entity.options)
+
+        coordinator.pending_programs = {"washer-1": "eco"}
+        self.assertEqual(["0", "400", "800", "1000"], entity.options)
 
     async def test_a_program_that_omits_the_option_keeps_the_widest_value_set(self) -> None:
         # Same rule for total ABSENCE, which is how the real HW80 schema says "this
