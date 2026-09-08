@@ -8090,5 +8090,200 @@ class SetupFailureRecordTest(unittest.TestCase):
         self.assertNotIn("example.com", json.dumps(block))
 
 
+class ProgramOptionMatrixTest(unittest.TestCase):
+    """`program_options`: which options each PROGRAM supports (issue #98).
+
+    `commands` above prints the ACTIVE category only -- one program out of the ~90 a washer
+    carries -- so before this section a dump could not answer "does the delicate cycle offer
+    a prewash", which is exactly what #98 asks for.
+    """
+
+    class _StartProgram:
+        """Duck-types `HonCommand` for a program-bearing command."""
+
+        def __init__(self, categories, active):
+            self.categories = categories
+            self._active = active
+
+        @property
+        def parameters(self):
+            return self.categories[self._active].parameters
+
+    def _matrix(self, categories, active="cotton"):
+        appliance = FakeAppliance(
+            commands={"startProgram": self._StartProgram(categories, active)}
+        )
+        return diagnostics._program_option_matrix(appliance)
+
+    def _catalogue(self):
+        return {
+            "cotton": FakeCommand({
+                "spinSpeed": FakeParam(value="1000", typology="enum", values=["0", "800", "1000"]),
+                "prewash": FakeParam(value="0", typology="enum", values=["0", "1"]),
+                "temp": FakeParam(value="40", typology="fixed", values=["40"]),
+            }),
+            # The delicate cycle has NO prewash at all and pins the temperature -- the exact
+            # shape of the real HW80 schema (diagnostics/live-2026-06-22/device-WM.json,
+            # whose active category carries no prewash/acquaplus/extraRinse*).
+            "delicate": FakeCommand({
+                "spinSpeed": FakeParam(value="400", typology="enum", values=["0", "400"]),
+                "temp": FakeParam(value="30", typology="fixed", values=["30"]),
+            }),
+        }
+
+    def test_absent_fixed_and_settable_are_reported_per_program(self) -> None:
+        matrix = self._matrix(self._catalogue())
+
+        self.assertEqual("startProgram", matrix["command"])
+        self.assertEqual(2, matrix["categories_total"])
+        self.assertEqual(["prewash", "spinSpeed", "temp"], matrix["union_params"])
+
+        self.assertEqual(
+            {"settable": ["prewash", "spinSpeed"], "fixed": {"temp": "40"}},
+            matrix["per_program"]["cotton"],
+        )
+        # The delicate cycle: prewash does not exist for it, temp is dictated at 30.
+        self.assertEqual(
+            {"settable": ["spinSpeed"], "fixed": {"temp": "30"}, "absent": ["prewash"]},
+            matrix["per_program"]["delicate"],
+        )
+
+    def test_a_favourite_is_never_named_and_never_widens_the_union(self) -> None:
+        # A favourite is keyed by text the USER typed and carries the engine's own
+        # `favourite` marker parameter. Neither may reach a file destined for a public
+        # issue tracker. Mutation-proof: dropping the ref_programs filter puts
+        # "Il mio programma" in `per_program`, and taking the union from
+        # `command.setting_keys` puts "favourite" in `union_params`.
+        categories = self._catalogue()
+        categories["Il mio programma"] = FakeCommand({
+            "favourite": FakeParam(value="1", typology="fixed", values=["1"]),
+            "spinSpeed": FakeParam(value="1000", typology="enum", values=["0", "1000"]),
+        })
+        matrix = self._matrix(categories)
+
+        self.assertNotIn("Il mio programma", matrix["per_program"])
+        self.assertNotIn("favourite", matrix["union_params"])
+        self.assertEqual({"cotton", "delicate"}, set(matrix["per_program"]))
+        # `categories_total` still counts it, so the withholding is visible rather than
+        # looking like an appliance with fewer programs.
+        self.assertEqual(3, matrix["categories_total"])
+
+    def test_the_synthetic_placeholder_is_not_a_program(self) -> None:
+        # `HonCommand.categories` answers `{"_": self}` for a category-less command; a bare
+        # "_" must never be printed as a program name.
+        params = {"spinSpeed": FakeParam(value="1000", typology="enum", values=["0", "1000"])}
+        matrix = self._matrix({"_": FakeCommand(params)}, active="_")
+        self.assertEqual({}, matrix)
+
+    def test_a_sentinel_only_parameter_is_not_called_settable(self) -> None:
+        # PR #103 review (coderabbitai): the entity gate ignores DRY_LEVEL_SENTINELS, so a
+        # dryLevel offering only ("", "0", "11") creates NO control. Reporting it as settable
+        # broke the one property this section promises -- that its verdict is the gate's.
+        # Mutation-proof: calling is_settable_option without the drops puts dryLevel in
+        # `settable` for the sentinel category.
+        categories = {
+            "cotton": FakeCommand({
+                "dryLevel": FakeParam(value="12", typology="enum", values=["12", "13", "14"]),
+            }),
+            "sentinel_only": FakeCommand({
+                "dryLevel": FakeParam(value="0", typology="enum", values=["0", "11"]),
+            }),
+        }
+        matrix = self._matrix(categories)
+
+        self.assertEqual({"settable": ["dryLevel"]}, matrix["per_program"]["cotton"])
+        self.assertEqual(
+            {"fixed": {"dryLevel": "0"}}, matrix["per_program"]["sentinel_only"]
+        )
+
+    def test_the_drops_come_from_the_real_description_tables(self) -> None:
+        # Not a re-declared constant: the map is read off the shipped descriptions, so a
+        # description that gains a `drop` is honoured with no change to diagnostics.py.
+        from custom_components.addhon.const import DRY_LEVEL_SENTINELS
+
+        drops = diagnostics._option_drops()
+        self.assertIn("dryLevel", drops)
+        self.assertEqual(set(DRY_LEVEL_SENTINELS), set(drops["dryLevel"]))
+        # Only the parameters that really declare sentinels are in the map.
+        self.assertNotIn("spinSpeed", drops)
+
+    def test_a_runaway_catalogue_is_bounded_and_says_so(self) -> None:
+        # PR #103 review (greptile P2). The cap cannot bite on a real appliance (the largest
+        # measured catalogue is 154 categories), so the flag appearing at all means the
+        # schema is malformed -- and a dropped program must never read as a program the
+        # appliance does not have.
+        cap = diagnostics._PROGRAM_MATRIX_MAX_PROGRAMS
+        categories = {
+            f"program_{index:04d}": FakeCommand({
+                "spinSpeed": FakeParam(value="800", typology="enum", values=["0", "800"]),
+            })
+            for index in range(cap + 5)
+        }
+        matrix = self._matrix(categories, active="program_0000")
+
+        self.assertEqual(cap, len(matrix["per_program"]))
+        self.assertTrue(matrix["per_program_truncated"])
+        # The raw count is untouched, so the withholding is measurable.
+        self.assertEqual(cap + 5, matrix["categories_total"])
+        # Deterministic: the retained programs are the first in sorted order.
+        self.assertEqual("program_0000", min(matrix["per_program"]))
+
+    def test_a_catalogue_within_the_cap_carries_no_truncation_flag(self) -> None:
+        self.assertNotIn("per_program_truncated", self._matrix(self._catalogue()))
+
+    def test_a_pinned_value_is_length_bounded(self) -> None:
+        # The one cloud-controlled string the section prints.
+        cap = diagnostics._PROGRAM_MATRIX_VALUE_MAX_CHARS
+        categories = {
+            "cotton": FakeCommand({
+                "programFamily": FakeParam(
+                    value="x" * (cap * 3), typology="fixed", values=["x" * (cap * 3)]
+                ),
+            }),
+        }
+        matrix = self._matrix(categories)
+        self.assertEqual(cap, len(matrix["per_program"]["cotton"]["fixed"]["programFamily"]))
+
+    def test_an_unimportable_program_options_costs_the_section_not_the_dump(self) -> None:
+        # Same contract `RegistryDegradationTest` pins for the seven platform modules: a
+        # module that will not import costs its own tables and never the walk. Mutation-
+        # proof: without the guard the `from .program_options import ...` raises straight
+        # out of the appliance block.
+        appliance = FakeAppliance(
+            commands={"startProgram": self._StartProgram(self._catalogue(), "cotton")}
+        )
+        with _BrokenModules("program_options"):
+            self.assertEqual({}, diagnostics._program_option_matrix(appliance))
+        # And it comes back once the module does.
+        self.assertIn("per_program", diagnostics._program_option_matrix(appliance))
+
+    def test_absent_for_an_appliance_without_startprogram(self) -> None:
+        appliance = FakeAppliance(commands={"settings": FakeCommand({})})
+        self.assertEqual({}, diagnostics._program_option_matrix(appliance))
+
+    def test_the_section_is_omitted_from_a_block_that_has_no_programs(self) -> None:
+        # Regression guard on the wiring: every fixture in this module is category-less, so
+        # the key must not appear at all rather than as an empty object.
+        _, blocks = _entry_diag()
+        for block in blocks.values():
+            self.assertNotIn("program_options", block)
+
+    def test_the_section_reaches_the_appliance_block(self) -> None:
+        coord = _build_coordinator()
+        coord.data[WD_ID]["appliance"] = FakeAppliance(
+            commands={"startProgram": self._StartProgram(self._catalogue(), "cotton")}
+        )
+        hass = FakeHass(coord)
+        result = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+        block = {b["type"]: b for b in result["appliances"]}["WD"]
+        self.assertEqual(
+            ["prewash", "spinSpeed", "temp"], block["program_options"]["union_params"]
+        )
+        self.assertEqual(
+            {"settable": ["spinSpeed"], "fixed": {"temp": "30"}, "absent": ["prewash"]},
+            block["program_options"]["per_program"]["delicate"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -147,6 +147,12 @@ class FakeCoordinator:
         self.refreshes = 0
         self.last_update_success = True
         self.last_exception = None
+        # `DataUpdateCoordinator.async_update_listeners`: a program change re-renders every
+        # entity of the coordinator, because the option controls read the pending program.
+        self.listener_broadcasts = 0
+
+    def async_update_listeners(self) -> None:
+        self.listener_broadcasts += 1
 
     async def async_refresh(self) -> None:
         self.refreshes += 1
@@ -405,7 +411,7 @@ class BufferWriteTest(unittest.IsolatedAsyncioTestCase):
         entity = select.HonProgramOptionSelect(coordinator, "washer-1", desc, FakeClient())
         self._attach(entity)
 
-        self.assertEqual(["0", "400", "800", "1000", "1200"], entity._attr_options)
+        self.assertEqual(["0", "400", "800", "1000", "1200"], entity.options)
         await entity.async_select_option("800")
 
         self.assertEqual({"washer-1": {"spinSpeed": "800"}}, coordinator.pending_options)
@@ -709,12 +715,12 @@ class TypeGateDryLevelTest(unittest.IsolatedAsyncioTestCase):
     async def test_wm_uses_wm_label_map(self) -> None:
         entity = await self._dry_level_select("WM", RangeParam(1, 3, 1))
         # WM/WD case 300: 1=extra_dry, 2=cupboard, 3=iron_dry.
-        self.assertEqual(["extra_dry", "cupboard", "iron_dry"], entity._attr_options)
+        self.assertEqual(["extra_dry", "cupboard", "iron_dry"], entity.options)
 
     async def test_td_uses_td_label_map(self) -> None:
         entity = await self._dry_level_select("TD", RangeParam(12, 14, 1))
         # TD case 53: 12=iron_dry, 13=ready_to_wear, 14=cupboard.
-        self.assertEqual(["iron_dry", "ready_to_wear", "cupboard"], entity._attr_options)
+        self.assertEqual(["iron_dry", "ready_to_wear", "cupboard"], entity.options)
 
 
 class DuplicateLabelDisambiguationTest(unittest.IsolatedAsyncioTestCase):
@@ -722,7 +728,7 @@ class DuplicateLabelDisambiguationTest(unittest.IsolatedAsyncioTestCase):
     label (DRY_LEVEL_LABELS_TD: 1&12->iron_dry, 3&14->cupboard, 4&15->extra_dry). When
     BOTH members are exposed the select must keep them as two DISTINCT options and
     round-trip each raw, not collapse them onto one key (which would drop a code from
-    _attr_options and make _key_to_raw buffer the wrong raw)."""
+    the option list and make _key_to_raw buffer the wrong raw)."""
 
     def _attach(self, entity) -> None:
         entity.hass = FakeHass()
@@ -744,17 +750,17 @@ class DuplicateLabelDisambiguationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_colliding_codes_stay_distinct_and_round_trip(self) -> None:
         # 4 and 15 both map to "extra_dry" on TD; both must survive as DISTINCT options.
-        # Mutation-proof: without FIX#4 _attr_options collapses to ["extra_dry"] (len 1)
+        # Mutation-proof: without FIX#4 the option list collapses to ["extra_dry"] (len 1)
         # and _key_to_raw is {"extra_dry": "15"} -> the first two assertions fail and the
         # raw "4" is unreachable / buffers as "15".
         entity, coordinator = self._td_dry_level(SetParam(["4", "15"]))
 
-        self.assertEqual(2, len(entity._attr_options))
-        self.assertEqual(len(entity._attr_options), len(set(entity._attr_options)))
+        self.assertEqual(2, len(entity.options))
+        self.assertEqual(len(entity.options), len(set(entity.options)))
         # Every raw code is reachable through the option keys (injective round-trip map).
         self.assertEqual({"4", "15"}, set(entity._key_to_raw.values()))
 
-        for option in entity._attr_options:
+        for option in entity.options:
             await entity.async_select_option(option)
             # Each option buffers its OWN distinct raw, not a collapsed sibling.
             self.assertEqual(
@@ -769,7 +775,7 @@ class DuplicateLabelDisambiguationTest(unittest.IsolatedAsyncioTestCase):
         # back as a distinct option (no aliasing of 1 onto 12 or vice versa).
         entity, coordinator = self._td_dry_level(SetParam(["1", "12"]))
 
-        self.assertEqual(2, len(set(entity._attr_options)))
+        self.assertEqual(2, len(set(entity.options)))
         opt_1 = entity._raw_to_key["1"]
         opt_12 = entity._raw_to_key["12"]
         self.assertNotEqual(opt_1, opt_12)
@@ -783,7 +789,7 @@ class DuplicateLabelDisambiguationTest(unittest.IsolatedAsyncioTestCase):
         # Regression guard: erpayo's TD range [12,13,14] has NO label collision, so the
         # options stay the plain translatable keys (state.<key>), unsuffixed.
         entity, _ = self._td_dry_level(RangeParam(12, 14, 1))
-        self.assertEqual(["iron_dry", "ready_to_wear", "cupboard"], entity._attr_options)
+        self.assertEqual(["iron_dry", "ready_to_wear", "cupboard"], entity.options)
 
 
 class ProgramDependencyTest(unittest.IsolatedAsyncioTestCase):
@@ -816,6 +822,27 @@ class ProgramDependencyTest(unittest.IsolatedAsyncioTestCase):
         # The stale options from the previous program are gone (entry dropped).
         self.assertNotIn("washer-1", coordinator.pending_options)
         self.assertEqual({}, coordinator.pending_options)
+
+    async def test_selecting_a_program_re_renders_every_option_entity(self) -> None:
+        # PR #103 review (greptile P1): the option controls derive their value set, range and
+        # on/off tokens from the pending program, and their buffered values are cleared on a
+        # change -- neither is visible until something writes their state. Selecting used to
+        # write only THIS select, leaving every option control on the previous program's
+        # choices until the next poll. Mutation-proof: a bare `async_write_ha_state()` leaves
+        # `listener_broadcasts` at 0.
+        from custom_components.addhon.select import HonProgramSelect
+
+        start = RecordingCommand({"program": Param(values={"1": "Cotone", "2": "Sintetici"})})
+        coordinator = FakeCoordinator(_washer({"startProgram": start}))
+        entity = HonProgramSelect(coordinator, "washer-1", FakeClient())
+        self._attach(entity)
+
+        await entity.async_select_option("Sintetici")
+
+        self.assertEqual(1, coordinator.listener_broadcasts)
+        # Still a pure buffer write: no command, no refresh.
+        self.assertEqual(0, start.send_calls)
+        self.assertEqual(0, coordinator.refreshes)
 
     async def test_reselecting_same_program_keeps_pending_options(self) -> None:
         # FIX#1 guard: re-selecting the SAME program is not a change, so the buffered
@@ -952,6 +979,277 @@ class OptionClearSurvivesNewerWriteTest(unittest.IsolatedAsyncioTestCase):
             coordinator.pending_options,
         )
         self.assertEqual(1, start.send_calls)
+
+
+class CategoryCommand:
+    """Duck-types ``HonCommand`` with real per-program CATEGORIES.
+
+    ``RecordingCommand`` above models a category-less command, which is all the earlier
+    tests needed. Issue #98 lives in the difference: a washer's ``startProgram`` is a dict
+    of one command PER PROGRAM, each with its own ``parameters``, and the entities are
+    built from ``available_settings`` -- the union that keeps the RICHEST variant of each
+    name (``commands.available_settings`` / ``_more_options``). Both are reproduced here so
+    a test can distinguish "the merged superset" from "what this program declares".
+    """
+
+    def __init__(self, categories: dict, active: str) -> None:
+        self.categories = {code: RecordingCommand(params) for code, params in categories.items()}
+        self._active = active
+        self.send_calls = 0
+
+    @property
+    def parameters(self) -> dict:
+        return self.categories[self._active].parameters
+
+    @property
+    def available_settings(self) -> dict:
+        merged: dict = {}
+        for command in self.categories.values():
+            for name, param in command.parameters.items():
+                current = merged.get(name)
+                if current is None or len(getattr(param, "values", []) or []) > len(
+                    getattr(current, "values", []) or []
+                ):
+                    merged[name] = param
+        return merged
+
+    async def send(self) -> None:
+        self.send_calls += 1
+
+
+class SelectedProgramTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #98: every option control must read the schema of the program the user
+    SELECTED, which lives in the pending store -- not the one last STARTED.
+
+    The distinction is the whole bug. ``async_select_option`` buffers the code and swaps no
+    category, and ``HonCommandLoader._set_last_category`` re-points the active command at
+    the last program the cloud accepted, so before this change the controls described a
+    finished cycle. Proven in the 2026-09-08 debug log attached to #98:
+    ``programName='rapid_30_min'`` on all 7 polls while the pending program moved through
+    four others.
+    """
+
+    def _attach(self, entity) -> None:
+        entity.hass = FakeHass()
+
+    def _appliance(self, categories: dict, active: str):
+        command = CategoryCommand(categories, active)
+        appliance = types.SimpleNamespace(commands={"startProgram": command})
+        coordinator = FakeCoordinator(
+            {"washer-1": {"type": "WM", "name": "W", "appliance": appliance,
+                          "attributes": {}, "settings": {}}}
+        )
+        return command, coordinator
+
+    def _select(self, coordinator, param: str, key: str):
+        from custom_components.addhon import select
+
+        desc = select.HonProgramOptionSelectDescription(
+            key=key, param=param, translation_key=key, types=("WM", "WD")
+        )
+        entity = select.HonProgramOptionSelect(coordinator, "washer-1", desc, FakeClient())
+        self._attach(entity)
+        return entity
+
+    def _number(self, coordinator, param: str, key: str):
+        from custom_components.addhon import number
+
+        desc = number.HonProgramOptionNumberDescription(
+            key=key, param=param, translation_key=key, types=("WM", "WD", "TD")
+        )
+        entity = number.HonProgramOptionNumber(coordinator, "washer-1", desc, FakeClient())
+        self._attach(entity)
+        return entity
+
+    def _switch(self, coordinator, param: str, key: str):
+        from custom_components.addhon import switch
+
+        desc = switch.HonProgramOptionSwitchDescription(
+            key=key, param=param, types=("WM", "WD")
+        )
+        entity = switch.HonProgramOptionSwitch(coordinator, "washer-1", desc, FakeClient())
+        self._attach(entity)
+        return entity
+
+    async def test_select_options_follow_the_pending_program(self) -> None:
+        # Mutation-proof: reading the merged superset (or the active command) keeps 5
+        # options for the delicate cycle, so the second assertion fails.
+        command, coordinator = self._appliance(
+            {
+                "cotton": {"spinSpeed": SetParam(["0", "400", "800", "1000", "1200"])},
+                "delicate": {"spinSpeed": SetParam(["0", "400", "600"])},
+            },
+            active="cotton",
+        )
+        entity = self._select(coordinator, "spinSpeed", "spin_speed")
+
+        # Nothing pending: the active command answers, exactly as before this change.
+        self.assertEqual(["0", "400", "800", "1000", "1200"], entity.options)
+
+        coordinator.pending_programs = {"washer-1": "delicate"}
+        self.assertEqual(["0", "400", "600"], entity.options)
+        # The active command is untouched -- only the pending store moved.
+        self.assertIs(command.categories["cotton"].parameters["spinSpeed"],
+                      command.parameters["spinSpeed"])
+
+        # And back: the resolver is not one-way.
+        coordinator.pending_programs = {"washer-1": "cotton"}
+        self.assertEqual(["0", "400", "800", "1000", "1200"], entity.options)
+
+    async def test_select_write_is_validated_against_the_pending_program(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        command, coordinator = self._appliance(
+            {
+                "cotton": {"spinSpeed": SetParam(["0", "400", "800", "1000", "1200"])},
+                "delicate": {"spinSpeed": SetParam(["0", "400", "600"])},
+            },
+            active="cotton",
+        )
+        entity = self._select(coordinator, "spinSpeed", "spin_speed")
+        coordinator.pending_programs = {"washer-1": "delicate"}
+
+        # 1200 exists on the cotton cycle only: refused for the selected program instead
+        # of being buffered and rejected later by the engine at Start.
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await entity.async_select_option("1200")
+        self.assertEqual("invalid_setpoint", ctx.exception.translation_key)
+
+        await entity.async_select_option("600")
+        self.assertEqual("600", coordinator.pending_options["washer-1"]["spinSpeed"])
+
+    async def test_number_range_follows_the_pending_program_not_the_last_started(self) -> None:
+        # The exact shape of the #98 log: the machine is idle after `rapid_30_min`, so the
+        # ACTIVE command is that program's, while the user has selected another one.
+        # Mutation-proof: resolving off the active command keeps max at 1410.
+        from homeassistant.exceptions import HomeAssistantError
+
+        command, coordinator = self._appliance(
+            {
+                "rapid_30_min": {"delayTime": RangeParam(0, 1410, 30)},
+                "delicate": {"delayTime": RangeParam(0, 180, 30)},
+            },
+            active="rapid_30_min",
+        )
+        entity = self._number(coordinator, "delayTime", "delay_time")
+        self.assertEqual(1410, entity.native_max_value)
+
+        coordinator.pending_programs = {"washer-1": "delicate"}
+        self.assertEqual(180, entity.native_max_value)
+        self.assertEqual(0, entity.native_min_value)
+        self.assertEqual(30, entity.native_step)
+
+        with self.assertRaises(HomeAssistantError):
+            await entity.async_set_native_value(240)
+        await entity.async_set_native_value(150)
+        self.assertEqual("150", coordinator.pending_options["washer-1"]["delayTime"])
+
+    async def test_switch_tokens_follow_the_pending_program(self) -> None:
+        # A value-pair range is the case that bites: anticrease is [0,1] on one program and
+        # [0,360] on another, and buffering "1" for a program that wants "360" is a value
+        # the engine refuses at Start. Mutation-proof: the merged superset keeps on="360"
+        # for BOTH, so the first assertion fails.
+        command, coordinator = self._appliance(
+            {
+                "cotton": {"anticrease": SetParam(["0", "1"])},
+                "delicate": {"anticrease": SetParam(["0", "360"])},
+            },
+            active="cotton",
+        )
+        entity = self._switch(coordinator, "anticrease", "anticrease")
+
+        await entity.async_turn_on()
+        self.assertEqual("1", coordinator.pending_options["washer-1"]["anticrease"])
+
+        coordinator.pending_programs = {"washer-1": "delicate"}
+        await entity.async_turn_on()
+        self.assertEqual("360", coordinator.pending_options["washer-1"]["anticrease"])
+
+        await entity.async_turn_off()
+        self.assertEqual("0", coordinator.pending_options["washer-1"]["anticrease"])
+
+    async def test_a_program_that_pins_the_option_keeps_the_widest_value_set(self) -> None:
+        # A program that declares the option FIXED must not empty the control: hiding it is
+        # issue #98's own request and belongs to the `available` gate, a separate and
+        # user-visible decision. Here the resolver walks past the unusable candidate.
+        # Mutation-proof: taking the pinned param unconditionally leaves ONE option (or
+        # none), so the assertion on the full set fails.
+        command, coordinator = self._appliance(
+            {
+                "cotton": {"spinSpeed": SetParam(["0", "400", "800"])},
+                "eco": {"spinSpeed": SetParam(["800"])},
+            },
+            active="cotton",
+        )
+        entity = self._select(coordinator, "spinSpeed", "spin_speed")
+        coordinator.pending_programs = {"washer-1": "eco"}
+        self.assertEqual(["0", "400", "800"], entity.options)
+
+    async def test_a_pinning_program_never_borrows_the_last_started_value_set(self) -> None:
+        # PR #103 review (sourcery-ai + greptile P1): when the pending program cannot answer,
+        # the fallback must be the MERGED superset and never the active command. The active
+        # command is the last program STARTED, so preferring it would answer a question about
+        # the selected program with another program's narrower set -- exactly the substitution
+        # this resolver exists to remove. Mutation-proof: walking category -> active -> merged
+        # returns the active `["0", "400"]` here.
+        command, coordinator = self._appliance(
+            {
+                # The widest variant, so `available_settings` caches THIS one as merged.
+                "cotton": {"spinSpeed": SetParam(["0", "400", "800", "1000"])},
+                "rapid_30_min": {"spinSpeed": SetParam(["0", "400"])},
+                "eco": {"spinSpeed": SetParam(["800"])},
+            },
+            active="rapid_30_min",
+        )
+        entity = self._select(coordinator, "spinSpeed", "spin_speed")
+        # Idle after `rapid_30_min`: with nothing pending the active command still answers.
+        self.assertEqual(["0", "400"], entity.options)
+
+        coordinator.pending_programs = {"washer-1": "eco"}
+        self.assertEqual(["0", "400", "800", "1000"], entity.options)
+
+    async def test_a_program_that_omits_the_option_keeps_the_widest_value_set(self) -> None:
+        # Same rule for total ABSENCE, which is how the real HW80 schema says "this
+        # program has no prewash" (verified on diagnostics/live-2026-06-22/device-WM.json,
+        # whose active category carries no prewash/acquaplus/extraRinse* at all).
+        command, coordinator = self._appliance(
+            {
+                "cotton": {"spinSpeed": SetParam(["0", "400", "800"])},
+                "spin_only": {"temp": SetParam(["0"])},
+            },
+            active="cotton",
+        )
+        entity = self._select(coordinator, "spinSpeed", "spin_speed")
+        coordinator.pending_programs = {"washer-1": "spin_only"}
+        self.assertEqual(["0", "400", "800"], entity.options)
+
+    async def test_an_unresolvable_pending_code_falls_back_to_the_active_command(self) -> None:
+        # A `prCode`-typed program parameter keys the pending store by CODE, not by
+        # category name, so the lookup must miss quietly rather than blank the control.
+        command, coordinator = self._appliance(
+            {
+                "cotton": {"spinSpeed": SetParam(["0", "400", "800"])},
+                "delicate": {"spinSpeed": SetParam(["0", "400"])},
+            },
+            active="cotton",
+        )
+        entity = self._select(coordinator, "spinSpeed", "spin_speed")
+
+        for pending in ("115", "", None, "_"):
+            coordinator.pending_programs = {"washer-1": pending}
+            self.assertEqual(
+                ["0", "400", "800"], entity.options, f"pending={pending!r}"
+            )
+
+    async def test_a_category_less_command_is_unaffected(self) -> None:
+        # Regression guard for every non-program appliance: `HonCommand.categories`
+        # answers `{"_": self}` there, and a pending code must not resolve against that
+        # placeholder.
+        start = RecordingCommand({"spinSpeed": SetParam(["0", "400", "800"])})
+        coordinator = FakeCoordinator(_washer({"startProgram": start}))
+        entity = self._select(coordinator, "spinSpeed", "spin_speed")
+        coordinator.pending_programs = {"washer-1": "delicate"}
+        self.assertEqual(["0", "400", "800"], entity.options)
 
 
 if __name__ == "__main__":

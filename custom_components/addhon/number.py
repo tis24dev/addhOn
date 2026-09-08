@@ -1002,15 +1002,16 @@ class HonProgramOptionNumber(HonProgramOptionEntity, NumberEntity):
 
     @property
     def _live_range(self) -> tuple[float, float, float]:
-        # Read live min/max/step from the ACTIVE startProgram command first, so the range
-        # tracks the SELECTED program (the cached _option_param is the merged superset across
-        # categories, which would validate too permissively after a program swap -- PR #38).
-        # Both are cheap single-object reads (no available_settings). Fall back to the cached
-        # merged param, then to the static fallback range.
-        active = self._active_option_param()
-        rng = option_range(active) if active is not None else None
-        if rng is None and self._option_param is not None:
-            rng = option_range(self._option_param)
+        # Read live min/max/step from the SELECTED program's category, so the range really
+        # tracks the program the user picked (the cached _option_param is the merged superset
+        # across categories, which would validate too permissively -- PR #38). Reading the
+        # ACTIVE command instead, as this did until now, tracked the last STARTED program:
+        # the select buffers its choice and swaps no category, so on a machine idle after a
+        # cycle the bounds offered were the finished program's (issue #98, verified in the
+        # 2026-09-08 debug log: programName='rapid_30_min' on all 7 polls while the pending
+        # program moved through four others). _selected_option_param walks
+        # category -> active -> merged and is a cheap single-object read at each step.
+        rng = option_range(self._selected_option_param())
         return rng or self._fallback_range
 
     @property
