@@ -72,6 +72,14 @@ class HonParameterEnum(HonParameter):
         return str(self._value) if self._value is not None else str(self.values[0])
 
     @property
+    def schema_value(self) -> Any | None:
+        # Normalized exactly as `value` and `values` are, so a schema-declared code stays
+        # comparable against the option list: a cloud-cased "Ropa mixta" or a bracketed
+        # "[fridge|freezer]" is only ever found in `values` in its clean form.
+        declared = super().schema_value
+        return None if declared is None else clean_value(declared)
+
+    @property
     def value(self) -> str | float:
         return clean_value(self._value) if self._value is not None else self.values[0]
 

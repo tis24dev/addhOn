@@ -167,6 +167,78 @@ class NativeEnumEdgeBehaviorTest(unittest.TestCase):
             na.value = "A|B|C"
 
 
+class SchemaValueTest(unittest.TestCase):
+    """`HonParameter.schema_value`: what the PROGRAM prescribes, as opposed to what the
+    parameter currently holds.
+
+    The distinction is the whole reason the property exists (issue #98): the Start path
+    writes the user's chosen options into the selected program category's parameters and
+    never undoes them on success, so `value` on a program the user has run before is their
+    own past choice, while `_attributes` is the schema as received and nothing writes to it.
+    Mirrors the hOn app, whose `setValue` reads
+    `dictionaryParameter.fixedValue ?? defaultValue` (decomp.txt:1778771-1778793).
+    """
+
+    def test_fixed_value_wins_over_default(self) -> None:
+        param = NaEnum("x", {"typology": "enum", "enumValues": ["0", "1"],
+                             "fixedValue": "1", "defaultValue": "0"}, "g")
+        self.assertEqual("1", param.schema_value)
+
+    def test_default_used_when_no_fixed(self) -> None:
+        param = NaRange("x", {"typology": "range", "minimumValue": "0",
+                              "maximumValue": "1410", "incrementValue": "30",
+                              "defaultValue": "240"}, "g")
+        self.assertEqual("240", param.schema_value)
+
+    def test_none_when_the_schema_prescribes_nothing(self) -> None:
+        # A pure descriptor: it lists enumValues so a client can render a control and states
+        # no value. Must NOT be confused with the "0" the enum fabricates to keep `value`
+        # non-None -- that "0" is not even among `values`, so surfacing it would blank the
+        # control. This shape is real: 20 such nodes in apk/dump/ac_live/commands_raw.json.
+        param = NaEnum("x", {"typology": "enum", "enumValues": ["2", "4", "5"]}, "g")
+        self.assertIsNone(param.schema_value)
+        self.assertEqual("0", param.value)
+        self.assertNotIn("0", param.values)
+        self.assertFalse(param.declares_value)
+
+    def test_a_declared_zero_counts(self) -> None:
+        param = NaEnum("x", {"typology": "enum", "enumValues": ["0", "1"],
+                             "defaultValue": "0"}, "g")
+        self.assertEqual("0", param.schema_value)
+        self.assertTrue(param.declares_value)
+
+    def test_writing_the_parameter_never_moves_the_schema_value(self) -> None:
+        # The load-bearing property. This is exactly what a previous Start of the same
+        # program leaves behind, and the reason `_prescribed_raw` may not read `value`.
+        param = NaEnum("spinSpeed", {"typology": "enum",
+                                     "enumValues": ["0", "400", "1400"],
+                                     "defaultValue": "400"}, "g")
+        param.value = "1400"
+        self.assertEqual("1400", param.value)
+        self.assertEqual("400", param.schema_value)
+
+    def test_enum_normalizes_the_schema_value_like_values(self) -> None:
+        # `values` and `value` are both clean_value()d, so a cased or bracketed schema code
+        # must be too or it could never be found in the option list.
+        param = NaEnum("zone", {"typology": "enum",
+                                "enumValues": ["[fridge|freezer]", "fridge"],
+                                "defaultValue": "[Fridge|Freezer]"}, "g")
+        self.assertEqual("fridge_freezer", param.schema_value)
+        self.assertIn(param.schema_value, param.values)
+
+    def test_fixed_reports_its_pin(self) -> None:
+        param = NaFixed("temp", {"typology": "fixed", "fixedValue": "40"}, "g")
+        self.assertEqual("40", param.schema_value)
+
+    def test_fixed_declaring_only_a_default_is_still_reported(self) -> None:
+        # `HonParameterFixed.value` reads fixedValue ONLY and answers the fabricated "0" for
+        # this shape; the schema node still carries what was declared, and reporting it is
+        # strictly more truthful than the fabrication.
+        param = NaFixed("temp", {"typology": "fixed", "defaultValue": "3"}, "g")
+        self.assertEqual("0", param.value)
+        self.assertEqual("3", param.schema_value)
+
+
 class RangeGridSetterTest(unittest.TestCase):
     """Regression for the x100 modulo grid-check bug: an on-grid setpoint with a
     non-zero min and a decimal step (e.g. 20.1 on 20..25 step 0.1) was wrongly

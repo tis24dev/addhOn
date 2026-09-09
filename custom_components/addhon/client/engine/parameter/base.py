@@ -49,10 +49,50 @@ class HonParameter:
         A declared "0" counts, hence the comparison against None/"" rather than a
         truthiness test -- a numeric 0 default is a value the schema asked for.
         """
-        return any(
-            self._attributes.get(name) not in (None, "")
-            for name in ("defaultValue", "fixedValue")
-        )
+        return self.schema_value is not None
+
+    @property
+    def schema_value(self) -> Any | None:
+        """What the SCHEMA prescribes for this parameter, or None if it prescribes nothing.
+
+        `fixedValue` first, then `defaultValue`, which is the hOn app's own order: its
+        `setValue` reads `dictionaryParameter.fixedValue ?? dictionaryParameter.defaultValue`
+        off the selected program's schema node (decomp.txt:1778771-1778793, analysed in
+        apk/analysis/issue98-99-program-options-and-wd-dry.md section 8).
+
+        This is deliberately NOT `value`, and the difference is the whole point. `value` is
+        LIVE state: the Start path writes the user's chosen options straight into the
+        selected category's parameters and never undoes them on success (button.py), the
+        command-history recovery seeds the last-started category from the cloud, and a
+        favourite category is loaded from the values the user saved. So `value` answers
+        "what does this parameter currently hold", which for a program the user has run
+        before is their own past choice. Only the untouched `_attributes` node still answers
+        "what does this PROGRAM prescribe" -- it is the schema as received and nothing ever
+        writes to it.
+
+        Returns the RAW schema value, uninterpreted: subclasses that normalize `value`
+        normalize this the same way (see HonParameterEnum), so the two stay comparable
+        against `values`. None means the node declared neither field -- which is a real
+        shape (an enum that lists `enumValues` purely so a client can render a control) and
+        must not be confused with the "0" the subclasses fabricate to keep `value` non-None.
+
+        The fixed-before-default order can in principle disagree with what THIS engine would
+        send: `HonParameterEnum` seeds its value from `defaultValue` alone and ignores
+        `fixedValue`, so an enum declaring both would be reported here as the former and
+        transmitted as the latter (PR #104 review, sourcery-ai). It is left as it is, and
+        the reason is evidence rather than preference: across every schema this repository
+        holds -- 5348 parameter nodes in apk/dump/, tests/fixtures/ and diagnostics/ --
+        `fixedValue` appears on `typology: fixed` nodes and on nothing else. Zero enum and
+        zero range nodes carry it, and zero fixed nodes carry a `defaultValue`, so the
+        conflicting shape has never been produced by the cloud. Branching on it would add an
+        untestable path to hide a value from a case that does not occur; if one ever does,
+        the divergence belongs in the enum's own seeding, not here.
+        """
+        for name in ("fixedValue", "defaultValue"):
+            declared = self._attributes.get(name)
+            if declared not in (None, ""):
+                return declared
+        return None
 
     @property
     def value(self) -> str | float:

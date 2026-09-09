@@ -660,11 +660,12 @@ def _command_schema(appliance) -> dict:
 _PROGRAM_MATRIX_MAX_PROGRAMS = 256
 
 # The bound on the one CLOUD-CONTROLLED string this section prints: the value a program
-# pins an option to. Real ones are a temperature, a spin speed, a flag or a single word
-# (`dashboard`, `download`, `series`), so 64 characters is already several times more than
-# any of them needs. No truncation flag, and for the same reason `_CONN_CATEGORY_MAX_CHARS`
-# needs none: a pinned value long enough to be cut is not a value, it is a payload, and the
-# cap exists to stop it becoming one rather than to summarise it.
+# prescribes for an option. Real ones are a temperature, a spin speed, a flag or a single
+# word (`dashboard`, `download`, `series`), so 64 characters is already several times more
+# than any of them needs. No truncation flag, and for the same reason
+# `_CONN_CATEGORY_MAX_CHARS` needs none: a prescribed value long enough to be cut is not a
+# value, it is a payload, and the cap exists to stop it becoming one rather than to
+# summarise it. Applied through `_bounded_text`, which masks before it cuts.
 _PROGRAM_MATRIX_VALUE_MAX_CHARS = 64
 
 
@@ -736,7 +737,23 @@ def _program_option_matrix(appliance) -> dict:
       ``absent``   -- in the union, not in THIS program: the option does not exist for it
       ``fixed``    -- present but pinned (fixed, or a single reachable value): the program
                       dictates it, and the map's value is what it dictates
-      ``settable`` -- present with >= 2 reachable values: a real choice for this program
+      ``settable`` -- present with >= 2 reachable values: a real choice for this program,
+                      and the map's value is the DEFAULT this program starts it at
+
+    ``settable`` carries its value for the same reason ``fixed`` does, and the reason is
+    the second half of #98 rather than symmetry for its own sake: the reporter's actual
+    request is that picking a program should preset the options that program calls for, and
+    the official app does exactly that -- on a program change it displays
+    ``fixedValue ?? defaultValue`` of the selected category (``setValue``
+    @decomp.txt:1778757, analysed in apk/analysis/issue98-99-program-options-and-wd-dry.md
+    section 8). A section that printed the pinned values but not the settable defaults could show
+    that an option is available and never what the program would set it to, which is the
+    half the feature is about.
+
+    Both maps carry ``HonParameter.schema_value`` -- the schema node -- and NOT the live
+    ``value``, which is mutable state an earlier cycle may have moved (see the comment at
+    the read below). A ``null`` means the schema prescribes nothing for that parameter in
+    that program.
 
     Settability is decided by ``program_options.is_settable_option``, the SAME predicate
     the entity gate uses AND with the same sentinel tuples (``_option_drops``), so a reader
@@ -812,18 +829,48 @@ def _program_option_matrix(appliance) -> dict:
         params = getattr(category, "parameters", None)
         params = params if isinstance(params, dict) else {}
         absent: list[str] = []
-        fixed: dict[str, str] = {}
-        settable: list[str] = []
+        # `str | None`: a null says the schema prescribes nothing for that parameter (see
+        # the read below), so the value type is genuinely optional and saying so keeps the
+        # annotation honest against the JSON this emits.
+        fixed: dict[str, str | None] = {}
+        settable: dict[str, str | None] = {}
         for name in union:
             param = params.get(name)
             if param is None:
                 absent.append(name)
-            elif is_settable_option(param, drops.get(name, ())):
-                settable.append(name)
+                continue
+            # The SCHEMA node, not the live value. `value` is mutable state -- the Start
+            # path writes the user's buffered options into the selected category and never
+            # undoes them on success, the command history seeds the last-started category,
+            # and a favourite category is loaded from what the user saved -- so a dump taken
+            # after a cycle would report a user's own past choice as the program's
+            # prescription. `schema_value` is the untouched node the app itself reads.
+            #
+            # `null` when the schema prescribes nothing, and NOT the engine's `value`. The
+            # subclasses fabricate a "0" to keep reads non-None, and for a descriptor-only
+            # node -- one that lists `enumValues` purely so a client can render a control --
+            # that "0" is not even among its own values and is deliberately never
+            # transmitted (`_send_parameters` filters the ancillary group on
+            # `declares_value`). Printing it would assert a starting value the program never
+            # stated, which is the one thing this section may not do; `null` says "this
+            # program prescribes nothing here", which is the truth.
+            # `_bounded_text`, never a bare slice: it MASKS and only then cuts, which is the
+            # order that keeps a MAC straddling the cap from arriving as a readable
+            # three-and-a-half-octet fragment (measured on a 64-char cap: `...3c:71:bf:`
+            # cut-first vs `...***` mask-first). That helper exists precisely so a new
+            # bounded cloud string does not have to rediscover this, and reviewing it is
+            # meant to be a matter of checking the call site uses it at all -- this one did
+            # not (PR #104 review, coderabbitai).
+            declared = getattr(param, "schema_value", None)
+            value = (
+                None
+                if declared is None
+                else _bounded_text(declared, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+            )
+            if is_settable_option(param, drops.get(name, ())):
+                settable[name] = value
             else:
-                fixed[name] = str(getattr(param, "value", ""))[
-                    :_PROGRAM_MATRIX_VALUE_MAX_CHARS
-                ]
+                fixed[name] = value
         row: dict = {}
         if settable:
             row["settable"] = settable
