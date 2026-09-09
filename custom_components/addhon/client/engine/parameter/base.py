@@ -75,6 +75,18 @@ class HonParameter:
         against `values`. None means the node declared neither field -- which is a real
         shape (an enum that lists `enumValues` purely so a client can render a control) and
         must not be confused with the "0" the subclasses fabricate to keep `value` non-None.
+
+        The fixed-before-default order can in principle disagree with what THIS engine would
+        send: `HonParameterEnum` seeds its value from `defaultValue` alone and ignores
+        `fixedValue`, so an enum declaring both would be reported here as the former and
+        transmitted as the latter (PR #104 review, sourcery-ai). It is left as it is, and
+        the reason is evidence rather than preference: across every schema this repository
+        holds -- 5348 parameter nodes in apk/dump/, tests/fixtures/ and diagnostics/ --
+        `fixedValue` appears on `typology: fixed` nodes and on nothing else. Zero enum and
+        zero range nodes carry it, and zero fixed nodes carry a `defaultValue`, so the
+        conflicting shape has never been produced by the cloud. Branching on it would add an
+        untestable path to hide a value from a case that does not occur; if one ever does,
+        the divergence belongs in the enum's own seeding, not here.
         """
         for name in ("fixedValue", "defaultValue"):
             declared = self._attributes.get(name)

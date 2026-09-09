@@ -8304,6 +8304,26 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         matrix = self._matrix(categories)
         self.assertEqual(cap, len(matrix["per_program"]["cotton"]["fixed"]["programFamily"]))
 
+    def test_a_mac_straddling_the_cap_is_masked_before_it_is_cut(self) -> None:
+        # PR #104 review (coderabbitai). `_redact` walks the finished block and the only
+        # value-shaped mask, `_MAC_RE`, matches a MAC only with all six octet groups
+        # present. Slicing to the cap FIRST hands it a fragment that no longer matches, and
+        # the remains travel to a public issue in cleartext. Measured on this very value:
+        # cut-first ends "...3c:71:bf:", mask-first ends "...***".
+        # Mutation-proof: `str(declared)[:cap]` leaves the octets in the output.
+        cap = diagnostics._PROGRAM_MATRIX_VALUE_MAX_CHARS
+        straddling = "x" * (cap - 9) + "3c:71:bf:b8:11:22"
+        categories = {
+            "cotton": FakeCommand({
+                "programFamily": FakeParam(value=straddling, typology="fixed",
+                                           values=[straddling], schema=straddling),
+            }),
+        }
+        emitted = self._matrix(categories)["per_program"]["cotton"]["fixed"]["programFamily"]
+        self.assertNotIn("3c:71:bf", emitted)
+        self.assertTrue(emitted.endswith("***"), emitted)
+        self.assertLessEqual(len(emitted), cap)
+
     def test_an_unimportable_program_options_costs_the_section_not_the_dump(self) -> None:
         # Same contract `RegistryDegradationTest` pins for the seven platform modules: a
         # module that will not import costs its own tables and never the walk. Mutation-

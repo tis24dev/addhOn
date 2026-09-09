@@ -660,11 +660,12 @@ def _command_schema(appliance) -> dict:
 _PROGRAM_MATRIX_MAX_PROGRAMS = 256
 
 # The bound on the one CLOUD-CONTROLLED string this section prints: the value a program
-# pins an option to. Real ones are a temperature, a spin speed, a flag or a single word
-# (`dashboard`, `download`, `series`), so 64 characters is already several times more than
-# any of them needs. No truncation flag, and for the same reason `_CONN_CATEGORY_MAX_CHARS`
-# needs none: a pinned value long enough to be cut is not a value, it is a payload, and the
-# cap exists to stop it becoming one rather than to summarise it.
+# prescribes for an option. Real ones are a temperature, a spin speed, a flag or a single
+# word (`dashboard`, `download`, `series`), so 64 characters is already several times more
+# than any of them needs. No truncation flag, and for the same reason
+# `_CONN_CATEGORY_MAX_CHARS` needs none: a prescribed value long enough to be cut is not a
+# value, it is a payload, and the cap exists to stop it becoming one rather than to
+# summarise it. Applied through `_bounded_text`, which masks before it cuts.
 _PROGRAM_MATRIX_VALUE_MAX_CHARS = 64
 
 
@@ -828,8 +829,11 @@ def _program_option_matrix(appliance) -> dict:
         params = getattr(category, "parameters", None)
         params = params if isinstance(params, dict) else {}
         absent: list[str] = []
-        fixed: dict[str, str] = {}
-        settable: dict[str, str] = {}
+        # `str | None`: a null says the schema prescribes nothing for that parameter (see
+        # the read below), so the value type is genuinely optional and saying so keeps the
+        # annotation honest against the JSON this emits.
+        fixed: dict[str, str | None] = {}
+        settable: dict[str, str | None] = {}
         for name in union:
             param = params.get(name)
             if param is None:
@@ -850,11 +854,18 @@ def _program_option_matrix(appliance) -> dict:
             # `declares_value`). Printing it would assert a starting value the program never
             # stated, which is the one thing this section may not do; `null` says "this
             # program prescribes nothing here", which is the truth.
+            # `_bounded_text`, never a bare slice: it MASKS and only then cuts, which is the
+            # order that keeps a MAC straddling the cap from arriving as a readable
+            # three-and-a-half-octet fragment (measured on a 64-char cap: `...3c:71:bf:`
+            # cut-first vs `...***` mask-first). That helper exists precisely so a new
+            # bounded cloud string does not have to rediscover this, and reviewing it is
+            # meant to be a matter of checking the call site uses it at all -- this one did
+            # not (PR #104 review, coderabbitai).
             declared = getattr(param, "schema_value", None)
             value = (
                 None
                 if declared is None
-                else str(declared)[:_PROGRAM_MATRIX_VALUE_MAX_CHARS]
+                else _bounded_text(declared, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
             )
             if is_settable_option(param, drops.get(name, ())):
                 settable[name] = value
