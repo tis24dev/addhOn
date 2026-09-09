@@ -253,9 +253,21 @@ class Opaque:
         return "opaque-str"
 
 
+_UNSET = object()
+
+
 class FakeParam:
-    def __init__(self, value=None, values=None, typology=None, category=None, mandatory=None, rng=None):
+    def __init__(self, value=None, values=None, typology=None, category=None, mandatory=None,
+                 rng=None, schema=_UNSET):
         self.value = value
+        # Duck-types `HonParameter.schema_value`: what the SCHEMA prescribes, which the
+        # engine keeps separate from the mutable `value`. DEFAULTS to `value`, because that
+        # is the well-formed case the real engine produces -- a node that declares a
+        # default has both, equal, until something writes to the parameter. The two shapes
+        # that matter are then stated explicitly: `schema=<other>` for a parameter an
+        # earlier cycle moved, and `schema=None` for a descriptor-only node the schema
+        # says nothing about.
+        self.schema_value = value if schema is _UNSET else schema
         self.typology = typology
         self.category = category
         self.mandatory = mandatory
@@ -8138,15 +8150,61 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         self.assertEqual(2, matrix["categories_total"])
         self.assertEqual(["prewash", "spinSpeed", "temp"], matrix["union_params"])
 
+        # `settable` carries the DEFAULT this program starts the option at, which is the
+        # half issue #98 actually asks for -- knowing an option is available says nothing
+        # about what the program would set it to.
         self.assertEqual(
-            {"settable": ["prewash", "spinSpeed"], "fixed": {"temp": "40"}},
+            {
+                "settable": {"prewash": "0", "spinSpeed": "1000"},
+                "fixed": {"temp": "40"},
+            },
             matrix["per_program"]["cotton"],
         )
         # The delicate cycle: prewash does not exist for it, temp is dictated at 30.
         self.assertEqual(
-            {"settable": ["spinSpeed"], "fixed": {"temp": "30"}, "absent": ["prewash"]},
+            {
+                "settable": {"spinSpeed": "400"},
+                "fixed": {"temp": "30"},
+                "absent": ["prewash"],
+            },
             matrix["per_program"]["delicate"],
         )
+
+    def test_the_prescribed_value_is_the_schema_not_the_live_one(self) -> None:
+        # A dump taken after a cycle must not report the user's own past choice as the
+        # program's prescription: the Start path writes buffered options into the selected
+        # category's parameters and never undoes them on success. Mutation-proof: reading
+        # `value` reports "1400" for a program whose schema says "400".
+        categories = {
+            "cotton": FakeCommand({
+                "spinSpeed": FakeParam(value="1400", typology="enum",
+                                       values=["0", "400", "1400"], schema="400"),
+                "temp": FakeParam(value="60", typology="fixed", values=["60"], schema="40"),
+            }),
+        }
+        matrix = self._matrix(categories)
+        self.assertEqual(
+            {"settable": {"spinSpeed": "400"}, "fixed": {"temp": "40"}},
+            matrix["per_program"]["cotton"],
+        )
+
+    def test_a_parameter_the_schema_says_nothing_about_is_reported_as_null(self) -> None:
+        # A pure descriptor -- it lists `enumValues` so a client can render a control and
+        # states no value -- prescribes nothing. The engine fabricates a "0" to keep reads
+        # non-None, but that "0" is not even among the parameter's own values and
+        # `_send_parameters` deliberately never transmits it (it filters the ancillary group
+        # on `declares_value`). Printing it would assert a starting value the program never
+        # stated. The shape is real: 20 such nodes in apk/dump/ac_live/commands_raw.json,
+        # one in every AC startProgram category. Mutation-proof: falling back to
+        # `param.value` reports "0" here.
+        categories = {
+            "cotton": FakeCommand({
+                "spinSpeed": FakeParam(value="0", typology="enum", values=["2", "4", "5"],
+                                       schema=None),
+            }),
+        }
+        matrix = self._matrix(categories)
+        self.assertEqual({"settable": {"spinSpeed": None}}, matrix["per_program"]["cotton"])
 
     def test_a_favourite_is_never_named_and_never_widens_the_union(self) -> None:
         # A favourite is keyed by text the USER typed and carries the engine's own
@@ -8191,7 +8249,9 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         }
         matrix = self._matrix(categories)
 
-        self.assertEqual({"settable": ["dryLevel"]}, matrix["per_program"]["cotton"])
+        self.assertEqual(
+            {"settable": {"dryLevel": "12"}}, matrix["per_program"]["cotton"]
+        )
         self.assertEqual(
             {"fixed": {"dryLevel": "0"}}, matrix["per_program"]["sentinel_only"]
         )
@@ -8280,7 +8340,11 @@ class ProgramOptionMatrixTest(unittest.TestCase):
             ["prewash", "spinSpeed", "temp"], block["program_options"]["union_params"]
         )
         self.assertEqual(
-            {"settable": ["spinSpeed"], "fixed": {"temp": "30"}, "absent": ["prewash"]},
+            {
+                "settable": {"spinSpeed": "400"},
+                "fixed": {"temp": "30"},
+                "absent": ["prewash"],
+            },
             block["program_options"]["per_program"]["delicate"],
         )
 

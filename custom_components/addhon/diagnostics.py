@@ -736,7 +736,23 @@ def _program_option_matrix(appliance) -> dict:
       ``absent``   -- in the union, not in THIS program: the option does not exist for it
       ``fixed``    -- present but pinned (fixed, or a single reachable value): the program
                       dictates it, and the map's value is what it dictates
-      ``settable`` -- present with >= 2 reachable values: a real choice for this program
+      ``settable`` -- present with >= 2 reachable values: a real choice for this program,
+                      and the map's value is the DEFAULT this program starts it at
+
+    ``settable`` carries its value for the same reason ``fixed`` does, and the reason is
+    the second half of #98 rather than symmetry for its own sake: the reporter's actual
+    request is that picking a program should preset the options that program calls for, and
+    the official app does exactly that -- on a program change it displays
+    ``fixedValue ?? defaultValue`` of the selected category (``setValue``
+    @decomp.txt:1778757, analysed in apk/analysis/issue98-99-program-options-and-wd-dry.md
+    section 8). A section that printed the pinned values but not the settable defaults could show
+    that an option is available and never what the program would set it to, which is the
+    half the feature is about.
+
+    Both maps carry ``HonParameter.schema_value`` -- the schema node -- and NOT the live
+    ``value``, which is mutable state an earlier cycle may have moved (see the comment at
+    the read below). A ``null`` means the schema prescribes nothing for that parameter in
+    that program.
 
     Settability is decided by ``program_options.is_settable_option``, the SAME predicate
     the entity gate uses AND with the same sentinel tuples (``_option_drops``), so a reader
@@ -813,17 +829,37 @@ def _program_option_matrix(appliance) -> dict:
         params = params if isinstance(params, dict) else {}
         absent: list[str] = []
         fixed: dict[str, str] = {}
-        settable: list[str] = []
+        settable: dict[str, str] = {}
         for name in union:
             param = params.get(name)
             if param is None:
                 absent.append(name)
-            elif is_settable_option(param, drops.get(name, ())):
-                settable.append(name)
+                continue
+            # The SCHEMA node, not the live value. `value` is mutable state -- the Start
+            # path writes the user's buffered options into the selected category and never
+            # undoes them on success, the command history seeds the last-started category,
+            # and a favourite category is loaded from what the user saved -- so a dump taken
+            # after a cycle would report a user's own past choice as the program's
+            # prescription. `schema_value` is the untouched node the app itself reads.
+            #
+            # `null` when the schema prescribes nothing, and NOT the engine's `value`. The
+            # subclasses fabricate a "0" to keep reads non-None, and for a descriptor-only
+            # node -- one that lists `enumValues` purely so a client can render a control --
+            # that "0" is not even among its own values and is deliberately never
+            # transmitted (`_send_parameters` filters the ancillary group on
+            # `declares_value`). Printing it would assert a starting value the program never
+            # stated, which is the one thing this section may not do; `null` says "this
+            # program prescribes nothing here", which is the truth.
+            declared = getattr(param, "schema_value", None)
+            value = (
+                None
+                if declared is None
+                else str(declared)[:_PROGRAM_MATRIX_VALUE_MAX_CHARS]
+            )
+            if is_settable_option(param, drops.get(name, ())):
+                settable[name] = value
             else:
-                fixed[name] = str(getattr(param, "value", ""))[
-                    :_PROGRAM_MATRIX_VALUE_MAX_CHARS
-                ]
+                fixed[name] = value
         row: dict = {}
         if settable:
             row["settable"] = settable
