@@ -1026,6 +1026,19 @@ class HonProgramOptionNumber(HonProgramOptionEntity, NumberEntity):
     def native_step(self) -> float:
         return self._live_range[2]
 
+    def _renderable(self, raw) -> bool:
+        # Same bounds and the same 1e-6 grid tolerance `async_set_native_value` enforces:
+        # a prescription this box could not accept from the user must not be shown as its
+        # value either.
+        try:
+            value = float(raw)
+        except (ValueError, TypeError):
+            return False
+        lo, hi, step = self._live_range
+        if not lo <= value <= hi or step <= 0:
+            return False
+        return abs((value - lo) / step - round((value - lo) / step)) < 1e-6
+
     @property
     def native_value(self) -> float | None:
         raw = self._current_raw()

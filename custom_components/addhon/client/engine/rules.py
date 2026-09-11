@@ -296,6 +296,21 @@ class HonRuleSet:
         self._attach_triggers()
         self._apply_config_rules()
 
+    @property
+    def rule_targets(self) -> set[str]:
+        """Names of the parameters any rule in this set can WRITE.
+
+        Both kinds: the runtime triggers (`_rules` is keyed by the TRIGGER parameter, so
+        the target is each rule's own `param_key`) and the static `$...` config rules.
+
+        A parameter in here is not described by its schema node -- a rule moves it, at
+        build time or when its trigger fires -- so a reader that wants to report what a
+        program prescribes must leave it alone (`HonProgramOptionEntity._prescribed_raw`).
+        """
+        targets = {rule.param_key for rules in self._rules.values() for rule in rules}
+        targets.update(param_key for param_key, _, _ in self._config_rules)
+        return targets
+
     def reapply_static_rules(self) -> None:
         """Re-apply ONLY the `$...` (static device config) rules.
 

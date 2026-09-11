@@ -837,6 +837,13 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
         self._raw_to_key = disambiguate_labels(base_keys)
         self._key_to_raw = {key: raw for raw, key in self._raw_to_key.items()}
 
+    def _renderable(self, raw) -> bool:
+        # A prescribed code this select does not offer would blank the entity; the device
+        # reading is the honest answer instead. Real on the reporter's dump: `delicati_59`
+        # pins temp to a code the merged control does not carry.
+        self._rebuild_maps()
+        return normalize_code(raw) in self._raw_to_key
+
     @property
     def options(self) -> list[str]:
         # One distinct option per exposed raw code (keys are unique; order preserved).

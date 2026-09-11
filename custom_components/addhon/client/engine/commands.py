@@ -366,6 +366,14 @@ class HonCommand:
             parameter.reset()
 
     @property
+    def rule_targets(self) -> set[str]:
+        """Names of the parameters this command's rules can write (see `HonRuleSet`)."""
+        targets: set[str] = set()
+        for ruleset in self._rules:
+            targets |= ruleset.rule_targets
+        return targets
+
+    @property
     def is_favourite(self) -> bool:
         """True if this category is a saved favourite.
 
