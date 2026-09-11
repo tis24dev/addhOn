@@ -767,13 +767,17 @@ class RebuildAtStartTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_refused_send_leaves_the_category_as_it_was(self) -> None:
         # The rebuild happens after the snapshot, so the rollback covers it too.
+        from homeassistant.exceptions import HomeAssistantError
+
         ok = _WireApi()
         appliance, categories = _real_categories(ok)
         await self._button(appliance, ok, "delicate", {"spinSpeed": "1400"}).async_press()
         before = dict(categories["delicate"].parameter_groups["parameters"])
         appliance.api = _WireApi(fail=True)
         categories["delicate"]._api = appliance.api
-        with self.assertRaises(Exception):
+        # The refusal must surface as the button's own error contract, not a bare
+        # Exception -- a `TypeError` in the setup would otherwise pass unnoticed.
+        with self.assertRaises(HomeAssistantError):
             await self._button(appliance, appliance.api, "delicate").async_press()
         self.assertEqual(before, categories["delicate"].parameter_groups["parameters"])
 
