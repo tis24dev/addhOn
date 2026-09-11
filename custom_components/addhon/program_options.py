@@ -367,8 +367,65 @@ class HonProgramOptionEntity(HonBaseEntity):
         )
         self.async_write_ha_state()
 
+    def _selected_category(self):
+        """The SELECTED program's category command, or None."""
+        code = self._selected_program_code()
+        if code is None:
+            return None
+        command = startprogram_command(self._appliance)
+        categories = getattr(command, "categories", None) if command is not None else None
+        if not isinstance(categories, dict):
+            return None
+        return categories.get(code)
+
+    def _prescribed_raw(self):
+        """What the SELECTED program prescribes for this option, or None.
+
+        The hOn app shows exactly this: with a program freshly picked from the catalogue
+        its `setValue` falls through to `dictionaryParameter.fixedValue ?? defaultValue`
+        of the selected category (decomp.txt:1778771-1778793), which is
+        ``HonParameter.schema_value``. Reading the category's ``value`` instead would
+        report the user's own past choice as the program's prescription -- three writers
+        leave one in there and nothing resets it (see `schema_value`'s own docstring).
+
+        Three cases answer None, each falling the caller back to the device reading:
+
+        - the program is a FAVOURITE. It IS a saved user configuration, so its VALUE is
+          the prescription and its schema node belongs to the base program. The app
+          agrees: opening a favourite fills `setValue`'s highest-precedence slot
+          (@3617979) instead of reading the schema.
+        - a RULE can write this parameter. The cascade fires when the options are applied
+          at Start, so the wire would carry something else and the display would be a
+          promise the payload does not keep. Measured: rule `spinSpeed <- temp==20 -> 400`
+          with a schema default of 1400. No washing-group catalogue on disk carries a
+          `programRules`, so this is a guard, not a live path (analysis section 9.8).
+        - the schema prescribes nothing, or the category does not declare the option.
+        """
+        category = self._selected_category()
+        if category is None:
+            return None
+        param = self._category_option_param()
+        if param is None:
+            return None
+        if getattr(category, "is_favourite", False):
+            return getattr(param, "value", None)
+        if self._param in (getattr(category, "rule_targets", None) or ()):
+            return None
+        return getattr(param, "schema_value", None)
+
+    def _renderable(self, raw) -> bool:
+        """True if THIS control can display ``raw``; the base control always can.
+
+        A switch is a boolean by construction and never refuses. The select and the number
+        override this: a prescription outside the option map or off the live grid would
+        blank the entity, and an honest device reading beats a blank (analysis 8.5.2 --
+        on the reporter's own dump 34 programs pin `temp` and 93 pin `dirtyLevel`, several
+        to codes the merged control does not offer)."""
+        return True
+
     def _current_raw(self):
-        """Pending value if buffered, else the live device value.
+        """Pending value if buffered, else what the selected program prescribes, else the
+        live device value.
 
         Reads ``_get_attr(param)`` (the direct attribute the device reports) and then
         ``_get_attr("startProgram." + param)`` (startProgram is not shadow-synced into
@@ -376,6 +433,9 @@ class HonProgramOptionEntity(HonBaseEntity):
         pending = self._pending().get(self._param)
         if pending is not None:
             return pending
+        prescribed = self._prescribed_raw()
+        if prescribed is not None and self._renderable(prescribed):
+            return prescribed
         raw = self._get_attr(self._param)
         if raw is not None:
             return raw
@@ -425,14 +485,7 @@ class HonProgramOptionEntity(HonBaseEntity):
         Returns None when nothing is pending, when the program parameter is not
         category-backed (a ``prCode``-typed enum keys the store by code, not by category
         name, so the lookup misses), or when the category omits the param."""
-        code = self._selected_program_code()
-        if code is None:
-            return None
-        command = startprogram_command(self._appliance)
-        categories = getattr(command, "categories", None) if command is not None else None
-        if not isinstance(categories, dict):
-            return None
-        category = categories.get(code)
+        category = self._selected_category()
         params = getattr(category, "parameters", None) if category is not None else None
         if isinstance(params, dict):
             return params.get(self._param)

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import copy as copy_module
 import sys
 import types
 import unittest
@@ -643,6 +644,364 @@ class ApplyOnStartTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HomeAssistantError):
             await button.async_press()
         self.assertEqual({"washer-1": {"spinSpeed": "800"}}, coordinator.pending_options)
+
+
+class _WireApi:
+    """Records what actually leaves for the cloud, body by body."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.bodies: list[dict] = []
+        self.fail = fail
+
+    async def send_command(self, appliance, name, params, ancillary, category) -> bool:
+        if self.fail:
+            raise RuntimeError("cloud refused")
+        self.bodies.append({"name": name, "params": dict(params), "category": category})
+        return True
+
+
+class _WireAppliance:
+    zone = 0
+    options: dict = {}
+
+    def __init__(self, api) -> None:
+        self.api = api
+        self.commands: dict = {}
+        self.info: dict = {}
+
+    def sync_command_to_params(self, name: str) -> None:
+        pass
+
+
+def _real_categories(api):
+    """A REAL engine startProgram with two program categories.
+
+    Doubles cannot answer the question this class asks -- what leaves on the wire for an
+    option the user never touched -- because the answer is produced by the engine's own
+    serialisation of its own mutated state.
+    """
+    from custom_components.addhon.client.engine.commands import HonCommand
+
+    appliance = _WireAppliance(api)
+    categories: dict = {}
+
+    def _category(name: str, spin_default: str) -> None:
+        attributes = {"parameters": {
+            "spinSpeed": {"typology": "enum", "category": "command", "mandatory": 1,
+                          "defaultValue": spin_default, "enumValues": ["0", "400", "1400"]},
+            "temp": {"typology": "enum", "category": "command", "mandatory": 1,
+                     "defaultValue": "40", "enumValues": ["20", "40", "60"]},
+        }}
+        categories[name] = HonCommand(
+            "startProgram", attributes, appliance, categories=categories,
+            category_name=f"PROGRAMS.WM.{name.upper()}",
+        )
+
+    _category("cotton", "1400")
+    _category("delicate", "400")
+    appliance.commands["startProgram"] = categories["cotton"]
+    return appliance, categories
+
+
+class RebuildAtStartTest(unittest.IsolatedAsyncioTestCase):
+    """Start rebuilds the SELECTED category from its schema before applying the buffer.
+
+    Without it a program the user has run before starts at their old choice: the Start
+    path writes the buffered options into the category's parameters and `rollback.clear()`
+    keeps them, and nothing ever puts them back. The hOn app has no such state to carry --
+    it rebuilds its parameter map on every program opening (`openProgramEpic`
+    @3618118-3618266). Analysis: apk/analysis/issue98-99-program-options-and-wd-dry.md
+    section 9.
+    """
+
+    def _button(self, appliance, api, pending_program=None, pending_options=None,
+                command_name="startProgram"):
+        from custom_components.addhon.button import HonProgramCommandButton
+
+        coordinator = FakeCoordinator(
+            {"washer-1": {"type": "WM", "name": "W", "appliance": appliance,
+                          "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_programs = (
+            {"washer-1": pending_program} if pending_program is not None else {}
+        )
+        coordinator.pending_options = (
+            {"washer-1": dict(pending_options)} if pending_options else {}
+        )
+        button = HonProgramCommandButton(
+            coordinator, "washer-1", FakeClient(),
+            command_name=command_name, unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+        )
+        button.hass = FakeHass()
+        return button
+
+    async def test_a_reselected_program_starts_at_what_it_prescribes(self) -> None:
+        # The section 8.5.3 repro, end to end and on the wire.
+        api = _WireApi()
+        appliance, _ = _real_categories(api)
+        await self._button(appliance, api, "delicate", {"spinSpeed": "1400"}).async_press()
+        self.assertEqual("1400", api.bodies[0]["params"]["spinSpeed"])
+        # Second cycle: the same program is picked again and nothing is touched.
+        await self._button(appliance, api, "delicate").async_press()
+        self.assertEqual("400", api.bodies[1]["params"]["spinSpeed"])
+
+    async def test_start_without_reselecting_repeats_the_last_cycle(self) -> None:
+        # No pending selection means no question about which program is meant, so the
+        # running configuration stands: this is the pre-existing behaviour and it stays.
+        api = _WireApi()
+        appliance, _ = _real_categories(api)
+        await self._button(appliance, api, "delicate", {"spinSpeed": "1400"}).async_press()
+        await self._button(appliance, api).async_press()
+        self.assertEqual("1400", api.bodies[1]["params"]["spinSpeed"])
+
+    async def test_the_buffered_options_are_applied_after_the_rebuild(self) -> None:
+        # Order is load-bearing: rebuilding AFTER the buffer would discard the user's
+        # explicit choice, which is the one thing the rebuild must never touch.
+        api = _WireApi()
+        appliance, _ = _real_categories(api)
+        await self._button(appliance, api, "delicate", {"spinSpeed": "1400"}).async_press()
+        await self._button(appliance, api, "delicate", {"temp": "60"}).async_press()
+        self.assertEqual("60", api.bodies[1]["params"]["temp"])
+        self.assertEqual("400", api.bodies[1]["params"]["spinSpeed"])
+
+    async def test_a_refused_send_leaves_the_category_as_it_was(self) -> None:
+        # The rebuild happens after the snapshot, so the rollback covers it too.
+        from homeassistant.exceptions import HomeAssistantError
+
+        ok = _WireApi()
+        appliance, categories = _real_categories(ok)
+        await self._button(appliance, ok, "delicate", {"spinSpeed": "1400"}).async_press()
+        before = dict(categories["delicate"].parameter_groups["parameters"])
+        appliance.api = _WireApi(fail=True)
+        categories["delicate"]._api = appliance.api
+        # The refusal must surface as the button's own error contract, not a bare
+        # Exception -- a `TypeError` in the setup would otherwise pass unnoticed.
+        with self.assertRaises(HomeAssistantError):
+            await self._button(appliance, appliance.api, "delicate").async_press()
+        self.assertEqual(before, categories["delicate"].parameter_groups["parameters"])
+
+    async def test_a_command_without_categories_is_not_rebuilt(self) -> None:
+        # `HonCommand.categories` answers `{"_": self}` for a category-less command, and a
+        # program code is never "_": the selected code must be reachable as a category or
+        # the rebuild would reset the very parameter carrying the user's choice.
+        from custom_components.addhon.client.engine.commands import HonCommand
+
+        api = _WireApi()
+        appliance = _WireAppliance(api)
+        command = HonCommand("startProgram", {"parameters": {
+            "prCode": {"typology": "enum", "category": "command", "mandatory": 1,
+                       "defaultValue": "1", "enumValues": ["1", "2"]},
+        }}, appliance)
+        appliance.commands["startProgram"] = command
+        await self._button(appliance, api, "2").async_press()
+        self.assertEqual("2", api.bodies[0]["params"]["prCode"])
+
+
+def _prescribing_appliance(api=None, rules=None, favourite=False):
+    """A REAL engine startProgram whose two categories prescribe different things.
+
+    `delicate` PINS extraRinse1 to 1 and temp to 60 (a value its own merged control cannot
+    render); `cotton` leaves both settable. The shadow reports the finished cycle, as a real
+    machine does between programmes.
+    """
+    from custom_components.addhon.client.engine.commands import HonCommand
+
+    appliance = _WireAppliance(api or _WireApi())
+    categories: dict = {}
+
+    cotton = {"parameters": {
+        "extraRinse1": {"typology": "enum", "category": "command", "mandatory": 1,
+                        "defaultValue": "0", "enumValues": ["0", "1"]},
+        "spinSpeed": {"typology": "enum", "category": "command", "mandatory": 1,
+                      "defaultValue": "1400", "enumValues": ["0", "400", "1400"]},
+        "temp": {"typology": "enum", "category": "command", "mandatory": 1,
+                 "defaultValue": "40", "enumValues": ["20", "40"]},
+        "delayTime": {"typology": "range", "category": "command", "mandatory": 0,
+                      "defaultValue": "0", "minimumValue": "0", "maximumValue": "180",
+                      "incrementValue": "30"},
+    }}
+    delicate = {"parameters": {
+        "extraRinse1": {"typology": "fixed", "category": "command", "mandatory": 1,
+                        "fixedValue": "1"},
+        "spinSpeed": {"typology": "enum", "category": "command", "mandatory": 1,
+                      "defaultValue": "400", "enumValues": ["0", "400", "1400"]},
+        "temp": {"typology": "fixed", "category": "command", "mandatory": 1,
+                 "fixedValue": "60"},
+        "delayTime": {"typology": "range", "category": "command", "mandatory": 0,
+                      "defaultValue": "60", "minimumValue": "0", "maximumValue": "180",
+                      "incrementValue": "30"},
+    }}
+    if rules:
+        delicate["parameters"]["programRules"] = {"category": "rule", "fixedValue": rules}
+    for name, attributes in (("cotton", cotton), ("delicate", delicate)):
+        categories[name] = HonCommand(
+            "startProgram", attributes, appliance, categories=categories,
+            category_name=f"PROGRAMS.WM.{name.upper()}",
+        )
+    if favourite:
+        # What `HonCommandLoader._add_favourites` builds: a copy of the base category
+        # carrying the user's saved values and a fixed `favourite="1"` marker.
+        from custom_components.addhon.client.engine.parameter.fixed import HonParameterFixed
+
+        saved = copy_module.copy(categories["cotton"])
+        saved.parameters["favourite"] = HonParameterFixed(
+            "favourite", {"typology": "fixed", "category": "command", "fixedValue": "1"},
+            "parameters",
+        )
+        saved.parameters["extraRinse1"].value = "1"
+        categories["MyFav"] = saved
+    appliance.commands["startProgram"] = categories["cotton"]
+    return appliance, categories
+
+
+class PrescribedReadTest(unittest.IsolatedAsyncioTestCase):
+    """With a programme selected and an option untouched, the controls show what THAT
+    programme prescribes instead of the finished cycle's reading.
+
+    This is the half issue #98 asks for, and the reason it could not ship before: the
+    payload carried whatever an earlier Start had left in the category, so displaying the
+    schema would have promised something the wire did not keep. The Start path now rebuilds
+    the selected category from its schema, so the two agree again.
+    """
+
+    def _switch(self, appliance, attributes, pending=None, options=None):
+        from custom_components.addhon import switch
+
+        coordinator = FakeCoordinator(
+            {"washer-1": {"type": "WM", "name": "W", "appliance": appliance,
+                          "attributes": attributes, "settings": {}}}
+        )
+        coordinator.pending_programs = {"washer-1": pending} if pending else {}
+        coordinator.pending_options = {"washer-1": dict(options)} if options else {}
+        desc = switch.HonProgramOptionSwitchDescription(
+            key="extra_rinse_1", param="extraRinse1", types=("WM", "WD")
+        )
+        entity = switch.HonProgramOptionSwitch(coordinator, "washer-1", desc, FakeClient())
+        entity.hass = FakeHass()
+        return entity
+
+    def _select(self, appliance, attributes, param, pending=None):
+        from custom_components.addhon import select as select_mod
+
+        coordinator = FakeCoordinator(
+            {"washer-1": {"type": "WM", "name": "W", "appliance": appliance,
+                          "attributes": attributes, "settings": {}}}
+        )
+        coordinator.pending_programs = {"washer-1": pending} if pending else {}
+        coordinator.pending_options = {}
+        desc = select_mod.HonProgramOptionSelectDescription(
+            key=param, param=param, translation_key=param, types=("WM", "WD")
+        )
+        entity = select_mod.HonProgramOptionSelect(coordinator, "washer-1", desc, FakeClient())
+        entity.hass = FakeHass()
+        return entity
+
+    def _number(self, appliance, attributes, pending=None):
+        from custom_components.addhon import number as number_mod
+
+        coordinator = FakeCoordinator(
+            {"washer-1": {"type": "WM", "name": "W", "appliance": appliance,
+                          "attributes": attributes, "settings": {}}}
+        )
+        coordinator.pending_programs = {"washer-1": pending} if pending else {}
+        coordinator.pending_options = {}
+        desc = number_mod.HonProgramOptionNumberDescription(
+            key="delay_time", param="delayTime", translation_key="delay_time",
+            types=("WM", "WD")
+        )
+        entity = number_mod.HonProgramOptionNumber(coordinator, "washer-1", desc, FakeClient())
+        entity.hass = FakeHass()
+        return entity
+
+    async def test_a_pinned_option_reads_as_the_programme_prescribes(self) -> None:
+        appliance, _ = _prescribing_appliance()
+        entity = self._switch(appliance, {"extraRinse1": "0"}, pending="delicate")
+        self.assertTrue(entity.is_on)
+
+    async def test_the_buffer_still_wins_over_the_prescription(self) -> None:
+        appliance, _ = _prescribing_appliance()
+        entity = self._switch(appliance, {"extraRinse1": "0"}, pending="delicate",
+                              options={"extraRinse1": "0"})
+        self.assertFalse(entity.is_on)
+
+    async def test_without_a_selection_the_device_reading_stands(self) -> None:
+        appliance, _ = _prescribing_appliance()
+        entity = self._switch(appliance, {"extraRinse1": "0"})
+        self.assertFalse(entity.is_on)
+
+    async def test_a_favourite_shows_the_value_it_saved(self) -> None:
+        # A favourite IS the user's configuration; its schema node is the base programme's
+        # and would report something the favourite never meant.
+        appliance, _ = _prescribing_appliance(favourite=True)
+        entity = self._switch(appliance, {"extraRinse1": "0"}, pending="MyFav")
+        self.assertTrue(entity.is_on)
+
+    async def test_a_settable_option_reads_the_programmes_default(self) -> None:
+        appliance, _ = _prescribing_appliance()
+        entity = self._select(appliance, {"spinSpeed": "1400"}, "spinSpeed", pending="delicate")
+        self.assertEqual("400", entity.current_option)
+
+    async def test_the_prescription_is_the_schema_and_not_a_past_choice(self) -> None:
+        # The load-bearing distinction (analysis 8.5.1). A previous Start of this same
+        # programme left 1400 inside the category and nothing resets it outside the Start
+        # path, so reading `value` would report the user's own past choice as the
+        # programme's prescription -- a subtler version of the bug #98 reports.
+        appliance, categories = _prescribing_appliance()
+        categories["delicate"].parameters["spinSpeed"].value = "1400"
+        entity = self._select(appliance, {"spinSpeed": "0"}, "spinSpeed", pending="delicate")
+        self.assertEqual("400", entity.current_option)
+
+    async def test_a_prescription_the_control_cannot_render_falls_back(self) -> None:
+        # `delicate` pins temp to 60, which its merged control does not offer: showing it
+        # would blank the entity, which is worse than the honest device reading.
+        appliance, _ = _prescribing_appliance()
+        entity = self._select(appliance, {"temp": "40"}, "temp", pending="delicate")
+        self.assertEqual("40", entity.current_option)
+
+    async def test_a_rule_target_falls_back_to_the_device(self) -> None:
+        # A parameter a rule can move is not described by its schema node: the cascade
+        # fires at Start and the wire would carry something else.
+        appliance, _ = _prescribing_appliance(
+            rules={"spinSpeed": {"temp": {"20": {"typology": "fixed", "fixedValue": "0"}}}}
+        )
+        entity = self._select(appliance, {"spinSpeed": "1400"}, "spinSpeed", pending="delicate")
+        self.assertEqual("1400", entity.current_option)
+
+    async def test_what_the_control_shows_is_what_the_start_transmits(self) -> None:
+        # The invariant the whole design exists for, and the one the withdrawn first
+        # attempt broke: for an option the user never touched, display and payload must
+        # agree. A previous Start left 1400 in the category; the control says 400 and the
+        # wire must carry 400, not the two disagreeing (analysis 8.5.3).
+        from custom_components.addhon.button import HonProgramCommandButton
+
+        api = _WireApi()
+        appliance, categories = _prescribing_appliance(api)
+        categories["delicate"].parameters["spinSpeed"].value = "1400"
+        entity = self._select(appliance, {"spinSpeed": "1400"}, "spinSpeed", pending="delicate")
+        shown = entity.current_option
+
+        coordinator = FakeCoordinator(
+            {"washer-1": {"type": "WM", "name": "W", "appliance": appliance,
+                          "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_programs = {"washer-1": "delicate"}
+        coordinator.pending_options = {}
+        button = HonProgramCommandButton(
+            coordinator, "washer-1", FakeClient(),
+            command_name="startProgram", unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+        )
+        button.hass = FakeHass()
+        await button.async_press()
+
+        self.assertEqual("400", shown)
+        self.assertEqual(shown, api.bodies[0]["params"]["spinSpeed"])
+
+    async def test_a_number_reads_the_prescription_when_its_range_holds_it(self) -> None:
+        appliance, _ = _prescribing_appliance()
+        entity = self._number(appliance, {"delayTime": "0"}, pending="delicate")
+        self.assertEqual(60.0, entity.native_value)
 
 
 class CapabilityGateSetupTest(unittest.IsolatedAsyncioTestCase):

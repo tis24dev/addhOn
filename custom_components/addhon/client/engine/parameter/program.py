@@ -51,6 +51,17 @@ class HonParameterProgram(HonParameterEnum):
         else:
             raise ValueError(f"Allowed values: {self.values} But was: {value}")
 
+    def reset(self) -> None:
+        """No-op: this parameter has no schema to go back to.
+
+        It is a VIEW over the command's categories and is built on an EMPTY attributes dict
+        (`super().__init__(key, {}, group)`), so the inherited `reset()` -- which re-runs
+        `_set_attributes()` -- would seed `_value` with the enum's fabricated "0" and blank
+        `_typology`, and `name_for_code` trusts both. The selected program is not a value
+        the schema prescribes: it is the choice the rebuild happens BECAUSE of
+        (`HonCommand.rebuild_from_schema`).
+        """
+
     @property
     def values(self) -> list[str]:
         values = [v for v in self._programs if all(f not in v for f in self._FILTER)]

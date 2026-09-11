@@ -364,3 +364,51 @@ class HonCommand:
     def reset(self) -> None:
         for parameter in self._parameters.values():
             parameter.reset()
+
+    @property
+    def rule_targets(self) -> set[str]:
+        """Names of the parameters this command's rules can write (see `HonRuleSet`)."""
+        targets: set[str] = set()
+        for ruleset in self._rules:
+            targets |= ruleset.rule_targets
+        return targets
+
+    @property
+    def is_favourite(self) -> bool:
+        """True if this category is a saved favourite.
+
+        Reads the `favourite="1"` marker `HonCommandLoader._add_favourites` injects into
+        the copy -- the same one `HonParameterProgram._is_favourite` uses to tell a schema
+        slug apart from a user-typed name."""
+        favourite = self._parameters.get("favourite")
+        return favourite is not None and str(getattr(favourite, "value", "")) == "1"
+
+    def rebuild_from_schema(self) -> bool:
+        """Put every parameter back to what its schema declares. True if it ran.
+
+        This is `openProgramEpic` (@3618118-3618266), which the hOn app runs on every
+        program opening: it rebuilds the whole parameter map from `dictionaryParameters`
+        and drops it on unmount, so its display and its payload cannot drift apart. Our
+        categories instead live for the whole config entry and are written by the Start
+        path (`apply_pending_options`, kept on success), by `_recover_last_command_states`
+        and by the favourites, with nothing ever putting them back -- which is why a
+        program the user has run before starts at their old choice rather than at what it
+        prescribes. Analysis: apk/analysis/issue98-99-program-options-and-wd-dry.md section 9.
+
+        A FAVOURITE is refused: it IS the user's saved configuration, so rebuilding it
+        would erase the thing they asked for. The app agrees -- opening a favourite feeds
+        the saved values into `setValue`'s highest-precedence slot instead of reading the
+        schema (@3617979).
+
+        The program parameter is left alone by its own no-op `reset()`, and the static
+        `$...` config rules go back on afterwards (see `HonRuleSet.reapply_static_rules`,
+        which deliberately is not `patch()`). `_category_name`, `_selected_explicitly` and
+        `_data` are not touched: they are identity and transport, not schema.
+        """
+        if self.is_favourite:
+            return False
+        for parameter in self._parameters.values():
+            parameter.reset()
+        for rule in self._rules:
+            rule.reapply_static_rules()
+        return True

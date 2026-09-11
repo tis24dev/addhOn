@@ -871,6 +871,20 @@ def _program_option_matrix(appliance) -> dict:
                 settable[name] = value
             else:
                 fixed[name] = value
+        # Which parameters this program's RULES can write. The prescription above is the
+        # schema node and nothing moves it; a rule does, when the options are applied at
+        # Start, so a reader comparing this section against what the machine actually
+        # started needs to know which rows the cascade can overrule. The rule BODY is not
+        # printable here -- it is a nested dict, and `schema_value` answers `null` for it,
+        # which is exactly what an empty node answers too, so the two are indistinguishable
+        # from the value alone. The targets are the part that is both small and decisive.
+        #
+        # Reachable, not hypothetical: on the HW80 and HD100 dumped on 2026-09-11
+        # (`apk/dump/roberto_2026-09-11/`) `programRules` sits in `union_params` of both,
+        # on 8 washer programs -- the Ariel and Dash partner cycles -- and on the dryer's
+        # `hqd_i_refresh`. `getattr` because the command doubles in the tests, and any
+        # engine older than the property, have none.
+        rule_targets = sorted(getattr(category, "rule_targets", None) or ())
         row: dict = {}
         if settable:
             row["settable"] = settable
@@ -878,6 +892,8 @@ def _program_option_matrix(appliance) -> dict:
             row["fixed"] = fixed
         if absent:
             row["absent"] = absent
+        if rule_targets:
+            row["rule_targets"] = rule_targets
         per_program[str(code)] = row
     return {
         "command": STARTPROGRAM_COMMAND,

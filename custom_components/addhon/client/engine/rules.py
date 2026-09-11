@@ -296,6 +296,34 @@ class HonRuleSet:
         self._attach_triggers()
         self._apply_config_rules()
 
+    @property
+    def rule_targets(self) -> set[str]:
+        """Names of the parameters any rule in this set can WRITE.
+
+        Both kinds: the runtime triggers (`_rules` is keyed by the TRIGGER parameter, so
+        the target is each rule's own `param_key`) and the static `$...` config rules.
+
+        A parameter in here is not described by its schema node -- a rule moves it, at
+        build time or when its trigger fires -- so a reader that wants to report what a
+        program prescribes must leave it alone (`HonProgramOptionEntity._prescribed_raw`).
+        """
+        targets = {rule.param_key for rules in self._rules.values() for rule in rules}
+        targets.update(param_key for param_key, _, _ in self._config_rules)
+        return targets
+
+    def reapply_static_rules(self) -> None:
+        """Re-apply ONLY the `$...` (static device config) rules.
+
+        For `HonCommand.rebuild_from_schema`: a reset hands every parameter back the value
+        its schema declares, which undoes a pin that describes the DEVICE rather than a
+        user's choice (`$installationType` -> `remoteVisible`). Those must go back on.
+
+        The runtime triggers must NOT be re-attached, which is why this is not `patch()`:
+        `reset()` does not clear the trigger tables, so re-running the whole patch would
+        register every rule a second time and a single write would then cascade twice.
+        """
+        self._apply_config_rules()
+
     def _attach_triggers(self) -> None:
         """Register every (already-expanded) rule as a trigger on its command's params."""
         for name, parameter in self._command.parameters.items():

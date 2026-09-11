@@ -276,6 +276,39 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                         # Snapshot the post-swap command's params too, so options/fixed
                         # applied below are rolled back with the swap on a send failure.
                         rollback["snapshots"].append((params, snapshot_params(params)))
+                    # (a2) Rebuild the SELECTED category from its schema, which is what the
+                    # hOn app gets for free by rebuilding its parameter map on every program
+                    # opening (`openProgramEpic`, decomp.txt:3618118-3618266) and dropping it
+                    # on unmount. Our categories instead live for the whole config entry and
+                    # keep whatever an earlier Start of this same program wrote into them
+                    # (the options are applied below and `rollback.clear()` keeps them on
+                    # success), so without this a re-selected program silently repeats the
+                    # user's old choices instead of starting at what it prescribes -- issue
+                    # #98, analysis section 9.
+                    #
+                    # AFTER the snapshots above, so a refused send rolls the rebuild back
+                    # too, and BEFORE (b), so the buffered options -- the user's explicit
+                    # choice, the one thing this must never touch -- are applied on top.
+                    #
+                    # Gated on the selected code being a real CATEGORY: `HonCommand.
+                    # categories` answers `{"_": self}` for a category-less command, whose
+                    # program parameter is a plain prCode enum, and rebuilding that would
+                    # reset the very parameter carrying the choice. A favourite refuses on
+                    # its own (it IS the user's saved configuration). `getattr` because the
+                    # command doubles in the tests have no such method.
+                    if pending_program is not None and pending_program in getattr(
+                        command, "categories", {}
+                    ):
+                        rebuild = getattr(command, "rebuild_from_schema", None)
+                        if callable(rebuild):
+                            # Called on its own line and NOT inside the debug arguments:
+                            # this rebuild is what the Start transmits, not a diagnostic.
+                            rebuilt = rebuild()
+                            _LOGGER.debug(
+                                "Button debug: program '%s' rebuilt from schema: %s",
+                                pending_program,
+                                rebuilt,
+                            )
                     # (b) Apply the buffered program options to the POST-SWAP command
                     # (#35): selecting the program swaps the active startProgram command,
                     # so the options must land on the new one. apply_pending_options skips

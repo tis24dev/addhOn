@@ -8233,6 +8233,27 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         matrix = self._matrix({"_": FakeCommand(params)}, active="_")
         self.assertEqual({}, matrix)
 
+    def test_a_programs_rule_targets_are_reported(self) -> None:
+        # Which parameters a program's rules can WRITE. Without it the section states a
+        # prescription the cascade may overrule at Start, and a reader cannot tell the two
+        # apart: the rule body itself is not printable here (it is a nested dict, and
+        # `schema_value` answers `null` for it, which is also what an empty node answers).
+        # Real and reachable: on the HW80 and the HD100 dumped on 2026-09-11, 8 washer
+        # programs and 1 dryer program carry a `programRules` node.
+        catalogue = self._catalogue()
+        catalogue["delicate"].rule_targets = {"spinSpeed"}
+
+        matrix = self._matrix(catalogue)
+
+        self.assertEqual(["spinSpeed"], matrix["per_program"]["delicate"]["rule_targets"])
+
+    def test_a_program_without_rules_reports_no_targets(self) -> None:
+        # Absent, not an empty list: every program of a rule-less appliance would otherwise
+        # carry a key that says nothing, in a section kept small on purpose.
+        matrix = self._matrix(self._catalogue())
+
+        self.assertNotIn("rule_targets", matrix["per_program"]["cotton"])
+
     def test_a_sentinel_only_parameter_is_not_called_settable(self) -> None:
         # PR #103 review (coderabbitai): the entity gate ignores DRY_LEVEL_SENTINELS, so a
         # dryLevel offering only ("", "0", "11") creates NO control. Reporting it as settable
