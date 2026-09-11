@@ -645,6 +645,154 @@ class ApplyOnStartTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"washer-1": {"spinSpeed": "800"}}, coordinator.pending_options)
 
 
+class _WireApi:
+    """Records what actually leaves for the cloud, body by body."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.bodies: list[dict] = []
+        self.fail = fail
+
+    async def send_command(self, appliance, name, params, ancillary, category) -> bool:
+        if self.fail:
+            raise RuntimeError("cloud refused")
+        self.bodies.append({"name": name, "params": dict(params), "category": category})
+        return True
+
+
+class _WireAppliance:
+    zone = 0
+    options: dict = {}
+
+    def __init__(self, api) -> None:
+        self.api = api
+        self.commands: dict = {}
+        self.info: dict = {}
+
+    def sync_command_to_params(self, name: str) -> None:
+        pass
+
+
+def _real_categories(api):
+    """A REAL engine startProgram with two program categories.
+
+    Doubles cannot answer the question this class asks -- what leaves on the wire for an
+    option the user never touched -- because the answer is produced by the engine's own
+    serialisation of its own mutated state.
+    """
+    from custom_components.addhon.client.engine.commands import HonCommand
+
+    appliance = _WireAppliance(api)
+    categories: dict = {}
+
+    def _category(name: str, spin_default: str) -> None:
+        attributes = {"parameters": {
+            "spinSpeed": {"typology": "enum", "category": "command", "mandatory": 1,
+                          "defaultValue": spin_default, "enumValues": ["0", "400", "1400"]},
+            "temp": {"typology": "enum", "category": "command", "mandatory": 1,
+                     "defaultValue": "40", "enumValues": ["20", "40", "60"]},
+        }}
+        categories[name] = HonCommand(
+            "startProgram", attributes, appliance, categories=categories,
+            category_name=f"PROGRAMS.WM.{name.upper()}",
+        )
+
+    _category("cotton", "1400")
+    _category("delicate", "400")
+    appliance.commands["startProgram"] = categories["cotton"]
+    return appliance, categories
+
+
+class RebuildAtStartTest(unittest.IsolatedAsyncioTestCase):
+    """Start rebuilds the SELECTED category from its schema before applying the buffer.
+
+    Without it a program the user has run before starts at their old choice: the Start
+    path writes the buffered options into the category's parameters and `rollback.clear()`
+    keeps them, and nothing ever puts them back. The hOn app has no such state to carry --
+    it rebuilds its parameter map on every program opening (`openProgramEpic`
+    @3618118-3618266). Analysis: apk/analysis/issue98-99-program-options-and-wd-dry.md
+    section 9.
+    """
+
+    def _button(self, appliance, api, pending_program=None, pending_options=None,
+                command_name="startProgram"):
+        from custom_components.addhon.button import HonProgramCommandButton
+
+        coordinator = FakeCoordinator(
+            {"washer-1": {"type": "WM", "name": "W", "appliance": appliance,
+                          "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_programs = (
+            {"washer-1": pending_program} if pending_program is not None else {}
+        )
+        coordinator.pending_options = (
+            {"washer-1": dict(pending_options)} if pending_options else {}
+        )
+        button = HonProgramCommandButton(
+            coordinator, "washer-1", FakeClient(),
+            command_name=command_name, unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+        )
+        button.hass = FakeHass()
+        return button
+
+    async def test_a_reselected_program_starts_at_what_it_prescribes(self) -> None:
+        # The section 8.5.3 repro, end to end and on the wire.
+        api = _WireApi()
+        appliance, _ = _real_categories(api)
+        await self._button(appliance, api, "delicate", {"spinSpeed": "1400"}).async_press()
+        self.assertEqual("1400", api.bodies[0]["params"]["spinSpeed"])
+        # Second cycle: the same program is picked again and nothing is touched.
+        await self._button(appliance, api, "delicate").async_press()
+        self.assertEqual("400", api.bodies[1]["params"]["spinSpeed"])
+
+    async def test_start_without_reselecting_repeats_the_last_cycle(self) -> None:
+        # No pending selection means no question about which program is meant, so the
+        # running configuration stands: this is the pre-existing behaviour and it stays.
+        api = _WireApi()
+        appliance, _ = _real_categories(api)
+        await self._button(appliance, api, "delicate", {"spinSpeed": "1400"}).async_press()
+        await self._button(appliance, api).async_press()
+        self.assertEqual("1400", api.bodies[1]["params"]["spinSpeed"])
+
+    async def test_the_buffered_options_are_applied_after_the_rebuild(self) -> None:
+        # Order is load-bearing: rebuilding AFTER the buffer would discard the user's
+        # explicit choice, which is the one thing the rebuild must never touch.
+        api = _WireApi()
+        appliance, _ = _real_categories(api)
+        await self._button(appliance, api, "delicate", {"spinSpeed": "1400"}).async_press()
+        await self._button(appliance, api, "delicate", {"temp": "60"}).async_press()
+        self.assertEqual("60", api.bodies[1]["params"]["temp"])
+        self.assertEqual("400", api.bodies[1]["params"]["spinSpeed"])
+
+    async def test_a_refused_send_leaves_the_category_as_it_was(self) -> None:
+        # The rebuild happens after the snapshot, so the rollback covers it too.
+        ok = _WireApi()
+        appliance, categories = _real_categories(ok)
+        await self._button(appliance, ok, "delicate", {"spinSpeed": "1400"}).async_press()
+        before = dict(categories["delicate"].parameter_groups["parameters"])
+        appliance.api = _WireApi(fail=True)
+        categories["delicate"]._api = appliance.api
+        with self.assertRaises(Exception):
+            await self._button(appliance, appliance.api, "delicate").async_press()
+        self.assertEqual(before, categories["delicate"].parameter_groups["parameters"])
+
+    async def test_a_command_without_categories_is_not_rebuilt(self) -> None:
+        # `HonCommand.categories` answers `{"_": self}` for a category-less command, and a
+        # program code is never "_": the selected code must be reachable as a category or
+        # the rebuild would reset the very parameter carrying the user's choice.
+        from custom_components.addhon.client.engine.commands import HonCommand
+
+        api = _WireApi()
+        appliance = _WireAppliance(api)
+        command = HonCommand("startProgram", {"parameters": {
+            "prCode": {"typology": "enum", "category": "command", "mandatory": 1,
+                       "defaultValue": "1", "enumValues": ["1", "2"]},
+        }}, appliance)
+        appliance.commands["startProgram"] = command
+        await self._button(appliance, api, "2").async_press()
+        self.assertEqual("2", api.bodies[0]["params"]["prCode"])
+
+
 class CapabilityGateSetupTest(unittest.IsolatedAsyncioTestCase):
     async def test_fixed_param_creates_no_select(self) -> None:
         # The anti-"No disponible" assertion: a fixed/single-value option creates NO
