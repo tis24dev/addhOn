@@ -239,6 +239,43 @@ class SchemaValueTest(unittest.TestCase):
         self.assertEqual("3", param.schema_value)
 
 
+class EnumResetReproducesConstructionTest(unittest.TestCase):
+    """`reset()` must leave an enum exactly as construction left it.
+
+    `reset()` re-runs `_set_attributes()` and nothing else (`base.py`), so whatever
+    `__init__` does AFTER that call is not reproduced. The enum appends there a
+    `defaultValue` that is not among `enumValues`, which is the shape the real washing
+    machine ships: `startProgram.programFamily` declares `['dashboard','smart']` with
+    `defaultValue` `'[dashboard|smart]'` (23 such nodes across the JSON corpus). A reset
+    parameter therefore held a value outside its own `values`, and re-writing it raised.
+
+    Nothing calls `reset()` today, which is why this was invisible; the per-programme
+    rebuild of issue #98 is the first caller.
+    """
+
+    _PROGRAM_FAMILY = {"category": "command", "typology": "enum", "mandatory": 0,
+                       "defaultValue": "[dashboard|smart]",
+                       "enumValues": ["dashboard", "smart"]}
+
+    def test_reset_keeps_the_out_of_list_default_among_the_values(self) -> None:
+        param = NaEnum("programFamily", dict(self._PROGRAM_FAMILY), "grp")
+        self.assertEqual(["dashboard", "smart", "dashboard_smart"], param.values)
+        param.reset()
+        self.assertEqual(["dashboard", "smart", "dashboard_smart"], param.values)
+
+    def test_the_value_a_reset_leaves_is_accepted_by_its_own_setter(self) -> None:
+        # The rebuild applies the buffered options onto these same parameters immediately
+        # after resetting them, so a value the setter refuses aborts the whole Start.
+        param = NaEnum("programFamily", dict(self._PROGRAM_FAMILY), "grp")
+        param.reset()
+        # What a reset leaves on the wire is the RAW schema form, which is what the real
+        # bodies carry (`programFamily: "[dashboard|smart]"`); only an explicit write
+        # through the setter replaces it with the normalized one.
+        self.assertEqual("[dashboard|smart]", param.intern_value)
+        param.value = param.value
+        self.assertEqual("dashboard_smart", param.value)
+
+
 class RangeGridSetterTest(unittest.TestCase):
     """Regression for the x100 modulo grid-check bug: an on-grid setpoint with a
     non-zero min and a decimal step (e.g. 20.1 on 20..25 step 0.1) was wrongly

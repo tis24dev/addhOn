@@ -37,8 +37,6 @@ class HonParameterEnum(HonParameter):
         self._value: str | float = ""
         self._values: list[str] = []
         self._set_attributes()
-        if self._default and clean_value(self._default) not in self.values:
-            self._values.append(str(self._default))
 
     def _set_attributes(self) -> None:
         super()._set_attributes()
@@ -55,6 +53,15 @@ class HonParameterEnum(HonParameter):
             self._values = [str(v) for v in raw_values]
         else:
             self._values = []
+        # A `defaultValue` the schema does not repeat in `enumValues` is still selectable:
+        # it is what `_set_attributes` just seeded `_value` with, and a value outside its
+        # own `values` is refused by this class's own setter. Real shape, 23 nodes in the
+        # corpus: the washing machine's `startProgram.programFamily` declares
+        # `['dashboard','smart']` with `defaultValue` `'[dashboard|smart]'`.
+        # It lives HERE and not in `__init__` so `reset()` -- which re-runs this method
+        # alone -- reproduces construction exactly (issue #98's per-program rebuild).
+        if self._default and clean_value(self._default) not in self.values:
+            self._values.append(str(self._default))
 
     def __repr__(self) -> str:
         return f"{self.__class__} (<{self.key}> {self.values})"
