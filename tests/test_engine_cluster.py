@@ -1191,6 +1191,93 @@ class ConfigRuleTest(unittest.TestCase):
         self.assertEqual(c.parameters["remoteVisible"].value, 0)
 
 
+class RebuildFromSchemaTest(unittest.TestCase):
+    """`HonCommand.rebuild_from_schema()`: put a program category back to the state it was
+    built in, which is what the hOn app gets for free.
+
+    The app rebuilds its whole parameter map from `dictionaryParameters` every time a
+    program is opened (`openProgramEpic` @3618118-3618266) and throws it away on unmount,
+    so what it displays and what it sends can never drift apart. Our categories instead
+    live for the whole config entry and are written by the Start path, by the command
+    history recovery and by the favourites, with nothing ever resetting one.
+
+    Full analysis: apk/analysis/issue98-99-program-options-and-wd-dry.md section 9.
+    """
+
+    _ATTRS = {
+        "parameters": {
+            "spinSpeed": {"typology": "enum", "category": "command", "mandatory": 0,
+                          "defaultValue": "400", "enumValues": ["0", "400", "1400"]},
+            "temp": _range(default="20", lo="16", hi="30", inc="1"),
+        },
+    }
+
+    def _command(self) -> NaCommand:
+        return NaCommand("startProgram", json.loads(json.dumps(self._ATTRS)),
+                         FakeAppliance(), category_name="PROGRAMS.WM.DELICATE")
+
+    def test_a_value_a_previous_start_left_behind_is_put_back(self) -> None:
+        # The section 8.5.3 repro: the user ran this program at 1400 once, and every later
+        # Start carried 1400 because nothing resets the category.
+        command = self._command()
+        command.parameters["spinSpeed"].value = "1400"
+        self.assertTrue(command.rebuild_from_schema())
+        self.assertEqual("400", command.parameters["spinSpeed"].intern_value)
+
+    def test_the_rebuild_keeps_the_category_identity(self) -> None:
+        command = self._command()
+        command.mark_selected_explicitly()
+        command.rebuild_from_schema()
+        self.assertEqual("PROGRAMS.WM.DELICATE", command.category)
+        self.assertTrue(command.selected_explicitly)
+
+    def test_the_program_parameter_survives_the_rebuild(self) -> None:
+        # `HonParameterProgram` is a VIEW over the command's categories, built on an empty
+        # attributes dict: resetting it from its schema would blank the selected program
+        # and its typology, and `name_for_code` trusts both.
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        start = app.commands["startProgram"]
+        program = start.parameters["program"]
+        selected = program.value
+        start.rebuild_from_schema()
+        self.assertEqual(selected, program.value)
+        self.assertEqual("enum", program.typology)
+
+    def test_a_favourite_category_is_refused(self) -> None:
+        # A favourite IS the user's saved choice, so rebuilding it would erase the thing
+        # the user asked for. The app agrees: opening a favourite feeds the saved values
+        # into `setValue`'s highest-precedence slot instead of reading the schema.
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=_RICH_FAVOURITES))
+        fav = app.commands["startProgram"].categories["MyFav"]
+        self.assertFalse(fav.rebuild_from_schema())
+        self.assertEqual(7.0, float(fav.parameters["tempSel"].value))
+
+    def test_the_static_config_pin_is_reapplied(self) -> None:
+        # `$installationType` is a persistent device property, not a user choice: a plain
+        # reset would hand back the schema default and undo the pin.
+        command = NaCommand("c", json.loads(json.dumps(_AC_SELF_CLEAN)), _ConfigApp("1toN"),
+                            category_name="PROGRAMS.AC.IOT_SELF_CLEAN")
+        self.assertEqual(0, command.parameters["remoteVisible"].value)
+        command.rebuild_from_schema()
+        self.assertEqual(0, command.parameters["remoteVisible"].value)
+
+    def test_the_rebuild_does_not_duplicate_the_triggers(self) -> None:
+        # Re-running the whole `patch()` would re-register every rule on top of the ones
+        # `__init__` already attached, so one write would fire its cascade twice.
+        attrs = {
+            "parameters": {
+                "mode": _enum("cold", ["cold", "hot"]),
+                "temp": _range(default="20", lo="16", hi="30", inc="1"),
+            },
+            "rules": {"r": _rule({"temp": {"mode": {"hot": {"typology": "fixed", "fixedValue": "28"}}}})},
+        }
+        command = NaCommand("c", json.loads(json.dumps(attrs)), FakeAppliance())
+        before = len(command.parameters["mode"]._triggers.get("hot", []))
+        self.assertEqual(1, before)
+        command.rebuild_from_schema()
+        self.assertEqual(before, len(command.parameters["mode"]._triggers.get("hot", [])))
+
+
 class _HassStub:
     async def async_add_executor_job(self, fn, *a):
         import concurrent.futures
