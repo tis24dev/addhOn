@@ -9,29 +9,80 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 ## [Unreleased]
 
-**New Features**
+**Changes**
 
-- **A fridge's modes are no longer one dropdown** (#93). Super Cool, Super Freeze,
-  Auto-set and Holiday are four separate settings on the appliance, not four values of
-  one setting: the reporter pointed out that the app lets My Zone sit at 0 °C while
-  Super Cool runs, and the appliance's own command catalogue agrees -- each mode writes
-  exactly one register and clears nothing else. They are now four switches, one per
-  mode, that can be on together. Turning one off clears only that mode, which is what
-  the official app does and what the single dropdown did not: its "off" sent the reset
-  that clears all four at once, so switching Super Cool off also switched Auto-set,
-  Super Freeze and Holiday off.
-- The **My Zone drawer's mode is now settable** on the fridges whose catalogue carries
-  it -- 0 °C fresh, Quick cool, Fruit and vegetables. It has no "off" because the
-  appliance has none: the drawer is always in one of its own modes.
-- The fridge's **downloaded presets** (Daily use, Extra cold, Extra ice, High
-  efficiency, Special food) each get a **button** that sends the preset. They are
-  buttons and not switches because the appliance keeps no record of which one ran: the
-  official app can only show the last one you sent from that phone.
-- **Zone temperatures are set with a slider** instead of a free-text box, over exactly
-  the degrees the appliance allows -- 1 to 9 for the fridge zone, -24 to -14 for the
-  freezer on the reported model. The wine cooler, the oven and the cooker hood keep the
-  box, and so does a zone whose temperatures the appliance publishes as a fixed list of
-  choices.
+- **Picking a programme now presets the options that programme calls for** (#98). With a
+  programme selected and an option you have not touched, the switches, the dropdowns and
+  the delayed start show what THAT programme prescribes instead of the settings the last
+  cycle finished with: choosing a programme that calls for an extra rinse turns the extra
+  rinse on. Anything you set yourself still wins, and with no programme selected nothing
+  changes at all.
+- **Starting a programme you have just re-selected no longer repeats your last cycle.**
+  The options of a programme were kept from the last time you ran it and sent again on
+  every later start, whatever the programme itself says, because nothing ever put them
+  back. Re-selecting a programme now starts it at its own settings. The two ways to
+  repeat a cycle are unchanged and are the ones the official app has: press start
+  WITHOUT re-selecting the programme, or use a favourite, which is never rebuilt.
+
+## [5.24.0] - 2026-09-09
+
+**Changes**
+
+- **The device diagnostics now report what each programme would START an option at**,
+  not just whether the option exists. The section shipped in 5.23.0 printed a value only
+  for the options a programme pins, so for a settable one it said the control is there
+  and never what the programme would set it to -- which is the half that matters for
+  #98. Both lists now carry a value, and both read it from the appliance's own catalogue
+  rather than from the running command: a dump taken after a cycle would otherwise report
+  your own past choice as the programme's prescription. An option the catalogue says
+  nothing about is reported as nothing, instead of the placeholder the engine keeps
+  internally so its readings are never empty.
+
+**Fixes**
+
+- A MAC address sitting exactly on the length limit of a reported value could be cut
+  before it was masked, and travel in the clear. It is masked first now.
+
+## [5.23.0] - 2026-09-08
+
+**Fixes**
+
+- **The washer's option controls described the wrong programme** (#98). Selecting
+  "Delicati" and then "Intensivo 40 C" left every spin speed, temperature, soil level and
+  delayed-start bound exactly as it was: none of the three control types looked at the
+  programme you had picked. Selecting a programme stores your choice and swaps nothing --
+  the swap happens when you press start -- and on every load addhOn re-points the start
+  command at the programme the cloud last accepted, so the controls were describing the
+  cycle that had FINISHED. Proven in the debug log attached to the issue: the appliance
+  reported the same finished programme on all seven polls while the pending choice moved
+  through five different ones, and the delayed-start bounds offered for the whole session
+  were the finished cycle's. Each control now reads the schema of the programme you
+  selected, which the appliance publishes per programme and addhOn already held in
+  memory -- and which is where the official app rebuilds its own option list from on
+  every programme change.
+
+**Changes**
+
+- The device diagnostics gained a section listing, per programme, which options that
+  programme exposes, which it pins and which it leaves settable. It is what made the
+  above provable on a real appliance instead of on a fixture.
+
+## [5.22.1] - 2026-09-05
+
+**Fixes**
+
+- **A washer-dryer's wash-and-dry programmes no longer start as wash-only** (#99). The
+  drying level was being forced to zero, and locked there, before you ever saw the
+  control: every wash-and-dry programme carries a rule that reads "with the dry option
+  off, the dry level is zero", and addhOn was applying it while it built the command
+  rather than when something actually switched the dry option. The official app never
+  applies that rule -- it ships on the programmes that CAN dry, and it describes where
+  the dry switch starts, not what the programme is allowed to do. Rules now apply when a
+  value changes, which is what they are for. Setting a dry level that the appliance
+  accepts no longer fails with "Allowed values: ['0']", and a wash-and-dry cycle runs the
+  drying it was asked for.
+
+## [5.22.0] - 2026-09-05
 
 **Changes**
 
@@ -58,6 +109,8 @@ the notes were generated automatically carry a link to their diff instead of a s
   code, its firmware and series identifiers and the catalogue itself.
 - Failing to write the catalogue cache no longer discards a catalogue that was fetched
   successfully, and an unchanged cache is no longer re-serialized on every poll.
+- A Hong Kong installation asks the catalogue endpoint for `zh-hk` instead of having its
+  language truncated to `zh`.
 - **A fridge's drawer is recognised from the setting the app itself reads.** Some
   refrigerators describe the My Zone drawer only through the `tempSelZ3` setting -- as a
   list of choices, which is exactly where the official app takes the drawer's mode list
@@ -85,55 +138,11 @@ the notes were generated automatically carry a link to their diff instead of a s
   same appliance also gets a control for them. That was written once and never revisited,
   so an appliance that later started up without its command catalogue lost the control
   and kept the reading hidden -- both gone, with nothing said. The reading is now given
-  back whenever its control is missing. A reading you disabled yourself stays disabled.
-- The single fridge **program dropdown is no longer created** where the per-mode
-  controls above can be built, which is every fridge we have seen a diagnostics dump
-  for. Automations calling `select.select_option` on it must move to the new switches,
-  to the My Zone select, or to the preset buttons. It stays, unchanged, on a fridge
-  whose catalogue offers only downloaded presets.
-- The four fridge mode **readings** (`binary_sensor`) stay, and are **hidden by default
-  on a new install only where a switch really replaces them** — a fridge whose appliance
-  cannot clear a given mode on its own keeps that reading visible, because nothing there
-  took its place. Nobody loses one either way: a reading already in your registry keeps
-  working, and a hidden one is one click away in the entity settings.
-- The four readings are also **renamed** — "Super cool (reading)" and so on — so the
-  reading and the switch that acts on the same mode are no longer two entities with one
-  name on the same device.
-- The zone **setpoint controls are renamed** to say what they are ("Zone 1 target
-  temperature"), which they previously shared word for word with the measured-temperature
-  sensor beside them.
-- **The old program dropdown is removed from the entity registry** where it was replaced,
-  instead of being left behind as an unavailable entity with a "?" badge, and a **repair
-  notice** tells you it happened and what replaced it. Worth reading if you automated it:
-  a call to an entity that no longer exists does not fail — Home Assistant logs a warning
-  and reports the service call as successful, so the automation keeps running and does
-  nothing. The removal is deliberate and cannot be undone: the entity's history ends
-  there. On a fridge that keeps the dropdown, nothing is touched.
+  back whenever its control is missing. A reading you disabled yourself stays disabled,
+  and one given back keeps the name your own registry row carries.
 
 **Fixes**
 
-- **A washer-dryer's wash-and-dry programmes no longer start as wash-only** (#99). The
-  drying level was being forced to zero, and locked there, before you ever saw the
-  control: every wash-and-dry programme carries a rule that reads "with the dry option
-  off, the dry level is zero", and addhOn was applying it while it built the command
-  rather than when something actually switched the dry option. The official app never
-  applies that rule -- it ships on the programmes that CAN dry, and it describes where
-  the dry switch starts, not what the programme is allowed to do. Rules now apply when a
-  value changes, which is what they are for. Setting a dry level that the appliance
-  accepts no longer fails with "Allowed values: ['0']", and a wash-and-dry cycle runs the
-  drying it was asked for.
-- **The My Zone mode sensor is removed from the registry** where the writable select
-  replaced it, instead of being left behind unavailable under the same name as its
-  replacement. Only there: a fridge that gets the mode switches but has no drawer
-  programs keeps its sensor, because nothing took its place.
-- **A four-door fridge now gets its fourth door** (discussion #94). The zone was already
-  reporting its temperature; only the door was missing, on an appliance that publishes it.
-- **My Zone mode no longer reports a whole-appliance preset as the drawer's state.** On
-  a fridge whose downloaded presets also write the drawer's register, the mode sensor
-  answered with the first preset that happened to write the same number.
-- **A drawer that has modes no longer also offers a target temperature.** On the models
-  that declare both, two controls wrote one register and the temperature one published
-  0, 2 or 5 as degrees Celsius — "a drawer set to 0 °C fresh reads 0 °C".
 - **A zone temperature is no longer accepted and then silently undone.** Auto set, Super
   cool and Holiday each pin the fridge zone to a temperature of the appliance's choosing;
   a value sent from Home Assistant was taken by the cloud and overwritten by the
@@ -148,6 +157,109 @@ the notes were generated automatically carry a link to their diff instead of a s
 - **A refused fridge command is reported in your language.** Starting a mode that the
   cloud rejected produced an untranslated "Can't send command"; switching one off, on the
   same appliance, produced a proper message. Both now answer the same way.
+
+## [5.21.1] - 2026-08-28
+
+**Fixes**
+
+- **The My Zone mode reading is kept, hidden, instead of being deleted** (#93). 5.21.0
+  removed it from the registry wherever the new writable selector replaced it, which ends
+  its history and cannot be undone. It is now hidden instead: the duplicate disappears
+  from the dashboard just the same, the recorded history survives, and one click in the
+  entity settings brings it back.
+
+## [5.21.0] - 2026-08-28
+
+**New Features**
+
+- **A fridge's modes are no longer one dropdown** (#93). Super Cool, Super Freeze,
+  Auto-set and Holiday are four separate settings on the appliance, not four values of
+  one setting: the reporter pointed out that the app lets My Zone sit at 0 °C while
+  Super Cool runs, and the appliance's own command catalogue agrees -- each mode writes
+  exactly one register and clears nothing else. They are now four switches, one per
+  mode, that can be on together. Turning one off clears only that mode, which is what
+  the official app does and what the single dropdown did not: its "off" sent the reset
+  that clears all four at once, so switching Super Cool off also switched Auto-set,
+  Super Freeze and Holiday off.
+- The **My Zone drawer's mode is now settable** on the fridges whose catalogue carries
+  it -- 0 °C fresh, Quick cool, Fruit and vegetables. It has no "off" because the
+  appliance has none: the drawer is always in one of its own modes.
+- The fridge's **downloaded presets** (Daily use, Extra cold, Extra ice, High
+  efficiency, Special food) each get a **button** that sends the preset. They are
+  buttons and not switches because the appliance keeps no record of which one ran: the
+  official app can only show the last one you sent from that phone.
+- **Zone temperatures are set with a slider** instead of a free-text box, over exactly
+  the degrees the appliance allows -- 1 to 9 for the fridge zone, -24 to -14 for the
+  freezer on the reported model. The wine cooler, the oven and the cooker hood keep the
+  box, and so does a zone whose temperatures the appliance publishes as a fixed list of
+  choices.
+
+**Changes**
+
+- The single fridge **program dropdown is no longer created** where the per-mode
+  controls above can be built, which is every fridge we have seen a diagnostics dump
+  for. Automations calling `select.select_option` on it must move to the new switches,
+  to the My Zone select, or to the preset buttons. It stays, unchanged, on a fridge
+  whose catalogue offers only downloaded presets.
+- The four fridge mode **readings** (`binary_sensor`) stay, and are **hidden by default
+  on a new install only where a switch really replaces them** -- a fridge whose appliance
+  cannot clear a given mode on its own keeps that reading visible, because nothing there
+  took its place. Nobody loses one either way: a reading already in your registry keeps
+  working, and a hidden one is one click away in the entity settings.
+- The four readings are also **renamed** -- "Super cool (reading)" and so on -- so the
+  reading and the switch that acts on the same mode are no longer two entities with one
+  name on the same device.
+- The zone **setpoint controls are renamed** to say what they are ("Zone 1 target
+  temperature"), which they previously shared word for word with the measured-temperature
+  sensor beside them.
+- **The old program dropdown is removed from the entity registry** where it was replaced,
+  instead of being left behind as an unavailable entity with a "?" badge, and a **repair
+  notice** tells you it happened and what replaced it. Worth reading if you automated it:
+  a call to an entity that no longer exists does not fail -- Home Assistant logs a warning
+  and reports the service call as successful, so the automation keeps running and does
+  nothing. The removal is deliberate and cannot be undone: the entity's history ends
+  there. On a fridge that keeps the dropdown, nothing is touched.
+
+**Fixes**
+
+- **A four-door fridge now gets its fourth door** (discussion #94). The zone was already
+  reporting its temperature; only the door was missing, on an appliance that publishes it.
+- **My Zone mode no longer reports a whole-appliance preset as the drawer's state.** On
+  a fridge whose downloaded presets also write the drawer's register, the mode sensor
+  answered with the first preset that happened to write the same number.
+- **A drawer that has modes no longer also offers a target temperature.** On the models
+  that declare both, two controls wrote one register and the temperature one published
+  0, 2 or 5 as degrees Celsius -- "a drawer set to 0 °C fresh reads 0 °C".
+- A favourite you saved on the appliance is no longer mistaken for one of its standard
+  programs by the classifiers that decide which controls to build.
+
+## [5.20.0] - 2026-08-27
+
+**New Features**
+
+- **A fridge reports its fault register and its My Zone drawer mode** (#93), two values
+  the appliance publishes and addhOn had never read.
+
+**Changes**
+
+- **The two debug switches are now admin-only** (#92, raised in the HACS default review).
+  They write the same process-wide log level the debug services do, and those services
+  were already admin-only, so the two routes to one capability disagreed about who may
+  use it. The Reset debug button stays open on purpose: it only turns the logging off.
+- **The diagnostics no longer accuse your appliance of hiding fields addhOn itself
+  wrote** (#93). The reporter's fridge dump listed five values as "returned by the API
+  and unmapped", and three of them were addhOn's own output, written into the same
+  dictionary a moment before the dump read it. Those names are now reported separately
+  and kept out of the coverage ratio, so the one list the section calls its gold signal
+  measures the device again.
+- Two of those three, a per-zone mode addhOn derived itself, are **gone** (#93). Haier
+  publishes no such field -- it appears nowhere in the official app -- nothing in addhOn
+  ever read them, and the per-zone mode the app really does compute follows different
+  rules per zone and per model, so a flat two-zone table was wrong for a whole family of
+  appliances.
+- The supported-devices and tested-hardware section was removed from the README, and
+  CONTRIBUTING no longer tells contributors to bump the manifest version by hand: the
+  release automation writes it and refuses a release whose manifest and tag disagree.
 
 ## [5.19.2] - 2026-08-26
 
@@ -202,6 +314,38 @@ the notes were generated automatically carry a link to their diff instead of a s
   declaration, not a choice of this integration: its stop command pins the light to `"0"`
   as a fixed value. Stopping only the fan, with the light left alone, is what the fan
   entity now does — this note replaces the 5.18.0 one that described the old behaviour.
+
+## [5.19.0] - 2026-08-24
+
+**New Features**
+
+- **The account's own Download diagnostics button returns the account dump.** It could
+  only ever answer `{"generated_at": ...}`, on every install, and hardest in the one case
+  it matters most: on an account with no appliances that service device is the only
+  device there is, so its broken button was the only button to press. It is how an empty
+  report reached us instead of the self-contained dump 5.17.0 had shipped for exactly
+  that situation.
+- **An account that owns nothing is now told apart from a module that failed and from a
+  session that resolved to somebody else's account.** All three used to produce the same
+  sentence -- the cloud answered, the list was empty -- and an investigation open for
+  weeks could not separate them from a dump. The report now carries what the cloud itself
+  declared about the call, whether the appliance-list module reported success, whether the
+  server handed back a replacement token, and whether our own session identity matches the
+  appliances returned. No key name and no value from any of it: a count and a verdict.
+  Family sharing is not a fault, and the wording says so -- an appliance shared with you
+  is stamped with its owner's account, which is normal and is reported as a boundary, not
+  as a diagnosis.
+
+**Fixes**
+
+- **A malformed appliance list can no longer take the whole integration down.** The
+  parser promised to answer with an empty list on any unexpected shape and did not keep
+  the promise for one shape, which escaped as an error out of setup naming nothing a
+  reporter could act on.
+- **The logs describe a rejected response without quoting it.** A public warning carries
+  the shape of what arrived rather than a masked copy of the body, a value that happens to
+  be used as a key is redacted like any other value, and the summary's own key names
+  follow the same rule.
 
 ## [5.18.0] - 2026-08-24
 
