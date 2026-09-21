@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import sys
 import unittest
 from dataclasses import FrozenInstanceError
@@ -499,6 +500,97 @@ class ApplianceAtomicAdoptionTest(unittest.TestCase):
         self.assertIs(appliance.commands, old_commands)
         self.assertIs(appliance.additional_data, old_additional)
         self.assertIs(appliance._appliance_model, old_model)  # noqa: SLF001
+
+
+class CatalogOptionsSiblingTest(unittest.TestCase):
+    """CHARACTERISATION: what this loader does with an `options` sibling at the top level.
+
+    Not an endorsement and not a fix. It is pinned because the diagnostics section that
+    reports on that sibling (`appliance_options.catalog_sibling`) chose its vocabulary
+    from this behaviour -- it can say a sibling EXISTED and never what it said -- and a
+    promise that weak has to rest on a measurement rather than on a reading.
+
+    There are TWO copies of the slot -> option-name map in a `/commands` response and the
+    official app reads the one destroyed here. `formatApplianceCommandsObject`
+    (@decomp.txt:1787183) and `storeModelAndCommandsInDatabase` (@decomp.txt:1786966)
+    both dereference `payload.options`, one level up from `applianceModel.options`, and
+    every real capture in this repository carries both -- tests/fixtures/ref_10136/
+    commands.json has top-level keys `applianceModel settings stopProgram startProgram
+    options dictionaryId`, with `options` empty there and in the model alike.
+
+    `_hydrate` pops only `applianceModel`, so the sibling reaches `_get_commands`, which
+    treats every remaining top-level key as a command. `options` is a dict with neither
+    `description` nor `protocolType`, so `_parse_categories` descends into it and
+    `_parse_command` writes each non-dict LEAF to `_additional_data["options"]` in turn:
+    last write wins, and a map of eight slots arrives as one string with the slots -- the
+    entire datum -- gone.
+
+    The day this loader lifts `options` out of the candidate the way it already lifts
+    `applianceModel`, these tests are what says so out loud instead of a dump quietly
+    changing shape.
+    """
+
+    def _additional_data(self, sibling: Any) -> dict:
+        loader = HonCommandLoader(None, ApplianceDouble(appliance_type="DW"))
+        loader._parse_candidate({"options": sibling}, {})  # noqa: SLF001
+        return loader.additional_data
+
+    def test_a_slot_map_arrives_flattened_to_its_last_value(self) -> None:
+        # The real dryer map, trailing space included, reduced to one option name.
+        self.assertEqual(
+            {"options": "photoPlasmaStatus"},
+            self._additional_data(
+                {
+                    "opt1 ": "anticrease",
+                    "opt2": "dryingManager",
+                    "opt5": "photoPlasmaStatus",
+                }
+            ),
+        )
+
+    def test_an_identity_map_is_flattened_the_same_way(self) -> None:
+        # The washer maps every name onto itself, which changes nothing: the loader is
+        # blind to what the mapping MEANS, only to how deep it is.
+        self.assertEqual(
+            {"options": "nightWashStatus"},
+            self._additional_data({"nightWashStatus": "nightWashStatus"}),
+        )
+
+    def test_the_flattening_follows_nesting_to_the_deepest_leaf(self) -> None:
+        # Not one level: `_parse_command` recurses, and the key it writes under stays the
+        # TOP-level name the whole way down.
+        self.assertEqual({"options": 1}, self._additional_data({"opt1": {"a": 1}}))
+
+    def test_an_empty_sibling_leaves_no_trace_at_all(self) -> None:
+        # The ambiguity the diagnostics section has to own: a sibling that was empty and
+        # a payload that never carried one are indistinguishable downstream. Both real
+        # captures in this repository are this case.
+        self.assertEqual({}, self._additional_data({}))
+
+    def test_a_non_mapping_sibling_is_stored_verbatim(self) -> None:
+        self.assertEqual({"options": "opt1"}, self._additional_data("opt1"))
+        self.assertEqual({"options": ["opt1"]}, self._additional_data(["opt1"]))
+        self.assertEqual({"options": None}, self._additional_data(None))
+
+    def test_the_sibling_never_becomes_a_command(self) -> None:
+        # It carries neither `description` nor `protocolType`, so `_is_command` refuses
+        # it and no `options` command is invented out of catalogue metadata.
+        loader = HonCommandLoader(None, ApplianceDouble(appliance_type="DW"))
+        loader._parse_candidate({"options": {"opt1": "prewash"}}, {})  # noqa: SLF001
+        self.assertEqual({}, loader.commands)
+
+    def test_the_sibling_survives_the_transport_normalisation(self) -> None:
+        # `extract_command_catalog` strips only `resultCode`, so whatever the cloud put
+        # beside `applianceModel` reaches the loader. Without this the tests above would
+        # be pinning a shape the transport never delivers.
+        payload = json.loads(
+            (Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "ref_10136" / "commands.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIn("options", payload)
+        self.assertIn("options", payload.get("applianceModel", {}))
+
 
 
 if __name__ == "__main__":

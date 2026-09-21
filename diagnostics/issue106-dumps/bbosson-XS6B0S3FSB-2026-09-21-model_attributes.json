@@ -1,0 +1,23 @@
+{
+  "upRackVol": "27600",
+  "series": "h20",
+  "sensor": "salt|smartLoading|rinse",
+  "remainingTime": "remainingTime+remainingTimeOpts",
+  "placeSetting": "16",
+  "option": "openDoor|express|tabStatus|extraDry|halfLoadPro|hygiene|intensive|openDoorCommand|totalCare",
+  "optCompatibility": "eyJmdW5jdGlvbmFsSWQiOnsiNnwxOHw3fDh8MTV8MTYiOnsib3B0NSI6IjAiLCJvcHQ0IjoiMCJ9LCI2fDE4fDE2fDN8NXw0fDEyIjp7Im9wdDIiOiIwIn0sIjZ8MTh8N3w4fDE1fDE2fDN8NXw0fDEyIjp7Im9wdDMiOiIwIn0sIjl8NnwxOHw3fDh8MTN8MTZ8NSI6eyJvcHQ3IjoiMCJ9LCI2fDE4fDd8OHwxNnwzfDV8NCI6eyJvcHQ4IjoiMCJ9LCI5fDEzfDEyIjp7Im9wdDgiOnsidGFiU3RhdHVzIjoiMCJ9LCJ0YWJTdGF0dXMiOnsib3B0OCI6IjAifX0sIjciOnsib3B0MiI6eyJ0YWJTdGF0dXMiOiIwIn0sInRhYlN0YXR1cyI6eyJvcHQyIjoiMCJ9fSwiOSI6eyJvcHQzIjp7Im9wdDgiOiIwIn0sIm9wdDgiOnsib3B0MyI6IjAifX0sIjEyIjp7Im9wdDciOnsib3B0OCI6IjAifSwib3B0OCI6eyJvcHQ3IjoiMCJ9fSwiOXw2fDE4fDd8OHwxNnwzfDV8NCI6eyJvcHQ4IjoiMCJ9LCI5fDEyIjp7Im9wdDUiOnsidGFiU3RhdHVzIjp7Im9wdDgiOiIwIn0sIm9wdDgiOnsidGFiU3RhdHVzIjoiMCJ9fSwib3B0NSI6eyJvcHQ4IjoiMCJ9LCJvcHQ4Ijp7Im9wdDUiOiIwIn0sIm9wdDQiOnsib3B0OCI6IjAifSwib3B0OCI6eyJvcHQ0IjoiMCJ9LCJvcHQ4Ijp7InRhYlN0YXR1cyI6eyJvcHQ1IjoiMCJ9LCJvcHQ1Ijp7InRhYlN0YXR1cyI6IjAifX0sInRhYlN0YXR1cyI6eyJvcHQ1Ijp7Im9wdDgiOiIwIn0sIm9wdDgiOnsib3B0NSI6IjAifX19LCI5fDEzIjp7InRhYlN0YXR1cyI6eyJvcHQyIjp7Im9wdDgiOiIwIn0sIm9wdDgiOnsib3B0MiI6IjAifX0sIm9wdDIiOnsidGFiU3RhdHVzIjp7Im9wdDgiOiIwIn0sIm9wdDgiOnsidGFiU3RhdHVzIjoiMCJ9fSwib3B0OCI6eyJ0YWJTdGF0dXMiOnsib3B0MiI6IjAifSwib3B0MiI6eyJ0YWJTdGF0dXMiOiIwIn19fX19",
+  "motor": "bldc",
+  "lowRackVol": "49400",
+  "lowerBarrierDate": "2204",
+  "interfaceType": "series|installationType|display|option",
+  "installationType": "bi",
+  "enrollmentType": "3.3",
+  "drawer": "3",
+  "display": "6D",
+  "serviceability": "ble",
+  "fwLabel": "iotfw_ec3",
+  "counters": "1",
+  "endOfCycleLock": "0",
+  "iot": "hOn",
+  "basketVol": "12700"
+}
