@@ -590,6 +590,18 @@ class CatalogOptionsSiblingTest(unittest.TestCase):
         )
         self.assertIn("options", payload)
         self.assertIn("options", payload.get("applianceModel", {}))
+        # Asserting on the fixture alone pinned the CLOUD's shape and nothing of ours:
+        # a normalisation that started dropping unknown top-level keys would have left
+        # this test green while `appliance_options.catalog_sibling` lost the only
+        # evidence it reports. Driving the real extractor is what makes the claim in the
+        # comment above true (PR #107 review, coderabbitai).
+        normalised = extract_command_catalog(
+            {"payload": {**payload, "resultCode": "0"}},
+            status=200,
+            request=_request(ApplianceDouble()),
+        )
+        self.assertIn("options", normalised.payload)
+        self.assertIn("options", normalised.payload.get("applianceModel", {}))
 
 
 

@@ -1600,11 +1600,25 @@ def _slot_index(rows: Mapping) -> tuple:
     by_slot: dict = {}
     by_name: dict = {}
     ambiguous: dict = {}
-    for slot, name in rows.items():
-        if not isinstance(slot, str) or not isinstance(name, str):
-            continue
-        for spelling in (slot, slot.strip()):
-            by_slot.setdefault(spelling, (slot, name))
+    pairs = [
+        (slot, name)
+        for slot, name in rows.items()
+        if isinstance(slot, str) and isinstance(name, str)
+    ]
+    # TWO passes, and the order between them is the whole point. Registering both
+    # spellings of a row together lets the STRIPPED form of one row occupy the exact key
+    # of another: given `{"opt1 ": "anticrease", "opt1": "other"}` the padded row files
+    # itself under `opt1` first, `setdefault` then refuses the row that is really named
+    # that, and a schema parameter spelled `opt1` resolves to the other row's alias --
+    # a confident wrong slot in the one section whose contract is to print `null`
+    # instead. Raw spellings are claimed first and outright, stripped ones only fill
+    # what nobody claimed, which is the "raw wins a collision" the docstring promises
+    # (PR #107 review, greptile-apps and coderabbitai, same line independently).
+    for slot, name in pairs:
+        by_slot[slot] = (slot, name)
+    for slot, name in pairs:
+        by_slot.setdefault(slot.strip(), (slot, name))
+    for slot, name in pairs:
         if name in ambiguous:
             ambiguous[name].append(slot)
             continue

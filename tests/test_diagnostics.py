@@ -9112,6 +9112,29 @@ class OptionSlotsTest(unittest.TestCase):
             block["params"]["opt1"],
         )
 
+    def test_a_padded_row_cannot_steal_the_key_another_row_really_has(self):
+        # The test above and this one are the two halves of the same rule, and only the
+        # first half was ever checked. When BOTH spellings arrive, the stripped form of
+        # the padded row used to claim `opt1` before the row honestly named `opt1` could,
+        # so a schema parameter spelled `opt1` resolved to the other row's alias: a
+        # confident wrong slot in the one section whose contract is to print nothing
+        # rather than guess. Raw spellings now win outright (PR #107 review).
+        block = self._slots(
+            ["opt1"],
+            self._options(read={"opt1 ": "anticrease", "opt1": "dryingManager"}),
+        )
+        self.assertEqual(
+            {"slot": "opt1", "source": "options_read", "alias": "dryingManager"},
+            block["params"]["opt1"],
+        )
+        # The losing row is NOT reported as unresolved, and that is deliberate rather
+        # than an oversight of the fix: `unresolved_slots` asks whether a slot names
+        # something the schema lacks, and `"opt1 "` stripped is a parameter the schema
+        # has. It stays visible where the raw truth lives -- `appliance_options.read`
+        # prints every row verbatim -- so nothing the cloud sent leaves the document;
+        # the join simply has one correspondence to state and states it once.
+        self.assertNotIn("unresolved_slots", block)
+
     def test_an_identity_mapped_appliance_reads_as_one(self):
         # The real washer uses no slots: it maps every option name to itself. Rows whose
         # `slot` equals their own key ARE the finding, and the redundant `alias` is
