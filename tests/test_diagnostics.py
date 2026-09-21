@@ -8654,6 +8654,19 @@ class ApplianceOptionsTest(unittest.TestCase):
         self.assertEqual("unreadable", block["catalog_sibling"]["state"])
         self.assertEqual("unreadable", block["last_command"]["state"])
 
+    def test_a_surface_that_is_present_but_hostile_is_unreadable_too(self):
+        # Distinct from the test above, and the difference is where the failure sits.
+        # There the SURFACE raised, so nothing about the cloud could be read at all; here
+        # `additional_data` is a perfectly ordinary mapping whose `.get` is the thing that
+        # breaks -- the shape `_last_fetch` and `_freshness` already guard against on
+        # cloud-filled envelopes. Both answer `unreadable` rather than `absent`, because
+        # `absent` is a claim about what the vendor sent and this row cannot make it.
+        block = self._options(
+            OptionAppliance(options={}, additional_data=ExplodingMapping())
+        )
+        self.assertEqual("unreadable", block["catalog_sibling"]["state"])
+        self.assertEqual("empty", block["read"]["state"])
+
     def test_a_non_mapping_surface_is_unreadable_not_absent(self):
         # Two different findings. `absent` is the ordinary answer on every type with no
         # programme options; `unreadable` says the surface is there and holds something
@@ -9263,6 +9276,37 @@ class OptionSlotsTest(unittest.TestCase):
         )
         self.assertEqual({"slot": None, "source": "options_read"}, block["params"]["prewash"])
         self.assertEqual({"options_read": {"prewash": ["opt1", "opt9"]}}, block["ambiguous_slots"])
+
+    def test_a_third_slot_joins_the_conflict_instead_of_replacing_it(self):
+        # Two rows open a conflict, and every row after them has to be APPENDED to it.
+        # An implementation that reopened the list on each collision would keep only the
+        # last pair and print a conflict narrower than the one the cloud actually sent --
+        # a reader counting the slots would then believe one of the three is unclaimed.
+        block = self._slots(
+            ["prewash"],
+            self._options(read={"opt1": "prewash", "opt5": "prewash", "opt9": "prewash"}),
+        )
+        self.assertEqual({"slot": None, "source": "options_read"}, block["params"]["prewash"])
+        self.assertEqual(
+            {"options_read": {"prewash": ["opt1", "opt5", "opt9"]}},
+            block["ambiguous_slots"],
+        )
+
+    def test_an_options_section_that_is_not_a_mapping_costs_only_its_rows(self):
+        # `appliance_options` is built a few lines earlier in the same dump, so this can
+        # only happen if that section is ever made to degrade to something else. The join
+        # still has `union_params` and must answer with the half it has rather than take
+        # the appliance block down with it.
+        block = diagnostics._option_slots(
+            {"command": "startProgram", "union_params": ["prewash"]},
+            "not a mapping",
+            {"vocabulary": ["opt1"]},
+        )
+        self.assertEqual("startProgram", block["command"])
+        self.assertEqual(1, block["params_considered"])
+        self.assertEqual({}, block["params"])
+        self.assertEqual(["opt1"], block["matrix_only"])
+        self.assertEqual(0, block["matrix_matched"])
 
     def test_the_leftover_map_announces_a_truncation_as_a_sibling(self):
         # A sibling and not a key inside the map, for the reason
