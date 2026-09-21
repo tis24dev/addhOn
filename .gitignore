@@ -3,7 +3,15 @@
 BUG_FINDINGS.md
 __pycache__/
 *.py[cod]
-/diagnostics/
+# Contents rather than the directory itself, for the reason spelled out at
+# /.superpowers/ below: git never descends into an EXCLUDED directory, so a negation
+# inside one can never re-include anything. Everything under diagnostics/ stays local
+# EXCEPT issue106-dumps/, which the test suite reads directly -- four classes in
+# tests/test_diagnostics.py decode the one real optCompatibility matrix anyone has
+# captured, deliberately without a skip, so an ignored copy means a red CI on a clean
+# checkout (measured: 21 failures). The capture is redacted at source by the reporter.
+/diagnostics/*
+!/diagnostics/issue106-dumps/
 # Local working artifacts (not versioned)
 /apk/
 /docs/hon-internal-notes.md

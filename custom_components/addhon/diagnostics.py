@@ -18,6 +18,17 @@ Per appliance the dump carries, beyond the bare key list it used to emit:
                     zone-indexing report (issue #75) needs a round trip to the
                     reporter before it can even be diagnosed.
   * `attributes`  - the attribute VALUES (telemetry/state), recursively redacted;
+  * `appliance_options` / `opt_compatibility` / `option_slots` - the option
+                    VOCABULARY. The cloud names a programme option twice, by a long
+                    name in the command schema and by a legacy `opt1..opt11` slot on
+                    the wire, and the map between them is per-APPLIANCE cloud data
+                    that exists nowhere in the app binary and collides across families
+                    (`opt1` is `prewash` on a washer and `threeInOne` on a
+                    dishwasher). The first reports that map, the second decodes the
+                    base64 compatibility matrix that says which options may be
+                    combined, and the third joins both against the command schema.
+                    Without them no option name in `commands` or `program_options`
+                    could be matched to what the cloud accepts (issue #106).
   * `commands`    - the writable schema per command param: value + enum + min/max/
                     step + typology, so a maintainer sees the real ranges/options;
   * `coverage`    - the signal: which bare attribute keys and which writable command
@@ -51,7 +62,10 @@ appliance id): only the entity domain and the code-authored unique_id suffix.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import importlib
+import json
 import logging
 import re
 from collections.abc import Mapping
@@ -621,11 +635,655 @@ def _model_attributes(appliance) -> dict:
     normalised by the engine), not off the coordinator entry: it is per-model
     and immutable for the session, so it never belongs in the polled snapshot.
     Returns {} for any appliance implementation that does not expose it.
+
+    VERBATIM, and that is a contract rather than an omission. Some of the values the
+    cloud puts here are TRANSPORT ENVELOPES and not data: `optCompatibility` is a
+    base64 JSON document -- the option-incompatibility matrix the hOn app consults
+    before accepting a combination (`isCombinationAllowed` @decomp.txt:1761607), which
+    `_opt_compatibility` below decodes -- and the `remainingTime*` / `suggestedLoad*`
+    family are whole JSON documents shipped inside a string. An envelope survives a
+    length cap the way a sentence survives being cut in half: what arrives still LOOKS
+    like a value, so a reader, and the section built on it, would decode a truncated
+    matrix or fail to decode one with nothing in the dump saying why. A `truncated`
+    sibling flag does not rescue it either, because the reader's next step is a decode
+    rather than a read.
+
+    That is why there is no cap here and why adding one is not a size decision. The
+    scale is measured rather than assumed: the washer captured under
+    apk/dump/roberto_2026-09-11/ ships a SINGLE `remainingTimeMainWash` value of 19731
+    characters through this map, against which a real `optCompatibility` is 1180. Every
+    bound this module declares would destroy the matrix, which
+    `OptCompatibilityVerbatimTest` demonstrates rather than asserts, and
+    `base64.b64decode` with its DEFAULT `validate=False` would not even complain: it
+    silently discards the `***` a mask leaves behind and returns shorter, entirely
+    plausible bytes. The decode below therefore passes `validate=True`, so a masked or
+    trimmed value is REFUSED instead of half-read. Bounding this map is not forbidden;
+    bounding it without exempting the envelopes is, and the test says so out loud.
+
+    The privacy argument `_bounded_text` demands of every other unconstrained cloud
+    string is made here by the SOURCE rather than by a cap: these rows are the vendor's
+    per-MODEL catalogue, one row per thousands of identical appliances, so they carry no
+    per-unit identity to bound. `_redact` still walks them by key name.
     """
     raw = getattr(appliance, "model_attributes", None)
     if not isinstance(raw, Mapping):
         return {}
     return {str(name): value for name, value in raw.items()}
+
+
+# The three sections below turn one opaque cloud datum into something a maintainer can
+# read from a downloaded dump (issue #106). The cloud names a programme option TWICE --
+# a long name in the command schema (`prewash`, `hygiene`, `extraDry`) and a legacy slot
+# (`opt1..opt11`) on the wire -- and the map between the two is per-APPLIANCE cloud data
+# that exists nowhere in the app binary. We send that map back on every command
+# (`applianceOptions`, client/transport/api.py) and, until now, printed none of it; the
+# compatibility matrix that decides which options may be combined shipped as 1180
+# characters of base64 inside `model_attributes` and was equally unreadable.
+#
+# `appliance_options` REPORTS the map, `opt_compatibility` DECODES the matrix, and
+# `option_slots` further down JOINS the two against the command schema. Only the third
+# interprets, and it interprets nothing the first two have not already printed verbatim,
+# which is the property that makes it safe to ship: every row it emits can be rebuilt by
+# hand from two sections of the same file.
+
+# The bounds on `appliance_options`. Placed beside their only consumer rather than in the
+# bounds block near the top of the module, for the same reason `_PROGRAM_MATRIX_MAX_PROGRAMS`
+# is: a cap is only readable next to the thing it caps.
+#
+# Both are runaway guards that cannot reach a real value, and that margin is exactly what
+# lets this section call itself VERBATIM. The widest option map measured anywhere is eight
+# rows (the wash-dryer catalogue fixture @decomp.txt:3495998) and the longest key or value
+# in any capture is `haier_SoakPrewashSelection`, 26 characters. Sixty-four of each is
+# several times what the datum needs -- and a cap a real key never reaches cannot strip a
+# trailing space, which is the single most diagnostic character in the whole block: the
+# dryer captured under apk/dump/roberto_2026-09-11/ is addressed by the slot key `"opt1 "`,
+# space included, and a consumer matching on `"opt1"` finds nothing. Nothing here sorts,
+# strips or normalises; the row order is the cloud's own declaration order, which is the
+# only evidence there is about how a model numbers its slots.
+#
+# The ROW bound announces itself, and as a COUNT rather than a boolean, because three
+# different accidents produce the same hole in the printed map: the cap fired, a key was
+# not renderable as a bounded scalar, or two long keys bounded to the same text and one
+# overwrote the other. A reader needs one fact out of all three -- this map has fewer rows
+# than the cloud sent -- because a missing row HERE reads as an option the appliance does
+# not have, which is the wrong conclusion in the one place a maintainer looks to find out
+# which options exist. The CHARACTER bound needs no flag, for the reason
+# `_CONN_CATEGORY_MAX_CHARS` needs none: a slot key sixty-four characters long is not a
+# key, it is a payload, and the cap is there to stop it becoming one.
+_OPTION_MAP_MAX_ROWS = 64
+_OPTION_TEXT_MAX_CHARS = 64
+
+# "This object exposes no such surface at all", which has to stay distinguishable from
+# "it exposes one and the answer is empty" -- the same distinction `_NO_LAST_UPDATE`
+# draws one section over. A sentinel and not None, because None is itself a value the
+# cloud sends under these keys, and conflating the two would report a cloud that shipped
+# a broken map as an integration that never looked.
+_NO_OPTION_SURFACE = object()
+
+
+def _option_map_block(raw: Mapping) -> dict:
+    """One cloud option mapping (slot -> option name), printed verbatim and classified.
+
+    The classification is the point rather than a convenience: this mapping has three
+    shapes, they mean three different things, and two of them look identical to the eye.
+
+      ``empty``    -- the cloud declared no options for this model.
+      ``identity`` -- every row maps a name to ITSELF. This model does not use the legacy
+                      slots at all and the long names ARE the wire names; the washer under
+                      apk/dump/roberto_2026-09-11/ answers exactly this. It is a POSITIVE
+                      finding, and a reader who cannot tell it from `empty` concludes the
+                      appliance has no options when in fact it has several.
+      ``aliases``  -- at least one row maps a key onto a DIFFERENT name. There are legacy
+                      slots here, and every option name printed anywhere else in this
+                      document has to be translated through this map before it means
+                      anything on the wire.
+
+    The verdict is computed on the RAW pairs, BEFORE `_redact` walks the finished block,
+    and that ordering is load bearing rather than incidental. `_redact` masks on KEY name,
+    so an identity row whose option name collides with one of `_TO_REDACT` prints as
+    `***`; a reader deciding identity-versus-aliases by diffing the printed rows would
+    then read that masked row as an alias. The token cannot be fooled that way, the rows
+    can, so the token is taken first.
+
+    A malformed row -- key or value not a string -- is still PRINTED, because a slot the
+    cloud declared with a null name is itself the finding, but it is counted and it can
+    never make the verdict `identity`: a row that does not carry its own name is a row
+    that still has to be translated. The single case dropped rather than printed is a key
+    `_bounded_text` refuses outright, i.e. a container, because rendering a cloud
+    container under a key of our own choosing is precisely what that helper exists to
+    refuse.
+    """
+    rows: dict = {}
+    malformed = 0
+    identity = True
+    for index, (key, value) in enumerate(raw.items()):
+        # Sliced by ENUMERATION rather than `list(raw.items())[:cap]`: a runaway mapping
+        # must not be materialised into a list just so it can be truncated.
+        if index >= _OPTION_MAP_MAX_ROWS:
+            break
+        well_formed = isinstance(key, str) and isinstance(value, str)
+        if not well_formed:
+            malformed += 1
+        if not (well_formed and key == value):
+            identity = False
+        # `_bounded_text` on BOTH halves, never a bare slice. It masks and only then cuts,
+        # so a MAC straddling the cap arrives as `***` instead of a readable three-and-a-
+        # half-octet fragment; and both halves are bounded because on this mapping both
+        # come from the cloud -- the long name is a VALUE on a slotted model and a KEY on
+        # an identity-mapped one, so bounding one side would leave the same string
+        # unbounded on half the appliances.
+        name = _bounded_text(key, _OPTION_TEXT_MAX_CHARS)
+        if name is None:
+            continue
+        rows[name] = _bounded_text(value, _OPTION_TEXT_MAX_CHARS)
+    block: dict = {
+        "state": "empty" if not raw else "identity" if identity else "aliases",
+        # A container this module OWNS, holding keys the CLOUD chose. That nesting is what
+        # lets the two counters sit BESIDE the map instead of inside it -- the rule
+        # `attributes_last_update_truncated` had to learn the hard way: a reserved key
+        # inside a cloud-keyed map cannot be told apart from an option the vendor happened
+        # to name that.
+        "rows": rows,
+    }
+    if malformed:
+        block["malformed_rows"] = malformed
+    # ONE number for the three ways a row can fail to arrive. Computed against the rows
+    # actually emitted, so a bounding collision is counted even though nothing raised.
+    dropped = len(raw) - len(rows)
+    if dropped:
+        block["rows_dropped"] = dropped
+    return block
+
+
+def _option_mapping(value) -> tuple:
+    """Classify one candidate option mapping: `(state, mapping)`, mapping only when usable.
+
+    `absent` and `unreadable` are kept apart deliberately. The first says the surface is
+    not there -- an appliance object from an older engine, a command history that carried
+    no `applianceOptions`, a JSON null -- and is the ordinary answer on every type with no
+    programme options at all. The second says the surface IS there and holds something
+    that is not a mapping, which is a vendor or engine fault and the only one of the two
+    a maintainer should act on.
+    """
+    if value is _NO_OPTION_SURFACE or value is None:
+        return "absent", None
+    if not isinstance(value, Mapping):
+        return "unreadable", None
+    return "ok", value
+
+
+def _option_surface(owner, name: str) -> tuple:
+    """Read ONE option mapping off a cloud-fed object, or say why there is none.
+
+    Guarded, because these are PROPERTIES on objects the cloud fills rather than fields:
+    `HonAppliance.options` is `dict(self._appliance_model.get("options", {}))`, and
+    `dict()` raises on a payload that sent a string where the model expected an object.
+    `_appliance_block` is called with no try/except around it from either entry point, so
+    a raising property here does not produce a wrong section, it produces no dump at all
+    -- and the dumps that matter most are taken while something is already broken.
+    """
+    try:
+        value = getattr(owner, name, _NO_OPTION_SURFACE)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: reading %s raised", name, exc_info=True)
+        return "unreadable", None
+    return _option_mapping(value)
+
+
+def _last_command_options(attributes: Mapping) -> tuple:
+    """The `applianceOptions` the appliance last ACCEPTED, out of its own command echo.
+
+    Read off the SAME `attributes` mapping the block echoes further down, threaded in
+    rather than re-read from the appliance, for the reason `_freshness` is handed its
+    instants: two reads of one shadow inside one document is two chances for a section
+    and the values it quotes to contradict each other.
+
+    Three hops and ONE guard, and the guard is not theoretical: `attributes` arrives as
+    whatever the coordinator entry carried and `commandHistory` is a cloud envelope
+    inside it, so either `.get` may be a foreign implementation that raises. One try
+    rather than three because there is nothing partial to salvage -- without the envelope
+    there is no map to print.
+    """
+    try:
+        history = (
+            attributes.get("commandHistory") if isinstance(attributes, Mapping) else None
+        )
+        command = history.get("command") if isinstance(history, Mapping) else None
+        raw = (
+            command.get("applianceOptions", _NO_OPTION_SURFACE)
+            if isinstance(command, Mapping)
+            else _NO_OPTION_SURFACE
+        )
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: commandHistory unreadable", exc_info=True)
+        return "unreadable", None
+    return _option_mapping(raw)
+
+
+def _catalog_sibling_options(appliance) -> dict:
+    """What became of the `options` sibling at the FIRST level of the commands payload.
+
+    There are TWO copies of the slot map in a `/commands` response and this integration
+    reads the one the official app does not. `HonAppliance.options` reads
+    `applianceModel.options`; the app dereferences `payload.options`, one level up and
+    beside `applianceModel`, in both `formatApplianceCommandsObject`
+    (@decomp.txt:1787183) and `storeModelAndCommandsInDatabase` (@decomp.txt:1786966,
+    which persists it with a literal `'{}'` fallback). Every raw capture in this
+    repository carries BOTH copies -- tests/fixtures/ref_10136/commands.json and
+    apk/dump/ac_live/commands_raw.json have `options` at the top level AND inside
+    `applianceModel` -- and on those two types both are empty, so whether the copies ever
+    DISAGREE on an appliance that uses slots is still unmeasured. That question is the
+    only reason this row exists, and `read` alone cannot answer it.
+
+    The first-level copy does not survive the loader, and it does not survive it quietly.
+    `_hydrate` pops only `applianceModel`; everything else reaches `_get_commands`, which
+    treats each remaining top-level key as a command. `options` is a dict with neither
+    `description` nor `protocolType`, so `_parse_categories` descends into it and
+    `_parse_command` writes every non-dict LEAF to `self._additional_data["options"]` in
+    turn, last write winning. Measured by driving the real loader:
+
+        {"opt1 ": "prewash", "opt2": "hygiene", "opt8": "acquaplus"} -> 'acquaplus'
+        {"nightWashStatus": "nightWashStatus"}                       -> 'nightWashStatus'
+        {"opt1": {"a": 1}}                                           -> 1
+        {}                                                           -> no key at all
+        "opt1" / ["opt1"] / None                                     -> stored verbatim
+
+    So this row can only ever say that a sibling EXISTED, never what it said, and its
+    vocabulary is written to promise no more than that. `absent` is genuinely ambiguous
+    -- no sibling, or an empty one -- and the state says so rather than claiming the
+    cloud sent nothing. That ambiguity is a defect of the engine, documented here and
+    deliberately not repaired from a diagnostics patch.
+
+    `mapping` is unreachable today and is not dead code: it is what this row prints the
+    day the loader lifts `options` out of the candidate the way it already lifts
+    `applianceModel`, and a section that had to be rewritten to notice that fix is a
+    section nobody updates.
+    """
+    state, extra = _option_surface(appliance, "additional_data")
+    if extra is None:
+        # `unavailable` rather than `absent`: the appliance object exposes no
+        # `additional_data` at all, which is a statement about THIS integration and not
+        # about what the cloud sent. Conflating the two would report a vendor fact we
+        # never observed.
+        return {"state": "unavailable" if state == "absent" else "unreadable"}
+    try:
+        value = extra.get("options", _NO_OPTION_SURFACE)
+    except Exception:  # noqa: BLE001 - `additional_data` is a cloud-filled mapping
+        return {"state": "unreadable"}
+    if value is _NO_OPTION_SURFACE:
+        return {"state": "absent"}
+    if isinstance(value, Mapping):
+        return dict(_option_map_block(value), state="mapping")
+    # `residue` is null for a container the bound refuses: the state already says a
+    # sibling was there, and printing a cloud container through a mask that only
+    # recognises MACs is what `_bounded_text` exists to prevent.
+    return {"state": "mangled", "residue": _bounded_text(value, _OPTION_TEXT_MAX_CHARS)}
+
+
+def _well_formed_pairs(raw):
+    """The `str -> str` rows of a mapping, or None when there are none to compare.
+
+    The comparison token below is built from THESE and not from the printed rows, so
+    that an agreement can never be a coincidence: the printed rows are bounded, so two
+    distinct long names sharing a 64-character prefix would compare equal, and two
+    malformed rows of different shapes compare equal once both have been coerced to
+    text. None rather than `{}` for the empty case, so "nothing to compare" reaches the
+    caller as its own answer and two silences are never reported as agreement.
+    """
+    if raw is None:
+        return None
+    pairs = {
+        key: value
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    return pairs or None
+
+
+def _appliance_options(appliance, attributes: Mapping) -> dict:
+    """The slot -> option-name map the cloud uses for this appliance (issue #106).
+
+    The subject is a per-APPLIANCE datum that exists nowhere in the app binary. The
+    static tables in the decompiled app are keyed by appliance TYPE and override each
+    other (`anticrease` is `opt3` generically and `opt1` for dryers, @decomp.txt:975010
+    and 975018), the slots COLLIDE across families (`opt1` is `prewash` on a washer and
+    `threeInOne` on a dishwasher, @decomp.txt:974978 against 1010136), and the tables
+    contradict one another on the dishwasher entries issue #106 is actually about. Only
+    the cloud knows, only this map carries it, and we transmit it on every single command
+    without ever having shown a maintainer what we were transmitting.
+
+    Three sources, because each answers something the others cannot:
+
+      ``read``            what THIS integration holds and sends. The section's subject.
+      ``last_command``    the echo in `attributes.commandHistory.command.applianceOptions`
+                          -- the map actually attached to the last command the appliance
+                          accepted.
+      ``catalog_sibling`` what became of the copy the official app reads instead of ours
+                          (see `_catalog_sibling_options`): the only witness to whether
+                          we are reading the right one of the two.
+
+    `last_command` repeats bytes `attributes` already prints -- 109 of them on the dryer
+    under apk/dump/roberto_2026-09-11/ -- and it earns the repetition twice over. It is
+    the only source that can be INDEPENDENT of our catalogue read, when the last command
+    came from the phone rather than from here; and without lifting it out of a nested
+    envelope there is no `read_vs_last_command` at all.
+
+    That verdict is honest in one direction only, and the docstring would rather say so
+    than have a reader over-trust it: when we issued the last command ourselves,
+    `applianceOptions` simply IS `appliance.options`, so `match` can be tautological --
+    and we cannot tell, because our device payload is indistinguishable from the app's.
+    `differs` never is, and `differs` is the finding: a stale catalogue, a cache serving
+    a map the cloud has since changed, or the two cloud copies disagreeing. The token is
+    computed on the raw well-formed pairs, before bounding, so a shared prefix cannot be
+    reported as equality.
+
+    Emitted for EVERY type, even when all three sources are mute. "The cloud told us
+    nothing about options for this appliance" is an answer issue #106 needs as often as a
+    populated map is, and a section that vanished when empty would leave a reader unable
+    to tell a silent cloud from a dump taken before this section existed.
+    """
+    read_state, read_raw = _option_surface(appliance, "options")
+    last_state, last_raw = _last_command_options(attributes)
+
+    read_pairs = _well_formed_pairs(read_raw)
+    last_pairs = _well_formed_pairs(last_raw)
+    if read_pairs is None or last_pairs is None:
+        verdict = "unknown"
+    else:
+        verdict = "match" if read_pairs == last_pairs else "differs"
+
+    def block(state, raw):
+        # The SAME key set whether or not there was a map, so a field-by-field diff
+        # between two downloads of one issue stays meaningful even when a source fell
+        # silent between them.
+        return {"state": state, "rows": {}} if raw is None else _option_map_block(raw)
+
+    return {
+        "read": block(read_state, read_raw),
+        "last_command": block(last_state, last_raw),
+        "catalog_sibling": _catalog_sibling_options(appliance),
+        "read_vs_last_command": verdict,
+    }
+
+
+# The model attribute `opt_compatibility` decodes, spelled as the cloud spells it. Named
+# rather than inlined because two places have to agree on it: the read below, and the
+# test that proves the value still reaches this module undamaged.
+_OPT_COMPAT_ATTR = "optCompatibility"
+
+# The ONE bound on `opt_compatibility`, applied to the base64 SOURCE and to nothing else.
+#
+# One cap, upstream of every allocation, is the whole design: bounding the source bounds
+# the decoded bytes, the parsed document, `programs`, `vocabulary` and every subtree
+# `duplicate_keys` quotes, since all of them are derived from those bytes and none can
+# exceed them by more than a small constant. A second cap further down would buy nothing
+# and would add a second place where this section could cut a cloud key in half.
+#
+# It REFUSES rather than truncates, which is the opposite of what every other bound in
+# this module does, and the difference is not a preference. Everything else capped here
+# is a LIST whose first N rows are still true after the cut. This is a single base64
+# blob, and half a blob is not half a matrix: it is either a parse error that looks like
+# a cloud bug which is not there, or -- worse -- a shorter matrix that decodes cleanly
+# and quietly asserts constraints the appliance never declared. Measured on the real
+# value: dropping 40 characters still decodes, under `validate=True`, to 855 perfectly
+# well-formed bytes. So above the cap the section says `too_large` and prints the size,
+# which is the honest answer, and leaves the untouched base64 visible one key above.
+#
+# 24576 is about twenty times the only real value ever captured (1180 characters, the
+# dishwasher in diagnostics/issue106-dumps/), so it cannot bite an appliance anyone has
+# dumped, and it still stops a runaway attribute from putting 18 KB of decoded JSON into
+# a file a maintainer reads by eye.
+_OPT_COMPAT_MAX_SOURCE_CHARS = 24576
+
+
+class _JsonPairs(tuple):
+    """The key/value pairs of ONE JSON object, in wire order, duplicates intact.
+
+    `json.loads(..., object_pairs_hook=...)` is the only way to SEE a duplicate key at
+    all -- by the time a dict exists the earlier occurrence is already gone -- but the
+    hook is called bottom-up and is told nothing about where in the document it sits, so
+    it cannot report a path. The obvious repair (record duplicates in a side table keyed
+    by `id()` and match them up during a later walk) is unsound on this very payload: the
+    values a duplicate discards are unreachable from the finished tree, get collected,
+    and their `id()` is then free to be reused by an unrelated dict.
+
+    So the hook stores pairs and decides nothing; `_collapse_duplicates` walks the result
+    top-down with the path in hand and does all the collapsing in one pass. A tuple
+    SUBCLASS rather than a bare tuple purely so `isinstance` can tell a JSON object from
+    a JSON array: a `list` is the array, a `_JsonPairs` is the object, and nothing
+    downstream can confuse the two.
+    """
+
+    __slots__ = ()
+
+
+def _collapse_duplicates(node, path: tuple, duplicates: list):
+    """Turn `_JsonPairs` into plain dicts, recording every key the collapse eats.
+
+    Last occurrence wins, because that is what `json.loads` does, what `JSON.parse` does,
+    and therefore what the hOn app itself acts on. The purpose here is not to AVOID the
+    collapse -- a dict cannot hold two `opt5` keys and neither can the JSON this module
+    emits -- but to make it visible, so a reader of `programs` knows whether the map in
+    front of them is the whole matrix or the part of it that survived a parser.
+
+    Each record carries the path of the CONTAINING object, the key, the occurrence count,
+    the subtree that won and the subtrees that lost, in wire order. `dropped` is the
+    load-bearing field: without it the section would say three constraints were lost and
+    not which three, which is a footnote rather than a finding.
+
+    The path is a LIST of segments and never a joined string, because the first-level
+    keys of this document are pipe-separated programme-id lists and the cloud is free to
+    put any character in them -- including whichever separator a joined path would have
+    picked. Child paths under a duplicated key carry the occurrence index (`opt5[0]`,
+    `opt5[1]`) while the record itself uses the bare key: three lines, and they remove a
+    real ambiguity, since a duplicate nested inside a LOSING occurrence would otherwise
+    be filed under a path identical to one inside the winning occurrence -- in the one
+    section whose entire job is telling apart what survived from what did not.
+    """
+    if isinstance(node, _JsonPairs):
+        counts: dict = {}
+        for key, _value in node:
+            counts[key] = counts.get(key, 0) + 1
+        occurrence: dict = {}
+        collapsed: dict = {}
+        superseded: dict = {}
+        for key, value in node:
+            index = occurrence.get(key, 0)
+            occurrence[key] = index + 1
+            segment = key if counts[key] == 1 else f"{key}[{index}]"
+            child = _collapse_duplicates(value, path + (segment,), duplicates)
+            if key in collapsed:
+                superseded.setdefault(key, []).append(collapsed[key])
+            collapsed[key] = child
+        # Emitted after the loop, so `kept` is the FINAL winner and not whichever
+        # occurrence happened to be current when the duplicate was first noticed.
+        for key, count in counts.items():
+            if count > 1:
+                duplicates.append(
+                    {
+                        "path": list(path),
+                        "key": key,
+                        "count": count,
+                        "kept": collapsed[key],
+                        "dropped": superseded.get(key, []),
+                    }
+                )
+        return collapsed
+    if isinstance(node, list):
+        return [
+            _collapse_duplicates(item, path + (str(index),), duplicates)
+            for index, item in enumerate(node)
+        ]
+    return node
+
+
+def _opt_compatibility_vocabulary(programs) -> list:
+    """Every OPTION name the matrix mentions, at any depth, de-duplicated and sorted.
+
+    Its own function rather than an expression inside the section, because it is the seam
+    `option_slots` needs: that section's `in_matrix` column is a membership test against
+    exactly this set, and a second definition of "an option the matrix knows" living over
+    there is how the two sections would eventually disagree inside one document.
+
+    The walk starts INSIDE each programme group and never at the group keys themselves:
+    the first level is `"<functionalId>|<functionalId>|..."`, a list of programme ids, and
+    only what hangs beneath it is an option name. Everything below that first level IS an
+    option name regardless of depth -- depth 1 means "unavailable for these programmes",
+    depth 2 a forbidden pair, depth 3 a forbidden triple, and all three spell the option
+    identically (`isCombinationAllowed` @decomp.txt:1761723-1761785).
+
+    Deliberately NOT filtered to `opt<N>`. The real dishwasher matrix mixes six legacy
+    slots with one full parameter name -- `opt2 opt3 opt4 opt5 opt7 opt8 tabStatus` -- so
+    a prefix filter would silently drop a name that is in the matrix and in the command
+    schema both, which is precisely the kind of row `option_slots` exists to match.
+    """
+    seen: dict = {}
+
+    def walk(node) -> None:
+        if not isinstance(node, Mapping):
+            return
+        for key, value in node.items():
+            seen[str(key)] = None
+            walk(value)
+
+    if isinstance(programs, Mapping):
+        for group in programs.values():
+            walk(group)
+    return sorted(seen)
+
+
+def _opt_compatibility(model_attributes: Mapping) -> dict:
+    """`optCompatibility`, decoded: which option combinations the model forbids (#106).
+
+    The cloud ships the compatibility matrix as ONE base64 string inside
+    `applianceModel.attributes`, and until now the dump printed it exactly as it arrived:
+    1180 opaque characters carrying the answer to "why can this programme not have
+    extraDry" and revealing none of it.
+
+    This is the matrix the hOn app itself consults. `isCombinationAllowed`
+    (@decomp.txt:1761607) runs `JSON.parse` on this very value, unwraps `functionalId`
+    when present and otherwise uses the root object, keeps the groups whose
+    `"<id>|<id>|..."` key contains the selected programme's `functionalId`, and then reads
+    the literal `"0"` at three depths: depth 1 says the option is unavailable for those
+    programmes, depth 2 a forbidden pair, depth 3 a forbidden triple. It also refuses
+    outright any combination longer than three ('The Maximum number of handled
+    combinations is 3', @decomp.txt:1761662), so a matrix nested deeper than that carries
+    constraints the app can never reach -- worth knowing before anyone reads a fourth
+    level as meaningful.
+
+    `programs` is the COLLAPSED matrix and `duplicate_keys` is what that costs. The one
+    real capture is malformed: the object under `"9|12"` declares `opt5` twice and `opt8`
+    three times, so there are two different true answers to "what does this model forbid"
+    -- what the cloud WROTE, and what any JSON parser actually SEES -- and a section
+    emitting one without naming the other would be lying about it. The collapsed view is
+    printed because it is the one the appliance behaves according to (the app loses those
+    three constraints too, so a maintainer reproducing a user's refused combination must
+    reason about the collapsed matrix or they are debugging a machine that does not
+    exist), and because it is the only one JSON can represent without turning every value
+    into a list for the sake of two keys on one appliance. `duplicate_keys` then quotes
+    the losing subtrees verbatim, so nothing the cloud wrote is missing from the section
+    -- it is merely in two places, and the section says which.
+
+    `keyed_by` reports which of the app's two entry branches the document took. A reader
+    lining this section up against `isCombinationAllowed` needs to know, and the shape of
+    `programs` alone is not a reliable way to find out.
+
+    DEGRADATION. Every failure costs this section and nothing else, and `error` names the
+    stage that refused with the sizes beside it wherever they are known, so even a refusal
+    says "there is a matrix here, it is this big, I would not read it".
+
+    `validate=True` on the decode is not a nicety, it is half of the defence stated in
+    `_model_attributes`. With the default `validate=False`, `b64decode` DISCARDS every
+    character outside the alphabet instead of complaining, so a value some future caller
+    has run through `_bounded_text` decodes without a murmur into shorter, entirely
+    plausible bytes. Measured on the real value: `value[:600] + "***"` yields 450 bytes
+    and no exception by default, and `binascii.Error` with `validate=True`.
+
+    And `validate=True` alone is NOT enough, which is why the JSON parse has its own arm:
+    a cut landing on a four-character boundary is still perfectly valid base64. Measured:
+    dropping 40 characters decodes cleanly and is caught only by `json.loads`; dropping
+    41, 42 or 43 is caught by the padding check. Neither guard covers the other's case.
+
+    The trailing broad guard is load bearing too, not decoration. `json.loads` raises
+    `RecursionError` -- a `RuntimeError`, which `except ValueError` does NOT catch -- on a
+    deeply nested document, and a document comfortably under the cap above reaches it:
+    `('{"a":' * 1200) + '1' + ('}' * 1200)` is 9604 base64 characters and takes the parse
+    down. Without this arm one absurd catalogue row would cost the reporter the whole file.
+
+    Whitespace is stripped from the ENDS of the source and only from the ends. The cloud
+    demonstrably ships padded keys elsewhere -- `"opt1 "`, trailing space included, under
+    apk/dump/roberto_2026-09-11/ -- so refusing a value over a stray newline would be
+    refusing it over the vendor's own habit; and stripping cannot hide the failure this
+    section guards, because `_bounded_text` writes `***`, which is not whitespace and
+    still raises.
+
+    Returns `{}` when the attribute is absent, so the section stays out of the dump for
+    every model with no matrix rather than emitting an empty shape a reader would try to
+    interpret.
+    """
+    if not isinstance(model_attributes, Mapping):
+        return {}
+    raw = model_attributes.get(_OPT_COMPAT_ATTR)
+    if raw is None:
+        return {}
+    # A non-string is reported as a SHAPE rather than coerced: `str()` on a dict would
+    # produce a repr that fails the decode and arrive as `invalid_base64`, blaming the
+    # encoding for a value that was never encoded.
+    if not isinstance(raw, str):
+        return {"error": "not_text"}
+    source = raw.strip()
+    if not source:
+        return {"error": "empty"}
+    chars = len(source)
+    if chars > _OPT_COMPAT_MAX_SOURCE_CHARS:
+        return {"error": "too_large", "source_chars": chars}
+    try:
+        decoded = base64.b64decode(source, validate=True)
+    except (binascii.Error, ValueError):
+        return {"error": "invalid_base64", "source_chars": chars}
+    # Printed on every outcome from here down, refusal included. They are what lets a
+    # reader tell a matrix this code could not read from a matrix that was not there, and
+    # what a maintainer compares against the base64 sitting one key above when they
+    # suspect something upstream has started trimming it.
+    sizes = {"source_chars": chars, "decoded_bytes": len(decoded)}
+    try:
+        text = decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"error": "invalid_utf8", **sizes}
+    try:
+        parsed = json.loads(text, object_pairs_hook=_JsonPairs)
+        duplicates: list = []
+        document = _collapse_duplicates(parsed, (), duplicates)
+    except ValueError:
+        return {"error": "invalid_json", **sizes}
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        # `RecursionError`, and whatever else a catalogue nobody has seen can invent. See
+        # the docstring: this arm is reachable with a payload well under the cap above.
+        _LOGGER.debug("Diagnostics debug: optCompatibility unreadable", exc_info=True)
+        return {"error": "unreadable", **sizes}
+    if not isinstance(document, Mapping):
+        return {"error": "not_an_object", **sizes}
+    # The app's own entry branch, reproduced rather than improved on: `r13 =
+    # r14.functionalId; if (!r13) -> r14` (@decomp.txt:1761741). The test is
+    # `isinstance(..., Mapping)` and NOT truthiness, because in JavaScript an EMPTY
+    # object is truthy -- so a `"functionalId": {}` is unwrapped there and must be
+    # unwrapped here, while a null or an empty string is falsy in both languages and
+    # falls through to the root. Getting this backwards would make the section disagree
+    # with the app on exactly the malformed catalogue it exists to explain.
+    inner = document.get("functionalId")
+    keyed_by = "functionalId" if isinstance(inner, Mapping) else None
+    programs = inner if keyed_by else document
+    return {
+        **sizes,
+        "keyed_by": keyed_by,
+        "programs": programs,
+        "vocabulary": _opt_compatibility_vocabulary(programs),
+        # A SIBLING of `programs` rather than a key inside it, for the reason
+        # `per_program_truncated` is one: every key of `programs` is a cloud-chosen list
+        # of programme ids, so a reserved entry there could not be told apart from a group
+        # the cloud actually named that. Emitted only when it has something to say.
+        **({"duplicate_keys": duplicates} if duplicates else {}),
+    }
 
 
 def _command_schema(appliance) -> dict:
@@ -905,6 +1563,254 @@ def _program_option_matrix(appliance) -> dict:
         # cloud-chosen program code, so a reserved `truncated` entry could not be told apart
         # from a program actually named that.
         **({"per_program_truncated": True} if truncated else {}),
+    }
+
+
+# Bound on the leftover-slot map. The largest slot vocabulary the app knows is
+# `opt1..opt11` and the largest real map measured is eight rows, so 32 cannot bite any
+# appliance seen so far and exists only to stop a malformed `options` from pasting a
+# catalogue into the dump. Unlike the character bounds elsewhere this one DOES announce
+# itself: dropping rows from a map whose whole point is "these are the slots nothing here
+# accounts for" would turn a partial answer into a complete-looking wrong one.
+_OPTION_SLOT_MAX_UNRESOLVED = 32
+
+
+def _slot_index(rows: Mapping) -> tuple:
+    """Index one printed option map for lookup in BOTH directions.
+
+    Both directions, because a parameter of `startProgram` can be spelled either way and
+    the app itself mixes them inside a single payload: @decomp.txt:1843556 is a captured
+    dryer `startProgram` carrying `anticrease`, `dryingManager` and `hybrid` under their
+    long names and `opt5`..`opt9` as bare slots, in one object. A lookup that only asked
+    "is this long name a VALUE of the map" would answer nothing at all for the half of a
+    schema that is already slot-spelled.
+
+    Returns `(by_slot, by_name, ambiguous)`. `by_slot` is keyed by both the raw spelling
+    and its stripped form, raw winning a collision, and what the caller PRINTS is always
+    the raw one. That is not tidiness: the cloud sends `"opt1 "` with a trailing space, so
+    a schema parameter honestly named `opt1` would miss its own row under an exact-match
+    index, while stripping what we print would erase the single most diagnostic detail in
+    the block.
+
+    `ambiguous` collects names that two different slots claim. Such a name is REMOVED from
+    `by_name` rather than resolved: the rows arrive in a deterministic order, so a winner
+    would be perfectly stable -- and a stable winner is exactly what makes a wrong answer
+    survive review. The caller reports the conflict and prints no slot.
+    """
+    by_slot: dict = {}
+    by_name: dict = {}
+    ambiguous: dict = {}
+    pairs = [
+        (slot, name)
+        for slot, name in rows.items()
+        if isinstance(slot, str) and isinstance(name, str)
+    ]
+    # TWO passes, and the order between them is the whole point. Registering both
+    # spellings of a row together lets the STRIPPED form of one row occupy the exact key
+    # of another: given `{"opt1 ": "anticrease", "opt1": "other"}` the padded row files
+    # itself under `opt1` first, `setdefault` then refuses the row that is really named
+    # that, and a schema parameter spelled `opt1` resolves to the other row's alias --
+    # a confident wrong slot in the one section whose contract is to print `null`
+    # instead. Raw spellings are claimed first and outright, stripped ones only fill
+    # what nobody claimed, which is the "raw wins a collision" the docstring promises
+    # (PR #107 review, greptile-apps and coderabbitai, same line independently).
+    for slot, name in pairs:
+        by_slot[slot] = (slot, name)
+    for slot, name in pairs:
+        by_slot.setdefault(slot.strip(), (slot, name))
+    for slot, name in pairs:
+        if name in ambiguous:
+            ambiguous[name].append(slot)
+            continue
+        if name in by_name and by_name[name][0] != slot:
+            ambiguous[name] = [by_name.pop(name)[0], slot]
+            continue
+        by_name[name] = (slot, name)
+    return by_slot, by_name, {name: sorted(slots) for name, slots in ambiguous.items()}
+
+
+def _option_slots(
+    program_options: Mapping, appliance_options: Mapping, opt_compatibility: Mapping
+) -> dict:
+    """Join the option NAMES of `startProgram` to the cloud's slot vocabulary (#106).
+
+    The only section of this dump that INTERPRETS instead of reporting, and it is worth
+    being explicit about why that is allowed. It is a pure join over three sections this
+    same document already prints verbatim -- it is handed their finished blocks and reads
+    the appliance for nothing -- so it adds no fact, only the correspondence, and any row
+    a reader distrusts can be rebuilt by hand from `program_options`,
+    `appliance_options` and `opt_compatibility` a few pages up. That checkability is the
+    property that makes an interpretation safe to ship, and it is also why the inputs are
+    the built sections rather than a second read of the appliance: two reads are two
+    chances for one document to contradict itself.
+
+    The question it answers is the one that blocked #106. A maintainer holding a dump can
+    see that the matrix forbids `opt5` together with `opt8` and has no way to learn which
+    two controls that sentence is about.
+
+    WHAT THE REAL DATA SHOWED, and why the section is shaped the way it is rather than as
+    one row per option parameter. On the dryer under apk/dump/roberto_2026-09-11/ --
+    the only appliance in this repository that really uses legacy slots -- the schema
+    declares 40 option names, the cloud map carries five slots, and exactly ONE of them
+    (`photoPlasmaStatus`) names something that schema has. The per-parameter form would
+    have printed 39 rows of `{"slot": null, "source": null}` around the single row that
+    says anything. So rows are emitted only where something is actually known, with
+    `params_considered` stating the denominator the way `categories_total` states what
+    `per_program` was drawn from -- and the four slots that matched NOTHING become
+    `unresolved_slots`, which on that appliance is the larger and more interesting half of
+    the finding: the cloud's slot vocabulary and the command schema are largely disjoint,
+    and no amount of per-row nulls would have made that visible.
+
+    NO STATIC FALLBACK TABLE, and that is a deliberate deletion rather than an omission.
+    The decompiled app does carry slot tables, and they are better than the brief for this
+    work assumed -- they are keyed by appliance TYPE with per-type overrides, and where
+    they overlap real hardware they are right (`anticrease` is `opt3` generically and
+    `opt1` for dryers, @decomp.txt:975010 and 975018; the real dryer answers `opt1`). They
+    were still dropped, for two measured reasons. First, yield: run against both real
+    appliances in this repository they contribute ZERO rows, because none of their names
+    appears in either schema. Second, and decisively, they CONTRADICT each other on the
+    dishwasher, which is the appliance issue #106 was opened about: `hygiene` is `opt7` in
+    both command-parameter enums (@decomp.txt:978496, 1010138) and `opt2` in the
+    `buildParameter` catalogue under an explicitly dishwasher-labelled entry
+    (@decomp.txt:975325), and `intensive` is `opt8` in one enum and mapped to itself in
+    the other (@decomp.txt:1010141 against 978508). A row sourced from a table like that
+    would print a confident wrong slot into a file that gets attached to a public issue,
+    where it is believed. `null` reads as "we do not know", which is the truth.
+
+    IN_MATRIX is a membership test against the decoded vocabulary, by NAME and by SLOT,
+    because the real matrix uses both: the one captured dishwasher writes its constraints
+    over `opt2 opt3 opt4 opt5 opt7 opt8 tabStatus` -- six slots and one honest parameter
+    name. The key is ABSENT from every row when there is no matrix, and that distinction
+    is the point: a column of `false` on an appliance that shipped no matrix reads as "the
+    matrix does not apply here" when the truth is "there is no matrix".
+
+    `matrix_matched` and `matrix_only` are the pair that makes an unusable matrix visible.
+    A matrix whose vocabulary touches nothing this appliance declares is a real outcome,
+    and it is reported as a COUNT plus the unaccounted names rather than as a verdict,
+    because the count is arithmetic and a verdict is a claim -- and because one-out-of-
+    forty is a different fact from zero, which a boolean would flatten together.
+
+    Empty `{}` when `program_options` is absent, which is every appliance with no
+    programme categories at all. That answers the question of which types get this
+    section without needing a type list: it appears exactly where there are programme
+    options to reconcile.
+    """
+    names = program_options.get("union_params") if isinstance(program_options, Mapping) else None
+    if not isinstance(names, list) or not names:
+        return {}
+
+    # Consulted in this order, and the order is a confidence ranking rather than an
+    # accident: `read` is the map this integration actually transmits, so a row sourced
+    # from it explains our own behaviour, while the echo describes a command that may have
+    # come from the phone. A row names the source that produced it either way, so a reader
+    # who disagrees with the ranking can still see which map answered.
+    sources = []
+    if isinstance(appliance_options, Mapping):
+        for token, key in (("options_read", "read"), ("options_last_command", "last_command")):
+            entry = appliance_options.get(key)
+            rows = entry.get("rows") if isinstance(entry, Mapping) else None
+            if isinstance(rows, Mapping) and rows:
+                sources.append((token, _slot_index(rows)))
+
+    vocabulary = (
+        opt_compatibility.get("vocabulary")
+        if isinstance(opt_compatibility, Mapping)
+        else None
+    )
+    vocabulary = frozenset(vocabulary) if isinstance(vocabulary, list) else None
+
+    known = {str(name) for name in names}
+    params: dict = {}
+    ambiguous: dict = {}
+    matched = 0
+    accounted = set()
+    for token, (_by_slot, _by_name, clash) in sources:
+        if clash:
+            ambiguous[token] = clash
+    for name in sorted(known):
+        row = None
+        for token, (by_slot, by_name, clash) in sources:
+            # `by_slot` FIRST: a parameter literally named `opt5` IS its own slot, and
+            # reading the map's value then gives the reader the long name it stands for.
+            hit = by_slot.get(name) or by_name.get(name)
+            if hit is not None:
+                slot, alias = hit
+                row = {"slot": slot, "source": token}
+                # Only when it says something the row key does not. On an identity-mapped
+                # appliance an `alias` repeating the key would be a line of noise on every
+                # single row.
+                if alias != name:
+                    row["alias"] = alias
+                break
+            if name in clash:
+                # The source is named and the slot is not: "this map talks about this
+                # option and contradicts itself", which `ambiguous_slots` spells out.
+                row = {"slot": None, "source": token}
+                break
+        if row is None:
+            row = {"slot": None, "source": None}
+        if vocabulary is not None:
+            slot = row["slot"]
+            hit = name in vocabulary or (
+                slot is not None
+                and (slot in vocabulary or slot.strip() in vocabulary)
+            )
+            row["in_matrix"] = bool(hit)
+            if hit:
+                matched += 1
+                accounted.add(name)
+                if slot is not None:
+                    accounted.update({slot, slot.strip()})
+        # Nothing known from any source and unmentioned by the matrix: the row would
+        # assert only that this section has no information, which `params_considered`
+        # already says once for all of them.
+        if row["slot"] is None and row["source"] is None and not row.get("in_matrix"):
+            continue
+        params[name] = row
+
+    # The slots whose NAMES nothing in this schema declares. On the one real slotted
+    # appliance this is four rows out of five, and dropping them would leave the dump
+    # saying "one option has a slot" while hiding that the two vocabularies barely
+    # overlap -- a bigger finding about #106 than any single row above.
+    unresolved: dict = {}
+    unresolved_truncated = False
+    for token, (_by_slot, by_name, _clash) in sources:
+        extra = {
+            slot: alias
+            for slot, alias in sorted(by_name.values())
+            if alias not in known and slot not in known and slot.strip() not in known
+        }
+        if not extra:
+            continue
+        if len(extra) > _OPTION_SLOT_MAX_UNRESOLVED:
+            unresolved_truncated = True
+            extra = dict(sorted(extra.items())[:_OPTION_SLOT_MAX_UNRESOLVED])
+        unresolved[token] = extra
+
+    return {
+        "command": program_options.get("command"),
+        # The denominator, stated because the map above is a FILTERED view of it -- the
+        # same contract `categories_total` holds against `per_program`.
+        "params_considered": len(known),
+        "params": params,
+        **({"unresolved_slots": unresolved} if unresolved else {}),
+        # A SIBLING of the map, not a key inside it: every key of `unresolved_slots[token]`
+        # is a cloud-CHOSEN slot, so a reserved `truncated` entry could not be told apart
+        # from a cloud that published a slot called `truncated`.
+        **({"unresolved_slots_truncated": True} if unresolved_truncated else {}),
+        **({"ambiguous_slots": ambiguous} if ambiguous else {}),
+        **(
+            {
+                "matrix_matched": matched,
+                # What the matrix talks about that this appliance accounts for nowhere.
+                # An empty list means the decoded matrix is fully interpretable here; a
+                # list as long as the vocabulary means the matrix, as sent, cannot be
+                # applied to this appliance at all -- which is a finding and not an error.
+                "matrix_only": sorted(vocabulary - accounted),
+            }
+            if vocabulary is not None
+            else {}
+        ),
     }
 
 
@@ -1732,6 +2638,16 @@ def _bounded_text(value, limit: int) -> str | None:
     field is either a closed vocabulary or emitted under a name `_TO_REDACT`
     already knows.
 
+    What this helper must NOT be pointed at is a cloud value that is an
+    ENVELOPE rather than a datum: base64, or a JSON document shipped inside a
+    string. Bounding one yields a value that still looks valid and decodes to
+    something else, or to nothing, and no `truncated` flag can repair that
+    because the reader's next step is a decode rather than a read.
+    `model_attributes` is where those live -- `optCompatibility`,
+    `remainingTime*`, `suggestedLoad*` -- and that map is deliberately
+    unbounded; see the contract stated in `_model_attributes` and the guard in
+    `OptCompatibilityVerbatimTest`.
+
     Returns None for anything `_scalar_text` refuses too: a character bound
     only means something for a scalar.
     """
@@ -2436,6 +3352,23 @@ def _appliance_block(
     commands = _command_schema(appliance)
     program_options_matrix = _program_option_matrix(appliance)
     model_attributes = _model_attributes(appliance)
+    # Read HERE, above `_redact`, which runs on the last line of this function, and from
+    # the SAME local the block prints below rather than from a second read of
+    # `appliance.model_attributes`. Two reads would disagree in the one case that matters:
+    # if anything ever starts bounding the values in `_model_attributes`, a section
+    # reading around it would keep emitting a pristine matrix while the base64 printed
+    # beside it was already damaged, and the dump would carry two irreconcilable accounts
+    # of one cloud string with nothing to say which was current.
+    opt_compatibility = _opt_compatibility(model_attributes)
+    # Below the `attributes` normalisation above, so the echo this reads is the same
+    # mapping the block prints.
+    appliance_options = _appliance_options(appliance, attributes)
+    # Built LAST of the four, and out of the other three rather than out of the appliance:
+    # it is a join, and handing it the finished sections is what makes it structurally
+    # incapable of disagreeing with them.
+    option_slots = _option_slots(
+        program_options_matrix, appliance_options, opt_compatibility
+    )
     # ONE walk of the per-type tables, ONE lazy-import decision, shared by both
     # consumers -- which is what the `_mapped_sets` docstring claims and what
     # makes `coverage.registries_unavailable` and `entities.sources` structurally
@@ -2492,6 +3425,24 @@ def _appliance_block(
         # what stops the next section from being dropped wherever its patch happened
         # to apply cleanly.
         "model_attributes": model_attributes,
+        # The two option-vocabulary sections sit here, between `model_attributes` and the
+        # reserved `zone_map` slot, because they are model-level catalogue data too -- one
+        # is `applianceModel.options`, the other decodes a row of the map directly above --
+        # and because they QUALIFY every option name printed further down. A reader who
+        # meets `opt7` in a command schema has to come back here to learn what it is, so it
+        # has to arrive first. They may not move above `model_attributes`: `freshness` is
+        # pinned to be immediately followed by it.
+        #
+        # Named `appliance_options` after the wire key (`applianceOptions`) and not
+        # `options`: the dump already carries an `options` under `entry` -- the config-entry
+        # toggles, an unrelated thing -- and a second one inside an appliance would make
+        # every grep and every jq filter over an issue attachment ambiguous.
+        "appliance_options": appliance_options,
+        # Directly under the base64 it decodes, which is the whole ergonomics of it: a
+        # reader who has just scrolled past 1180 opaque characters should find out what
+        # they say on the next line. Omitted for a model with no matrix -- every appliance
+        # dumped so far except the one dishwasher -- rather than emitting an empty shape.
+        **({"opt_compatibility": opt_compatibility} if opt_compatibility else {}),
         "attributes": dict(attributes),
         # BESIDE the values, never inside them. `attributes` above has one
         # contract -- a flat name -> value echo of what the device said -- and a
@@ -2518,6 +3469,13 @@ def _appliance_block(
         # an appliance whose startProgram carries no categories, rather than
         # emitting an empty shape a reader would try to interpret.
         **({"program_options": program_options_matrix} if program_options_matrix else {}),
+        # Immediately after `program_options`, because it is the SAME list of option names
+        # read a second way: that section says what each programme does with an option,
+        # this one says what the cloud calls it on the wire and whether the compatibility
+        # matrix is talking about it. Read apart they are two curiosities; read together
+        # they are the answer to issue #106. It is built FROM that section, so it cannot
+        # appear without it.
+        **({"option_slots": option_slots} if option_slots else {}),
         "coverage": coverage,
         # Next to coverage on purpose: one says what the code could map for this
         # type, the other what Home Assistant actually holds. Reading them together

@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import base64
+import binascii
 import dataclasses
 import importlib
+import inspect
 import json
 import sys
 import types
@@ -8388,6 +8391,977 @@ class ProgramOptionMatrixTest(unittest.TestCase):
             },
             block["program_options"]["per_program"]["delicate"],
         )
+
+
+# ---------------------------------------------------------------------------
+# The option vocabulary (issue #106): `appliance_options`, `opt_compatibility`
+# and the join between them, `option_slots`.
+# ---------------------------------------------------------------------------
+
+# The one real compatibility matrix anyone has captured, read from where the repository
+# already keeps it rather than copied into a fixture. It is a cloud response nobody can
+# regenerate -- one dishwasher, one user, one day -- and it is stored beside a README
+# explaining the trap it contains. A second copy under tests/fixtures/ would be a second
+# thing to keep true, and the day the two drifted this guard would still pass while
+# testing a value the cloud never sent. It is deliberately NOT skipped when missing: the
+# whole point of the class below is to notice when something has happened to that file.
+_ISSUE106_DUMPS = REPO_ROOT / "diagnostics" / "issue106-dumps"
+_DW_MODEL_ATTRS = _ISSUE106_DUMPS / "bbosson-XS6B0S3FSB-2026-09-21-model_attributes.json"
+_DW_DECODED = _ISSUE106_DUMPS / "bbosson-XS6B0S3FSB-2026-09-21-optCompatibility-decoded.json"
+
+
+def _real_opt_compat_b64() -> str:
+    """The `optCompatibility` value exactly as the cloud sent it."""
+    return json.loads(_DW_MODEL_ATTRS.read_text(encoding="utf-8"))["optCompatibility"]
+
+
+def _b64(payload: str) -> str:
+    return base64.b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def _decoded_matrix(text):
+    """The matrix a reader gets out of `text`, or None when they get nothing.
+
+    Both failure shapes collapse to one answer on purpose: which of them a truncation
+    produces is an accident of arithmetic (a cut at a length divisible by four decodes
+    cleanly to half a document and dies in `json.loads`, a cut anywhere else dies in
+    `b64decode`), and the guard below cares only that the reader ends up with nothing.
+    """
+    if not isinstance(text, str):
+        return None
+    try:
+        return json.loads(base64.b64decode(text, validate=True).decode("utf-8"))
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return None
+
+
+class OptionAppliance:
+    """An appliance exposing exactly the surfaces asked for, and no others.
+
+    `_UNSET` leaves the attribute OFF the object rather than setting it to None: the
+    sections under test distinguish "this engine has no such property" from "it has one
+    and the answer is empty", and a double that always carried both could not exercise
+    the first.
+    """
+
+    def __init__(self, options=_UNSET, additional_data=_UNSET, model_attributes=_UNSET):
+        self.commands = {}
+        if options is not _UNSET:
+            self.options = options
+        if additional_data is not _UNSET:
+            self.additional_data = additional_data
+        if model_attributes is not _UNSET:
+            self.model_attributes = model_attributes
+
+
+def _option_block(appliance=None, attributes=None, app_type="TD"):
+    return diagnostics._appliance_block(
+        "id1",
+        {
+            "appliance": OptionAppliance(options={}, additional_data={})
+            if appliance is None
+            else appliance,
+            "type": app_type,
+            "attributes": {} if attributes is None else attributes,
+            "statistics": {},
+        },
+    )
+
+
+class ApplianceOptionsTest(unittest.TestCase):
+    """`appliance_options`: the slot -> option-name map, from every source that sees it.
+
+    The cloud names a programme option twice -- a long name in the command schema and a
+    legacy `opt1..opt11` slot on the wire -- and the map between them is per-APPLIANCE
+    data that exists nowhere in the app binary. We send it back on every command and,
+    before this section, printed it nowhere, so issue #106 could not be diagnosed from a
+    dump at all.
+    """
+
+    # The two real shapes this section has to tell apart, taken verbatim from the two
+    # captures in this repository rather than invented: a dryer that DOES use legacy
+    # slots (note the trailing space in `"opt1 "` -- that is what the cloud sends), and a
+    # washer that maps every option name onto itself and so uses no slots at all.
+    TD_SLOTS = {
+        "opt1 ": "anticrease",
+        "opt2": "dryingManager",
+        "opt3": "bestIroning",
+        "opt4": "hybrid",
+        "opt5": "photoPlasmaStatus",
+    }
+    WM_IDENTITY = {
+        "nightWashStatus": "nightWashStatus",
+        "haier_SoakPrewashSelection": "haier_SoakPrewashSelection",
+    }
+
+    @staticmethod
+    def _history(options):
+        """The command echo, in the shape the live captures carry it."""
+        return {
+            "commandHistory": {
+                "command": {"commandName": "startProgram", "applianceOptions": options}
+            }
+        }
+
+    def _options(self, appliance=None, attributes=None):
+        return diagnostics._appliance_options(
+            OptionAppliance(options={}, additional_data={})
+            if appliance is None
+            else appliance,
+            {} if attributes is None else attributes,
+        )
+
+    def test_the_slot_map_is_printed_exactly_as_the_cloud_sent_it(self):
+        # The whole contract in one assertion: no strip, no sort, no normalisation.
+        # `"opt1 "` really arrives with a trailing space, and a section that tidied it
+        # away would send a maintainer hunting a slot that does not exist under the name
+        # the cloud actually accepts.
+        block = self._options(
+            OptionAppliance(options=dict(self.TD_SLOTS), additional_data={})
+        )
+        self.assertEqual("aliases", block["read"]["state"])
+        self.assertEqual(self.TD_SLOTS, block["read"]["rows"])
+        self.assertEqual(list(self.TD_SLOTS), list(block["read"]["rows"]))
+
+    def test_the_trailing_space_survives_redaction_and_serialisation(self):
+        # Verbatim only counts if it is still verbatim in the FILE. `_redact` rebuilds
+        # every mapping key by key and Home Assistant serialises the result, so the
+        # guarantee is asserted after both rather than on the helper's return value.
+        block = _option_block(
+            OptionAppliance(options=dict(self.TD_SLOTS), additional_data={})
+        )
+        rows = json.loads(json.dumps(block))["appliance_options"]["read"]["rows"]
+        self.assertIn("opt1 ", rows)
+        self.assertEqual("anticrease", rows["opt1 "])
+
+    def test_an_identity_map_is_neither_absent_nor_empty(self):
+        # The real washer maps every option name onto itself. That is a POSITIVE finding
+        # -- this model uses no legacy slots -- and the three states must stay
+        # distinguishable, because a reader who cannot tell them apart concludes the
+        # appliance has no options at all.
+        identity = self._options(
+            OptionAppliance(options=dict(self.WM_IDENTITY), additional_data={})
+        )
+        self.assertEqual("identity", identity["read"]["state"])
+        self.assertEqual(self.WM_IDENTITY, identity["read"]["rows"])
+        self.assertEqual("empty", self._options()["read"]["state"])
+        self.assertEqual({}, self._options()["read"]["rows"])
+        self.assertEqual("absent", self._options(OptionAppliance())["read"]["state"])
+
+    def test_the_section_is_emitted_even_when_every_source_is_mute(self):
+        # "The cloud told us nothing about options here" is an answer issue #106 needs as
+        # often as a populated map is. A section that vanished when empty would leave a
+        # reader unable to tell a silent cloud from a dump taken before it existed.
+        block = _option_block(app_type="AC")["appliance_options"]
+        self.assertEqual("empty", block["read"]["state"])
+        self.assertEqual("absent", block["last_command"]["state"])
+        self.assertEqual("absent", block["catalog_sibling"]["state"])
+
+    def test_the_section_sits_between_the_model_and_the_shadow(self):
+        # The pinned order is load bearing: every option NAME printed further down is
+        # only interpretable through this map, so it has to arrive before them and beside
+        # the other model-level catalogue data. It may not move ABOVE `model_attributes`
+        # either, which `FreshnessPlacementTest` pins from the other side.
+        keys = list(_option_block(app_type="AC"))
+        self.assertLess(keys.index("model_attributes"), keys.index("appliance_options"))
+        self.assertLess(keys.index("appliance_options"), keys.index("attributes"))
+        self.assertLess(keys.index("appliance_options"), keys.index("commands"))
+
+    def test_the_name_does_not_collide_with_the_entry_options(self):
+        # `entry.options` is the config-entry toggles and has nothing to do with this.
+        # The two live in different namespaces and the names must stay different too, or
+        # every grep and every jq filter over an issue attachment becomes ambiguous.
+        dump, blocks = _entry_diag()
+        self.assertIn("options", dump["entry"])
+        self.assertNotIn("options", blocks["AC"])
+
+    def test_the_command_echo_is_read_and_compared_with_our_own(self):
+        # The echo is the only source that can be INDEPENDENT of our catalogue read, and
+        # a disagreement is the finding: a stale catalogue, or a cache serving a map the
+        # cloud has since changed.
+        stale = self._options(
+            OptionAppliance(options={"opt1 ": "anticrease"}, additional_data={}),
+            self._history(dict(self.TD_SLOTS)),
+        )
+        self.assertEqual("aliases", stale["last_command"]["state"])
+        self.assertEqual(self.TD_SLOTS, stale["last_command"]["rows"])
+        self.assertEqual("differs", stale["read_vs_last_command"])
+        agreeing = self._options(
+            OptionAppliance(options=dict(self.TD_SLOTS), additional_data={}),
+            self._history(dict(self.TD_SLOTS)),
+        )
+        self.assertEqual("match", agreeing["read_vs_last_command"])
+
+    def test_two_silent_sources_are_unknown_and_never_agreement(self):
+        # Two empty maps must not be reported as agreeing: "nothing to compare" is its
+        # own answer, and rendering it as `match` would manufacture a corroboration out
+        # of two silences on exactly the appliances where the map is the missing datum.
+        self.assertEqual("unknown", self._options()["read_vs_last_command"])
+
+    def test_a_mangled_first_level_sibling_survives_as_a_residue(self):
+        # The loader flattens a first-level `options` to its last leaf, which
+        # `CatalogOptionsSiblingTest` in tests/test_command_catalog_hydration.py pins
+        # against the real loader. The residue is the only surviving evidence that the
+        # sibling the official app reads existed at all.
+        block = self._options(
+            OptionAppliance(
+                options=dict(self.TD_SLOTS),
+                additional_data={"options": "photoPlasmaStatus"},
+            )
+        )
+        self.assertEqual("mangled", block["catalog_sibling"]["state"])
+        self.assertEqual("photoPlasmaStatus", block["catalog_sibling"]["residue"])
+
+    def test_an_absent_sibling_is_told_apart_from_an_absent_surface(self):
+        # Measured: an EMPTY first-level sibling leaves no key in `additional_data` at
+        # all, exactly like a payload that never carried one, so `absent` owns that
+        # ambiguity. What it must not do is conflate it with an appliance object that has
+        # no `additional_data` surface -- a statement about THIS integration rather than
+        # about the cloud, and so a token of its own.
+        self.assertEqual("absent", self._options()["catalog_sibling"]["state"])
+        self.assertEqual(
+            "unavailable",
+            self._options(OptionAppliance(options={}))["catalog_sibling"]["state"],
+        )
+
+    def test_a_sibling_kept_as_a_mapping_is_printed_like_any_other_map(self):
+        # Unreachable through today's loader and deliberately supported: the day
+        # `options` is lifted out of the candidate the way `applianceModel` already is,
+        # this row starts printing the real map with no change here.
+        block = self._options(
+            OptionAppliance(options={}, additional_data={"options": dict(self.TD_SLOTS)})
+        )
+        self.assertEqual("mapping", block["catalog_sibling"]["state"])
+        self.assertEqual(self.TD_SLOTS, block["catalog_sibling"]["rows"])
+
+    def test_a_raising_surface_costs_its_own_row_and_not_the_dump(self):
+        # `options` and `additional_data` are properties on cloud-filled objects, and
+        # `_appliance_block` is called with no try/except around it from either entry
+        # point. The dumps that matter most are taken while something is already broken.
+        class Hostile:
+            commands = {}
+
+            @property
+            def options(self):
+                raise RuntimeError("boom")
+
+            @property
+            def additional_data(self):
+                raise RuntimeError("boom")
+
+        block = self._options(Hostile(), ExplodingMapping({"machMode": "1"}))
+        self.assertEqual("unreadable", block["read"]["state"])
+        self.assertEqual("unreadable", block["catalog_sibling"]["state"])
+        self.assertEqual("unreadable", block["last_command"]["state"])
+
+    def test_a_surface_that_is_present_but_hostile_is_unreadable_too(self):
+        # Distinct from the test above, and the difference is where the failure sits.
+        # There the SURFACE raised, so nothing about the cloud could be read at all; here
+        # `additional_data` is a perfectly ordinary mapping whose `.get` is the thing that
+        # breaks -- the shape `_last_fetch` and `_freshness` already guard against on
+        # cloud-filled envelopes. Both answer `unreadable` rather than `absent`, because
+        # `absent` is a claim about what the vendor sent and this row cannot make it.
+        block = self._options(
+            OptionAppliance(options={}, additional_data=ExplodingMapping())
+        )
+        self.assertEqual("unreadable", block["catalog_sibling"]["state"])
+        self.assertEqual("empty", block["read"]["state"])
+
+    def test_a_non_mapping_surface_is_unreadable_not_absent(self):
+        # Two different findings. `absent` is the ordinary answer on every type with no
+        # programme options; `unreadable` says the surface is there and holds something
+        # it should not, which is the only one of the two a maintainer should act on.
+        block = self._options(OptionAppliance(options=["opt1"], additional_data={}))
+        self.assertEqual("unreadable", block["read"]["state"])
+        self.assertEqual({}, block["read"]["rows"])
+
+    def test_malformed_rows_are_printed_counted_and_never_read_as_identity(self):
+        # A slot the cloud declared with a null name is itself the finding, so the row is
+        # printed. It must not be able to make the verdict `identity`: a row that does not
+        # carry its own name is a row that still has to be translated.
+        block = self._options(
+            OptionAppliance(
+                options={"opt1 ": None, 5: "x", "opt3": "hygiene"}, additional_data={}
+            )
+        )
+        self.assertEqual({"opt1 ": None, "5": "x", "opt3": "hygiene"}, block["read"]["rows"])
+        self.assertEqual(2, block["read"]["malformed_rows"])
+        self.assertEqual("aliases", block["read"]["state"])
+
+    def test_the_verdict_is_taken_before_redaction_masks_a_row(self):
+        # `_redact` masks on KEY name, so an option whose long name collides with an
+        # identity key prints as `***`. A reader deciding identity-versus-aliases by
+        # diffing the printed rows would read that masked row as an alias; the token is
+        # computed on the raw pairs and cannot be fooled that way.
+        block = _option_block(
+            OptionAppliance(options={"code": "code", "opt2": "opt2"}, additional_data={}),
+            app_type="DW",
+        )["appliance_options"]
+        self.assertEqual("identity", block["read"]["state"])
+        self.assertEqual("***", block["read"]["rows"]["code"])
+
+    def test_every_way_a_row_can_go_missing_is_counted(self):
+        # One number for three causes, because a reader needs one fact out of all of them:
+        # the map above has fewer rows than the cloud sent. A missing row HERE reads as an
+        # option the appliance does not have.
+        cap = diagnostics._OPTION_MAP_MAX_ROWS
+        wide = self._options(
+            OptionAppliance(
+                options={f"opt{i}": f"n{i}" for i in range(cap + 16)}, additional_data={}
+            )
+        )["read"]
+        self.assertEqual(cap, len(wide["rows"]))
+        self.assertEqual(16, wide["rows_dropped"])
+
+        # Two long keys bounding to the same text: nothing raises, one row simply
+        # overwrites the other.
+        prefix = "x" * (diagnostics._OPTION_TEXT_MAX_CHARS + 1)
+        collided = self._options(
+            OptionAppliance(options={prefix + "a": "v", prefix + "b": "v"}, additional_data={})
+        )["read"]
+        self.assertEqual(1, len(collided["rows"]))
+        self.assertEqual(1, collided["rows_dropped"])
+
+        # A key that is not a bounded scalar at all is dropped rather than stringified:
+        # rendering a cloud container under a key of our choosing is what `_bounded_text`
+        # exists to refuse.
+        container = self._options(
+            OptionAppliance(options={("t", "u"): "v", "ok": "ok"}, additional_data={})
+        )["read"]
+        self.assertEqual({"ok": "ok"}, container["rows"])
+        self.assertEqual(1, container["rows_dropped"])
+
+    def test_a_mac_shaped_value_is_masked_before_it_is_cut(self):
+        # `_bounded_text`, never a bare slice: mask first, then cut. Both halves of this
+        # mapping come from the cloud, so both are bounded -- the long name is a key on an
+        # identity model and a value on a slotted one.
+        block = self._options(
+            OptionAppliance(options={"opt1": "AA:BB:CC:DD:EE:FF"}, additional_data={})
+        )
+        self.assertNotIn("AA:BB", json.dumps(block))
+
+
+class OptCompatibilityMatrixTest(unittest.TestCase):
+    """The decoded matrix, against the one real dishwasher capture (issue #106).
+
+    Every number here was measured off diagnostics/issue106-dumps/ rather than chosen:
+    1180 base64 characters, 885 decoded bytes, twelve programme groups, seven option
+    names, and the two duplicated keys the cloud wrote and every JSON parser eats.
+    """
+
+    def setUp(self):
+        self.section = diagnostics._opt_compatibility(
+            {"optCompatibility": _real_opt_compat_b64()}
+        )
+
+    def test_it_decodes_and_reports_both_sizes(self):
+        self.assertNotIn("error", self.section)
+        self.assertEqual(1180, self.section["source_chars"])
+        self.assertEqual(885, self.section["decoded_bytes"])
+
+    def test_the_functional_id_wrapper_is_unwrapped_and_named(self):
+        # The app does the same unwrap (@decomp.txt:1761741), and a reader comparing this
+        # section against it has to know which branch was taken.
+        self.assertEqual("functionalId", self.section["keyed_by"])
+        self.assertNotIn("functionalId", self.section["programs"])
+        self.assertEqual(12, len(self.section["programs"]))
+        self.assertIn("9|12", self.section["programs"])
+        self.assertIn("6|18|7|8|15|16", self.section["programs"])
+
+    def test_the_vocabulary_is_six_slots_and_one_real_name(self):
+        # The reason `option_slots` cannot assume `optN`: this matrix mixes legacy slot
+        # spellings with a full parameter name, and `tabStatus` is in the command schema
+        # under exactly that name.
+        self.assertEqual(
+            ["opt2", "opt3", "opt4", "opt5", "opt7", "opt8", "tabStatus"],
+            self.section["vocabulary"],
+        )
+
+    def test_the_duplicates_the_app_silently_loses_are_reported(self):
+        # The finding of the whole section. `"9|12"` declares opt5 twice and opt8 three
+        # times; `JSON.parse` keeps the last of each, so the app itself acts on a matrix
+        # missing three constraints.
+        reported = {
+            (tuple(row["path"]), row["key"]): row["count"]
+            for row in self.section["duplicate_keys"]
+        }
+        self.assertEqual(
+            {
+                (("functionalId", "9|12"), "opt5"): 2,
+                (("functionalId", "9|12"), "opt8"): 3,
+            },
+            reported,
+        )
+
+    def test_every_losing_subtree_is_quoted_verbatim(self):
+        # Counts alone would say three constraints were lost and not WHICH three. These
+        # are the bytes the cloud wrote and the app never sees.
+        rows = {row["key"]: row for row in self.section["duplicate_keys"]}
+        self.assertEqual(
+            [{"tabStatus": {"opt8": "0"}, "opt8": {"tabStatus": "0"}}],
+            rows["opt5"]["dropped"],
+        )
+        self.assertEqual([{"opt5": "0"}, {"opt4": "0"}], rows["opt8"]["dropped"])
+
+    def test_programs_is_the_collapsed_view_and_kept_agrees_with_it(self):
+        # `programs` is what the appliance behaves according to, so it must be the LAST
+        # occurrence -- and `kept` must be that same object, or the two halves of the
+        # section would be describing different matrices.
+        group = self.section["programs"]["9|12"]
+        self.assertEqual({"opt8": "0"}, group["opt5"])
+        for row in self.section["duplicate_keys"]:
+            self.assertEqual(group[row["key"]], row["kept"], row["key"])
+
+    def test_the_whole_section_is_json_serialisable(self):
+        # `_JsonPairs` is a tuple subclass and must never survive the collapse: one
+        # leaking into the block is a TypeError in HA's encoder, i.e. no dump at all.
+        json.dumps(self.section)
+
+    def test_the_path_is_a_list_of_segments_and_never_a_joined_string(self):
+        # The first-level keys are pipe-separated programme-id lists and the cloud may
+        # put any character in them, including whichever separator a joined path would
+        # have chosen.
+        for row in self.section["duplicate_keys"]:
+            self.assertIsInstance(row["path"], list)
+            self.assertIn("|", row["path"][1])
+
+
+class OptCompatibilityDegradationTest(unittest.TestCase):
+    """Every way the value can be wrong, and the promise that it costs only itself."""
+
+    @staticmethod
+    def _section(value):
+        return diagnostics._opt_compatibility({"optCompatibility": value})
+
+    def test_an_absent_attribute_keeps_the_section_out_of_the_dump(self):
+        self.assertEqual({}, diagnostics._opt_compatibility({}))
+        self.assertEqual({}, diagnostics._opt_compatibility({"optCompatibility": None}))
+
+    def test_a_non_mapping_surface_is_ignored(self):
+        self.assertEqual({}, diagnostics._opt_compatibility("not a mapping"))
+        self.assertEqual({}, diagnostics._opt_compatibility(None))
+
+    def test_a_non_string_is_reported_as_a_shape_not_as_an_encoding(self):
+        # Coercing with str() would report `invalid_base64` and blame the encoding for a
+        # value that was never encoded.
+        self.assertEqual("not_text", self._section({"a": 1})["error"])
+        self.assertEqual("not_text", self._section(17)["error"])
+
+    def test_an_empty_or_blank_value_says_so(self):
+        self.assertEqual("empty", self._section("")["error"])
+        self.assertEqual("empty", self._section("   \n ")["error"])
+
+    def test_surrounding_whitespace_does_not_cost_the_matrix(self):
+        # The cloud ships padded strings elsewhere -- `"opt1 "` with the trailing space --
+        # so refusing over a stray newline would be refusing over the vendor's own habit.
+        section = self._section(" " + _real_opt_compat_b64() + "\n")
+        self.assertEqual(885, section["decoded_bytes"])
+        self.assertEqual("functionalId", section["keyed_by"])
+
+    def test_an_oversized_value_is_refused_and_measured_never_truncated(self):
+        section = self._section("A" * (diagnostics._OPT_COMPAT_MAX_SOURCE_CHARS + 1))
+        self.assertEqual("too_large", section["error"])
+        self.assertEqual(
+            diagnostics._OPT_COMPAT_MAX_SOURCE_CHARS + 1, section["source_chars"]
+        )
+        # A refusal, not a cut: half a base64 blob is not half a matrix.
+        self.assertNotIn("programs", section)
+
+    def test_the_real_value_is_nowhere_near_the_cap(self):
+        # A cap that could bite the only appliance anyone has dumped is not a runaway
+        # guard, it is a filter.
+        self.assertLess(
+            len(_real_opt_compat_b64()) * 10, diagnostics._OPT_COMPAT_MAX_SOURCE_CHARS
+        )
+
+    def test_a_masked_value_is_refused_rather_than_half_decoded(self):
+        # The A4 mechanism, exercised directly. With b64decode's DEFAULT validate=False
+        # this input returns 450 bytes and raises nothing, so a `_bounded_text` applied
+        # upstream would produce a matrix that parses and lies.
+        masked = _real_opt_compat_b64()[:600] + diagnostics._REDACTED
+        self.assertEqual(450, len(base64.b64decode(masked)))  # the trap, measured
+        with self.assertRaises((binascii.Error, ValueError)):
+            base64.b64decode(masked, validate=True)
+        self.assertEqual("invalid_base64", self._section(masked)["error"])
+
+    def test_a_cut_off_a_four_character_boundary_is_caught_by_the_padding(self):
+        self.assertEqual("invalid_base64", self._section(_real_opt_compat_b64()[:-41])["error"])
+        self.assertEqual("invalid_base64", self._section(_real_opt_compat_b64()[:-43])["error"])
+
+    def test_a_cut_on_a_four_character_boundary_is_caught_only_by_the_json(self):
+        # Valid base64, 855 real bytes, and still not a matrix. This is why the decode
+        # guard and the parse guard are two guards and not one.
+        cut = _real_opt_compat_b64()[:-40]
+        self.assertEqual(855, len(base64.b64decode(cut, validate=True)))
+        section = self._section(cut)
+        self.assertEqual("invalid_json", section["error"])
+        self.assertEqual(855, section["decoded_bytes"])
+
+    def test_non_utf8_bytes_are_reported_as_such(self):
+        section = self._section(base64.b64encode(b"\xff\xfe\x00").decode("ascii"))
+        self.assertEqual("invalid_utf8", section["error"])
+        self.assertEqual(3, section["decoded_bytes"])
+
+    def test_valid_json_that_is_not_an_object_is_reported_as_such(self):
+        self.assertEqual("not_an_object", self._section(_b64("[1,2]"))["error"])
+        self.assertEqual("not_an_object", self._section(_b64('"nope"'))["error"])
+
+    def test_a_deeply_nested_document_costs_the_section_and_not_the_dump(self):
+        # `json.loads` raises RecursionError -- a RuntimeError, which `except ValueError`
+        # does NOT catch -- and this payload is well under the cap. Without the broad arm
+        # one absurd catalogue row costs the reporter the whole file.
+        deep = _b64(('{"a":' * 1200) + "1" + ("}" * 1200))
+        self.assertLess(len(deep), diagnostics._OPT_COMPAT_MAX_SOURCE_CHARS)
+        section = self._section(deep)
+        self.assertEqual("unreadable", section["error"])
+        self.assertEqual(len(deep), section["source_chars"])
+
+    def test_a_matrix_with_no_functional_id_wrapper_uses_the_root(self):
+        section = self._section(_b64('{"9|12":{"opt1":"0"}}'))
+        self.assertIsNone(section["keyed_by"])
+        self.assertEqual({"9|12": {"opt1": "0"}}, section["programs"])
+        self.assertEqual(["opt1"], section["vocabulary"])
+
+    def test_an_empty_functional_id_object_is_still_unwrapped(self):
+        # In JavaScript `{}` is truthy, so the app unwraps it; testing truthiness here
+        # instead of `isinstance(..., Mapping)` would make this section disagree with the
+        # app on a malformed catalogue.
+        section = self._section(_b64('{"functionalId":{}}'))
+        self.assertEqual("functionalId", section["keyed_by"])
+        self.assertEqual({}, section["programs"])
+        self.assertEqual([], section["vocabulary"])
+
+    def test_a_falsy_non_object_functional_id_falls_through_to_the_root(self):
+        section = self._section(_b64('{"functionalId":null,"9":{"opt1":"0"}}'))
+        self.assertIsNone(section["keyed_by"])
+        self.assertIn("9", section["programs"])
+
+    def test_no_duplicates_means_no_key(self):
+        self.assertNotIn("duplicate_keys", self._section(_b64('{"9":{"opt1":"0"}}')))
+
+    def test_a_duplicate_nested_inside_a_losing_occurrence_is_told_apart(self):
+        # Without the occurrence index in the child path these two records would be filed
+        # under an identical path and a reader could not say which subtree each belonged
+        # to -- in the section whose only job is separating what survived from what did not.
+        section = self._section(_b64('{"9":{"o":{"x":"0","x":"1"},"o":{"y":"0","y":"1"}}}'))
+        paths = {(tuple(row["path"]), row["key"]) for row in section["duplicate_keys"]}
+        self.assertIn((("9",), "o"), paths)
+        self.assertIn((("9", "o[0]"), "x"), paths)
+        self.assertIn((("9", "o[1]"), "y"), paths)
+
+
+class OptCompatibilityVocabularyTest(unittest.TestCase):
+    """The seam `option_slots` reuses, tested as the seam it is."""
+
+    def test_it_collects_option_names_at_every_depth_and_no_group_keys(self):
+        programs = {
+            "6|18": {"opt5": "0", "opt4": "0"},
+            "9|12": {"opt8": {"tabStatus": {"opt5": "0"}}},
+        }
+        self.assertEqual(
+            ["opt4", "opt5", "opt8", "tabStatus"],
+            diagnostics._opt_compatibility_vocabulary(programs),
+        )
+
+    def test_it_never_returns_a_programme_group_key(self):
+        self.assertEqual(
+            ["opt1"], diagnostics._opt_compatibility_vocabulary({"6|18|7": {"opt1": "0"}})
+        )
+
+    def test_it_survives_anything_that_is_not_a_mapping(self):
+        self.assertEqual([], diagnostics._opt_compatibility_vocabulary(None))
+        self.assertEqual([], diagnostics._opt_compatibility_vocabulary([1, 2]))
+        self.assertEqual([], diagnostics._opt_compatibility_vocabulary({"9": "0"}))
+
+
+class OptCompatibilityPlacementTest(unittest.TestCase):
+    """Where the section sits and when it appears, which is most of what it buys."""
+
+    @staticmethod
+    def _block(model_attributes):
+        return _option_block(
+            OptionAppliance(
+                options={}, additional_data={}, model_attributes=model_attributes
+            ),
+            app_type="DW",
+        )
+
+    def test_it_sits_directly_under_the_base64_it_decodes(self):
+        # Adjacency is the ergonomics: a reader who has just scrolled past 1180 opaque
+        # characters should find out what they say within the next two keys.
+        keys = list(self._block({"optCompatibility": _real_opt_compat_b64()}))
+        self.assertLess(keys.index("model_attributes"), keys.index("opt_compatibility"))
+        self.assertLess(keys.index("opt_compatibility"), keys.index("attributes"))
+
+    def test_a_model_with_no_matrix_gets_no_section(self):
+        # Which is every appliance anyone has dumped except the dishwasher. An empty
+        # shape would be something a reader tries to interpret.
+        self.assertNotIn("opt_compatibility", self._block({"zones": "fridge"}))
+        self.assertNotIn("opt_compatibility", self._block({}))
+
+    def test_a_refused_matrix_still_produces_a_block(self):
+        # The promise: the section degrades to itself and never to the dump.
+        block = self._block({"optCompatibility": "!!!not base64!!!", "zones": "a"})
+        self.assertEqual("invalid_base64", block["opt_compatibility"]["error"])
+        self.assertEqual("a", block["model_attributes"]["zones"])
+        self.assertIn("coverage", block)
+
+
+class OptCompatibilityVerbatimTest(unittest.TestCase):
+    """A4: `model_attributes` must not start bounding the value this section decodes.
+
+    `_bounded_text` is this module's standard treatment for an unconstrained cloud
+    string, and pointing it at `model_attributes` -- the one section with no cap at all
+    -- would be an entirely reasonable-looking patch. It would also be SILENT:
+    `b64decode`'s default `validate=False` discards the `***` and returns shorter,
+    plausible bytes, so the dump would carry a matrix that parses, reads correctly, and
+    forbids combinations the model never forbade.
+
+    These tests pass on arrival, which is the point. They do not forbid bounding the map
+    -- they fail the day it is bounded without exempting the envelopes, which is the
+    distinction `_model_attributes`' docstring asks a reviewer to keep.
+    """
+
+    def test_the_cloud_bytes_reach_the_section_through_the_whole_block(self):
+        raw = _real_opt_compat_b64()
+        block = _option_block(
+            OptionAppliance(
+                options={}, additional_data={}, model_attributes={"optCompatibility": raw}
+            ),
+            app_type="DW",
+        )
+        # The printed value, byte for byte. Nothing between `applianceModel.attributes`
+        # and the dump may shorten, mask or normalise it.
+        self.assertEqual(raw, block["model_attributes"]["optCompatibility"])
+        section = block["opt_compatibility"]
+        self.assertNotIn("error", section)
+        self.assertEqual(885, section["decoded_bytes"])
+        self.assertEqual(12, len(section["programs"]))
+        self.assertEqual(2, len(section["duplicate_keys"]))
+
+    def test_every_cap_this_module_declares_would_destroy_it(self):
+        # The failure this class exists to prevent, demonstrated rather than argued. Every
+        # bound in the module is tried, because the plausible mistake is not inventing a
+        # new cap but REUSING one of these on a section that also prints model attributes.
+        for cap in (
+            diagnostics._PROGRAM_MATRIX_VALUE_MAX_CHARS,
+            diagnostics._FUTURE_MAX_VALUE_CHARS,
+            diagnostics._OPTION_TEXT_MAX_CHARS,
+            diagnostics._CONN_CATEGORY_MAX_CHARS,
+        ):
+            with self.subTest(cap=cap):
+                bounded = diagnostics._bounded_text(_real_opt_compat_b64(), cap)
+                self.assertNotEqual(_real_opt_compat_b64(), bounded)
+                self.assertIsNone(_decoded_matrix(bounded))
+
+    def test_the_masks_the_dump_does_run_leave_it_alone(self):
+        # The two masks that DO run on every leaf are cleared explicitly, so a future
+        # reader does not have to re-derive why a 1180-character cloud string is safe:
+        # `_MAC_RE` needs six colon-separated octet groups and base64 has no colons, and
+        # `_redact` matches on KEY names.
+        raw = _real_opt_compat_b64()
+        self.assertEqual(raw, diagnostics._jsonable(raw))
+        self.assertEqual(
+            {"optCompatibility": raw}, diagnostics._redact({"optCompatibility": raw})
+        )
+
+    def test_the_capture_on_disk_still_decodes_to_its_companion_file(self):
+        # Guards the FIXTURE rather than the code. The decoded companion is stored raw on
+        # purpose, because re-serialising it would erase the duplicate keys that are the
+        # whole reason for keeping it; if someone tidies either file this fails before a
+        # test that depends on them goes quietly green against a value the cloud never sent.
+        decoded = base64.b64decode(_real_opt_compat_b64(), validate=True)
+        self.assertEqual(_DW_DECODED.read_bytes().strip(), decoded)
+        self.assertIn(b'"opt5":{"opt8":"0"},"opt8":{"opt5":"0"}', decoded)
+
+
+class OptionSlotsTest(unittest.TestCase):
+    """`option_slots`: which legacy slot each programme option answers to (issue #106).
+
+    A pure join over three sections the same document already prints, which is what makes
+    the only interpreting section in this dump safe to ship: every row can be rebuilt by
+    hand from `program_options`, `appliance_options` and `opt_compatibility`.
+    """
+
+    TD_ECHO = {
+        "opt1 ": "anticrease",
+        "opt2": "dryingManager",
+        "opt3": "bestIroning",
+        "opt4": "hybrid",
+        "opt5": "photoPlasmaStatus",
+    }
+
+    @staticmethod
+    def _options(read=None, last=None):
+        return {
+            "read": {"state": "ok", "rows": read or {}},
+            "last_command": {"state": "ok", "rows": last or {}},
+        }
+
+    def _slots(self, names, options=None, matrix=None):
+        return diagnostics._option_slots(
+            {"command": "startProgram", "union_params": sorted(names)},
+            options if options is not None else self._options(),
+            {"vocabulary": sorted(matrix)} if matrix is not None else {},
+        )
+
+    def test_the_clouds_own_malformed_slot_key_survives_verbatim(self):
+        # Character for character. The real dryer is addressed by `"opt1 "`, and that
+        # malformation is the most diagnostic detail in the block: it is the reason a
+        # consumer matching on `"opt1"` finds nothing.
+        block = self._slots(["anticrease", "photoPlasmaStatus"], self._options(last=self.TD_ECHO))
+        self.assertEqual(
+            {"slot": "opt1 ", "source": "options_last_command"}, block["params"]["anticrease"]
+        )
+        self.assertIn("opt1 ", json.dumps(block))
+
+    def test_a_slot_spelled_with_stray_whitespace_still_finds_its_parameter(self):
+        # The same malformation from the other side: a schema parameter honestly named
+        # `opt1` must not miss its own row because the cloud's key carries a space. The
+        # stripped spelling is used for the LOOKUP only; what is printed is the raw key.
+        block = self._slots(["opt1"], self._options(read={"opt1 ": "anticrease"}))
+        self.assertEqual(
+            {"slot": "opt1 ", "source": "options_read", "alias": "anticrease"},
+            block["params"]["opt1"],
+        )
+
+    def test_a_padded_row_cannot_steal_the_key_another_row_really_has(self):
+        # The test above and this one are the two halves of the same rule, and only the
+        # first half was ever checked. When BOTH spellings arrive, the stripped form of
+        # the padded row used to claim `opt1` before the row honestly named `opt1` could,
+        # so a schema parameter spelled `opt1` resolved to the other row's alias: a
+        # confident wrong slot in the one section whose contract is to print nothing
+        # rather than guess. Raw spellings now win outright (PR #107 review).
+        block = self._slots(
+            ["opt1"],
+            self._options(read={"opt1 ": "anticrease", "opt1": "dryingManager"}),
+        )
+        self.assertEqual(
+            {"slot": "opt1", "source": "options_read", "alias": "dryingManager"},
+            block["params"]["opt1"],
+        )
+        # The losing row is NOT reported as unresolved, and that is deliberate rather
+        # than an oversight of the fix: `unresolved_slots` asks whether a slot names
+        # something the schema lacks, and `"opt1 "` stripped is a parameter the schema
+        # has. It stays visible where the raw truth lives -- `appliance_options.read`
+        # prints every row verbatim -- so nothing the cloud sent leaves the document;
+        # the join simply has one correspondence to state and states it once.
+        self.assertNotIn("unresolved_slots", block)
+
+    def test_an_identity_mapped_appliance_reads_as_one(self):
+        # The real washer uses no slots: it maps every option name to itself. Rows whose
+        # `slot` equals their own key ARE the finding, and the redundant `alias` is
+        # suppressed so such an appliance does not print it on every row.
+        block = self._slots(
+            ["nightWashStatus", "haier_SoakPrewashSelection", "spinSpeed"],
+            self._options(last={
+                "nightWashStatus": "nightWashStatus",
+                "haier_SoakPrewashSelection": "haier_SoakPrewashSelection",
+            }),
+        )
+        self.assertEqual(
+            {"slot": "nightWashStatus", "source": "options_last_command"},
+            block["params"]["nightWashStatus"],
+        )
+        self.assertNotIn("alias", block["params"]["haier_SoakPrewashSelection"])
+        self.assertNotIn("spinSpeed", block["params"])
+
+    def test_a_slot_named_parameter_carries_the_name_it_stands_for(self):
+        # The app mixes both spellings in ONE payload (@decomp.txt:1843556), so a lookup
+        # that only asked "is this a VALUE of the map" would answer nothing for the
+        # slot-spelled half of a schema.
+        block = self._slots(["opt2"], self._options(read={"opt2": "hygiene"}))
+        self.assertEqual(
+            {"slot": "opt2", "source": "options_read", "alias": "hygiene"},
+            block["params"]["opt2"],
+        )
+
+    def test_the_read_map_is_consulted_before_the_command_echo(self):
+        # The order is a confidence ranking: `read` is the map this integration actually
+        # transmits, so a row sourced from it explains our own behaviour.
+        block = self._slots(
+            ["prewash"],
+            self._options(read={"opt3": "prewash"}, last={"opt4": "prewash"}),
+        )
+        self.assertEqual("opt3", block["params"]["prewash"]["slot"])
+        self.assertEqual("options_read", block["params"]["prewash"]["source"])
+
+    def test_slots_naming_options_the_schema_does_not_have_are_reported(self):
+        # On the only real slotted appliance this is the LARGER half: four of the five
+        # slots the dryer echoed name options its own startProgram does not declare. Drop
+        # them and the dump says "one option has a slot" while hiding that the two
+        # vocabularies barely overlap.
+        block = self._slots(["photoPlasmaStatus"], self._options(last=self.TD_ECHO))
+        self.assertEqual(
+            {
+                "opt1 ": "anticrease",
+                "opt2": "dryingManager",
+                "opt3": "bestIroning",
+                "opt4": "hybrid",
+            },
+            block["unresolved_slots"]["options_last_command"],
+        )
+        # A slot that DID find its parameter is not repeated here.
+        self.assertNotIn("opt5", block["unresolved_slots"]["options_last_command"])
+
+    def test_a_parameter_nothing_is_known_about_gets_no_row(self):
+        # 39 rows of `{"slot": null, "source": null}` around the one row that says
+        # something is what the real dryer would otherwise print.
+        block = self._slots(["spinSpeed", "temp", "prewash"], self._options(read={"opt1": "prewash"}))
+        self.assertEqual(["prewash"], sorted(block["params"]))
+
+    def test_the_denominator_is_stated_so_the_filter_cannot_mislead(self):
+        # The same contract `categories_total` holds against `per_program`: a filtered map
+        # must say what it was filtered from, or a reader concludes the appliance has one
+        # option parameter.
+        block = self._slots(["spinSpeed", "temp", "prewash"], self._options(read={"opt1": "prewash"}))
+        self.assertEqual(3, block["params_considered"])
+        self.assertEqual(1, len(block["params"]))
+
+    def test_there_is_no_static_fallback_table(self):
+        # Deleted deliberately rather than omitted. The decompiled app's tables contribute
+        # ZERO rows on both real appliances in this repository, and they contradict each
+        # other on the dishwasher issue #106 was opened about -- `hygiene` is `opt7` in
+        # two command-parameter enums and `opt2` in the dishwasher-labelled catalogue
+        # entry (@decomp.txt:978496, 1010138 against 975325). A confident wrong slot in a
+        # file attached to a public issue is believed; a null reads as "we do not know".
+        block = self._slots(["prewash", "hygiene", "anticrease", "threeInOne"])
+        self.assertEqual({}, block["params"])
+        self.assertEqual(4, block["params_considered"])
+
+    def test_in_matrix_matches_by_name_and_by_slot(self):
+        # The real matrix uses both: the captured dishwasher writes its constraints over
+        # six legacy slots and one honest parameter name.
+        vocabulary = {"opt2", "opt3", "opt4", "opt5", "opt7", "opt8", "tabStatus"}
+        block = self._slots(
+            ["hygiene", "tabStatus", "extraDry"],
+            self._options(read={"opt2": "hygiene"}),
+            vocabulary,
+        )
+        self.assertTrue(block["params"]["hygiene"]["in_matrix"])    # by slot
+        self.assertTrue(block["params"]["tabStatus"]["in_matrix"])  # by name
+        self.assertEqual(2, block["matrix_matched"])
+        # `extraDry` has no slot and no matrix mention, so it has nothing to report and
+        # gets no row -- `false` is printed only where the row exists for another reason.
+        self.assertNotIn("extraDry", block["params"])
+        self.assertFalse(
+            self._slots(
+                ["prewash"], self._options(read={"opt9": "prewash"}), {"opt2"}
+            )["params"]["prewash"]["in_matrix"]
+        )
+
+    def test_the_matrix_names_nothing_here_accounts_for_are_listed(self):
+        # "The cloud sent a compatibility matrix whose vocabulary touches nothing this
+        # appliance declares" is a real outcome, and this is where a reader sees it.
+        block = self._slots(
+            ["hygiene"], self._options(read={"opt2": "hygiene"}), {"opt2", "opt5", "opt8"}
+        )
+        self.assertEqual(1, block["matrix_matched"])
+        self.assertEqual(["opt5", "opt8"], block["matrix_only"])
+
+    def test_no_matrix_means_no_column_rather_than_a_column_of_false(self):
+        # A column of `false` on an appliance that shipped no matrix reads as "the matrix
+        # does not apply here" when the truth is "there is no matrix".
+        block = self._slots(["prewash"], self._options(read={"opt1": "prewash"}))
+        self.assertNotIn("in_matrix", block["params"]["prewash"])
+        self.assertNotIn("matrix_matched", block)
+        self.assertNotIn("matrix_only", block)
+
+    def test_two_slots_claiming_one_option_print_no_slot(self):
+        # The rows arrive in a deterministic order, so a winner would be perfectly stable
+        # -- which is exactly what makes a wrong answer survive review. Naming the
+        # conflict and printing no slot is the honest half.
+        block = self._slots(
+            ["prewash"], self._options(read={"opt1": "prewash", "opt9": "prewash"})
+        )
+        self.assertEqual({"slot": None, "source": "options_read"}, block["params"]["prewash"])
+        self.assertEqual({"options_read": {"prewash": ["opt1", "opt9"]}}, block["ambiguous_slots"])
+
+    def test_a_third_slot_joins_the_conflict_instead_of_replacing_it(self):
+        # Two rows open a conflict, and every row after them has to be APPENDED to it.
+        # An implementation that reopened the list on each collision would keep only the
+        # last pair and print a conflict narrower than the one the cloud actually sent --
+        # a reader counting the slots would then believe one of the three is unclaimed.
+        block = self._slots(
+            ["prewash"],
+            self._options(read={"opt1": "prewash", "opt5": "prewash", "opt9": "prewash"}),
+        )
+        self.assertEqual({"slot": None, "source": "options_read"}, block["params"]["prewash"])
+        self.assertEqual(
+            {"options_read": {"prewash": ["opt1", "opt5", "opt9"]}},
+            block["ambiguous_slots"],
+        )
+
+    def test_an_options_section_that_is_not_a_mapping_costs_only_its_rows(self):
+        # `appliance_options` is built a few lines earlier in the same dump, so this can
+        # only happen if that section is ever made to degrade to something else. The join
+        # still has `union_params` and must answer with the half it has rather than take
+        # the appliance block down with it.
+        block = diagnostics._option_slots(
+            {"command": "startProgram", "union_params": ["prewash"]},
+            "not a mapping",
+            {"vocabulary": ["opt1"]},
+        )
+        self.assertEqual("startProgram", block["command"])
+        self.assertEqual(1, block["params_considered"])
+        self.assertEqual({}, block["params"])
+        self.assertEqual(["opt1"], block["matrix_only"])
+        self.assertEqual(0, block["matrix_matched"])
+
+    def test_the_leftover_map_announces_a_truncation_as_a_sibling(self):
+        # A sibling and not a key inside the map, for the reason
+        # `attributes_last_update_truncated` is one: every key of that map is a
+        # cloud-CHOSEN slot, so a reserved `truncated` entry could not be told apart from
+        # a cloud that published a slot called `truncated`.
+        cap = diagnostics._OPTION_SLOT_MAX_UNRESOLVED
+        flood = {f"opt{index:03d}": f"unknown{index}" for index in range(cap + 5)}
+        block = self._slots(["prewash"], self._options(read=flood))
+        self.assertEqual(cap, len(block["unresolved_slots"]["options_read"]))
+        self.assertTrue(block["unresolved_slots_truncated"])
+        self.assertNotIn("truncated", block["unresolved_slots"]["options_read"])
+
+    def test_an_appliance_with_no_programme_options_gets_no_section(self):
+        # Which settles which TYPES carry this section without needing a type list: it
+        # appears exactly where there are programme options to reconcile.
+        self.assertEqual({}, diagnostics._option_slots({}, self._options(), {}))
+        self.assertEqual(
+            {}, diagnostics._option_slots({"union_params": []}, self._options(), {})
+        )
+        self.assertNotIn("option_slots", _option_block(app_type="AC"))
+
+    def test_it_reads_the_built_sections_and_never_the_appliance(self):
+        # The property that makes an interpreting section safe: handed the finished
+        # blocks, it cannot disagree with what the document prints, and a reader who
+        # distrusts a row can rebuild it by hand from two sections above.
+        signature = inspect.signature(diagnostics._option_slots)
+        self.assertEqual(
+            ["program_options", "appliance_options", "opt_compatibility"],
+            list(signature.parameters),
+        )
+
+    def test_the_section_sits_directly_after_program_options(self):
+        # Read apart they are two curiosities; read together they are the answer to #106.
+        category = FakeCommand({"prewash": FakeParam(value="0"), "program": FakeParam(value="p1")})
+
+        class StartProgram:
+            categories = {"p1": category}
+            parameters = category.parameters
+
+        appliance = OptionAppliance(
+            options={"opt1": "prewash"}, additional_data={}
+        )
+        appliance.commands = {"startProgram": StartProgram()}
+        block = diagnostics._appliance_block(
+            "id1",
+            {"appliance": appliance, "type": "WM", "attributes": {}, "statistics": {}},
+        )
+        keys = list(block)
+        self.assertEqual("option_slots", keys[keys.index("program_options") + 1])
+        self.assertEqual(
+            {"slot": "opt1", "source": "options_read"},
+            block["option_slots"]["params"]["prewash"],
+        )
+        json.dumps(block)
 
 
 if __name__ == "__main__":
