@@ -63,12 +63,9 @@ from .const import (
     APPLIANCE_FRE,
     APPLIANCE_HO,
     APPLIANCE_OV,
+    APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
-    APPLIANCE_TD,
-    APPLIANCE_WASH_GROUP,
     APPLIANCE_WC,
-    APPLIANCE_WD,
-    APPLIANCE_WM,
     CONF_ENABLE_EXPERIMENTAL,
     DOMAIN,
 )
@@ -271,16 +268,23 @@ class HonProgramOptionNumberDescription:
     unit: str | None = None
 
 
-_WASH_GROUP_TYPES = (APPLIANCE_WM, APPLIANCE_WD, APPLIANCE_TD)
-
 # Candidate program-option numbers, capability-gated by the device schema. delayTime is a
-# true range (0..1410 step 30 on the real models); the bounds are read live.
+# true range and every bound is read live: 0..1410 step 30 on the real washers, 0..1410
+# step 5 on the dishwasher of issue #106. That difference is why the dishwasher needs no
+# row of its own here -- nothing in this table encodes a step.
+#
+# `types` is APPLIANCE_PROGRAM_GROUP itself and not a local tuple. There used to be one,
+# `_WASH_GROUP_TYPES`, holding the same laundry types under the name the group constant
+# had; when the dishwasher joined, it would have kept saying "wash" while listing a
+# dishwasher, and it would have been a second list of the same members free to drift
+# from the first. A delayed start is a property of having a programme catalogue, which is
+# exactly what the group now means.
 _PROGRAM_OPTION_NUMBERS: tuple[HonProgramOptionNumberDescription, ...] = (
     HonProgramOptionNumberDescription(
         key="delay_time",
         param="delayTime",
         translation_key="delay_time",
-        types=_WASH_GROUP_TYPES,
+        types=APPLIANCE_PROGRAM_GROUP,
         icon="mdi:timer-outline",
         unit=UnitOfTime.MINUTES,
     ),
@@ -532,7 +536,7 @@ async def async_setup_entry(
         # Writable program-option numbers (#35): delayed start etc., capability-gated on
         # the wash group's live startProgram schema.
         opt_created: list[str] = []
-        if app_type in APPLIANCE_WASH_GROUP:
+        if app_type in APPLIANCE_PROGRAM_GROUP:
             for option in _PROGRAM_OPTION_NUMBERS:
                 if app_type not in option.types:
                     continue

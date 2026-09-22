@@ -574,5 +574,38 @@ class SelectStateTranslationTest(unittest.TestCase):
                 )
 
 
+class DishwasherReadWriteNamesTest(unittest.TestCase):
+    """Issue #106: a DW option readable AND writable must not show two identical names.
+
+    The four dishwasher binary sensors read `extraDry`, `halfLoad`, `openDoor` and
+    `ecoExpress` from the shadow, i.e. what the RUNNING or last cycle used; the switches
+    of the same names buffer a choice for the NEXT start. The two can disagree by design
+    -- the #106 dump shows a finished cycle still carrying its flags -- so they must read
+    differently. This is not the wine cooler's `light`, where switch and sensor are the
+    same register at the same instant and a shared name is harmless.
+
+    The guard exists for the day someone "tidies" the names back into line without
+    knowing why they differ.
+    """
+
+    _PAIRS = ("extra_dry", "half_load", "auto_open_door", "eco_express")
+
+    def test_no_dishwasher_sensor_shares_its_name_with_the_switch(self) -> None:
+        for source in (
+            REPO_ROOT / "custom_components" / "addhon" / "strings.json",
+            REPO_ROOT / "custom_components" / "addhon" / "translations" / "en.json",
+            REPO_ROOT / "custom_components" / "addhon" / "translations" / "it.json",
+        ):
+            entity = json.loads(source.read_text(encoding="utf-8"))["entity"]
+            for key in self._PAIRS:
+                with self.subTest(file=source.name, key=key):
+                    sensor = entity["binary_sensor"][key]["name"]
+                    control = entity["switch"][key]["name"]
+                    self.assertNotEqual(sensor, control)
+                    # And the difference is the qualifier, not a drift: the switch keeps
+                    # the plain name the washer and dryer options use.
+                    self.assertTrue(sensor.startswith(control), (sensor, control))
+
+
 if __name__ == "__main__":
     unittest.main()

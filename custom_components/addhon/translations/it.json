@@ -624,16 +624,16 @@
         "name": "Preriscaldamento"
       },
       "extra_dry": {
-        "name": "Asciugatura extra"
+        "name": "Asciugatura extra in uso"
       },
       "half_load": {
-        "name": "Mezzo carico"
+        "name": "Mezzo carico in uso"
       },
       "auto_open_door": {
-        "name": "Apertura automatica porta"
+        "name": "Apertura automatica porta in uso"
       },
       "eco_express": {
-        "name": "Eco express"
+        "name": "Eco express in uso"
       },
       "night_wash": {
         "name": "Lavaggio notturno"
@@ -921,6 +921,24 @@
       },
       "holiday_mode": {
         "name": "Modalità Vacanza"
+      },
+      "eco_express": {
+        "name": "Eco express"
+      },
+      "half_load": {
+        "name": "Mezzo carico"
+      },
+      "extra_dry": {
+        "name": "Asciugatura extra"
+      },
+      "intensive": {
+        "name": "Intensivo plus"
+      },
+      "auto_open_door": {
+        "name": "Apertura automatica porta"
+      },
+      "tabs": {
+        "name": "Pastiglie 3 in 1"
       }
     },
     "number": {
@@ -1090,6 +1108,14 @@
           "kw_3_0": "3,0 kW",
           "kw_6_8": "6,8 kW",
           "kw_7_2": "7,2 kW"
+        }
+      },
+      "diverter_level": {
+        "name": "Cesto di lavaggio",
+        "state": {
+          "upper": "Cesto superiore",
+          "lower": "Cesto inferiore",
+          "both": "Entrambi i cesti"
         }
       }
     },

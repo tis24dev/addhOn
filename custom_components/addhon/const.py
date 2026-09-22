@@ -41,8 +41,23 @@ APPLIANCE_KT  = "KT"      # Coffee machine / kettle
 APPLIANCE_WH  = "WH"      # Water heater
 APPLIANCE_RVC = "RVC"     # Robot vacuum cleaner
 
-# Groups all washing machine/tumble dryer/washer-dryer appliances
-APPLIANCE_WASH_GROUP = (APPLIANCE_WM, APPLIANCE_TD, APPLIANCE_WD)
+# The types whose `startProgram` carries a CATALOGUE of programmes: a program select,
+# explicit Start/Stop buttons, a delayed start and the programme-option controls all hang
+# off this one tuple.
+#
+# It used to be APPLIANCE_WASH_GROUP and hold the laundry family only, and that name was
+# the reason the dishwasher got nothing (issue #106): the gate asked "is this a washer"
+# when the question every consumer really means is "does this appliance declare a
+# programme catalogue". A dishwasher answers yes -- the XS 6B0S3FSB of #106 carries 45
+# startProgram categories, the same shape the washer does -- and the capability checks
+# downstream (`"startProgram" in commands`, the settable-option gate) were already written
+# against the command schema, never against the type. The family check simply ran first.
+#
+# Membership stays a TYPE list rather than becoming a pure capability probe on purpose: a
+# fridge and a cooker hood also declare `startProgram`, and theirs are preset buttons and
+# a sparse on/off command respectively, each with a control model of its own (ref_programs,
+# hood.py). A type joins here only once its catalogue has been read on a real appliance.
+APPLIANCE_PROGRAM_GROUP = (APPLIANCE_WM, APPLIANCE_TD, APPLIANCE_WD, APPLIANCE_DW)
 
 # Names of the parameters that, in hOn commands, carry the program code/name.
 # Shared between the select (options source + choice) and the "Start program"
@@ -97,6 +112,13 @@ DRY_LEVEL_LABELS_TD = {
 TEMP_LEVEL_LABELS = {"1": "minimum", "2": "low", "3": "medium", "4": "high"}
 DIRTY_LEVEL_LABELS = {"1": "little", "2": "normal", "3": "very"}
 STEAM_LEVEL_LABELS = {"0": "no_steam", "1": "cotton", "2": "delicate", "3": "synthetic"}
+# Dishwasher basket selector (issue #106). The three names are the app's own
+# `...DIVERTER_UPPER` / `_LOWER` / `_BOTH` (decomp.txt:1757874). The device also declares
+# "0", which the app never names anywhere: it is the state the app shows as the half-load
+# toggle switched off, so it is dropped as a choice (DIVERTER_LEVEL_SENTINELS) rather
+# than offered under a label we would have had to invent.
+DIVERTER_LEVEL_LABELS = {"1": "upper", "2": "lower", "6": "both"}
+DIVERTER_LEVEL_SENTINELS = ("0",)
 # Unselectable dryLevel sentinels (hasDryLevelValue returns false for ''/'0'/'11'):
 # dropped from the select options so they never appear as a choice.
 DRY_LEVEL_SENTINELS = ("", "0", "11")

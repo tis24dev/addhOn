@@ -20,6 +20,9 @@ __pycache__/
 # Local development and agent tooling
 /.gitnexus/
 /.claude/
+# Written by `gitnexus analyze`: the same skill files it puts under .claude/skills/,
+# copied for non-Claude agents. Regenerated on every analyze.
+/.agents/
 # Contents rather than the directory itself: git never descends into an EXCLUDED
 # directory, so a negation inside one can never re-include anything. The campaign
 # records under sdd/ are tracked, and the previous `/.superpowers/` ignored every new

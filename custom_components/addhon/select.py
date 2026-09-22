@@ -38,16 +38,19 @@ from .const import (
     AC_SWING_V_PARAM,
     APPLIANCE_AC,
     APPLIANCE_AP,
+    APPLIANCE_DW,
     APPLIANCE_FR,
     APPLIANCE_FRE,
     APPLIANCE_HOB,
     APPLIANCE_IH,
+    APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
     APPLIANCE_TD,
-    APPLIANCE_WASH_GROUP,
     APPLIANCE_WD,
     APPLIANCE_WM,
     DIRTY_LEVEL_LABELS,
+    DIVERTER_LEVEL_LABELS,
+    DIVERTER_LEVEL_SENTINELS,
     DOMAIN,
     DRY_LEVEL_LABELS_TD,
     DRY_LEVEL_LABELS_WM,
@@ -155,6 +158,7 @@ class HonProgramOptionSelectDescription:
 
 _WASH_TYPES = (APPLIANCE_WM, APPLIANCE_WD)
 _DRY_TYPES = (APPLIANCE_TD,)
+_DW_TYPES = (APPLIANCE_DW,)
 
 # Candidate program-option selects, capability-gated by the device schema. spin/temp are
 # numeric enums on the real washers -> selects with raw numeric labels (no state block).
@@ -185,6 +189,15 @@ _PROGRAM_OPTION_SELECTS: tuple[HonProgramOptionSelectDescription, ...] = (
     HonProgramOptionSelectDescription(
         key="dirty_level", param="dirtyLevel", translation_key="dirty_level",
         types=_WASH_TYPES, label_map=DIRTY_LEVEL_LABELS, icon="mdi:liquid-spot",
+    ),
+    # Dishwasher basket selector (issue #106): settable in 42 programmes out of 43 on the
+    # XS 6B0S3FSB. In the app it is reached THROUGH the half-load toggle, which opens it as
+    # a drawer (decomp.txt:4510515); Home Assistant has no control that opens another, so
+    # it stands on its own here and the half-load switch stays a plain toggle.
+    HonProgramOptionSelectDescription(
+        key="diverter_level", param="diverterLevel", translation_key="diverter_level",
+        types=_DW_TYPES, label_map=DIVERTER_LEVEL_LABELS, drop=DIVERTER_LEVEL_SENTINELS,
+        icon="mdi:arrow-expand-vertical",
     ),
     HonProgramOptionSelectDescription(
         key="steam_level", param="steamLevel", translation_key="steam_level",
@@ -452,7 +465,7 @@ async def async_setup_entry(
                     app_type,
                 )
             continue
-        if app_type not in APPLIANCE_WASH_GROUP:
+        if app_type not in APPLIANCE_PROGRAM_GROUP:
             _LOGGER.debug("Select debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
             continue
         if HonProgramSelect.supports_appliance(appliance):

@@ -28,12 +28,13 @@ from .command_dispatch import CommandPatch, async_dispatch_patch
 from .const import (
     APPLIANCE_AC,
     APPLIANCE_AP,
+    APPLIANCE_DW,
     APPLIANCE_FR,
     APPLIANCE_FRE,
     APPLIANCE_HO,
+    APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
     APPLIANCE_TD,
-    APPLIANCE_WASH_GROUP,
     APPLIANCE_WC,
     APPLIANCE_WD,
     APPLIANCE_WM,
@@ -352,19 +353,46 @@ class HonProgramOptionSwitchDescription:
 # (anticrease is the WM/WD opt-toggle; antiCreaseTime is the TD timed variant).
 _WASH_TYPES = (APPLIANCE_WM, APPLIANCE_WD)
 _DRY_TYPES = (APPLIANCE_TD,)
+# Dishwasher (issue #106). Its own family rather than a member of `_WASH_TYPES`: the
+# option vocabulary barely overlaps the washer's (only `hygiene` is shared, and it is
+# shared by adding the type to that row below), and the legacy `optN` slots mean
+# different things on the two -- `opt7` is `extraRinse3` on a washer and `hygiene` here --
+# so no row may silently apply to both.
+_DW_TYPES = (APPLIANCE_DW,)
+# `hygiene` is the one option both families really have, with the same meaning and the
+# same wire name, so one row serves both and a second would be two entities for one idea.
+_HYGIENE_TYPES = (*_WASH_TYPES, *_DW_TYPES)
 _PROGRAM_OPTION_SWITCHES: tuple[HonProgramOptionSwitchDescription, ...] = (
     HonProgramOptionSwitchDescription(key="extra_rinse_1", param="extraRinse1", types=_WASH_TYPES, icon="mdi:water-plus"),
     HonProgramOptionSwitchDescription(key="extra_rinse_2", param="extraRinse2", types=_WASH_TYPES, icon="mdi:water-plus"),
     HonProgramOptionSwitchDescription(key="extra_rinse_3", param="extraRinse3", types=_WASH_TYPES, icon="mdi:water-plus"),
     HonProgramOptionSwitchDescription(key="acquaplus", param="acquaplus", types=_WASH_TYPES, icon="mdi:water"),
     HonProgramOptionSwitchDescription(key="prewash", param="prewash", types=_WASH_TYPES, icon="mdi:water-sync"),
-    HonProgramOptionSwitchDescription(key="hygiene", param="hygiene", types=_WASH_TYPES, icon="mdi:bacteria"),
+    HonProgramOptionSwitchDescription(key="hygiene", param="hygiene", types=_HYGIENE_TYPES, icon="mdi:bacteria"),
     HonProgramOptionSwitchDescription(key="anticrease", param="anticrease", types=_WASH_TYPES, icon="mdi:tshirt-crew"),
     HonProgramOptionSwitchDescription(key="good_night", param="goodNight", types=_WASH_TYPES, icon="mdi:weather-night"),
     HonProgramOptionSwitchDescription(key="sterilization", param="sterilizationStatus", types=_DRY_TYPES, icon="mdi:bacteria-outline"),
     HonProgramOptionSwitchDescription(key="tumbling", param="tumblingStatus", types=_DRY_TYPES, icon="mdi:tumble-dryer"),
     HonProgramOptionSwitchDescription(key="permanent_press", param="permanentPressStatus", types=_DRY_TYPES, icon="mdi:tshirt-crew-outline"),
     HonProgramOptionSwitchDescription(key="anti_crease_time", param="antiCreaseTime", types=_DRY_TYPES, icon="mdi:tshirt-crew"),
+    # Dishwasher options. Every one is a startProgram parameter the XS 6B0S3FSB of #106
+    # declares as range 0..1, i.e. exactly what the app renders as a toggle on a DW
+    # (`isOnOffValueDw`, decomp.txt:1755771). Labels follow the app's own
+    # `DW_CMD&CTRL.PROGRAM_CYCLE_DETAIL_OTHER_OPTIONS.*` keys (decomp.txt:975324-975627).
+    #
+    # NOT here, deliberately: `threeInOne`, `autoDose` and `opt10`. On that appliance they
+    # are fixed in 42 programmes out of 42, so the gate would refuse them anyway, and a row
+    # that can never produce an entity is a row nobody can tell is dead.
+    #
+    # `tabStatus` has no label anywhere in the app. It is the older name of the same
+    # 3-in-1 tablets option `threeInOne` names on newer models, so it takes that label
+    # under the key `tabs` rather than inventing a second name for one idea.
+    HonProgramOptionSwitchDescription(key="eco_express", param="ecoExpress", types=_DW_TYPES, icon="mdi:leaf"),
+    HonProgramOptionSwitchDescription(key="half_load", param="halfLoad", types=_DW_TYPES, icon="mdi:fraction-one-half"),
+    HonProgramOptionSwitchDescription(key="extra_dry", param="extraDry", types=_DW_TYPES, icon="mdi:hair-dryer"),
+    HonProgramOptionSwitchDescription(key="intensive", param="intensive", types=_DW_TYPES, icon="mdi:car-turbocharger"),
+    HonProgramOptionSwitchDescription(key="auto_open_door", param="openDoor", types=_DW_TYPES, icon="mdi:door-open"),
+    HonProgramOptionSwitchDescription(key="tabs", param="tabStatus", types=_DW_TYPES, icon="mdi:cube-outline"),
 )
 
 
@@ -403,7 +431,7 @@ def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> l
         app_type,
         _command_names(appliance),
     )
-    if app_type in APPLIANCE_WASH_GROUP:
+    if app_type in APPLIANCE_PROGRAM_GROUP:
         if appliance and hasattr(appliance, "commands"):
             cmds = getattr(appliance, "commands", None)
             cmds = cmds if isinstance(cmds, dict) else {}
