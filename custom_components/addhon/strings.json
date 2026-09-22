@@ -624,16 +624,16 @@
         "name": "Preheating"
       },
       "extra_dry": {
-        "name": "Extra dry"
+        "name": "Extra dry in use"
       },
       "half_load": {
-        "name": "Half load"
+        "name": "Half load in use"
       },
       "auto_open_door": {
-        "name": "Auto door open"
+        "name": "Auto door open in use"
       },
       "eco_express": {
-        "name": "Eco express"
+        "name": "Eco express in use"
       },
       "night_wash": {
         "name": "Night wash"
@@ -921,6 +921,24 @@
       },
       "holiday_mode": {
         "name": "Holiday mode"
+      },
+      "eco_express": {
+        "name": "Eco express"
+      },
+      "half_load": {
+        "name": "Half load"
+      },
+      "extra_dry": {
+        "name": "Extra dry"
+      },
+      "intensive": {
+        "name": "Intensive plus"
+      },
+      "auto_open_door": {
+        "name": "Auto door open"
+      },
+      "tabs": {
+        "name": "3-in-1 tablets"
       }
     },
     "number": {
@@ -1090,6 +1108,14 @@
           "kw_3_0": "3.0 kW",
           "kw_6_8": "6.8 kW",
           "kw_7_2": "7.2 kW"
+        }
+      },
+      "diverter_level": {
+        "name": "Wash basket",
+        "state": {
+          "upper": "Upper basket",
+          "lower": "Lower basket",
+          "both": "Both baskets"
         }
       }
     },

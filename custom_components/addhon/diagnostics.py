@@ -83,8 +83,8 @@ from .const import (
     APPLIANCE_HO,
     APPLIANCE_HOB,
     APPLIANCE_IH,
+    APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
-    APPLIANCE_WASH_GROUP,
     APPLIANCE_WD,
     APPLIANCE_WM,
     CONF_ENABLE_DEBUG,
@@ -215,11 +215,11 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
     # would go looking for a writable machMode that does not exist.
     {
         "tag": "switch.pause",
-        "types": APPLIANCE_WASH_GROUP,
+        "types": APPLIANCE_PROGRAM_GROUP,
         "read": ("machMode",),
         "write": ("pause",),
     },
-    {"tag": "button.start_program", "types": APPLIANCE_WASH_GROUP},
+    {"tag": "button.start_program", "types": APPLIANCE_PROGRAM_GROUP},
     # The fridge's preset buttons (`button.ref_preset_iot_*`, #93) have NO row here, and
     # the absence is the statement. Each sends a whole `startProgram` category and fixes
     # no parameter of its own: the `tempSel` triple that travels is declared per program
@@ -234,17 +234,20 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
     # only `if name in params`, so on a device whose `stopProgram` does not carry
     # the name the button fixes nothing. The live washer's stopProgram carries
     # `onOffStatus`; the live dryer's carries `returnStandby` and nothing else,
-    # so shipping this row for the whole wash group states a write that cannot
-    # happen on a real TD. `write_command` names the command the fixed parameters
+    # so shipping this row for the whole programme group states a write that
+    # cannot happen on a real TD. The dishwasher of issue #106 sides with the
+    # washer -- its stopProgram is `onOffStatus` fixed at "0" and nothing else --
+    # which is one more reason the per-appliance drop below, and not the type
+    # list, is what keeps this row honest. `write_command` names the command the fixed parameters
     # have to be declared under, and `_entity_section` drops the ones the device
     # does not declare.
     {
         "tag": "button.stop_program",
-        "types": APPLIANCE_WASH_GROUP,
+        "types": APPLIANCE_PROGRAM_GROUP,
         "write": ("onOffStatus",),
         "write_command": "stopProgram",
     },
-    {"tag": "select.program", "types": APPLIANCE_WASH_GROUP},
+    {"tag": "select.program", "types": APPLIANCE_PROGRAM_GROUP},
     # The fridge program select. It reads seven attributes and its row said nothing at
     # all until issue #93, whose dump therefore printed `"select.ref_program": null`
     # beside a coverage block accusing `programName` of being unmapped -- two sections
@@ -2162,7 +2165,7 @@ def _mapped_sets(
             sources[f"select.{desc.key}"] = _source_row(
                 read=_read_chain(desc.attr), write=[desc.param]
             )
-    if app_type in APPLIANCE_WASH_GROUP:
+    if app_type in APPLIANCE_PROGRAM_GROUP:
         mapped_params.update(PROGRAM_PARAM_NAMES)
     if app_type in (APPLIANCE_REF, APPLIANCE_FR, APPLIANCE_FRE) and HonRefProgramSelect:
         # The fridge program select is a fixed-key entity, so the registry walk cannot

@@ -37,6 +37,7 @@ if str(REPO) not in sys.path:
 
 _WM_FIXTURE = REPO / "tests" / "fixtures" / "wm_candy_tca286" / "startprogram_params.json"
 _TD_FIXTURE = REPO / "tests" / "fixtures" / "td_haier_hd90" / "startprogram_params.json"
+_DW_FIXTURE = REPO / "tests" / "fixtures" / "dw_haier_xs6b0s3fsb" / "startprogram_params.json"
 
 
 def _mod(name: str) -> types.ModuleType:
@@ -153,12 +154,16 @@ _install_stubs()
 from custom_components.addhon import number, select, switch  # noqa: E402
 from custom_components.addhon.client.engine.commands import HonCommand  # noqa: E402
 from custom_components.addhon.const import (  # noqa: E402
+    APPLIANCE_DW,
+    APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_TD,
     APPLIANCE_WD,
     APPLIANCE_WM,
+    DIVERTER_LEVEL_SENTINELS,
 )
 from custom_components.addhon.program_options import (  # noqa: E402
     is_settable_option,
+    option_choices,
     startprogram_option_param,
 )
 
@@ -272,6 +277,13 @@ class CatalogPinTest(unittest.TestCase):
         "tumbling": "tumblingStatus",
         "permanent_press": "permanentPressStatus",
         "anti_crease_time": "antiCreaseTime",
+        # Dishwasher (issue #106). `hygiene` above now also serves DW; these six are DW-only.
+        "eco_express": "ecoExpress",
+        "half_load": "halfLoad",
+        "extra_dry": "extraDry",
+        "intensive": "intensive",
+        "auto_open_door": "openDoor",
+        "tabs": "tabStatus",
     }
     _PINNED_SELECTS = {
         # (key, param) pairs: dry_level appears twice (type-gated WM/WD vs TD).
@@ -281,6 +293,7 @@ class CatalogPinTest(unittest.TestCase):
         ("temp_level", "tempLevel"),
         ("spin_speed", "spinSpeed"),
         ("wash_temp", "temp"),
+        ("diverter_level", "diverterLevel"),  # dishwasher, issue #106
     }
     _PINNED_NUMBERS = {"delay_time": "delayTime"}
 
@@ -327,6 +340,102 @@ class CatalogPinTest(unittest.TestCase):
                     len(set(keys)),
                     f"{app_type}/{platform}: duplicate catalog key (unique_id collision)",
                 )
+
+
+class DishwasherControlsTest(unittest.TestCase):
+    """Issue #106: the XS 6B0S3FSB dishwasher gets the controls its schema declares.
+
+    Every expectation below is read off the real appliance -- the fixture is its active
+    `startProgram` category, rebuilt from the diagnostics attached to #106 -- never
+    written from the catalogue side. A test that derived its answer from the catalogue
+    would pass on any catalogue.
+    """
+
+    # What the gate must produce on that category: seven toggles, the basket selector and
+    # the delayed start. Measured on the dump, `eco` programme, functionalId 2.
+    _EXPECTED = {
+        "ecoExpress", "halfLoad", "extraDry", "hygiene", "intensive", "openDoor",
+        "tabStatus", "diverterLevel", "delayTime",
+    }
+
+    def test_the_dishwasher_is_in_the_programme_group(self) -> None:
+        # The one line issue #106 was about: the family check ran BEFORE the capability
+        # checks, and DW was not in the family, so none of them was ever reached.
+        self.assertIn(APPLIANCE_DW, APPLIANCE_PROGRAM_GROUP)
+
+    def test_the_settable_set_matches_the_real_dishwasher(self) -> None:
+        appliance, _ = _build_appliance(_DW_FIXTURE)
+        settable = {
+            param
+            for param, drop in _catalog_entries(APPLIANCE_DW)
+            if is_settable_option(startprogram_option_param(appliance, param), drop)
+        }
+        self.assertEqual(settable, self._EXPECTED)
+
+    def test_the_fixed_toggles_create_nothing(self) -> None:
+        # Fixed in 42 programmes out of 42 on that appliance. They are present in the
+        # schema -- that is checked first, so this cannot pass by the param vanishing --
+        # and the gate has to turn them down.
+        appliance, present = _build_appliance(_DW_FIXTURE)
+        for param in ("threeInOne", "autoDose", "opt10"):
+            self.assertIn(param, present, f"{param} should be in the DW fixture")
+            self.assertFalse(
+                is_settable_option(startprogram_option_param(appliance, param)),
+                f"{param} is fixed on the XS 6B0S3FSB and must create no entity",
+            )
+
+    def test_the_basket_selector_offers_exactly_three_baskets(self) -> None:
+        # The device declares 0/1/2/6. "0" has no name anywhere in the app -- it is the
+        # half-load toggle switched off -- so it must never be offered as a choice.
+        appliance, _ = _build_appliance(_DW_FIXTURE)
+        param = startprogram_option_param(appliance, "diverterLevel")
+        self.assertEqual(
+            sorted(option_choices(param, DIVERTER_LEVEL_SENTINELS)), ["1", "2", "6"]
+        )
+
+    def test_hygiene_serves_the_dishwasher_without_leaving_the_washers(self) -> None:
+        # One row for both families. Adding DW must not have cost WM or WD their switch.
+        row = next(d for d in switch._PROGRAM_OPTION_SWITCHES if d.key == "hygiene")
+        for app_type in (APPLIANCE_WM, APPLIANCE_WD, APPLIANCE_DW):
+            self.assertIn(app_type, row.types)
+        self.assertNotIn(APPLIANCE_TD, row.types)
+
+    def test_no_dishwasher_row_leaks_onto_the_washers(self) -> None:
+        # The legacy slots mean different things on the two families (`opt7` is
+        # `extraRinse3` on a washer and `hygiene` here), so a DW-only row applying to a
+        # washer would be a control for a parameter that is not what its label says.
+        dw_only = {"eco_express", "half_load", "extra_dry", "intensive", "auto_open_door", "tabs"}
+        for d in switch._PROGRAM_OPTION_SWITCHES:
+            if d.key in dw_only:
+                self.assertEqual(tuple(d.types), (APPLIANCE_DW,), d.key)
+        dv = next(d for d in select._PROGRAM_OPTION_SELECTS if d.key == "diverter_level")
+        self.assertEqual(tuple(dv.types), (APPLIANCE_DW,))
+
+
+class DishwasherSwitchBuilderTest(unittest.TestCase):
+    """What `_appliance_switches` really builds for the #106 dishwasher."""
+
+    def _built(self):
+        appliance, _ = _build_appliance(_DW_FIXTURE)
+        data = {"type": APPLIANCE_DW, "appliance": appliance, "name": "Dishwasher", "attributes": {}}
+        coordinator = types.SimpleNamespace(data={"dw1": data}, hass=None)
+        return switch._appliance_switches(coordinator, "dw1", data, None)
+
+    def test_the_seven_option_switches_are_built(self) -> None:
+        keys = {e._desc.key for e in self._built() if hasattr(e, "_desc")}
+        self.assertEqual(
+            keys,
+            {"eco_express", "half_load", "extra_dry", "hygiene", "intensive", "auto_open_door", "tabs"},
+        )
+
+    def test_no_pause_switch_without_pause_commands(self) -> None:
+        # Joining the programme group makes DW eligible for the pause switch; this model
+        # declares neither `pauseProgram` nor `resumeProgram`, so eligible is all it is.
+        built = self._built()
+        self.assertFalse(
+            any(type(e).__name__ == "HonWashingMachinePauseSwitch" for e in built),
+            [type(e).__name__ for e in built],
+        )
 
 
 if __name__ == "__main__":

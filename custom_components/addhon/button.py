@@ -17,8 +17,8 @@ from .base_entity import HonAccountEntity, HonBaseEntity
 from .const import (
     APPLIANCE_FR,
     APPLIANCE_FRE,
+    APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
-    APPLIANCE_WASH_GROUP,
     CONF_ENABLE_DEBUG,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
@@ -95,7 +95,7 @@ async def async_setup_entry(
                     redact_id(appliance_id),
                 )
             continue
-        if app_type not in APPLIANCE_WASH_GROUP:
+        if app_type not in APPLIANCE_PROGRAM_GROUP:
             _LOGGER.debug("Button debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
             continue
         appliance = data.get("appliance")

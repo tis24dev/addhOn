@@ -1,0 +1,229 @@
+{
+  "_comment": "startProgram schema of the ACTIVE category (programme `eco`, functionalId 2) of a real Haier XS 6B0S3FSB dishwasher, rebuilt into the raw hOn node shape from the `commands.startProgram` section of the v5.26.0-beta1 diagnostics attached to issue #106 on 2026-09-22. range -> minimumValue/maximumValue/incrementValue, enum -> enumValues, fixed -> fixedValue; `defaultValue` is the value the dump printed. Left out on purpose: 3 programme names the USER typed (favourites), because user text stays out of files in this repository, and the descriptor-only enums ['ecoIndexOpts', 'energyConsumption'], which the dump printed without their value list and which could not be rebuilt without inventing one. Neither is a programme option.",
+  "model": "XS 6B0S3FSB",
+  "type": "DW",
+  "source": "issue #106, diagnostics v5.26.0-beta1",
+  "captured": "2026-09-22",
+  "startprogram_params": {
+    "delayTime": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1410.0,
+      "incrementValue": 5.0,
+      "defaultValue": 0
+    },
+    "program": {
+      "typology": "enum",
+      "enumValues": [
+        "auto_care",
+        "auto_wash_soil",
+        "dishwasher_care",
+        "eco",
+        "glass_care",
+        "intensive",
+        "iot_baby_care",
+        "iot_breakfast",
+        "iot_checkup",
+        "iot_china_crystals",
+        "iot_cocktail_glasses_soil",
+        "iot_daily_care_soil",
+        "iot_dinner_for_two",
+        "iot_extra_hygiene",
+        "iot_happy_hour",
+        "iot_party",
+        "iot_pizza_menu_soil",
+        "iot_plastic_tupperware",
+        "iot_porcelain",
+        "iot_power_mix_wash_soil",
+        "iot_pyrex_and_glassware",
+        "iot_super_flash",
+        "iot_super_wash",
+        "iot_turbopower",
+        "iot_voice_automatic",
+        "iot_voice_delicate",
+        "iot_voice_eco",
+        "iot_voice_intensive",
+        "iot_voice_prewash",
+        "iot_voice_universal",
+        "iot_wok_grids_maxi_pans_soil",
+        "prewash",
+        "rapid_20",
+        "rapid_35",
+        "rapid_49",
+        "rapid_59",
+        "silent",
+        "smart_ai_pro_soil",
+        "smart_ai_rapid_soil",
+        "smart_ai_soil",
+        "universal",
+        "zone_wash"
+      ],
+      "defaultValue": "eco"
+    },
+    "diverterLevel": {
+      "typology": "enum",
+      "enumValues": [
+        "0",
+        "1",
+        "2",
+        "6"
+      ],
+      "defaultValue": "0"
+    },
+    "onOffStatus": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "operationName": {
+      "typology": "fixed",
+      "fixedValue": "grCHGWash"
+    },
+    "threeInOne": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "opt10": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "ecoExpress": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "halfLoad": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "extraDry": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "openDoor": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "hygiene": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "intensive": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "autoDose": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "prCode": {
+      "typology": "fixed",
+      "fixedValue": "8"
+    },
+    "prPosition": {
+      "typology": "fixed",
+      "fixedValue": "3"
+    },
+    "prStr": {
+      "typology": "fixed",
+      "fixedValue": "PROGRAMS.DW.ECO"
+    },
+    "tabStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "ecoIndex": {
+      "typology": "fixed",
+      "fixedValue": "3"
+    },
+    "energyLabel": {
+      "typology": "range",
+      "minimumValue": 0.5,
+      "maximumValue": 5.0,
+      "incrementValue": 0.5,
+      "defaultValue": 4
+    },
+    "functionalId": {
+      "typology": "fixed",
+      "fixedValue": "2"
+    },
+    "powerWashPrz": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "programCluster": {
+      "typology": "enum",
+      "enumValues": [
+        "traditional",
+        "eco",
+        "traditional_eco"
+      ],
+      "defaultValue": "traditional_eco"
+    },
+    "programFamily": {
+      "typology": "enum",
+      "enumValues": [
+        "dashboard",
+        "guided",
+        "snap",
+        "dashboard_guided_snap"
+      ],
+      "defaultValue": "dashboard_guided_snap"
+    },
+    "programType": {
+      "typology": "fixed",
+      "fixedValue": "WD"
+    },
+    "remainingTime": {
+      "typology": "fixed",
+      "fixedValue": "235"
+    },
+    "remoteActionable": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remoteVisible": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "suggestedLoadD": {
+      "typology": "fixed",
+      "fixedValue": "RL100"
+    },
+    "temp": {
+      "typology": "fixed",
+      "fixedValue": "45"
+    },
+    "waterConsumption": {
+      "typology": "fixed",
+      "fixedValue": "9"
+    },
+    "waterEfficiency": {
+      "typology": "fixed",
+      "fixedValue": "4"
+    },
+    "waterSaving": {
+      "typology": "fixed",
+      "fixedValue": "78"
+    }
+  }
+}
