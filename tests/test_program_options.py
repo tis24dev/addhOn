@@ -1795,5 +1795,81 @@ class DishwasherStartOnTheWireTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("1", body["params"]["ecoExpress"])
         self.assertEqual("1", body["params"]["extraDry"])
 
+
+class DishwasherUserFlowOnTheWireTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #106, the whole user path: pick a programme, set options, press Start.
+
+    `DishwasherStartOnTheWireTest` above writes the pending buffers by hand, so the program
+    select and the option switches are never exercised and a regression in how THEY fill
+    the buffers would pass it (PR #108 review, greptile). Here the real select, the real
+    switches and the real button share one coordinator -- the buffers are attributes of
+    it -- and nothing is written to them except by the entities themselves. The
+    transmitted category is checked alongside the fields, since it is what tells the cloud
+    which programme to run.
+    """
+
+    def _coordinator(self, appliance):
+        coordinator = FakeCoordinator(
+            {"dw-1": {"type": "DW", "name": "Dishwasher", "appliance": appliance,
+                      "attributes": {}, "settings": {}}}
+        )
+        coordinator.hass = FakeHass()
+        return coordinator
+
+    @staticmethod
+    def _live(entity):
+        entity.hass = FakeHass()
+        entity.async_write_ha_state = lambda: None
+        return entity
+
+    async def _run(self, programme: str, switches_on: tuple) -> dict:
+        from custom_components.addhon import switch as switch_mod
+        from custom_components.addhon.button import HonProgramCommandButton
+        from custom_components.addhon.select import HonProgramSelect
+
+        api = _DwWireApi()
+        appliance, _ = _dw_categories(api)
+        coordinator = self._coordinator(appliance)
+
+        program_select = self._live(HonProgramSelect(coordinator, "dw-1", FakeClient()))
+        self.assertIn(programme, program_select.options)
+        await program_select.async_select_option(programme)
+
+        for key in switches_on:
+            desc = next(d for d in switch_mod._PROGRAM_OPTION_SWITCHES if d.key == key)
+            entity = self._live(switch_mod.HonProgramOptionSwitch(coordinator, "dw-1", desc, FakeClient()))
+            await entity.async_turn_on()
+
+        start = self._live(HonProgramCommandButton(
+            coordinator, "dw-1", FakeClient(),
+            command_name="startProgram", unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+        ))
+        await start.async_press()
+        self.assertEqual(1, len(api.bodies))
+        return api.bodies[0]
+
+    async def test_a_picked_programme_and_its_options_reach_the_wire(self) -> None:
+        body = await self._run("rapid_20", ("half_load", "tabs"))
+        self.assertEqual("startProgram", body["name"])
+        # The category is rapid_20's although eco was the active one: the select's choice
+        # survived all the way to the swap.
+        self.assertEqual("PROGRAMS.DW.RAPID_20", body["category"])
+        self.assertEqual("18", body["ancillary"]["functionalId"])
+        self.assertEqual("1", body["params"]["halfLoad"])
+        self.assertEqual("1", body["params"]["tabStatus"])
+        # Options the switches never touched, and that rapid_20 pins, go out at the pin.
+        for pinned in ("ecoExpress", "extraDry", "hygiene", "intensive"):
+            self.assertEqual("0", body["params"][pinned], pinned)
+
+    async def test_the_active_programme_picked_again_keeps_its_category(self) -> None:
+        body = await self._run("eco", ("eco_express", "extra_dry"))
+        self.assertEqual("PROGRAMS.DW.ECO", body["category"])
+        self.assertEqual("2", body["ancillary"]["functionalId"])
+        self.assertEqual("1", body["params"]["ecoExpress"])
+        self.assertEqual("1", body["params"]["extraDry"])
+        self.assertEqual("0", body["params"]["halfLoad"])
+
+
 if __name__ == "__main__":
     unittest.main()
