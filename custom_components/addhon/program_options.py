@@ -1,9 +1,14 @@
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Writable program-option controls for the washing group (WM/WD/TD), discussion #35.
+"""Writable program-option controls for the programme group, discussion #35.
 
-The washer/dryer expose start/stop/pause + a program select, but no way to tune the
+The group is ``const.APPLIANCE_PROGRAM_GROUP``: washer, dryer and washer-dryer from the
+start, the dishwasher since issue #106. Nothing in this module is laundry-specific --
+the gate reads the device's ``startProgram`` schema, never its type -- which is why the
+dishwasher needed no change here, only a place in the group and rows in the tables.
+
+These appliances expose start/stop + a program select, but no way to tune the
 program (spin speed, temperature, dry level, extra rinses, delayed start, ...). Those
 options are PARAMETERS of the ``startProgram`` command, not a separate service: the app
 picks a program, overlays the chosen option values and sends ONE ``startProgram`` bundle.

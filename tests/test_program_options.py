@@ -1611,5 +1611,189 @@ class SelectedProgramTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(["0", "400", "800"], entity.options)
 
 
+class DishwasherPlatformSetupTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #106, per platform: the dishwasher reaches each setup gate, and the gate decides.
+
+    `DW in APPLIANCE_PROGRAM_GROUP` alone protects the constant, not the four places that
+    read it: a platform rewritten to test its own tuple would leave that assertion green
+    and the dishwasher without the control (PR #108 review). So every case below runs the
+    real `async_setup_entry` twice, once as a dishwasher and once as a type outside the
+    group with the SAME commands, and requires the entity in the first and not the
+    second. That pairing is what makes the gate itself the thing under test.
+    """
+
+    _OUTSIDER = "OV"  # declares startProgram in real life, and is not in the group
+
+    async def _keys(self, platform, commands: dict, app_type: str) -> set:
+        from custom_components.addhon.const import DOMAIN
+
+        coordinator = FakeCoordinator(_washer(commands, app_type=app_type))
+        hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}})
+        added: list = []
+        # `options` because number.py reads the experimental toggle off the entry; the
+        # shared FakeEntry predates any number test in this file and has none.
+        entry = FakeEntry()
+        entry.options = {}
+        await platform.async_setup_entry(hass, entry, added.extend)
+        added = [e for e in added if not getattr(e, "_addhon_account", False)]
+        self._last = added
+        return {getattr(e, "_attr_translation_key", None) for e in added}
+
+    async def test_start_and_stop_buttons(self) -> None:
+        from custom_components.addhon import button
+
+        commands = {"startProgram": RecordingCommand(), "stopProgram": RecordingCommand()}
+        dw = await self._keys(button, commands, "DW")
+        self.assertTrue({"start_program", "stop_program"} <= dw, dw)
+        outsider = await self._keys(button, commands, self._OUTSIDER)
+        self.assertFalse({"start_program", "stop_program"} & outsider, outsider)
+
+    async def test_delayed_start_number_with_the_dishwasher_bounds(self) -> None:
+        from custom_components.addhon import number
+
+        # 0..1410 step 5: the XS 6B0S3FSB's own delayTime, read off the #106 dump. The
+        # washers are step 30; nothing in the catalogue encodes a step, so the bound has
+        # to come from the schema, and this checks that it does.
+        commands = {"startProgram": RecordingCommand({"delayTime": RangeParam(0, 1410, 5)})}
+        dw = await self._keys(number, commands, "DW")
+        self.assertIn("delay_time", dw)
+        entity = next(e for e in self._last if getattr(e, "_attr_translation_key", None) == "delay_time")
+        self.assertEqual(
+            (0.0, 1410.0, 5.0),
+            (float(entity.native_min_value), float(entity.native_max_value), float(entity.native_step)),
+        )
+        outsider = await self._keys(number, commands, self._OUTSIDER)
+        self.assertNotIn("delay_time", outsider)
+
+    async def test_program_select_and_basket_select(self) -> None:
+        from custom_components.addhon import select
+
+        commands = {"startProgram": RecordingCommand({
+            "program": Param(values={"eco": "eco", "rapid_20": "rapid_20"}),
+            "diverterLevel": SetParam(["0", "1", "2", "6"]),
+        })}
+        dw = await self._keys(select, commands, "DW")
+        self.assertTrue({"program", "diverter_level"} <= dw, dw)
+        basket = next(e for e in self._last if getattr(e, "_attr_translation_key", None) == "diverter_level")
+        # "0" has no name anywhere in the app: three baskets, never four.
+        self.assertEqual(["upper", "lower", "both"], list(basket.options))
+        outsider = await self._keys(select, commands, self._OUTSIDER)
+        self.assertFalse({"program", "diverter_level"} & outsider, outsider)
+
+
+class _DwWireApi:
+    """Like `_WireApi`, and also keeps the ancillary group: `functionalId` travels there."""
+
+    def __init__(self) -> None:
+        self.bodies: list[dict] = []
+
+    async def send_command(self, appliance, name, params, ancillary, category) -> bool:
+        self.bodies.append({
+            "name": name, "params": dict(params), "ancillary": dict(ancillary), "category": category,
+        })
+        return True
+
+
+def _dw_categories(api):
+    """Two REAL dishwasher startProgram categories, prescriptions read off the #106 dump.
+
+    `eco` (functionalId 2) leaves every option settable; `rapid_20` (functionalId 18) pins
+    ecoExpress, extraDry, hygiene and intensive at 0 and leaves halfLoad, openDoor and
+    tabStatus free. Distinct enough that a Start sending the wrong category's schema shows
+    up in the body. `functionalId` sits in `ancillaryParameters`, where the app looks for it
+    (`startProgram[P].ancillaryParameters.functionalId.fixedValue`, eight call sites in the
+    decompiled app).
+    """
+    from custom_components.addhon.client.engine.commands import HonCommand
+
+    appliance = _WireAppliance(api)
+    categories: dict = {}
+
+    def _toggle(settable: bool) -> dict:
+        if settable:
+            return {"typology": "range", "category": "command", "mandatory": 1,
+                    "minimumValue": 0, "maximumValue": 1, "incrementValue": 1, "defaultValue": 0}
+        return {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": "0"}
+
+    def _category(name: str, functional_id: str, pinned: set) -> None:
+        options = ("ecoExpress", "halfLoad", "extraDry", "hygiene", "intensive", "openDoor", "tabStatus")
+        parameters = {opt: _toggle(opt not in pinned) for opt in options}
+        parameters["onOffStatus"] = {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": "1"}
+        attributes = {
+            "parameters": parameters,
+            "ancillaryParameters": {
+                "functionalId": {"typology": "fixed", "category": "cluster", "mandatory": 1,
+                                 "fixedValue": functional_id},
+            },
+        }
+        categories[name] = HonCommand(
+            "startProgram", attributes, appliance, categories=categories,
+            category_name=f"PROGRAMS.DW.{name.upper()}",
+        )
+
+    _category("eco", "2", set())
+    _category("rapid_20", "18", {"ecoExpress", "extraDry", "hygiene", "intensive"})
+    appliance.commands["startProgram"] = categories["eco"]
+    return appliance, categories
+
+
+class DishwasherStartOnTheWireTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #106: what a dishwasher Start actually hands to the cloud (PR #108 review).
+
+    Nothing has been sent to a real dishwasher yet. This is the part of that gap that can
+    be closed without one: the real engine, the real category swap, the real button, and
+    the body exactly as `send_command` receives it.
+    """
+
+    def _button(self, appliance, pending_program, pending_options=None):
+        from custom_components.addhon.button import HonProgramCommandButton
+
+        coordinator = FakeCoordinator(
+            {"dw-1": {"type": "DW", "name": "Dishwasher", "appliance": appliance,
+                      "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_programs = {"dw-1": pending_program}
+        coordinator.pending_options = {"dw-1": dict(pending_options)} if pending_options else {}
+        button = HonProgramCommandButton(
+            coordinator, "dw-1", FakeClient(),
+            command_name="startProgram", unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+        )
+        button.hass = FakeHass()
+        return button
+
+    async def test_the_selected_programme_travels_with_its_own_identity(self) -> None:
+        api = _DwWireApi()
+        appliance, _ = _dw_categories(api)
+        await self._button(appliance, "rapid_20", {"halfLoad": "1", "tabStatus": "1"}).async_press()
+        body = api.bodies[0]
+        self.assertEqual("startProgram", body["name"])
+        # The swap happened: the functionalId is rapid_20's, not the active eco's. This is
+        # the number the compatibility matrix is keyed by, so a wrong one here would make
+        # every future constraint check read the wrong programme's row.
+        self.assertEqual("18", body["ancillary"]["functionalId"])
+        self.assertEqual("1", body["params"]["halfLoad"])
+        self.assertEqual("1", body["params"]["tabStatus"])
+        self.assertEqual("1", body["params"]["onOffStatus"])
+
+    async def test_an_option_the_programme_pins_is_sent_at_the_pin(self) -> None:
+        # rapid_20 pins these four at 0. Nothing was buffered for them, and what leaves
+        # must be the programme's prescription, not a leftover from the active category.
+        api = _DwWireApi()
+        appliance, _ = _dw_categories(api)
+        await self._button(appliance, "rapid_20", {"halfLoad": "1"}).async_press()
+        params = api.bodies[0]["params"]
+        for pinned in ("ecoExpress", "extraDry", "hygiene", "intensive"):
+            self.assertEqual("0", params[pinned], pinned)
+
+    async def test_eco_carries_its_options_and_its_own_identity(self) -> None:
+        api = _DwWireApi()
+        appliance, _ = _dw_categories(api)
+        await self._button(appliance, "eco", {"ecoExpress": "1", "extraDry": "1"}).async_press()
+        body = api.bodies[0]
+        self.assertEqual("2", body["ancillary"]["functionalId"])
+        self.assertEqual("1", body["params"]["ecoExpress"])
+        self.assertEqual("1", body["params"]["extraDry"])
+
 if __name__ == "__main__":
     unittest.main()
