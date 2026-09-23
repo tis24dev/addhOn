@@ -112,13 +112,12 @@ DRY_LEVEL_LABELS_TD = {
 TEMP_LEVEL_LABELS = {"1": "minimum", "2": "low", "3": "medium", "4": "high"}
 DIRTY_LEVEL_LABELS = {"1": "little", "2": "normal", "3": "very"}
 STEAM_LEVEL_LABELS = {"0": "no_steam", "1": "cotton", "2": "delicate", "3": "synthetic"}
-# Dishwasher basket selector (issue #106). The three names are the app's own
-# `...DIVERTER_UPPER` / `_LOWER` / `_BOTH` (decomp.txt:1757874). The device also declares
-# "0", which the app never names anywhere: it is the state the app shows as the half-load
-# toggle switched off, so it is dropped as a choice (DIVERTER_LEVEL_SENTINELS) rather
-# than offered under a label we would have had to invent.
-DIVERTER_LEVEL_LABELS = {"1": "upper", "2": "lower", "6": "both"}
-DIVERTER_LEVEL_SENTINELS = ("0",)
+# Dishwasher basket selector (issue #106). All four names are the app's own:
+# `getDiverterLevelLabel` (decomp.txt:5037045) maps "0" to `OTHER_OPTIONS.OFF` and
+# 1/2/6 to `...DIVERTER_UPPER` / `_LOWER` / `_BOTH`. "0" is the default of every
+# programme on the XS 6B0S3FSB and the usual shadow value, so it stays a choice: without
+# it the select read `unknown` whenever no basket was picked (beta2 report).
+DIVERTER_LEVEL_LABELS = {"0": "off", "1": "upper", "2": "lower", "6": "both"}
 # Unselectable dryLevel sentinels (hasDryLevelValue returns false for ''/'0'/'11'):
 # dropped from the select options so they never appear as a choice.
 DRY_LEVEL_SENTINELS = ("", "0", "11")

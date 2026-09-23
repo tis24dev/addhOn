@@ -59,6 +59,7 @@ from .param_rollback import restore_params, snapshot_params
 from .program_options import (
     HonProgramOptionEntity,
     async_send_program,
+    is_half_load_with_diverter,
     normalize_code,
     option_choices,
 )
@@ -447,8 +448,14 @@ def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> l
         # Writable program-option switches (#35): created only for the params this
         # model genuinely exposes as settable in its startProgram schema.
         created_opts: list[str] = []
+        # Issue #106: where the app makes the half load a basket choice, the basket select
+        # carries it and Start derives `halfLoad` from the basket (button.py), so a half-load
+        # switch would only be overwritten.
+        basket_carries_half_load = app_type == APPLIANCE_DW and is_half_load_with_diverter(appliance)
         for desc in _PROGRAM_OPTION_SWITCHES:
             if app_type not in desc.types:
+                continue
+            if basket_carries_half_load and desc.param == "halfLoad":
                 continue
             if not HonProgramOptionSwitch.supports(appliance, desc.param):
                 continue

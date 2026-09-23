@@ -325,6 +325,52 @@ def apply_pending_options(params: dict, options: dict) -> list[str]:
     return applied
 
 
+# The legacy names whose presence in the model `option` makes a dishwasher H-type when the
+# model carries no `optCompatibility` (second branch of `isHType`, decomp.txt:597621).
+_H_TYPE_OPTION_NAMES = ("express", "tabStatus", "extraDry", "hygiene", "intensive")
+
+
+def is_half_load_with_diverter(appliance) -> bool:
+    """True where the hOn app turns the half load into a basket choice (issue #106).
+
+    Mirrors `isHalfLoadWithDiverter` (decomp.txt:4493117-4493162): the model is H-type
+    (`optCompatibility` among its attributes, or all of `_H_TYPE_OPTION_NAMES` in its
+    `option`) AND `hasHalfLoadProOption` (decomp.txt:1762713), i.e. `option` contains
+    "halfLoadPro". The app tests `option` with a substring `includes`, and so does this.
+    There the half-load key opens the basket drawer and the drawer writes both keys
+    (decomp.txt:4518160-4518202), so `halfLoad` is never chosen on its own."""
+    attributes = getattr(appliance, "model_attributes", None)
+    if not isinstance(attributes, dict):
+        return False
+    option = str(attributes.get("option") or "")
+    if "halfLoadPro" not in option:
+        return False
+    if "optCompatibility" in attributes:
+        return True
+    return all(name in option for name in _H_TYPE_OPTION_NAMES)
+
+
+def couple_half_load_to_basket(params) -> str | None:
+    """Set ``halfLoad`` from ``diverterLevel`` the way the app's basket drawer does.
+
+    A basket picked (any code but "0") -> "1", no basket -> "0" (decomp.txt:4518193-4518202;
+    the app sends "1" for "6", both baskets, too). Only for a model where
+    `is_half_load_with_diverter` holds: the caller checks that. Leaves ``params`` alone and
+    returns None when either parameter is missing or when the programme pins ``halfLoad``
+    (a fixed parameter keeps its prescription). Returns the value written otherwise."""
+    if not isinstance(params, dict):
+        return None
+    half_load = params.get("halfLoad")
+    basket = params.get("diverterLevel")
+    if half_load is None or basket is None or not is_settable_option(half_load):
+        return None
+    code = normalize_code(getattr(basket, "value", None))
+    value = "0" if code in (None, "", "0") else "1"
+    half_load.value = value
+    _LOGGER.debug("couple_half_load_to_basket: diverterLevel=%s -> halfLoad=%s", code, value)
+    return value
+
+
 class HonProgramOptionEntity(HonBaseEntity):
     """Shared mixin for the writable program-option entities (switch/select/number).
 
