@@ -4323,9 +4323,19 @@ def _published_state(state_get, entity_id: str) -> dict | None:
     The key set is fixed -- `state` plus `_ENTITY_STATE_ATTRS`, null where the
     entity declares none -- so two downloads of the same issue diff key by key.
 
-    THE PRIVACY ARGUMENT. The state is computed by this integration's own entities
-    from the attributes and settings of the same appliance, which the block already
-    prints under the same masks, so it adds no new class of value; it goes through
+    THE PRIVACY ARGUMENT. Every state this integration publishes is computed from
+    data the same block already prints, or from public text:
+      * the appliance's attributes and settings (`attributes`);
+      * the command schema -- the program select offers the program parameter's
+        values and reports the one that matches, so its state is a member of that
+        enum in `commands`;
+      * the hOn translation catalogue, which turns a program slug into a label and
+        is the same public text for every user.
+    Free text the USER typed reaches a state only as a favourite's name, and
+    `_mask_favourites` replaces those across the whole block, states included. The
+    one state that is none of the above is a button's -- the instant it was last
+    pressed, i.e. behaviour of the person -- and it is withheld
+    (`_ENTITY_STATE_WITHHELD_DOMAINS`). What is published goes through
     `_bounded_text`, which masks a MAC before it cuts, and then through `_redact`
     with the rest of the block. The three attributes are code-authored constants
     (units, device and state classes). Nothing else of the state object is read.
