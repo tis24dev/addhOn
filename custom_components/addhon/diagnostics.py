@@ -18,6 +18,12 @@ Per appliance the dump carries, beyond the bare key list it used to emit:
                     zone-indexing report (issue #75) needs a round trip to the
                     reporter before it can even be diagnosed.
   * `attributes`  - the attribute VALUES (telemetry/state), recursively redacted;
+  * `statistics` / `attributes_overridden` - where those values came from.
+                    `attributes` is the flat result of merging the statistics
+                    endpoint, the context payload, the device shadow and the
+                    settings, last one wins, and the merge keeps no record: the
+                    first is the statistics payload verbatim, the second names every
+                    key two layers carried and which of them won (issue #73);
   * `appliance_options` / `opt_compatibility` / `option_slots` - the option
                     VOCABULARY. The cloud names a programme option twice, by a long
                     name in the command schema and by a legacy `opt1..opt11` slot on
@@ -46,6 +52,9 @@ Per appliance the dump carries, beyond the bare key list it used to emit:
                     whether an entity was created or the whole platform crashed.
                     That gap is why "the control is missing from Home Assistant"
                     used to be unanswerable from a dump and needed the log as well.
+                    Its `states` map adds what each live entity is PUBLISHING --
+                    state, unit, device and state class -- beside the raw value
+                    it was computed from.
 
 The entry-level `platforms` block is the same reading one level up, and it exists
 for the case the per-appliance one cannot cover: when setup fails there are no
@@ -496,6 +505,17 @@ _COVERAGE_META_PARAMS = frozenset(
 # few dozen entities today; the cap is a runaway guard, not a filter, and like the
 # future-capability bounds it announces itself rather than truncating silently.
 _ENTITY_MAX_PER_DOMAIN = 80
+
+# Character bound on a published entity state (`entities.states`). Home Assistant
+# itself refuses a state longer than 255 characters, so this is the platform's own
+# ceiling restated: it cuts nothing a real state can hold, and exists so that the
+# bound is written here rather than assumed from a system this file does not own.
+_ENTITY_STATE_MAX_CHARS = 255
+
+# The state attributes `entities.states` copies, and the ONLY ones. A whitelist, not
+# a filter: `friendly_name` is derived from the device nickname and every other
+# attribute is platform-specific, so anything not named here stays out by default.
+_ENTITY_STATE_ATTRS = ("unit_of_measurement", "device_class", "state_class")
 
 # Bound on materialising a RANGE's grid into the dump (see `_param_schema`). Only a
 # grid this small is enumerated, so the never-enumerate-a-setpoint rule stands. 8
@@ -3254,6 +3274,78 @@ def _attribute_values(attributes: Mapping) -> Mapping:
         return attributes
 
 
+# The layers `hon_client._get_attributes` merges, in the order it applies them: each
+# one `update()`s over the previous, so the LAST layer holding a key is the one whose
+# value the flat `attributes` map carries. Pinned against the real merge by
+# `AttributeOverridesDriftGuardTest`, which is the only thing keeping this replay
+# honest -- the merge itself records nothing.
+_MERGE_LAYERS = ("statistics", "context", "shadow", "settings")
+
+
+def _merge_layer_keys(appliance, statistics: Mapping, settings) -> dict:
+    """The key set of each merge layer, rebuilt the way `_get_attributes` reads it.
+
+    `statistics` and `settings` come from the coordinator entry, which copied them in
+    the same `_build_appliance_entry` call that built the merged map, so they are the
+    exact inputs of that merge. `context` (the top level of `appliance.attributes`)
+    and `shadow` (its `parameters` sub-map) have no such copy and are read off the
+    live appliance at dump time: a key the realtime push added after the snapshot can
+    show up here, and nothing else can.
+
+    Every read is guarded on its own, because a layer that cannot be read must cost
+    that layer and never the dump: this runs inside `_appliance_block`, which has no
+    try/except around it at either entry point.
+    """
+    layers = {name: set() for name in _MERGE_LAYERS}
+    layers["statistics"] = {k for k in statistics if isinstance(k, str)}
+    if isinstance(settings, Mapping):
+        layers["settings"] = {k for k in settings if isinstance(k, str)}
+    try:
+        raw = getattr(appliance, "attributes", None)
+        if isinstance(raw, Mapping):
+            layers["context"] = {k for k in raw if isinstance(k, str)}
+            params = raw.get("parameters")
+        else:
+            # `_get_attributes`' second branch: an object exposing `.parameters`
+            # contributes the shadow layer and no context layer at all.
+            params = getattr(raw, "parameters", None)
+        if isinstance(params, Mapping):
+            layers["shadow"] = {k for k in params if isinstance(k, str)}
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: merge layers unreadable", exc_info=True)
+    return layers
+
+
+def _attribute_overrides(appliance, statistics: Mapping, settings) -> dict:
+    """Every attribute key more than one merge layer carries, with those layers.
+
+    The flat `attributes` map is the RESULT of a merge that records nothing: when the
+    statistics endpoint and the device shadow both publish a key, the shadow's value
+    is printed and the statistics value is gone, with no trace that there were two.
+    Issue #73 is the worked example: an AC `totalElectricityUsed` far above the
+    physical ceiling, and no dump could say whether `/commands/v1/statistics` carried
+    a different figure for it that the shadow had overwritten.
+
+    Each value lists the layers holding the key in merge order, so the last name is
+    the one whose value `attributes` shows. A key held by ONE layer is not listed:
+    its origin is already legible from the dump -- in `statistics`, in
+    `attributes_last_update`, dotted for `settings`, and the top-level context
+    otherwise -- and listing all of them would print one row per attribute (207 on a
+    live washer) to say nothing new.
+
+    No cap, for the reason `attributes` has none: every key here is also a key of
+    that map, so this section can never be the larger of the two.
+    """
+    layers = _merge_layer_keys(appliance, statistics, settings)
+    keys = set().union(*layers.values())
+    overrides = {}
+    for key in sorted(keys):
+        holders = [name for name in _MERGE_LAYERS if key in layers[name]]
+        if len(holders) > 1:
+            overrides[key] = holders
+    return overrides
+
+
 def _drop_superseded_ref_program(mapped, app_type, appliance):
     """Un-map what `select.ref_program` reads when THIS appliance does not get it (#93).
 
@@ -3341,6 +3433,7 @@ def _appliance_block(
         attributes = _attribute_values(attributes)
     statistics = data.get("statistics")
     statistics = statistics if isinstance(statistics, Mapping) else {}
+    overrides = _attribute_overrides(appliance, statistics, data.get("settings"))
     # Normalised HERE and nowhere else. A caller may pass nothing, a naive
     # datetime, or something that is not a datetime at all; below this line
     # `now` is always an aware UTC instant, so every age is a subtraction that
@@ -3465,6 +3558,15 @@ def _appliance_block(
         # true and immediately after the map, so it still reads as part of it.
         "attributes_last_update": stamps,
         **({"attributes_last_update_truncated": True} if stamps_truncated else {}),
+        # The two sections that say where the values in `attributes` came from, after
+        # the map and its instants so the adjacency pinned above stays intact.
+        # `statistics` is the payload of `/commands/v1/statistics` merged with
+        # `/commands/v1/maintenance-cycle`, verbatim: the flat map above is built over
+        # it, so any key the device shadow also publishes shows the shadow's value
+        # there and survives only here. `attributes_overridden` names those keys,
+        # and is always present -- `{}` is the finding "no key had two sources".
+        "statistics": dict(statistics),
+        "attributes_overridden": overrides,
         "commands": commands,
         # Directly after `commands`, which prints the ACTIVE program only: this is
         # the same schema read per PROGRAM, and reading the two together is what
@@ -3958,8 +4060,16 @@ def _entity_inventory(
     status = "ok" if callable(state_get) else "registry_only"
     # Seeded for EVERY appliance, before a single row is read: an appliance with no
     # rows must render as "nothing was created", never as "nothing was looked at".
+    # `states` is seeded only where there is a state machine to read: without one it
+    # is absent, like `not_created`, rather than an empty map claiming that nothing
+    # was being published.
     per_appliance: dict = {
-        appliance_id: {"status": status, "by_domain": {}} for appliance_id in ids
+        appliance_id: (
+            {"status": status, "by_domain": {}, "states": {}}
+            if status == "ok"
+            else {"status": status, "by_domain": {}}
+        )
+        for appliance_id in ids
     }
     account: dict = {}
     account_not_created: dict = {}
@@ -4040,6 +4150,13 @@ def _entity_inventory(
             continue
         if _is_restored(state_get, entity_id):
             section.setdefault("not_created", []).append(tagged)
+            continue
+        # Only a live entity publishes anything: a disabled row has no state by
+        # construction and a restored one is a placeholder, and both are already
+        # named in their own lists above.
+        published = _published_state(state_get, entity_id)
+        if published is not None:
+            section["states"][tagged] = published
 
     totals: dict = {}
     for section in per_appliance.values():
@@ -4050,6 +4167,8 @@ def _entity_inventory(
         for field in ("disabled", "hidden", "not_created"):
             if field in section and isinstance(section[field], list):
                 section[field] = sorted(section[field])
+        if "states" in section:
+            section["states"] = dict(sorted(section["states"].items()))
 
     platforms = {
         "status": status,
@@ -4088,6 +4207,45 @@ def _is_restored(state_get, entity_id: str) -> bool:
     if isinstance(attributes, Mapping):
         return bool(attributes.get("restored"))
     return False
+
+
+def _published_state(state_get, entity_id: str) -> dict | None:
+    """What Home Assistant is publishing for one entity, or None when unreadable.
+
+    The raw value in `attributes` and the state an entity publishes are two
+    different things whenever the entity converts, scales or maps, and until this
+    section a dump carried only the first. A scale correction on a counter (issue
+    #73) is exactly the change that can only be verified in the field by reading the
+    two side by side.
+
+    The key set is fixed -- `state` plus `_ENTITY_STATE_ATTRS`, null where the
+    entity declares none -- so two downloads of the same issue diff key by key.
+
+    THE PRIVACY ARGUMENT. The state is computed by this integration's own entities
+    from the attributes and settings of the same appliance, which the block already
+    prints under the same masks, so it adds no new class of value; it goes through
+    `_bounded_text`, which masks a MAC before it cuts, and then through `_redact`
+    with the rest of the block. The three attributes are code-authored constants
+    (units, device and state classes). Nothing else of the state object is read.
+    """
+    try:
+        state = state_get(entity_id)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        return None
+    if state is None:
+        return None
+    attributes = getattr(state, "attributes", None)
+    attributes = attributes if isinstance(attributes, Mapping) else {}
+    published = {
+        "state": _bounded_text(
+            getattr(state, "state", None), _ENTITY_STATE_MAX_CHARS
+        )
+    }
+    for name in _ENTITY_STATE_ATTRS:
+        published[name] = _bounded_text(
+            _enum_text(attributes.get(name)), _ENTITY_STATE_MAX_CHARS
+        )
+    return published
 
 
 def _coordinator(hass: HomeAssistant, entry: ConfigEntry):
