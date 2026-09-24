@@ -617,18 +617,43 @@ def _favourite_placeholders(appliance) -> dict[str, str]:
 
     A blank name is dropped: it carries nothing the user wrote, and mapping "" would
     replace every empty string in the dump.
+
+    Each name also brings the one other string the program select can publish for
+    it. A favourite is never translated, so its label IS its name, and when that
+    label collides with another program's -- a favourite called like a catalogue
+    program's translated label -- `select.disambiguate_labels` suffixes it with its
+    code, which is the name again: `"<name> (<name>)"`. That string is built by the
+    select's own function rather than restated here, so the two cannot drift; if
+    the select module cannot be imported the plain names are still masked.
     """
     try:
         names = favourite_names(appliance)
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
         _LOGGER.debug("Diagnostics debug: favourite names unreadable", exc_info=True)
         return {}
-    return {
+    placeholders = {
         name: f"<favourite {number}>"
         for number, name in enumerate(
             sorted(name for name in names if name.strip()), start=1
         )
     }
+    try:
+        # Function-local and guarded, like every platform import in this module:
+        # `select` pulls in the Home Assistant entity stack.
+        from .select import disambiguate_labels
+
+        for name, token in list(placeholders.items()):
+            # Two codes sharing one label is exactly the collision; the second
+            # code is a throwaway that only has to differ from `name`.
+            collided = disambiguate_labels({name: name, f"{name}\0": name})[name]
+            if collided != name:
+                placeholders[collided] = f"{token} ({token})"
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug(
+            "Diagnostics debug: disambiguated favourite labels unavailable",
+            exc_info=True,
+        )
+    return placeholders
 
 
 def _mask_favourites(value, placeholders: Mapping):
@@ -643,11 +668,11 @@ def _mask_favourites(value, placeholders: Mapping):
     favourites at the source (`ref_programs.program_categories`); this pass is what
     keeps the rest in step without each section having to know.
 
-    Whole strings only. A substring match would also catch the select's
-    disambiguated label (`"<name> (<code>)"`, only when two programs share a label),
-    but at the price of masking every unrelated text that happens to contain a short
-    favourite name. Runs on the output of `_redact`, so the tree holds JSON primitives
-    only.
+    Whole strings only: a substring match would mask every unrelated text that
+    happens to contain a short favourite name. The select's disambiguated label for a
+    favourite is covered as a whole string of its own (see
+    `_favourite_placeholders`). Runs on the output of `_redact`, so the tree holds
+    JSON primitives only.
     """
     if not placeholders:
         return value

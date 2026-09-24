@@ -9877,6 +9877,64 @@ class FavouriteNameMaskingTest(unittest.TestCase):
         json.dumps(block)
         self.assertIn("commands", block)
 
+    def _state_block(self, state):
+        return _favourite_block(entities={
+            "status": "ok",
+            "by_domain": {"select": ["program"]},
+            "states": {
+                "select.program": {
+                    "state": state,
+                    "unit_of_measurement": None,
+                    "device_class": None,
+                    "state_class": None,
+                }
+            },
+        })
+
+    def test_the_select_s_disambiguated_label_of_a_favourite_is_masked(self):
+        """A favourite named like a catalogue program's translated label collides with
+        it, and the select suffixes the favourite with its code -- its name again."""
+        from custom_components.addhon.select import disambiguate_labels
+
+        collided = disambiguate_labels(
+            {"Capi nuovi": "Capi nuovi", "hqd_new": "Capi nuovi"}
+        )["Capi nuovi"]
+        block = self._state_block(collided)
+        self.assertEqual(
+            "<favourite 1> (<favourite 1>)",
+            block["entities"]["states"]["select.program"]["state"],
+        )
+        self.assertNotIn("Capi nuovi", json.dumps(block))
+
+    def test_the_catalogue_side_of_the_collision_is_left_alone(self):
+        # Its label is catalogue text and its code a schema slug: nothing the user typed.
+        block = self._state_block("Capi nuovi (hqd_new)")
+        self.assertEqual(
+            "Capi nuovi (hqd_new)",
+            block["entities"]["states"]["select.program"]["state"],
+        )
+
+    def test_without_the_select_module_the_plain_names_are_still_masked(self):
+        import custom_components.addhon.select as select_mod
+
+        original = select_mod.disambiguate_labels
+
+        def _raise(_base):
+            raise RuntimeError("select unavailable")
+
+        select_mod.disambiguate_labels = _raise
+        try:
+            placeholders = diagnostics._favourite_placeholders(
+                FakeAppliance(commands={
+                    "startProgram": _CategorisedCommand(
+                        "x", ("Capi nuovi", "x"), ("Capi nuovi",)
+                    )
+                })
+            )
+        finally:
+            select_mod.disambiguate_labels = original
+        self.assertEqual({"Capi nuovi": "<favourite 1>"}, placeholders)
+
     def test_the_marker_decides_not_the_shape_of_the_name(self):
         # A favourite named like a schema slug is still a favourite, and a catalogue
         # program with a human-looking name is not.
