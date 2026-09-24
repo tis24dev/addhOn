@@ -646,8 +646,12 @@ def _favourite_placeholders(appliance) -> dict[str, str]:
             # Two codes sharing one label is exactly the collision; the second
             # code is a throwaway that only has to differ from `name`.
             collided = disambiguate_labels({name: name, f"{name}\0": name})[name]
+            # `setdefault`, never an assignment: the same string can also be
+            # ANOTHER favourite's own name (favourites `A` and `A (A)`), and the
+            # plain name is the exact identity -- the enum member, `programName` --
+            # where this form is only the rare collision case.
             if collided != name:
-                placeholders[collided] = f"{token} ({token})"
+                placeholders.setdefault(collided, f"{token} ({token})")
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
         _LOGGER.debug(
             "Diagnostics debug: disambiguated favourite labels unavailable",

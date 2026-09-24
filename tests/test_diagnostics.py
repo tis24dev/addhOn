@@ -9914,6 +9914,22 @@ class FavouriteNameMaskingTest(unittest.TestCase):
             block["entities"]["states"]["select.program"]["state"],
         )
 
+    def test_a_favourite_s_own_name_wins_over_another_s_collided_label(self):
+        # `A (A)` is both the second favourite's name and the label the select would
+        # publish for `A` on a collision; the plain name is the exact identity.
+        placeholders = diagnostics._favourite_placeholders(
+            FakeAppliance(commands={
+                "startProgram": _CategorisedCommand(
+                    "A", ("A", "A (A)", "x"), ("A", "A (A)")
+                )
+            })
+        )
+        self.assertEqual("<favourite 1>", placeholders["A"])
+        self.assertEqual("<favourite 2>", placeholders["A (A)"])
+        self.assertEqual(
+            "<favourite 2> (<favourite 2>)", placeholders["A (A) (A (A))"]
+        )
+
     def test_without_the_select_module_the_plain_names_are_still_masked(self):
         import custom_components.addhon.select as select_mod
 
