@@ -517,6 +517,13 @@ _ENTITY_STATE_MAX_CHARS = 255
 # attribute is platform-specific, so anything not named here stays out by default.
 _ENTITY_STATE_ATTRS = ("unit_of_measurement", "device_class", "state_class")
 
+# Domains whose state is NOT a reading of the appliance. A button's state is the
+# instant somebody last pressed it: behaviour of the person, not telemetry, and a
+# class of value no other section of the dump carries. The row is still emitted, with
+# a null state, so that every live entity keeps exactly one row -- an absent button
+# would read as an entity that is not live.
+_ENTITY_STATE_WITHHELD_DOMAINS = frozenset({"button"})
+
 # Bound on materialising a RANGE's grid into the dump (see `_param_schema`). Only a
 # grid this small is enumerated, so the never-enumerate-a-setpoint rule stands. 8
 # covers every few-position control observed so far -- a 0/1 lock or tone, a 0..2
@@ -4270,10 +4277,11 @@ def _published_state(state_get, entity_id: str) -> dict | None:
         return None
     attributes = getattr(state, "attributes", None)
     attributes = attributes if isinstance(attributes, Mapping) else {}
+    withheld = entity_id.split(".", 1)[0] in _ENTITY_STATE_WITHHELD_DOMAINS
     published = {
-        "state": _bounded_text(
-            getattr(state, "state", None), _ENTITY_STATE_MAX_CHARS
-        )
+        "state": None
+        if withheld
+        else _bounded_text(getattr(state, "state", None), _ENTITY_STATE_MAX_CHARS)
     }
     for name in _ENTITY_STATE_ATTRS:
         published[name] = _bounded_text(

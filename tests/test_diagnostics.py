@@ -9739,6 +9739,27 @@ class EntityPublishedStateTest(unittest.TestCase):
         entities = self._dump([], _PublishedStates())
         self.assertEqual({}, entities["states"])
 
+    def test_a_button_keeps_its_row_but_not_the_instant_it_was_pressed(self):
+        """A button's state is when somebody last pressed it: behaviour of the person,
+        not a reading of the appliance. The row stays so every live entity has one."""
+        rows = [FakeRegistryEntry("ap-unique_start", "button.purificatore_start")]
+        states = _PublishedStates({
+            "button.purificatore_start": _PublishedState(
+                "2026-09-24T08:15:00+00:00", device_class="restart"
+            ),
+        })
+        entities = self._dump(rows, states)
+        self.assertEqual(
+            {
+                "state": None,
+                "unit_of_measurement": None,
+                "device_class": "restart",
+                "state_class": None,
+            },
+            entities["states"]["button.start"],
+        )
+        self.assertNotIn("2026-09-24T08:15", json.dumps(entities))
+
 
 if __name__ == "__main__":
     unittest.main()
