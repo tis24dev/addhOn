@@ -204,6 +204,27 @@ class HonCommand:
             self.mandatory_parameter_groups if only_mandatory else self.parameter_groups
         )
         params = grouped_params.get("parameters", {})
+        # A `dryTime` the schema left without a default goes out as null, as the hOn app
+        # sends it, and NOT as the `min` the range invents for reads. On a washer-dryer
+        # that invented value is not neutral: `dryTime` 1..4 is 30/60/90/120 minutes of
+        # TIMED drying (decomp.txt:1757888, `dryTime-1` = `drying-30`), and with a
+        # `dryLevel` > 0 it switches the cycle from level drying to 30 minutes by the
+        # clock -- issue #99, analysis apk/analysis/issue98-99-program-options-and-wd-dry.md
+        # section 11.
+        #
+        # IF DRYING PROGRAMS MISBEHAVE AFTER THIS (a start refused, drying not happening,
+        # a wrong cycle length), THIS NULL IS A CANDIDATE. It is the app's own value only
+        # when the user never touches the drying drawer; we have never seen it accepted on
+        # the wire. The value proven on a real appliance (BHA6SD696M6DB980, #99) is "0",
+        # which is what the app sends once the user picks a dry level
+        # (`checkAndApplyDryingRules`, decomp.txt:2682881).
+        dry_time = self._parameters.get("dryTime")
+        if (
+            "dryTime" in params
+            and isinstance(dry_time, HonParameterRange)
+            and dry_time.is_unset
+        ):
+            params["dryTime"] = None  # type: ignore[assignment]
         return await self.send_parameters(params)
 
     async def send_specific(self, param_names: list[str]) -> bool:
