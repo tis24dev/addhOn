@@ -213,11 +213,14 @@ class HonCommand:
         # section 11.
         #
         # IF DRYING PROGRAMS MISBEHAVE AFTER THIS (a start refused, drying not happening,
-        # a wrong cycle length), THIS NULL IS A CANDIDATE. It is the app's own value only
-        # when the user never touches the drying drawer; we have never seen it accepted on
-        # the wire. The value proven on a real appliance (BHA6SD696M6DB980, #99) is "0",
-        # which is what the app sends once the user picks a dry level
-        # (`checkAndApplyDryingRules`, decomp.txt:2682881).
+        # a wrong cycle length), THIS NULL IS A CANDIDATE. It is what the app sends unless
+        # the user picks a drying time and then goes back to a dry level: the drying
+        # drawer starts with `dryLevel` as its selected dependency (`normalize`,
+        # decomp.txt:1774744-1775200), and `checkAndApplyDryingRules`
+        # (decomp.txt:2682881) resets `dryTime` to "0" only when that dependency changes.
+        # Picking a dry level from the start leaves `dryTime` null. We have never seen
+        # null accepted on the wire; the value proven on a real appliance
+        # (BHA6SD696M6DB980, #99) is "0".
         dry_time = self._parameters.get("dryTime")
         if (
             "dryTime" in params
