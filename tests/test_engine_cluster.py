@@ -1094,6 +1094,81 @@ class AncillaryPayloadTest(unittest.TestCase):
         self.assertEqual(0.0, float(ancillary["ecoMode"]))
 
 
+class DryTimePayloadTest(unittest.TestCase):
+    """What leaves as `dryTime` on a washer-dryer start. Issue #99.
+
+    The REAL W+D+S category declares `dryTime` 1..4 with no defaultValue. The range
+    seeds itself with its min, 1, which on the appliance is 30 minutes of timed drying
+    (decomp.txt:1757888): with dryLevel > 0 that turned an Eco 40-60 wash-and-dry into
+    wash + 30 minutes by the clock. The app's `setValue` has nothing to fall back to and
+    sends null (decomp.txt:1778757-1778816), so we do too -- only for `dryTime`.
+    """
+
+    def _command(self, schema: dict = _WD_WASH_DRY_REAL) -> tuple[NaCommand, _SendingAppliance]:
+        appliance = _SendingAppliance()
+        command = NaCommand(
+            "startProgram",
+            json.loads(json.dumps(schema)),
+            appliance,
+            category_name="PROGRAMS.WM_WD.IOT_WASH_RESISTANT_COLORED",
+        )
+        return command, appliance
+
+    @staticmethod
+    def _sent(command: NaCommand, appliance: _SendingAppliance) -> dict:
+        asyncio.run(command.send())
+        _, params, _, _ = appliance.api.sent[-1]
+        return params
+
+    def test_an_unset_dry_time_goes_as_null(self) -> None:
+        command, appliance = self._command()
+        self.assertEqual(1, command.parameters["dryTime"].value)  # reads still see the min
+        params = self._sent(command, appliance)
+        self.assertIn("dryTime", params)
+        self.assertIsNone(params["dryTime"])
+
+    def test_a_written_dry_time_goes_verbatim(self) -> None:
+        # Any setter write counts: a user option, a rule, the command-history recovery or
+        # a favourite -- the app's last-program and favourite slots outrank the schema.
+        command, appliance = self._command()
+        command.parameters["dryTime"].value = "2"
+        self.assertEqual("2", self._sent(command, appliance)["dryTime"])
+
+    def test_a_rebuild_from_schema_makes_it_null_again(self) -> None:
+        command, appliance = self._command()
+        command.parameters["dryTime"].value = "2"
+        self.assertTrue(command.rebuild_from_schema())
+        self.assertIsNone(self._sent(command, appliance)["dryTime"])
+
+    def test_a_dry_time_the_schema_valued_is_not_touched(self) -> None:
+        schema = json.loads(json.dumps(_WD_WASH_DRY_REAL))
+        schema["parameters"]["dryTime"]["defaultValue"] = "3"
+        command, appliance = self._command(schema)
+        self.assertEqual("3", self._sent(command, appliance)["dryTime"])
+
+    def test_a_payload_without_dry_time_does_not_gain_one(self) -> None:
+        # dryTime is mandatory 0, so a mandatory-only send leaves it out; the null must
+        # replace a value that is going out, never add a key that is not.
+        command, appliance = self._command()
+        asyncio.run(command.send(only_mandatory=True))
+        _, params, _, _ = appliance.api.sent[-1]
+        self.assertNotIn("dryTime", params)
+
+    def test_a_dry_time_that_is_not_a_range_is_not_touched(self) -> None:
+        schema = json.loads(json.dumps(_WD_WASH_DRY_REAL))
+        schema["parameters"]["dryTime"] = {"typology": "enum", "category": "command",
+                                           "mandatory": 0, "enumValues": [0, 1, 2]}
+        command, appliance = self._command(schema)
+        self.assertIsNotNone(self._sent(command, appliance)["dryTime"])
+
+    def test_other_ranges_without_a_default_keep_their_min(self) -> None:
+        # Scope pin: the null is for `dryTime` alone, as decided for #99.
+        schema = json.loads(json.dumps(_WD_WASH_DRY_REAL))
+        schema["parameters"]["steamTime"] = dict(schema["parameters"]["dryTime"])
+        command, appliance = self._command(schema)
+        self.assertEqual("1", self._sent(command, appliance)["steamTime"])
+
+
 class NativeEnumEdgeBehaviorTest(unittest.TestCase):
     """Pin of the BABYCARE fix that the cluster exposes on favourites/recover/rule-default:
     the native side accepts a re-cased enum and keeps the raw value in intern_value."""
