@@ -50,7 +50,6 @@ from .const import (
     APPLIANCE_WM,
     DIRTY_LEVEL_LABELS,
     DIVERTER_LEVEL_LABELS,
-    DIVERTER_LEVEL_SENTINELS,
     DOMAIN,
     DRY_LEVEL_LABELS_TD,
     DRY_LEVEL_LABELS_WM,
@@ -193,10 +192,12 @@ _PROGRAM_OPTION_SELECTS: tuple[HonProgramOptionSelectDescription, ...] = (
     # Dishwasher basket selector (issue #106): settable in 42 programmes out of 43 on the
     # XS 6B0S3FSB. In the app it is reached THROUGH the half-load toggle, which opens it as
     # a drawer (decomp.txt:4510515); Home Assistant has no control that opens another, so
-    # it stands on its own here and the half-load switch stays a plain toggle.
+    # it stands on its own here. Where the app couples the two
+    # (`is_half_load_with_diverter`), this select also carries the half load: no half-load
+    # switch is built and Start derives `halfLoad` from the basket.
     HonProgramOptionSelectDescription(
         key="diverter_level", param="diverterLevel", translation_key="diverter_level",
-        types=_DW_TYPES, label_map=DIVERTER_LEVEL_LABELS, drop=DIVERTER_LEVEL_SENTINELS,
+        types=_DW_TYPES, label_map=DIVERTER_LEVEL_LABELS,
         icon="mdi:arrow-expand-vertical",
     ),
     HonProgramOptionSelectDescription(

@@ -750,6 +750,17 @@ class ClusterBehaviorTest(unittest.TestCase):
     def test_favourite_added(self) -> None:
         self.assertIn("MyFav", _native_snapshot()["rich_favourites_categories"])
 
+    def test_favourite_names_finds_what_the_loader_filed(self) -> None:
+        # End to end through the real `_add_favourites`: the diagnostics dump masks
+        # exactly these names, so the marker it rests on must be the one the loader
+        # actually injects -- and a catalogue program must never be reported.
+        from custom_components.addhon.ref_programs import favourite_names
+
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=_RICH_FAVOURITES))
+        self.assertEqual(frozenset({"MyFav"}), favourite_names(app))
+        plain = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        self.assertEqual(frozenset(), favourite_names(plain))
+
     def test_favourite_does_not_corrupt_base_program(self) -> None:
         # Regression: `_add_favourites` shallow-copied the base command, sharing its
         # `_parameters` dict AND parameter objects. Applying MyFav (tempSel=7 on

@@ -214,6 +214,34 @@ def _is_favourite(category) -> bool:
     return isinstance(params, dict) and _FAVOURITE_PARAM in params
 
 
+def favourite_names(appliance) -> frozenset[str]:
+    """Every name a user's saved favourite is filed under, on ANY command.
+
+    The complement of what `program_categories` keeps, and the same test: the engine's
+    own marker, never the shape of the name (see that function for why a heuristic
+    fails). Walked over every command rather than `startProgram` alone, because
+    `_add_favourites` files a favourite under the command the favourite itself names.
+
+    For a reader that must keep these names OUT of something -- the diagnostics dump
+    masks them -- so the synthetic `{"_": self}` placeholder is not a name and is
+    skipped, and a command that cannot be walked costs that command only.
+    """
+    commands = getattr(appliance, "commands", None)
+    if not isinstance(commands, dict):
+        return frozenset()
+    names: set[str] = set()
+    for command in commands.values():
+        categories = getattr(command, "categories", None)
+        if not isinstance(categories, dict):
+            continue
+        names.update(
+            str(name)
+            for name, category in categories.items()
+            if str(name) != SYNTHETIC_CATEGORY and _is_favourite(category)
+        )
+    return frozenset(names)
+
+
 def _category_values(category, param_name: str) -> frozenset[str]:
     """Allowed values of a category parameter, CASE-FOLDED, or an empty set.
 

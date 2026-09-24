@@ -15,6 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonAccountEntity, HonBaseEntity
 from .const import (
+    APPLIANCE_DW,
     APPLIANCE_FR,
     APPLIANCE_FRE,
     APPLIANCE_PROGRAM_GROUP,
@@ -29,7 +30,12 @@ from .const import (
 from .debug_utils import command_names, param_snapshot, redact_id, redact_store
 from .logging_utils import reset_integration_log_level, silence_mqtt_noise
 from .param_rollback import restore_params, snapshot_params
-from .program_options import apply_pending_options, async_send_program
+from .program_options import (
+    apply_pending_options,
+    async_send_program,
+    couple_half_load_to_basket,
+    is_half_load_with_diverter,
+)
 from .ref_programs import download_codes
 
 _LOGGER = logging.getLogger(__name__)
@@ -191,6 +197,14 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
             if self._command_name == "startProgram"
             else {}
         )
+        # Issue #106: on a dishwasher where the app makes the half load a basket choice,
+        # `halfLoad` is derived from `diverterLevel` right before sending, as the app's
+        # basket drawer writes it. Decided here, on the event loop, like the buffers above.
+        couple_basket = (
+            self._command_name == "startProgram"
+            and self._appliance_data.get("type") == APPLIANCE_DW
+            and is_half_load_with_diverter(appliance)
+        )
         _LOGGER.debug(
             "Button debug: press '%s' id=%s pending_program=%s options=%s store=%s commands=%s",
             self._command_name,
@@ -340,6 +354,11 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                                 name,
                                 self._command_name,
                             )
+                    # (b2) Last, so the basket it reads is final: the programme's default,
+                    # the buffered choice, or a pin. Covered by the rollback snapshots.
+                    if couple_basket:
+                        coupled = couple_half_load_to_basket(params)
+                        _LOGGER.debug("Button debug: halfLoad coupled to the basket -> %s", coupled)
                     if _LOGGER.isEnabledFor(logging.DEBUG):
                         _LOGGER.debug(
                             "Button debug: sending command '%s' final_params=%s",

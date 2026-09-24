@@ -11,5 +11,5 @@
   "requirements": [
     "awsiotsdk>=1.21.0"
   ],
-  "version": "5.26.0-beta2"
+  "version": "5.26.0-beta3"
 }

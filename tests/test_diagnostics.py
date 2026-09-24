@@ -6119,8 +6119,10 @@ class AttributeTimestampTest(unittest.TestCase):
         self.assertEqual(
             keys.index("attributes") + 1, keys.index("attributes_last_update")
         )
+        # Followed by the sections that say where those values came from; the full
+        # sequence down to `commands` is pinned in StatisticsSectionTest.
         self.assertEqual(
-            keys.index("attributes_last_update") + 1, keys.index("commands")
+            keys.index("attributes_last_update") + 1, keys.index("statistics")
         )
 
     def test_every_shadow_parameter_gets_a_row(self):
@@ -9362,6 +9364,599 @@ class OptionSlotsTest(unittest.TestCase):
             block["option_slots"]["params"]["prewash"],
         )
         json.dumps(block)
+
+
+class _LayeredAppliance:
+    """An appliance exposing the two live merge layers the way the engine does.
+
+    `attributes` is the context payload with the shadow under `parameters`; the
+    statistics and settings layers reach `_appliance_block` through the coordinator
+    entry instead, which is where `_build_appliance_entry` copies them.
+    """
+
+    def __init__(self, context=None, shadow=None):
+        self.commands = {}
+        self.attributes = dict(context or {})
+        if shadow is not None:
+            self.attributes["parameters"] = dict(shadow)
+
+
+class _RaisingAttributesAppliance:
+    commands = {}
+
+    @property
+    def attributes(self):
+        raise RuntimeError("attributes unreadable")
+
+
+def _snapshot(appliance, statistics, settings):
+    """The flat map `_get_attributes` would have built from these layers, holding the
+    SAME objects: the shadow check in `_merge_layer_keys` is by identity."""
+    merged = dict(statistics or {})
+    try:
+        raw = getattr(appliance, "attributes", None)
+    except RuntimeError:  # _RaisingAttributesAppliance
+        raw = None
+    if isinstance(raw, Mapping):
+        merged.update(raw)
+        merged.update(raw.get("parameters") or {})
+    if isinstance(settings, Mapping):
+        merged.update(settings)
+    return merged
+
+
+def _layered_block(appliance, statistics=None, settings=None, attributes=None):
+    statistics = {} if statistics is None else statistics
+    data = {
+        "appliance": appliance,
+        "type": "AC",
+        "attributes": (
+            _snapshot(appliance, statistics, settings)
+            if attributes is None
+            else attributes
+        ),
+        "statistics": statistics,
+    }
+    if settings is not None:
+        data["settings"] = settings
+    return diagnostics._appliance_block("id1", data)
+
+
+class StatisticsSectionTest(unittest.TestCase):
+    """The statistics payload and the keys the merge let one layer overwrite (#73)."""
+
+    def test_the_statistics_payload_is_emitted_verbatim(self):
+        _, blocks = _entry_diag()
+        self.assertEqual({"programsCounter": 12}, blocks["WD"]["statistics"])
+        self.assertEqual({}, blocks["AC"]["statistics"])
+
+    def test_nested_statistics_survive_as_structure(self):
+        # The real washer payload carries lists of objects (`mostUsedPrograms`,
+        # `loadingPercentage`); they must stay JSON structure, not a repr string.
+        payload = {
+            "mostUsedPrograms": [{"prCode": "124", "count": 109}],
+            "temperatureUsage": {"temp40": 10},
+        }
+        block = _layered_block(_LayeredAppliance(), statistics=payload)
+        self.assertEqual(payload, block["statistics"])
+        json.dumps(block)
+
+    def test_identity_inside_the_statistics_payload_is_redacted(self):
+        block = _layered_block(
+            _LayeredAppliance(),
+            statistics={
+                "macAddress": "AA:BB:CC:DD:EE:FF",
+                "note": "seen on AA:BB:CC:DD:EE:FF",
+            },
+        )
+        self.assertEqual("***", block["statistics"]["macAddress"])
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", json.dumps(block))
+
+    def test_a_key_the_shadow_overwrote_keeps_its_statistics_value_here(self):
+        """The #73 question: the flat map shows the shadow's figure, and the one the
+        statistics endpoint sent is readable only in `statistics`."""
+        reading = FakeShadowAttribute("6396", AC_STAMP_OLD)
+        appliance = _LayeredAppliance(shadow={"totalElectricityUsed": reading})
+        block = _layered_block(
+            appliance, statistics={"totalElectricityUsed": 639.6}
+        )
+        self.assertEqual("6396", block["attributes"]["totalElectricityUsed"])
+        self.assertEqual(639.6, block["statistics"]["totalElectricityUsed"])
+        self.assertEqual(
+            {"totalElectricityUsed": ["statistics", "shadow"]},
+            block["attributes_overridden"],
+        )
+
+    def test_a_shadow_key_newer_than_the_snapshot_is_not_named_the_winner(self):
+        """The snapshot was built while only statistics carried the key, and the push
+        added it to the live shadow afterwards. The printed map still shows the
+        statistics value, so naming the shadow as the winner would contradict it."""
+        appliance = _LayeredAppliance(
+            shadow={"totalElectricityUsed": FakeShadowAttribute("6396", AC_STAMP_NEW)}
+        )
+        block = _layered_block(
+            appliance,
+            statistics={"totalElectricityUsed": 639.6},
+            attributes={"totalElectricityUsed": 639.6},
+        )
+        self.assertEqual(639.6, block["attributes"]["totalElectricityUsed"])
+        self.assertEqual({}, block["attributes_overridden"])
+
+    def test_an_equal_but_distinct_value_is_not_the_shadow_s_object(self):
+        # Equality would pass here and identity must not: a snapshot value that merely
+        # compares equal was not taken from this shadow parameter.
+        appliance = _LayeredAppliance(shadow={"k": [1]})
+        block = _layered_block(appliance, statistics={"k": [1]}, attributes={"k": [1]})
+        self.assertEqual({}, block["attributes_overridden"])
+
+    def test_no_overlap_is_an_explicit_empty_finding(self):
+        appliance = _LayeredAppliance(context={"lastConnEvent": {}}, shadow={"a": 1})
+        block = _layered_block(appliance, statistics={"b": 2}, settings={"c.d": 3})
+        self.assertEqual({}, block["attributes_overridden"])
+
+    def test_every_layer_holding_a_key_is_named_in_merge_order(self):
+        appliance = _LayeredAppliance(context={"k": 1}, shadow={"k": 2})
+        block = _layered_block(
+            appliance, statistics={"k": 0}, settings={"k": 3}
+        )
+        self.assertEqual(
+            {"k": ["statistics", "context", "shadow", "settings"]},
+            block["attributes_overridden"],
+        )
+
+    def test_the_rows_are_sorted(self):
+        appliance = _LayeredAppliance(shadow={"zeta": 1, "alpha": 2})
+        block = _layered_block(appliance, statistics={"zeta": 0, "alpha": 0})
+        self.assertEqual(["alpha", "zeta"], list(block["attributes_overridden"]))
+
+    def test_an_appliance_with_no_attributes_surface_still_compares_its_layers(self):
+        # FakeApplianceNoModel has no `attributes` at all: only the two layers the
+        # coordinator entry carries are left, and they can still collide.
+        block = _layered_block(
+            FakeApplianceNoModel(commands={}),
+            statistics={"k": 1},
+            settings={"k": 2},
+        )
+        self.assertEqual({"k": ["statistics", "settings"]}, block["attributes_overridden"])
+
+    def test_an_unreadable_attributes_surface_costs_its_layers_not_the_dump(self):
+        block = _layered_block(
+            _RaisingAttributesAppliance(), statistics={"k": 1}, settings={"k": 2}
+        )
+        self.assertEqual({"k": ["statistics", "settings"]}, block["attributes_overridden"])
+        json.dumps(block)
+
+    def test_a_non_mapping_settings_entry_is_ignored(self):
+        appliance = _LayeredAppliance(shadow={"k": 1})
+        block = _layered_block(appliance, statistics={"k": 0}, settings="junk")
+        self.assertEqual({"k": ["statistics", "shadow"]}, block["attributes_overridden"])
+
+    def test_the_two_sections_sit_between_the_instants_and_the_commands(self):
+        _, blocks = _entry_diag()
+        keys = list(blocks["AC"])
+        at = keys.index("attributes_last_update")
+        self.assertEqual(
+            ["statistics", "attributes_overridden", "commands"],
+            keys[at + 1:at + 4],
+        )
+
+
+class AttributeOverridesDriftGuardTest(unittest.TestCase):
+    """`_MERGE_LAYERS` is a replay of `hon_client._get_attributes`, and a replay that
+    drifts from the merge would name the wrong winner in the very dump opened to find
+    out which value won. Every combination of two or more layers is run through the
+    REAL merge, and the value it keeps must be the last layer the section names."""
+
+    def test_the_last_named_layer_is_the_value_the_real_merge_keeps(self):
+        import itertools
+
+        from custom_components.addhon.hon_client import _get_attributes
+
+        layers = diagnostics._MERGE_LAYERS
+        for size in range(2, len(layers) + 1):
+            for held in itertools.combinations(layers, size):
+                with self.subTest(held=held):
+                    statistics = {"k": "statistics"} if "statistics" in held else {}
+                    settings = {"k": "settings"} if "settings" in held else {}
+                    context = {"k": "context"} if "context" in held else {}
+                    appliance = types.SimpleNamespace(
+                        attributes={
+                            **context,
+                            "parameters": (
+                                {"k": "shadow"} if "shadow" in held else {}
+                            ),
+                        },
+                        statistics=statistics,
+                        settings=settings,
+                    )
+                    merged = _get_attributes(appliance)
+                    named = diagnostics._attribute_overrides(
+                        appliance, statistics, settings, merged
+                    )
+                    self.assertEqual(list(held), named["k"])
+                    self.assertEqual(named["k"][-1], merged["k"])
+
+
+class _PublishedState:
+    def __init__(self, state, **attributes):
+        self.state = state
+        self.attributes = attributes
+
+
+class _PublishedStates:
+    def __init__(self, states=None, raising=()):
+        self._states = dict(states or {})
+        self._raising = set(raising)
+
+    def get(self, entity_id):
+        if entity_id in self._raising:
+            raise RuntimeError("state machine hiccup")
+        return self._states.get(entity_id)
+
+
+class EntityPublishedStateTest(unittest.TestCase):
+    """`entities.states`: what each live entity publishes, beside the raw value."""
+
+    def tearDown(self) -> None:
+        _restore_registry()
+
+    def _dump(self, rows, states):
+        coord = _build_ap_coordinator()
+        hass = RegistryHass(coord, rows=rows, states=states)
+        _install_registry(hass)
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+        )
+        return result["appliances"][0]["entities"]
+
+    def _rows(self, pairs=AP_ROWS, **kwargs):
+        return [FakeRegistryEntry(uid, eid, **kwargs) for uid, eid in pairs]
+
+    def test_a_live_entity_publishes_its_state_and_classes(self):
+        states = _PublishedStates({
+            "switch.purificatore_child_lock": _PublishedState(
+                "on", friendly_name="Purificatore Child lock"
+            ),
+            "switch.purificatore_touch_tone": _PublishedState("off"),
+            "fan.purificatore": _PublishedState("on"),
+            "select.purificatore_aroma": _PublishedState(
+                "12.5",
+                unit_of_measurement="kWh",
+                device_class="energy",
+                state_class="total_increasing",
+            ),
+        })
+        entities = self._dump(self._rows(), states)
+        self.assertEqual(
+            {
+                "state": "12.5",
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "state_class": "total_increasing",
+            },
+            entities["states"]["select.aroma"],
+        )
+        self.assertEqual(
+            {
+                "state": "on",
+                "unit_of_measurement": None,
+                "device_class": None,
+                "state_class": None,
+            },
+            entities["states"]["switch.child_lock"],
+        )
+
+    def test_the_rows_are_sorted_and_keyed_like_the_rest_of_the_section(self):
+        states = _PublishedStates(
+            {eid: _PublishedState("on") for _uid, eid in AP_ROWS}
+        )
+        entities = self._dump(self._rows(), states)
+        self.assertEqual(
+            ["fan.purifier", "select.aroma", "switch.child_lock", "switch.touch_tone"],
+            list(entities["states"]),
+        )
+
+    def test_nothing_but_the_whitelisted_attributes_is_read(self):
+        """`friendly_name` is built from the nickname; no other attribute of the state
+        object may reach the dump either, whatever the platform puts there."""
+        states = _PublishedStates({
+            eid: _PublishedState(
+                "on", friendly_name="Salotto di Mario", options=["a", "b"], icon="x"
+            )
+            for _uid, eid in AP_ROWS
+        })
+        entities = self._dump(self._rows(), states)
+        for row in entities["states"].values():
+            self.assertEqual(
+                {"state", "unit_of_measurement", "device_class", "state_class"},
+                set(row),
+            )
+        self.assertNotIn("Salotto di Mario", json.dumps(entities))
+
+    def test_an_enum_class_is_unwrapped_to_its_token(self):
+        import enum
+
+        class _StateClass(enum.Enum):
+            MEASUREMENT = "measurement"
+
+        states = _PublishedStates({
+            AP_ROWS[0][1]: _PublishedState("1", state_class=_StateClass.MEASUREMENT),
+        })
+        entities = self._dump(self._rows(AP_ROWS[:1]), states)
+        self.assertEqual(
+            "measurement", entities["states"]["switch.child_lock"]["state_class"]
+        )
+
+    def test_a_mac_in_a_state_is_masked_before_the_cut(self):
+        long_state = "x" * 250 + "AA:BB:CC:DD:EE:FF"
+        states = _PublishedStates({AP_ROWS[0][1]: _PublishedState(long_state)})
+        entities = self._dump(self._rows(AP_ROWS[:1]), states)
+        state = entities["states"]["switch.child_lock"]["state"]
+        self.assertLessEqual(len(state), diagnostics._ENTITY_STATE_MAX_CHARS)
+        self.assertNotIn("AA:BB", state)
+
+    def test_disabled_and_not_created_entities_publish_nothing(self):
+        rows = self._rows(AP_ROWS[:1], disabled_by="user") + self._rows(AP_ROWS[1:])
+        states = _PublishedStates({
+            # touch_tone is registered and NOT live -> not_created, no state row.
+            AP_ROWS[2][1]: _PublishedState("on"),
+            AP_ROWS[3][1]: _PublishedState("rose"),
+        })
+        entities = self._dump(rows, states)
+        self.assertEqual(["switch.touch_tone"], entities["not_created"])
+        self.assertEqual(["fan.purifier", "select.aroma"], list(entities["states"]))
+
+    def test_a_restored_placeholder_publishes_nothing(self):
+        states = FakeStates(
+            live=[eid for _uid, eid in AP_ROWS[1:]], restored=[AP_ROWS[0][1]]
+        )
+        entities = self._dump(self._rows(), states)
+        self.assertNotIn("switch.child_lock", entities["states"])
+
+    def test_a_state_read_that_raises_costs_that_row_only(self):
+        states = _PublishedStates(
+            {eid: _PublishedState("on") for _uid, eid in AP_ROWS[1:]},
+            raising=[AP_ROWS[0][1]],
+        )
+        entities = self._dump(self._rows(), states)
+        self.assertNotIn("switch.child_lock", entities["states"])
+        self.assertIn("switch.touch_tone", entities["states"])
+
+    def test_without_a_state_machine_there_is_no_states_map(self):
+        """`registry_only` must not print an empty map that reads as 'nothing is
+        published': the dump could not look, which is a different statement."""
+        coord = _build_ap_coordinator()
+        hass = RegistryHass(coord, rows=self._rows())
+        _install_registry(hass)
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry())
+        )
+        entities = result["appliances"][0]["entities"]
+        self.assertEqual("registry_only", entities["status"])
+        self.assertNotIn("states", entities)
+
+    def test_an_appliance_with_no_rows_has_an_empty_states_map(self):
+        entities = self._dump([], _PublishedStates())
+        self.assertEqual({}, entities["states"])
+
+    def test_a_button_keeps_its_row_but_not_the_instant_it_was_pressed(self):
+        """A button's state is when somebody last pressed it: behaviour of the person,
+        not a reading of the appliance. The row stays so every live entity has one."""
+        rows = [FakeRegistryEntry("ap-unique_start", "button.purificatore_start")]
+        states = _PublishedStates({
+            "button.purificatore_start": _PublishedState(
+                "2026-09-24T08:15:00+00:00", device_class="restart"
+            ),
+        })
+        entities = self._dump(rows, states)
+        self.assertEqual(
+            {
+                "state": None,
+                "unit_of_measurement": None,
+                "device_class": "restart",
+                "state_class": None,
+            },
+            entities["states"]["button.start"],
+        )
+        self.assertNotIn("2026-09-24T08:15", json.dumps(entities))
+
+
+class _Category:
+    def __init__(self, parameters):
+        self.parameters = parameters
+
+
+class _CategorisedCommand:
+    """A startProgram whose categories include the user's saved favourites.
+
+    A favourite is what `command_loader._add_favourites` makes it: a catalogue category
+    filed under the name the user typed, carrying the engine's `favourite` marker.
+    """
+
+    def __init__(self, active, programs, favourites):
+        self.parameters = {
+            "program": FakeParam(value=active, typology="enum", values=list(programs)),
+        }
+        self.categories = {
+            name: _Category(
+                {"favourite": FakeParam(value="1")} if name in favourites else {}
+            )
+            for name in programs
+        }
+
+
+def _favourite_block(attributes=None, entities=None, favourites=("Capi nuovi",)):
+    command = _CategorisedCommand(
+        "Capi nuovi", ("Capi nuovi", "Zeta mia", "hqd_cottons"), favourites
+    )
+    appliance = FakeAppliance(commands={"startProgram": command})
+    return diagnostics._appliance_block(
+        "id1",
+        {
+            "appliance": appliance,
+            "type": "WM",
+            "attributes": {} if attributes is None else attributes,
+            "statistics": {},
+        },
+        entities,
+    )
+
+
+class FavouriteNameMaskingTest(unittest.TestCase):
+    """A favourite is filed under free text the user typed: it must not leave in a dump."""
+
+    def test_every_road_into_the_block_is_masked(self):
+        block = _favourite_block(
+            attributes={
+                "programName": "Capi nuovi",
+                "startProgram.program": "Capi nuovi",
+            },
+            entities={
+                "status": "ok",
+                "by_domain": {"select": ["program"]},
+                "states": {
+                    "select.program": {
+                        "state": "Capi nuovi",
+                        "unit_of_measurement": None,
+                        "device_class": None,
+                        "state_class": None,
+                    }
+                },
+            },
+        )
+        program = block["commands"]["startProgram"]["program"]
+        self.assertEqual("<favourite 1>", program["value"])
+        self.assertIn("<favourite 1>", program["enum"])
+        self.assertEqual("<favourite 1>", block["attributes"]["programName"])
+        self.assertEqual("<favourite 1>", block["attributes"]["startProgram.program"])
+        self.assertEqual(
+            "<favourite 1>", block["entities"]["states"]["select.program"]["state"]
+        )
+        self.assertNotIn("Capi nuovi", json.dumps(block))
+
+    def test_the_tokens_are_numbered_in_name_order_and_catalogue_names_stay(self):
+        block = _favourite_block(favourites=("Zeta mia", "Capi nuovi"))
+        self.assertEqual(
+            ["<favourite 1>", "<favourite 2>", "hqd_cottons"],
+            block["commands"]["startProgram"]["program"]["enum"],
+        )
+
+    def test_only_whole_strings_are_masked(self):
+        block = _favourite_block(attributes={"note": "Capi nuovi extra"})
+        self.assertEqual("Capi nuovi extra", block["attributes"]["note"])
+
+    def test_a_key_equal_to_a_favourite_name_is_masked_too(self):
+        block = _favourite_block(attributes={"Capi nuovi": 1})
+        self.assertEqual(1, block["attributes"]["<favourite 1>"])
+        self.assertNotIn("Capi nuovi", block["attributes"])
+
+    def test_a_blank_favourite_name_is_not_a_token(self):
+        # Mapping "" would replace every empty string in the dump.
+        placeholders = diagnostics._favourite_placeholders(
+            FakeAppliance(commands={
+                "startProgram": _CategorisedCommand("", ("", " ", "x"), ("", " "))
+            })
+        )
+        self.assertEqual({}, placeholders)
+
+    def test_an_appliance_without_favourites_is_left_as_it_was(self):
+        block = _favourite_block(attributes={"programName": "hqd_cottons"}, favourites=())
+        self.assertEqual("Capi nuovi", block["commands"]["startProgram"]["program"]["value"])
+
+    def test_an_unreadable_favourite_lookup_costs_the_mask_not_the_dump(self):
+        original = diagnostics.favourite_names
+
+        def _raise(_appliance):
+            raise RuntimeError("categories unreadable")
+
+        diagnostics.favourite_names = _raise
+        try:
+            block = _favourite_block()
+        finally:
+            diagnostics.favourite_names = original
+        json.dumps(block)
+        self.assertIn("commands", block)
+
+    def _state_block(self, state):
+        return _favourite_block(entities={
+            "status": "ok",
+            "by_domain": {"select": ["program"]},
+            "states": {
+                "select.program": {
+                    "state": state,
+                    "unit_of_measurement": None,
+                    "device_class": None,
+                    "state_class": None,
+                }
+            },
+        })
+
+    def test_the_select_s_disambiguated_label_of_a_favourite_is_masked(self):
+        """A favourite named like a catalogue program's translated label collides with
+        it, and the select suffixes the favourite with its code -- its name again."""
+        from custom_components.addhon.select import disambiguate_labels
+
+        collided = disambiguate_labels(
+            {"Capi nuovi": "Capi nuovi", "hqd_new": "Capi nuovi"}
+        )["Capi nuovi"]
+        block = self._state_block(collided)
+        self.assertEqual(
+            "<favourite 1> (<favourite 1>)",
+            block["entities"]["states"]["select.program"]["state"],
+        )
+        self.assertNotIn("Capi nuovi", json.dumps(block))
+
+    def test_the_catalogue_side_of_the_collision_is_left_alone(self):
+        # Its label is catalogue text and its code a schema slug: nothing the user typed.
+        block = self._state_block("Capi nuovi (hqd_new)")
+        self.assertEqual(
+            "Capi nuovi (hqd_new)",
+            block["entities"]["states"]["select.program"]["state"],
+        )
+
+    def test_a_favourite_s_own_name_wins_over_another_s_collided_label(self):
+        # `A (A)` is both the second favourite's name and the label the select would
+        # publish for `A` on a collision; the plain name is the exact identity.
+        placeholders = diagnostics._favourite_placeholders(
+            FakeAppliance(commands={
+                "startProgram": _CategorisedCommand(
+                    "A", ("A", "A (A)", "x"), ("A", "A (A)")
+                )
+            })
+        )
+        self.assertEqual("<favourite 1>", placeholders["A"])
+        self.assertEqual("<favourite 2>", placeholders["A (A)"])
+        self.assertEqual(
+            "<favourite 2> (<favourite 2>)", placeholders["A (A) (A (A))"]
+        )
+
+    def test_without_the_select_module_the_plain_names_are_still_masked(self):
+        import custom_components.addhon.select as select_mod
+
+        original = select_mod.disambiguate_labels
+
+        def _raise(_base):
+            raise RuntimeError("select unavailable")
+
+        select_mod.disambiguate_labels = _raise
+        try:
+            placeholders = diagnostics._favourite_placeholders(
+                FakeAppliance(commands={
+                    "startProgram": _CategorisedCommand(
+                        "x", ("Capi nuovi", "x"), ("Capi nuovi",)
+                    )
+                })
+            )
+        finally:
+            select_mod.disambiguate_labels = original
+        self.assertEqual({"Capi nuovi": "<favourite 1>"}, placeholders)
+
+    def test_the_marker_decides_not_the_shape_of_the_name(self):
+        # A favourite named like a schema slug is still a favourite, and a catalogue
+        # program with a human-looking name is not.
+        block = _favourite_block(favourites=("hqd_cottons",))
+        enum = block["commands"]["startProgram"]["program"]["enum"]
+        self.assertEqual(["Capi nuovi", "Zeta mia", "<favourite 1>"], enum)
 
 
 if __name__ == "__main__":

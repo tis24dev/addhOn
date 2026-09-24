@@ -1113,6 +1113,7 @@
       "diverter_level": {
         "name": "Wash basket",
         "state": {
+          "off": "Off",
           "upper": "Upper basket",
           "lower": "Lower basket",
           "both": "Both baskets"

@@ -1624,10 +1624,10 @@ class DishwasherPlatformSetupTest(unittest.IsolatedAsyncioTestCase):
 
     _OUTSIDER = "OV"  # declares startProgram in real life, and is not in the group
 
-    async def _keys(self, platform, commands: dict, app_type: str) -> set:
+    async def _keys(self, platform, commands: dict, app_type: str, attributes: dict | None = None) -> set:
         from custom_components.addhon.const import DOMAIN
 
-        coordinator = FakeCoordinator(_washer(commands, app_type=app_type))
+        coordinator = FakeCoordinator(_washer(commands, attributes, app_type=app_type))
         hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": FakeClient()}}})
         added: list = []
         # `options` because number.py reads the experimental toggle off the entry; the
@@ -1675,10 +1675,23 @@ class DishwasherPlatformSetupTest(unittest.IsolatedAsyncioTestCase):
         dw = await self._keys(select, commands, "DW")
         self.assertTrue({"program", "diverter_level"} <= dw, dw)
         basket = next(e for e in self._last if getattr(e, "_attr_translation_key", None) == "diverter_level")
-        # "0" has no name anywhere in the app: three baskets, never four.
-        self.assertEqual(["upper", "lower", "both"], list(basket.options))
+        # "0" is the app's OFF (`getDiverterLevelLabel` @decomp.txt:5037045): four choices.
+        self.assertEqual(["off", "upper", "lower", "both"], list(basket.options))
         outsider = await self._keys(select, commands, self._OUTSIDER)
         self.assertFalse({"program", "diverter_level"} & outsider, outsider)
+
+    async def test_the_basket_select_reads_off_when_no_basket_is_picked(self) -> None:
+        # The #106 beta2 report: `diverterLevel` is "0" in the shadow and in every
+        # programme's default, and the select showed `unknown` for it.
+        from custom_components.addhon import select
+
+        commands = {"startProgram": RecordingCommand({
+            "program": Param(values={"eco": "eco", "rapid_20": "rapid_20"}),
+            "diverterLevel": SetParam(["0", "1", "2", "6"]),
+        })}
+        await self._keys(select, commands, "DW", {"diverterLevel": "0"})
+        basket = next(e for e in self._last if getattr(e, "_attr_translation_key", None) == "diverter_level")
+        self.assertEqual("off", basket.current_option)
 
 
 class _DwWireApi:
@@ -1694,7 +1707,15 @@ class _DwWireApi:
         return True
 
 
-def _dw_categories(api):
+# `model_attributes` of the #106 dishwasher that decide the half-load/basket coupling
+# (`isHalfLoadWithDiverter` @decomp.txt:4493117): `halfLoadPro` in `option`, and H-type.
+_DW_COUPLED_MODEL = {
+    "option": "openDoor|express|tabStatus|extraDry|halfLoadPro|hygiene|intensive|openDoorCommand|totalCare",
+    "optCompatibility": "e30=",
+}
+
+
+def _dw_categories(api, basket: bool = False):
     """Two REAL dishwasher startProgram categories, prescriptions read off the #106 dump.
 
     `eco` (functionalId 2) leaves every option settable; `rapid_20` (functionalId 18) pins
@@ -1703,6 +1724,10 @@ def _dw_categories(api):
     up in the body. `functionalId` sits in `ancillaryParameters`, where the app looks for it
     (`startProgram[P].ancillaryParameters.functionalId.fixedValue`, eight call sites in the
     decompiled app).
+
+    ``basket=True`` adds the real `diverterLevel` enum to every category, a third one,
+    `quick`, whose programme pins `halfLoad` at 0, and the model attributes that couple the
+    two on this dishwasher.
     """
     from custom_components.addhon.client.engine.commands import HonCommand
 
@@ -1719,6 +1744,9 @@ def _dw_categories(api):
         options = ("ecoExpress", "halfLoad", "extraDry", "hygiene", "intensive", "openDoor", "tabStatus")
         parameters = {opt: _toggle(opt not in pinned) for opt in options}
         parameters["onOffStatus"] = {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": "1"}
+        if basket:
+            parameters["diverterLevel"] = {"typology": "enum", "category": "command", "mandatory": 1,
+                                           "enumValues": ["0", "1", "2", "6"], "defaultValue": "0"}
         attributes = {
             "parameters": parameters,
             "ancillaryParameters": {
@@ -1733,6 +1761,9 @@ def _dw_categories(api):
 
     _category("eco", "2", set())
     _category("rapid_20", "18", {"ecoExpress", "extraDry", "hygiene", "intensive"})
+    if basket:
+        _category("quick", "99", {"halfLoad"})
+        appliance.model_attributes = dict(_DW_COUPLED_MODEL)
     appliance.commands["startProgram"] = categories["eco"]
     return appliance, categories
 
@@ -1785,6 +1816,40 @@ class DishwasherStartOnTheWireTest(unittest.IsolatedAsyncioTestCase):
         params = api.bodies[0]["params"]
         for pinned in ("ecoExpress", "extraDry", "hygiene", "intensive"):
             self.assertEqual("0", params[pinned], pinned)
+
+    async def test_a_picked_basket_sends_half_load_on(self) -> None:
+        api = _DwWireApi()
+        appliance, _ = _dw_categories(api, basket=True)
+        await self._button(appliance, "eco", {"diverterLevel": "1"}).async_press()
+        params = api.bodies[0]["params"]
+        self.assertEqual("1", params["diverterLevel"])
+        self.assertEqual("1", params["halfLoad"])
+
+    async def test_no_basket_sends_half_load_off(self) -> None:
+        # A leftover half-load choice without a basket: the app would send 0.
+        api = _DwWireApi()
+        appliance, _ = _dw_categories(api, basket=True)
+        await self._button(appliance, "eco", {"halfLoad": "1"}).async_press()
+        params = api.bodies[0]["params"]
+        self.assertEqual("0", params["diverterLevel"])
+        self.assertEqual("0", params["halfLoad"])
+
+    async def test_a_programme_that_pins_half_load_keeps_its_pin(self) -> None:
+        api = _DwWireApi()
+        appliance, _ = _dw_categories(api, basket=True)
+        await self._button(appliance, "quick", {"diverterLevel": "6"}).async_press()
+        params = api.bodies[0]["params"]
+        self.assertEqual("6", params["diverterLevel"])
+        self.assertEqual("0", params["halfLoad"])
+
+    async def test_an_uncoupled_model_sends_half_load_as_chosen(self) -> None:
+        api = _DwWireApi()
+        appliance, _ = _dw_categories(api, basket=True)
+        del appliance.model_attributes
+        await self._button(appliance, "eco", {"diverterLevel": "1", "halfLoad": "0"}).async_press()
+        params = api.bodies[0]["params"]
+        self.assertEqual("1", params["diverterLevel"])
+        self.assertEqual("0", params["halfLoad"])
 
     async def test_eco_carries_its_options_and_its_own_identity(self) -> None:
         api = _DwWireApi()

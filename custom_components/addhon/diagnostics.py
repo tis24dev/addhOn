@@ -18,6 +18,12 @@ Per appliance the dump carries, beyond the bare key list it used to emit:
                     zone-indexing report (issue #75) needs a round trip to the
                     reporter before it can even be diagnosed.
   * `attributes`  - the attribute VALUES (telemetry/state), recursively redacted;
+  * `statistics` / `attributes_overridden` - where those values came from.
+                    `attributes` is the flat result of merging the statistics
+                    endpoint, the context payload, the device shadow and the
+                    settings, last one wins, and the merge keeps no record: the
+                    first is the statistics payload verbatim, the second names every
+                    key two layers carried and which of them won (issue #73);
   * `appliance_options` / `opt_compatibility` / `option_slots` - the option
                     VOCABULARY. The cloud names a programme option twice, by a long
                     name in the command schema and by a legacy `opt1..opt11` slot on
@@ -46,6 +52,9 @@ Per appliance the dump carries, beyond the bare key list it used to emit:
                     whether an entity was created or the whole platform crashed.
                     That gap is why "the control is missing from Home Assistant"
                     used to be unanswerable from a dump and needed the log as well.
+                    Its `states` map adds what each live entity is PUBLISHING --
+                    state, unit, device and state class -- beside the raw value
+                    it was computed from.
 
 The entry-level `platforms` block is the same reading one level up, and it exists
 for the case the per-appliance one cannot cover: when setup fails there are no
@@ -95,7 +104,7 @@ from .const import (
 )
 from .debug_utils import _MAC_RE, redact_id
 from .hon_commands import SETTINGS_COMMANDS, param_range, param_values
-from .ref_programs import program_categories
+from .ref_programs import favourite_names, program_categories
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -497,6 +506,24 @@ _COVERAGE_META_PARAMS = frozenset(
 # future-capability bounds it announces itself rather than truncating silently.
 _ENTITY_MAX_PER_DOMAIN = 80
 
+# Character bound on a published entity state (`entities.states`). Home Assistant
+# itself refuses a state longer than 255 characters, so this is the platform's own
+# ceiling restated: it cuts nothing a real state can hold, and exists so that the
+# bound is written here rather than assumed from a system this file does not own.
+_ENTITY_STATE_MAX_CHARS = 255
+
+# The state attributes `entities.states` copies, and the ONLY ones. A whitelist, not
+# a filter: `friendly_name` is derived from the device nickname and every other
+# attribute is platform-specific, so anything not named here stays out by default.
+_ENTITY_STATE_ATTRS = ("unit_of_measurement", "device_class", "state_class")
+
+# Domains whose state is NOT a reading of the appliance. A button's state is the
+# instant somebody last pressed it: behaviour of the person, not telemetry, and a
+# class of value no other section of the dump carries. The row is still emitted, with
+# a null state, so that every live entity keeps exactly one row -- an absent button
+# would read as an entity that is not live.
+_ENTITY_STATE_WITHHELD_DOMAINS = frozenset({"button"})
+
 # Bound on materialising a RANGE's grid into the dump (see `_param_schema`). Only a
 # grid this small is enumerated, so the never-enumerate-a-setpoint rule stands. 8
 # covers every few-position control observed so far -- a 0/1 lock or tone, a 0..2
@@ -578,6 +605,93 @@ def _redact(value):
     if isinstance(value, (list, tuple)):
         return [_redact(item) for item in value]
     return _jsonable(value)
+
+
+def _favourite_placeholders(appliance) -> dict[str, str]:
+    """Each favourite name of this appliance -> the stable token that replaces it.
+
+    Numbered in name order, so one favourite gets the same token in every section of
+    the block -- the active program, the enum member it is, the entity state showing it
+    -- and a reader can still follow it across them. The token says how many favourites
+    there are and nothing about what the user called them.
+
+    A blank name is dropped: it carries nothing the user wrote, and mapping "" would
+    replace every empty string in the dump.
+
+    Each name also brings the one other string the program select can publish for
+    it. A favourite is never translated, so its label IS its name, and when that
+    label collides with another program's -- a favourite called like a catalogue
+    program's translated label -- `select.disambiguate_labels` suffixes it with its
+    code, which is the name again: `"<name> (<name>)"`. That string is built by the
+    select's own function rather than restated here, so the two cannot drift; if
+    the select module cannot be imported the plain names are still masked.
+    """
+    try:
+        names = favourite_names(appliance)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: favourite names unreadable", exc_info=True)
+        return {}
+    placeholders = {
+        name: f"<favourite {number}>"
+        for number, name in enumerate(
+            sorted(name for name in names if name.strip()), start=1
+        )
+    }
+    try:
+        # Function-local and guarded, like every platform import in this module:
+        # `select` pulls in the Home Assistant entity stack.
+        from .select import disambiguate_labels
+
+        for name, token in list(placeholders.items()):
+            # Two codes sharing one label is exactly the collision; the second
+            # code is a throwaway that only has to differ from `name`.
+            collided = disambiguate_labels({name: name, f"{name}\0": name})[name]
+            # `setdefault`, never an assignment: the same string can also be
+            # ANOTHER favourite's own name (favourites `A` and `A (A)`), and the
+            # plain name is the exact identity -- the enum member, `programName` --
+            # where this form is only the rare collision case.
+            if collided != name:
+                placeholders.setdefault(collided, f"{token} ({token})")
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug(
+            "Diagnostics debug: disambiguated favourite labels unavailable",
+            exc_info=True,
+        )
+    return placeholders
+
+
+def _mask_favourites(value, placeholders: Mapping):
+    """Replace every string -- key or value -- EQUAL to a favourite name.
+
+    A favourite is a catalogue category filed under the name the user typed
+    (`command_loader._add_favourites`), and that name reaches the dump by several
+    roads: every program enum in `commands`, the program parameter's value and its
+    `settings.*` mirror in `attributes` when a favourite is the active category,
+    `programName` when the device reports the favourite's code, and the published
+    state of the program select and sensor. `program_options` already drops
+    favourites at the source (`ref_programs.program_categories`); this pass is what
+    keeps the rest in step without each section having to know.
+
+    Whole strings only: a substring match would mask every unrelated text that
+    happens to contain a short favourite name. The select's disambiguated label for a
+    favourite is covered as a whole string of its own (see
+    `_favourite_placeholders`). Runs on the output of `_redact`, so the tree holds
+    JSON primitives only.
+    """
+    if not placeholders:
+        return value
+    if isinstance(value, Mapping):
+        return {
+            placeholders.get(key, key) if isinstance(key, str) else key: (
+                _mask_favourites(item, placeholders)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_favourites(item, placeholders) for item in value]
+    if isinstance(value, str):
+        return placeholders.get(value, value)
+    return value
 
 
 def _param_value(param):
@@ -3254,6 +3368,110 @@ def _attribute_values(attributes: Mapping) -> Mapping:
         return attributes
 
 
+# The layers `hon_client._get_attributes` merges, in the order it applies them: each
+# one `update()`s over the previous, so the LAST layer holding a key is the one whose
+# value the flat `attributes` map carries. Pinned against the real merge by
+# `AttributeOverridesDriftGuardTest`, which is the only thing keeping this replay
+# honest -- the merge itself records nothing.
+_MERGE_LAYERS = ("statistics", "context", "shadow", "settings")
+
+
+def _merge_layer_keys(
+    appliance, statistics: Mapping, settings, attributes: Mapping
+) -> dict:
+    """The key set of each merge layer, rebuilt the way `_get_attributes` reads it.
+
+    `statistics` and `settings` come from the coordinator entry, which copied them in
+    the same `_build_appliance_entry` call that built the merged map, so they are the
+    exact inputs of that merge. `context` (the top level of `appliance.attributes`)
+    and `shadow` (its `parameters` sub-map) have no such copy and are read off the
+    live appliance at dump time, which can be later than the snapshot `attributes`
+    was built from.
+
+    The shadow layer is therefore checked against that snapshot by IDENTITY: a
+    shadow key counts only when the snapshot holds the very object the live shadow
+    holds. The engine updates a known parameter's HonAttribute in place and never
+    replaces it, and the shadow is applied after statistics and context, so a key
+    the shadow already had at snapshot time points at that object; a key the
+    realtime push added AFTER the snapshot does not, and without this check it
+    would be reported as the winner over a statistics value the printed map still
+    shows. The only layer applied later is `settings`, whose keys are dotted
+    (`command.param`) and do not collide with a bare shadow name in practice; a
+    key both carry falls back to the live read (see the comment at the check).
+    The context layer gets no such check -- its values are primitives, where
+    identity proves nothing -- and keeps the live read; its keys are the payload
+    envelope and do not come and go between polls the way a newly reported
+    parameter does.
+
+    Every read is guarded on its own, because a layer that cannot be read must cost
+    that layer and never the dump: this runs inside `_appliance_block`, which has no
+    try/except around it at either entry point.
+    """
+    layers = {name: set() for name in _MERGE_LAYERS}
+    layers["statistics"] = {k for k in statistics if isinstance(k, str)}
+    if isinstance(settings, Mapping):
+        layers["settings"] = {k for k in settings if isinstance(k, str)}
+    try:
+        raw = getattr(appliance, "attributes", None)
+        if isinstance(raw, Mapping):
+            layers["context"] = {k for k in raw if isinstance(k, str)}
+            params = raw.get("parameters")
+        else:
+            # `_get_attributes`' second branch: an object exposing `.parameters`
+            # contributes the shadow layer and no context layer at all.
+            params = getattr(raw, "parameters", None)
+        if isinstance(params, Mapping):
+            # The module sentinel, not `.get(name)`: a snapshot value of None must
+            # not read as the same object as a shadow value of None it never held.
+            # A key `settings` also carries is taken on the live read: settings won
+            # it, so the snapshot holds the settings object and cannot vouch either
+            # way for the shadow underneath.
+            layers["shadow"] = {
+                k
+                for k, value in params.items()
+                if isinstance(k, str)
+                and (
+                    k in layers["settings"]
+                    or attributes.get(k, _NO_LAST_UPDATE) is value
+                )
+            }
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: merge layers unreadable", exc_info=True)
+    return layers
+
+
+def _attribute_overrides(
+    appliance, statistics: Mapping, settings, attributes: Mapping
+) -> dict:
+    """Every attribute key more than one merge layer carries, with those layers.
+
+    The flat `attributes` map is the RESULT of a merge that records nothing: when the
+    statistics endpoint and the device shadow both publish a key, the shadow's value
+    is printed and the statistics value is gone, with no trace that there were two.
+    Issue #73 is the worked example: an AC `totalElectricityUsed` far above the
+    physical ceiling, and no dump could say whether `/commands/v1/statistics` carried
+    a different figure for it that the shadow had overwritten.
+
+    Each value lists the layers holding the key in merge order, so the last name is
+    the one whose value `attributes` shows. A key held by ONE layer is not listed:
+    its origin is already legible from the dump -- in `statistics`, in
+    `attributes_last_update`, dotted for `settings`, and the top-level context
+    otherwise -- and listing all of them would print one row per attribute (207 on a
+    live washer) to say nothing new.
+
+    No cap, for the reason `attributes` has none: every key here is also a key of
+    that map, so this section can never be the larger of the two.
+    """
+    layers = _merge_layer_keys(appliance, statistics, settings, attributes)
+    keys = set().union(*layers.values())
+    overrides = {}
+    for key in sorted(keys):
+        holders = [name for name in _MERGE_LAYERS if key in layers[name]]
+        if len(holders) > 1:
+            overrides[key] = holders
+    return overrides
+
+
 def _drop_superseded_ref_program(mapped, app_type, appliance):
     """Un-map what `select.ref_program` reads when THIS appliance does not get it (#93).
 
@@ -3341,6 +3559,9 @@ def _appliance_block(
         attributes = _attribute_values(attributes)
     statistics = data.get("statistics")
     statistics = statistics if isinstance(statistics, Mapping) else {}
+    overrides = _attribute_overrides(
+        appliance, statistics, data.get("settings"), attributes
+    )
     # Normalised HERE and nowhere else. A caller may pass nothing, a naive
     # datetime, or something that is not a datetime at all; below this line
     # `now` is always an aware UTC instant, so every age is a subtraction that
@@ -3465,6 +3686,15 @@ def _appliance_block(
         # true and immediately after the map, so it still reads as part of it.
         "attributes_last_update": stamps,
         **({"attributes_last_update_truncated": True} if stamps_truncated else {}),
+        # The two sections that say where the values in `attributes` came from, after
+        # the map and its instants so the adjacency pinned above stays intact.
+        # `statistics` is the payload of `/commands/v1/statistics` merged with
+        # `/commands/v1/maintenance-cycle`, verbatim: the flat map above is built over
+        # it, so any key the device shadow also publishes shows the shadow's value
+        # there and survives only here. `attributes_overridden` names those keys,
+        # and is always present -- `{}` is the finding "no key had two sources".
+        "statistics": dict(statistics),
+        "attributes_overridden": overrides,
         "commands": commands,
         # Directly after `commands`, which prints the ACTIVE program only: this is
         # the same schema read per PROGRAM, and reading the two together is what
@@ -3486,7 +3716,10 @@ def _appliance_block(
         "entities": entity_section,
         "future_capabilities": future,
     }
-    return _redact(block)
+    # Favourites LAST, over the finished and already redacted block: their names are
+    # free text the user typed, and they surface in more places than any one section
+    # can see (see `_mask_favourites`).
+    return _mask_favourites(_redact(block), _favourite_placeholders(appliance))
 
 
 # The bound on the ONE cloud-controlled string this section prints. The vocabulary
@@ -3958,8 +4191,16 @@ def _entity_inventory(
     status = "ok" if callable(state_get) else "registry_only"
     # Seeded for EVERY appliance, before a single row is read: an appliance with no
     # rows must render as "nothing was created", never as "nothing was looked at".
+    # `states` is seeded only where there is a state machine to read: without one it
+    # is absent, like `not_created`, rather than an empty map claiming that nothing
+    # was being published.
     per_appliance: dict = {
-        appliance_id: {"status": status, "by_domain": {}} for appliance_id in ids
+        appliance_id: (
+            {"status": status, "by_domain": {}, "states": {}}
+            if status == "ok"
+            else {"status": status, "by_domain": {}}
+        )
+        for appliance_id in ids
     }
     account: dict = {}
     account_not_created: dict = {}
@@ -4040,6 +4281,13 @@ def _entity_inventory(
             continue
         if _is_restored(state_get, entity_id):
             section.setdefault("not_created", []).append(tagged)
+            continue
+        # Only a live entity publishes anything: a disabled row has no state by
+        # construction and a restored one is a placeholder, and both are already
+        # named in their own lists above.
+        published = _published_state(state_get, entity_id)
+        if published is not None:
+            section["states"][tagged] = published
 
     totals: dict = {}
     for section in per_appliance.values():
@@ -4050,6 +4298,8 @@ def _entity_inventory(
         for field in ("disabled", "hidden", "not_created"):
             if field in section and isinstance(section[field], list):
                 section[field] = sorted(section[field])
+        if "states" in section:
+            section["states"] = dict(sorted(section["states"].items()))
 
     platforms = {
         "status": status,
@@ -4088,6 +4338,56 @@ def _is_restored(state_get, entity_id: str) -> bool:
     if isinstance(attributes, Mapping):
         return bool(attributes.get("restored"))
     return False
+
+
+def _published_state(state_get, entity_id: str) -> dict | None:
+    """What Home Assistant is publishing for one entity, or None when unreadable.
+
+    The raw value in `attributes` and the state an entity publishes are two
+    different things whenever the entity converts, scales or maps, and until this
+    section a dump carried only the first. A scale correction on a counter (issue
+    #73) is exactly the change that can only be verified in the field by reading the
+    two side by side.
+
+    The key set is fixed -- `state` plus `_ENTITY_STATE_ATTRS`, null where the
+    entity declares none -- so two downloads of the same issue diff key by key.
+
+    THE PRIVACY ARGUMENT. Every state this integration publishes is computed from
+    data the same block already prints, or from public text:
+      * the appliance's attributes and settings (`attributes`);
+      * the command schema -- the program select offers the program parameter's
+        values and reports the one that matches, so its state is a member of that
+        enum in `commands`;
+      * the hOn translation catalogue, which turns a program slug into a label and
+        is the same public text for every user.
+    Free text the USER typed reaches a state only as a favourite's name, and
+    `_mask_favourites` replaces those across the whole block, states included. The
+    one state that is none of the above is a button's -- the instant it was last
+    pressed, i.e. behaviour of the person -- and it is withheld
+    (`_ENTITY_STATE_WITHHELD_DOMAINS`). What is published goes through
+    `_bounded_text`, which masks a MAC before it cuts, and then through `_redact`
+    with the rest of the block. The three attributes are code-authored constants
+    (units, device and state classes). Nothing else of the state object is read.
+    """
+    try:
+        state = state_get(entity_id)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        return None
+    if state is None:
+        return None
+    attributes = getattr(state, "attributes", None)
+    attributes = attributes if isinstance(attributes, Mapping) else {}
+    withheld = entity_id.split(".", 1)[0] in _ENTITY_STATE_WITHHELD_DOMAINS
+    published = {
+        "state": None
+        if withheld
+        else _bounded_text(getattr(state, "state", None), _ENTITY_STATE_MAX_CHARS)
+    }
+    for name in _ENTITY_STATE_ATTRS:
+        published[name] = _bounded_text(
+            _enum_text(attributes.get(name)), _ENTITY_STATE_MAX_CHARS
+        )
+    return published
 
 
 def _coordinator(hass: HomeAssistant, entry: ConfigEntry):

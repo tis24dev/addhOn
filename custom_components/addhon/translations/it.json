@@ -1113,6 +1113,7 @@
       "diverter_level": {
         "name": "Cesto di lavaggio",
         "state": {
+          "off": "Spento",
           "upper": "Cesto superiore",
           "lower": "Cesto inferiore",
           "both": "Entrambi i cesti"

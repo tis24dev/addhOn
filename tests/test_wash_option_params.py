@@ -159,9 +159,11 @@ from custom_components.addhon.const import (  # noqa: E402
     APPLIANCE_TD,
     APPLIANCE_WD,
     APPLIANCE_WM,
-    DIVERTER_LEVEL_SENTINELS,
+    DIVERTER_LEVEL_LABELS,
 )
 from custom_components.addhon.program_options import (  # noqa: E402
+    couple_half_load_to_basket,
+    is_half_load_with_diverter,
     is_settable_option,
     option_choices,
     startprogram_option_param,
@@ -384,13 +386,17 @@ class DishwasherControlsTest(unittest.TestCase):
                 f"{param} is fixed on the XS 6B0S3FSB and must create no entity",
             )
 
-    def test_the_basket_selector_offers_exactly_three_baskets(self) -> None:
-        # The device declares 0/1/2/6. "0" has no name anywhere in the app -- it is the
-        # half-load toggle switched off -- so it must never be offered as a choice.
+    def test_the_basket_selector_offers_off_and_the_three_baskets(self) -> None:
+        # The device declares 0/1/2/6 and every programme defaults to "0". The app names
+        # "0" OFF (`getDiverterLevelLabel` @decomp.txt:5037045), so it is a choice here
+        # too: dropping it left the select `unknown` whenever no basket was picked.
         appliance, _ = _build_appliance(_DW_FIXTURE)
         param = startprogram_option_param(appliance, "diverterLevel")
+        choices = option_choices(param)
+        self.assertEqual(sorted(choices), ["0", "1", "2", "6"])
         self.assertEqual(
-            sorted(option_choices(param, DIVERTER_LEVEL_SENTINELS)), ["1", "2", "6"]
+            [DIVERTER_LEVEL_LABELS[c] for c in sorted(choices)],
+            ["off", "upper", "lower", "both"],
         )
 
     def test_hygiene_serves_the_dishwasher_without_leaving_the_washers(self) -> None:
@@ -412,11 +418,77 @@ class DishwasherControlsTest(unittest.TestCase):
         self.assertEqual(tuple(dv.types), (APPLIANCE_DW,))
 
 
+# `model_attributes.option` of the #106 dishwasher, verbatim from its beta2 dump. The
+# matrix itself is irrelevant here: the app only asks whether the key is there.
+_DW_OPTION = "openDoor|express|tabStatus|extraDry|halfLoadPro|hygiene|intensive|openDoorCommand|totalCare"
+_DW_MODEL = {"option": _DW_OPTION, "optCompatibility": "e30=", "series": "h20"}
+
+
+class DishwasherHalfLoadBasketTest(unittest.TestCase):
+    """On the #106 dishwasher the app writes `halfLoad` from the basket, never on its own.
+
+    `isHalfLoadWithDiverter` @decomp.txt:4493117 (H-type and `halfLoadPro` in the model
+    `option`) makes the half-load key open the basket drawer, and the drawer writes
+    `halfLoad = basket ? '1' : '0'` beside `diverterLevel` (@4518160-4518202).
+    """
+
+    def test_the_real_model_is_coupled(self) -> None:
+        self.assertTrue(is_half_load_with_diverter(types.SimpleNamespace(model_attributes=_DW_MODEL)))
+
+    def test_h_type_through_the_matrix_alone(self) -> None:
+        # The first branch of `isHType`: the matrix decides, whatever the option names.
+        model = {"option": "halfLoadPro|extraDry", "optCompatibility": "e30="}
+        self.assertTrue(is_half_load_with_diverter(types.SimpleNamespace(model_attributes=model)))
+
+    def test_h_type_through_the_option_names_alone(self) -> None:
+        # The second branch of `isHType`: no matrix, but all five legacy names.
+        model = {"option": _DW_OPTION}
+        self.assertTrue(is_half_load_with_diverter(types.SimpleNamespace(model_attributes=model)))
+
+    def test_no_half_load_pro_is_not_coupled(self) -> None:
+        model = dict(_DW_MODEL, option=_DW_OPTION.replace("halfLoadPro|", ""))
+        self.assertFalse(is_half_load_with_diverter(types.SimpleNamespace(model_attributes=model)))
+
+    def test_not_h_type_is_not_coupled(self) -> None:
+        model = {"option": "halfLoadPro|extraDry"}
+        self.assertFalse(is_half_load_with_diverter(types.SimpleNamespace(model_attributes=model)))
+
+    def test_no_model_attributes_is_not_coupled(self) -> None:
+        self.assertFalse(is_half_load_with_diverter(types.SimpleNamespace()))
+
+    def _params(self, basket):
+        appliance, _ = _build_appliance(_DW_FIXTURE)
+        params = appliance.commands["startProgram"].parameters
+        params["diverterLevel"].value = basket
+        return params
+
+    def test_a_basket_turns_half_load_on(self) -> None:
+        for basket in ("1", "2", "6"):
+            params = self._params(basket)
+            self.assertEqual("1", couple_half_load_to_basket(params), basket)
+            self.assertEqual("1", str(params["halfLoad"].value), basket)
+
+    def test_no_basket_turns_half_load_off(self) -> None:
+        params = self._params("0")
+        params["halfLoad"].value = "1"
+        self.assertEqual("0", couple_half_load_to_basket(params))
+        self.assertEqual("0", str(params["halfLoad"].value))
+
+    def test_a_missing_parameter_changes_nothing(self) -> None:
+        params = self._params("1")
+        del params["diverterLevel"]
+        params["halfLoad"].value = "0"
+        self.assertIsNone(couple_half_load_to_basket(params))
+        self.assertEqual("0", str(params["halfLoad"].value))
+
+
 class DishwasherSwitchBuilderTest(unittest.TestCase):
     """What `_appliance_switches` really builds for the #106 dishwasher."""
 
-    def _built(self):
+    def _built(self, model_attributes=None):
         appliance, _ = _build_appliance(_DW_FIXTURE)
+        if model_attributes is not None:
+            appliance.model_attributes = model_attributes
         data = {"type": APPLIANCE_DW, "appliance": appliance, "name": "Dishwasher", "attributes": {}}
         coordinator = types.SimpleNamespace(data={"dw1": data}, hass=None)
         return switch._appliance_switches(coordinator, "dw1", data, None)
@@ -426,6 +498,15 @@ class DishwasherSwitchBuilderTest(unittest.TestCase):
         self.assertEqual(
             keys,
             {"eco_express", "half_load", "extra_dry", "hygiene", "intensive", "auto_open_door", "tabs"},
+        )
+
+    def test_a_coupled_model_gets_no_half_load_switch(self) -> None:
+        # The basket select carries the half load there, as in the app: a separate
+        # switch would be overwritten by the basket at Start.
+        keys = {e._desc.key for e in self._built(_DW_MODEL) if hasattr(e, "_desc")}
+        self.assertEqual(
+            keys,
+            {"eco_express", "extra_dry", "hygiene", "intensive", "auto_open_door", "tabs"},
         )
 
     def test_no_pause_switch_without_pause_commands(self) -> None:
