@@ -9761,5 +9761,129 @@ class EntityPublishedStateTest(unittest.TestCase):
         self.assertNotIn("2026-09-24T08:15", json.dumps(entities))
 
 
+class _Category:
+    def __init__(self, parameters):
+        self.parameters = parameters
+
+
+class _CategorisedCommand:
+    """A startProgram whose categories include the user's saved favourites.
+
+    A favourite is what `command_loader._add_favourites` makes it: a catalogue category
+    filed under the name the user typed, carrying the engine's `favourite` marker.
+    """
+
+    def __init__(self, active, programs, favourites):
+        self.parameters = {
+            "program": FakeParam(value=active, typology="enum", values=list(programs)),
+        }
+        self.categories = {
+            name: _Category(
+                {"favourite": FakeParam(value="1")} if name in favourites else {}
+            )
+            for name in programs
+        }
+
+
+def _favourite_block(attributes=None, entities=None, favourites=("Capi nuovi",)):
+    command = _CategorisedCommand(
+        "Capi nuovi", ("Capi nuovi", "Zeta mia", "hqd_cottons"), favourites
+    )
+    appliance = FakeAppliance(commands={"startProgram": command})
+    return diagnostics._appliance_block(
+        "id1",
+        {
+            "appliance": appliance,
+            "type": "WM",
+            "attributes": {} if attributes is None else attributes,
+            "statistics": {},
+        },
+        entities,
+    )
+
+
+class FavouriteNameMaskingTest(unittest.TestCase):
+    """A favourite is filed under free text the user typed: it must not leave in a dump."""
+
+    def test_every_road_into_the_block_is_masked(self):
+        block = _favourite_block(
+            attributes={
+                "programName": "Capi nuovi",
+                "startProgram.program": "Capi nuovi",
+            },
+            entities={
+                "status": "ok",
+                "by_domain": {"select": ["program"]},
+                "states": {
+                    "select.program": {
+                        "state": "Capi nuovi",
+                        "unit_of_measurement": None,
+                        "device_class": None,
+                        "state_class": None,
+                    }
+                },
+            },
+        )
+        program = block["commands"]["startProgram"]["program"]
+        self.assertEqual("<favourite 1>", program["value"])
+        self.assertIn("<favourite 1>", program["enum"])
+        self.assertEqual("<favourite 1>", block["attributes"]["programName"])
+        self.assertEqual("<favourite 1>", block["attributes"]["startProgram.program"])
+        self.assertEqual(
+            "<favourite 1>", block["entities"]["states"]["select.program"]["state"]
+        )
+        self.assertNotIn("Capi nuovi", json.dumps(block))
+
+    def test_the_tokens_are_numbered_in_name_order_and_catalogue_names_stay(self):
+        block = _favourite_block(favourites=("Zeta mia", "Capi nuovi"))
+        self.assertEqual(
+            ["<favourite 1>", "<favourite 2>", "hqd_cottons"],
+            block["commands"]["startProgram"]["program"]["enum"],
+        )
+
+    def test_only_whole_strings_are_masked(self):
+        block = _favourite_block(attributes={"note": "Capi nuovi extra"})
+        self.assertEqual("Capi nuovi extra", block["attributes"]["note"])
+
+    def test_a_key_equal_to_a_favourite_name_is_masked_too(self):
+        block = _favourite_block(attributes={"Capi nuovi": 1})
+        self.assertEqual(1, block["attributes"]["<favourite 1>"])
+        self.assertNotIn("Capi nuovi", block["attributes"])
+
+    def test_a_blank_favourite_name_is_not_a_token(self):
+        # Mapping "" would replace every empty string in the dump.
+        placeholders = diagnostics._favourite_placeholders(
+            FakeAppliance(commands={
+                "startProgram": _CategorisedCommand("", ("", " ", "x"), ("", " "))
+            })
+        )
+        self.assertEqual({}, placeholders)
+
+    def test_an_appliance_without_favourites_is_left_as_it_was(self):
+        block = _favourite_block(attributes={"programName": "hqd_cottons"}, favourites=())
+        self.assertEqual("Capi nuovi", block["commands"]["startProgram"]["program"]["value"])
+
+    def test_an_unreadable_favourite_lookup_costs_the_mask_not_the_dump(self):
+        original = diagnostics.favourite_names
+
+        def _raise(_appliance):
+            raise RuntimeError("categories unreadable")
+
+        diagnostics.favourite_names = _raise
+        try:
+            block = _favourite_block()
+        finally:
+            diagnostics.favourite_names = original
+        json.dumps(block)
+        self.assertIn("commands", block)
+
+    def test_the_marker_decides_not_the_shape_of_the_name(self):
+        # A favourite named like a schema slug is still a favourite, and a catalogue
+        # program with a human-looking name is not.
+        block = _favourite_block(favourites=("hqd_cottons",))
+        enum = block["commands"]["startProgram"]["program"]["enum"]
+        self.assertEqual(["Capi nuovi", "Zeta mia", "<favourite 1>"], enum)
+
+
 if __name__ == "__main__":
     unittest.main()

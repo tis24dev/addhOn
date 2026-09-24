@@ -104,7 +104,7 @@ from .const import (
 )
 from .debug_utils import _MAC_RE, redact_id
 from .hon_commands import SETTINGS_COMMANDS, param_range, param_values
-from .ref_programs import program_categories
+from .ref_programs import favourite_names, program_categories
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -605,6 +605,64 @@ def _redact(value):
     if isinstance(value, (list, tuple)):
         return [_redact(item) for item in value]
     return _jsonable(value)
+
+
+def _favourite_placeholders(appliance) -> dict[str, str]:
+    """Each favourite name of this appliance -> the stable token that replaces it.
+
+    Numbered in name order, so one favourite gets the same token in every section of
+    the block -- the active program, the enum member it is, the entity state showing it
+    -- and a reader can still follow it across them. The token says how many favourites
+    there are and nothing about what the user called them.
+
+    A blank name is dropped: it carries nothing the user wrote, and mapping "" would
+    replace every empty string in the dump.
+    """
+    try:
+        names = favourite_names(appliance)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: favourite names unreadable", exc_info=True)
+        return {}
+    return {
+        name: f"<favourite {number}>"
+        for number, name in enumerate(
+            sorted(name for name in names if name.strip()), start=1
+        )
+    }
+
+
+def _mask_favourites(value, placeholders: Mapping):
+    """Replace every string -- key or value -- EQUAL to a favourite name.
+
+    A favourite is a catalogue category filed under the name the user typed
+    (`command_loader._add_favourites`), and that name reaches the dump by several
+    roads: every program enum in `commands`, the program parameter's value and its
+    `settings.*` mirror in `attributes` when a favourite is the active category,
+    `programName` when the device reports the favourite's code, and the published
+    state of the program select and sensor. `program_options` already drops
+    favourites at the source (`ref_programs.program_categories`); this pass is what
+    keeps the rest in step without each section having to know.
+
+    Whole strings only. A substring match would also catch the select's
+    disambiguated label (`"<name> (<code>)"`, only when two programs share a label),
+    but at the price of masking every unrelated text that happens to contain a short
+    favourite name. Runs on the output of `_redact`, so the tree holds JSON primitives
+    only.
+    """
+    if not placeholders:
+        return value
+    if isinstance(value, Mapping):
+        return {
+            placeholders.get(key, key) if isinstance(key, str) else key: (
+                _mask_favourites(item, placeholders)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_favourites(item, placeholders) for item in value]
+    if isinstance(value, str):
+        return placeholders.get(value, value)
+    return value
 
 
 def _param_value(param):
@@ -3629,7 +3687,10 @@ def _appliance_block(
         "entities": entity_section,
         "future_capabilities": future,
     }
-    return _redact(block)
+    # Favourites LAST, over the finished and already redacted block: their names are
+    # free text the user typed, and they surface in more places than any one section
+    # can see (see `_mask_favourites`).
+    return _mask_favourites(_redact(block), _favourite_placeholders(appliance))
 
 
 # The bound on the ONE cloud-controlled string this section prints. The vocabulary
