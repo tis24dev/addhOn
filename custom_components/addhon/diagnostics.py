@@ -3282,15 +3282,32 @@ def _attribute_values(attributes: Mapping) -> Mapping:
 _MERGE_LAYERS = ("statistics", "context", "shadow", "settings")
 
 
-def _merge_layer_keys(appliance, statistics: Mapping, settings) -> dict:
+def _merge_layer_keys(
+    appliance, statistics: Mapping, settings, attributes: Mapping
+) -> dict:
     """The key set of each merge layer, rebuilt the way `_get_attributes` reads it.
 
     `statistics` and `settings` come from the coordinator entry, which copied them in
     the same `_build_appliance_entry` call that built the merged map, so they are the
     exact inputs of that merge. `context` (the top level of `appliance.attributes`)
     and `shadow` (its `parameters` sub-map) have no such copy and are read off the
-    live appliance at dump time: a key the realtime push added after the snapshot can
-    show up here, and nothing else can.
+    live appliance at dump time, which can be later than the snapshot `attributes`
+    was built from.
+
+    The shadow layer is therefore checked against that snapshot by IDENTITY: a
+    shadow key counts only when the snapshot holds the very object the live shadow
+    holds. The engine updates a known parameter's HonAttribute in place and never
+    replaces it, and the shadow is applied after statistics and context, so a key
+    the shadow already had at snapshot time points at that object; a key the
+    realtime push added AFTER the snapshot does not, and without this check it
+    would be reported as the winner over a statistics value the printed map still
+    shows. The only layer applied later is `settings`, whose keys are dotted
+    (`command.param`) and do not collide with a bare shadow name in practice; a
+    key both carry falls back to the live read (see the comment at the check).
+    The context layer gets no such check -- its values are primitives, where
+    identity proves nothing -- and keeps the live read; its keys are the payload
+    envelope and do not come and go between polls the way a newly reported
+    parameter does.
 
     Every read is guarded on its own, because a layer that cannot be read must cost
     that layer and never the dump: this runs inside `_appliance_block`, which has no
@@ -3310,13 +3327,28 @@ def _merge_layer_keys(appliance, statistics: Mapping, settings) -> dict:
             # contributes the shadow layer and no context layer at all.
             params = getattr(raw, "parameters", None)
         if isinstance(params, Mapping):
-            layers["shadow"] = {k for k in params if isinstance(k, str)}
+            # The module sentinel, not `.get(name)`: a snapshot value of None must
+            # not read as the same object as a shadow value of None it never held.
+            # A key `settings` also carries is taken on the live read: settings won
+            # it, so the snapshot holds the settings object and cannot vouch either
+            # way for the shadow underneath.
+            layers["shadow"] = {
+                k
+                for k, value in params.items()
+                if isinstance(k, str)
+                and (
+                    k in layers["settings"]
+                    or attributes.get(k, _NO_LAST_UPDATE) is value
+                )
+            }
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
         _LOGGER.debug("Diagnostics debug: merge layers unreadable", exc_info=True)
     return layers
 
 
-def _attribute_overrides(appliance, statistics: Mapping, settings) -> dict:
+def _attribute_overrides(
+    appliance, statistics: Mapping, settings, attributes: Mapping
+) -> dict:
     """Every attribute key more than one merge layer carries, with those layers.
 
     The flat `attributes` map is the RESULT of a merge that records nothing: when the
@@ -3336,7 +3368,7 @@ def _attribute_overrides(appliance, statistics: Mapping, settings) -> dict:
     No cap, for the reason `attributes` has none: every key here is also a key of
     that map, so this section can never be the larger of the two.
     """
-    layers = _merge_layer_keys(appliance, statistics, settings)
+    layers = _merge_layer_keys(appliance, statistics, settings, attributes)
     keys = set().union(*layers.values())
     overrides = {}
     for key in sorted(keys):
@@ -3433,7 +3465,9 @@ def _appliance_block(
         attributes = _attribute_values(attributes)
     statistics = data.get("statistics")
     statistics = statistics if isinstance(statistics, Mapping) else {}
-    overrides = _attribute_overrides(appliance, statistics, data.get("settings"))
+    overrides = _attribute_overrides(
+        appliance, statistics, data.get("settings"), attributes
+    )
     # Normalised HERE and nowhere else. A caller may pass nothing, a naive
     # datetime, or something that is not a datetime at all; below this line
     # `now` is always an aware UTC instant, so every age is a subtraction that

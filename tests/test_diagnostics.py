@@ -9389,12 +9389,33 @@ class _RaisingAttributesAppliance:
         raise RuntimeError("attributes unreadable")
 
 
+def _snapshot(appliance, statistics, settings):
+    """The flat map `_get_attributes` would have built from these layers, holding the
+    SAME objects: the shadow check in `_merge_layer_keys` is by identity."""
+    merged = dict(statistics or {})
+    try:
+        raw = getattr(appliance, "attributes", None)
+    except RuntimeError:  # _RaisingAttributesAppliance
+        raw = None
+    if isinstance(raw, Mapping):
+        merged.update(raw)
+        merged.update(raw.get("parameters") or {})
+    if isinstance(settings, Mapping):
+        merged.update(settings)
+    return merged
+
+
 def _layered_block(appliance, statistics=None, settings=None, attributes=None):
+    statistics = {} if statistics is None else statistics
     data = {
         "appliance": appliance,
         "type": "AC",
-        "attributes": {} if attributes is None else attributes,
-        "statistics": {} if statistics is None else statistics,
+        "attributes": (
+            _snapshot(appliance, statistics, settings)
+            if attributes is None
+            else attributes
+        ),
+        "statistics": statistics,
     }
     if settings is not None:
         data["settings"] = settings
@@ -9434,11 +9455,10 @@ class StatisticsSectionTest(unittest.TestCase):
     def test_a_key_the_shadow_overwrote_keeps_its_statistics_value_here(self):
         """The #73 question: the flat map shows the shadow's figure, and the one the
         statistics endpoint sent is readable only in `statistics`."""
-        appliance = _LayeredAppliance(shadow={"totalElectricityUsed": "6396"})
+        reading = FakeShadowAttribute("6396", AC_STAMP_OLD)
+        appliance = _LayeredAppliance(shadow={"totalElectricityUsed": reading})
         block = _layered_block(
-            appliance,
-            statistics={"totalElectricityUsed": 639.6},
-            attributes={"totalElectricityUsed": "6396"},
+            appliance, statistics={"totalElectricityUsed": 639.6}
         )
         self.assertEqual("6396", block["attributes"]["totalElectricityUsed"])
         self.assertEqual(639.6, block["statistics"]["totalElectricityUsed"])
@@ -9446,6 +9466,28 @@ class StatisticsSectionTest(unittest.TestCase):
             {"totalElectricityUsed": ["statistics", "shadow"]},
             block["attributes_overridden"],
         )
+
+    def test_a_shadow_key_newer_than_the_snapshot_is_not_named_the_winner(self):
+        """The snapshot was built while only statistics carried the key, and the push
+        added it to the live shadow afterwards. The printed map still shows the
+        statistics value, so naming the shadow as the winner would contradict it."""
+        appliance = _LayeredAppliance(
+            shadow={"totalElectricityUsed": FakeShadowAttribute("6396", AC_STAMP_NEW)}
+        )
+        block = _layered_block(
+            appliance,
+            statistics={"totalElectricityUsed": 639.6},
+            attributes={"totalElectricityUsed": 639.6},
+        )
+        self.assertEqual(639.6, block["attributes"]["totalElectricityUsed"])
+        self.assertEqual({}, block["attributes_overridden"])
+
+    def test_an_equal_but_distinct_value_is_not_the_shadow_s_object(self):
+        # Equality would pass here and identity must not: a snapshot value that merely
+        # compares equal was not taken from this shadow parameter.
+        appliance = _LayeredAppliance(shadow={"k": [1]})
+        block = _layered_block(appliance, statistics={"k": [1]}, attributes={"k": [1]})
+        self.assertEqual({}, block["attributes_overridden"])
 
     def test_no_overlap_is_an_explicit_empty_finding(self):
         appliance = _LayeredAppliance(context={"lastConnEvent": {}}, shadow={"a": 1})
@@ -9529,7 +9571,7 @@ class AttributeOverridesDriftGuardTest(unittest.TestCase):
                     )
                     merged = _get_attributes(appliance)
                     named = diagnostics._attribute_overrides(
-                        appliance, statistics, settings
+                        appliance, statistics, settings, merged
                     )
                     self.assertEqual(list(held), named["k"])
                     self.assertEqual(named["k"][-1], merged["k"])
