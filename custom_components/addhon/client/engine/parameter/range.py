@@ -52,8 +52,9 @@ class HonParameterRange(HonParameter):
         Without a `defaultValue`, `_set_attributes` seeds the range with its `min`, a value
         this engine invents so reads never come back empty. The hOn app has nothing to
         invent it from: its `setValue` falls through `fixedValue` and `defaultValue` to
-        `null` (decomp.txt:1778757-1778816). This tells the two apart for the payload
-        builder, see `HonCommand.send`. Any write through the setter -- a user option, a
+        `null` (decomp.txt:1778757-1778816), which none of its send paths lets reach the
+        wire. This tells the two apart for the payload builder, see
+        `HonCommand._dry_time_to_send`. Any write through the setter -- a user option, a
         rule, the command-history recovery, a favourite -- counts, as the app's own
         last-program and favourite slots outrank the schema; `reset()` clears it.
         """
