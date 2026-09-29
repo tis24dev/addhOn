@@ -1181,6 +1181,16 @@ class DryTimePayloadTest(unittest.TestCase):
         command, appliance = self._command(schema)
         self.assertEqual("0", self._sent(command, appliance)["dryTime"])
 
+    def test_a_drying_only_program_is_recognised_when_program_type_is_an_enum(self) -> None:
+        # Every programType seen so far is `fixed`, but an enum reads back lower-cased
+        # (`clean_value`), so "D" must be matched on the raw value, as the app does.
+        schema = self._schema(ancillaryParameters={"programType": {
+            "typology": "enum", "category": "general", "mandatory": 1,
+            "defaultValue": "D", "enumValues": ["D"]}})
+        command, appliance = self._command(schema)
+        command.parameters["dryTime"].value = "2"
+        self.assertEqual("2", self._sent(command, appliance)["dryTime"])
+
     def test_a_program_without_dry_level_counts_as_no_level(self) -> None:
         schema = json.loads(json.dumps(_WD_WASH_DRY_REAL))
         del schema["parameters"]["dryLevel"]

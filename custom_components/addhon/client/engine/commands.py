@@ -234,7 +234,9 @@ class HonCommand:
             dryLevel != '0' and programType != 'D'  ->  dryTime = '0'  (the level wins)
             otherwise                               ->  dryTime = its value, or '0'
 
-        A missing dryLevel counts as '0' (`dryLevel || '0'` there). "Its value" is what
+        A missing dryLevel counts as '0' (`dryLevel || '0'` there), and programType is
+        matched on its raw value as the app does: an enum reads back lower-cased
+        (`clean_value`), so `value` would never equal 'D'. "Its value" is what
         the program or a write gave it; a range the schema left without a default has
         none, only the `min` this engine invents for reads, so it goes as '0'.
 
@@ -253,7 +255,7 @@ class HonCommand:
         """
         program_type = self._parameters.get("programType")
         if not _is_zero(params.get("dryLevel")) and (
-            program_type is None or program_type.value != "D"
+            program_type is None or program_type.intern_value != "D"
         ):
             return "0"
         dry_time = self._parameters.get("dryTime")
