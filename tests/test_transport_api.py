@@ -147,6 +147,27 @@ class FakeConnection:
         return self._ctx("POST", url, kwargs)
 
 
+class _RaisingConnection(FakeConnection):
+    """A connection whose POST fails the way `_intercept` does on a 5xx: it raises."""
+
+    def __init__(self, error: Exception, mobile_id="pyhOn") -> None:
+        super().__init__(None, mobile_id=mobile_id)
+        self._error = error
+
+    def post(self, url, **kwargs):
+        conn, error = self, self._error
+
+        class _Ctx:
+            async def __aenter__(self):
+                conn.calls.append(("POST", url, kwargs))
+                raise error
+
+            async def __aexit__(self, *a):
+                return False
+
+        return _Ctx()
+
+
 class FakeAppliance:
     def __init__(self, **info) -> None:
         self.appliance_type = "REF"
@@ -595,6 +616,27 @@ class SendCommandTest(unittest.TestCase):
         self.assertIn("setParameters", errors)    # command in the ERROR line
         self.assertIn("7", errors)                # resultCode in the ERROR line
         self.assertIn("***", blob)                # redaction marker
+
+    def test_send_command_raising_logs_the_redacted_payload(self) -> None:
+        # #99: a 500 surfaces as an exception out of the connection, before any
+        # resultCode, and the payload that caused it was nowhere in the log -- beta4's
+        # `dryTime: null` had to be inferred. The body now goes out at DEBUG, redacted
+        # like the resultCode failure above, and the exception still propagates.
+        self._patch_clock("2026-06-18T12:34:56.789012")
+        conn = _RaisingConnection(RuntimeError("hOn server error (status 500)"),
+                                  mobile_id="SECRET_MOBILE")
+        app = FakeAppliance()
+        logger = "custom_components.addhon.client.transport.api"
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            with self.assertRaises(RuntimeError):
+                _run(_call(conn).send_command(app, "startProgram", {"dryTime": "0"}, {}))
+        blob = "\n".join(cm.output)
+        self.assertIn("startProgram", blob)
+        self.assertIn("dryTime", blob)
+        self.assertNotIn(app.mac_address, blob)
+        self.assertNotIn("SECRET_MOBILE", blob)
+        self.assertIn("***", blob)
+        self.assertTrue(all(r.levelno == logging.DEBUG for r in cm.records))
 
     def test_send_command_strips_dry_level_off_every_type_but_wd_and_td(self) -> None:
         # The app's transport (decomp.txt:554239-554338) keeps `dryLevel` for TD and WD
