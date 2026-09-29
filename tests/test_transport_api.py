@@ -596,6 +596,24 @@ class SendCommandTest(unittest.TestCase):
         self.assertIn("7", errors)                # resultCode in the ERROR line
         self.assertIn("***", blob)                # redaction marker
 
+    def test_send_command_strips_dry_level_off_every_type_but_wd_and_td(self) -> None:
+        # The app's transport (decomp.txt:554239-554338) keeps `dryLevel` for TD and WD
+        # only; two real WM bodies from the official app carry none although the WM
+        # schema declares it (fixed "0", mandatory).
+        for appliance_type, kept in (("WM", False), ("REF", False), ("AC", False),
+                                     ("WD", True), ("TD", True)):
+            with self.subTest(appliance_type=appliance_type):
+                self._patch_clock("2026-06-18T12:34:56.789012")
+                conn = FakeConnection({"payload": {"resultCode": "0"}})
+                app = FakeAppliance()
+                app.appliance_type = appliance_type
+                params = {"dryLevel": "0", "temp": "40"}
+                _run(_call(conn).send_command(app, "startProgram", params, {}))
+                sent = conn.calls[0][2]["json"]["parameters"]
+                self.assertEqual(kept, "dryLevel" in sent)
+                self.assertEqual("40", sent["temp"])
+                self.assertIn("dryLevel", params)  # the caller's mapping is not touched
+
 
 class CommandTimestampTest(unittest.TestCase):
     def test_format_millis_and_z(self) -> None:

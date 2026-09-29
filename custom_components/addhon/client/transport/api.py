@@ -481,6 +481,13 @@ class HonApi:
         program_name: str = "",
     ) -> bool:
         timestamp = _command_timestamp()
+        # `dryLevel` reaches the cloud for washer-dryers and tumble dryers only: the
+        # app's transport stringifies it for TD/WD and drops it for every other type
+        # (decomp.txt:554239-554338), whatever the schema says. Two real washing-machine
+        # bodies from the official app (2.27.9 and 2.29.8) carry none although the WM
+        # schema declares it, fixed "0" and mandatory.
+        if appliance.appliance_type not in ("WD", "TD") and "dryLevel" in parameters:
+            parameters = {k: v for k, v in parameters.items() if k != "dryLevel"}
         data: dict[str, Any] = {
             "macAddress": appliance.mac_address,
             "timestamp": timestamp,
