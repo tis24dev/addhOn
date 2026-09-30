@@ -32,7 +32,11 @@ class _Appliance:
         pass
 
 
-def _settings(appliance) -> HonCommand:
+def _fixed(value: str) -> dict:
+    return {"typology": "fixed", "fixedValue": value, "category": "command", "mandatory": 0}
+
+
+def _settings(appliance, ancillary: dict | None = None) -> HonCommand:
     """A `settings` command shaped like the HP110M8-9's: two free parameters and
     two of the 22 mandatory fixed ones."""
     attributes = {
@@ -49,7 +53,7 @@ def _settings(appliance) -> HonCommand:
                             "maximumValue": "40", "incrementValue": "1",
                             "defaultValue": "0", "category": "command", "mandatory": 1},
         },
-        "ancillaryParameters": {},
+        "ancillaryParameters": dict(ancillary or {}),
     }
     command = HonCommand("settings", attributes, appliance, category_name="setParameters")
     appliance.commands["settings"] = command
@@ -94,20 +98,49 @@ def test_the_hpwh_profile_keeps_the_requested_order() -> None:
 class _RecordingApi:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.ancillaries: list[dict] = []
 
     async def send_command(self, appliance, command, parameters, ancillary,
                            program_name="", *, wire_command=None, energy_label=True):
         self.calls.append((command, dict(parameters), program_name,
                            wire_command, energy_label))
+        self.ancillaries.append(dict(ancillary))
         return True
 
 
 def _dispatch(appliance, command, patch):
+    ok, api = _dispatch_api(appliance, [command], patch)
+    return ok, api.calls
+
+
+def _dispatch_api(appliance, commands, patch):
     api = _RecordingApi()
-    command._api = api
+    for command in commands:
+        command._api = api
     appliance.sync_payload_to_params = lambda payload: None
     ok = asyncio.run(CommandDispatcher().dispatch(appliance, patch))
-    return ok, api.calls
+    return ok, api
+
+
+def _start_program(appliance, ancillary: dict | None = None) -> dict[str, HonCommand]:
+    """The HW `startProgram` categories, each with its fixed `machMode`."""
+    categories: dict = {}
+    for name, mach_mode in (("auto", "1"), ("eco", "2"), ("elec", "3"), ("vac", "4")):
+        categories[name] = HonCommand(
+            "startProgram",
+            {
+                "parameters": {
+                    "machMode": {"typology": "fixed", "fixedValue": mach_mode,
+                                 "category": "command", "mandatory": 1},
+                },
+                "ancillaryParameters": dict(ancillary or {}),
+            },
+            appliance,
+            categories=categories,
+            category_name=f"PROGRAMS.HW.{name.upper()}",
+        )
+    appliance.commands["startProgram"] = categories["auto"]
+    return categories
 
 
 def test_an_hw_write_goes_out_as_setparameters_without_energy_label() -> None:
@@ -175,3 +208,135 @@ def test_hpwh_mode_patch_selects_its_category_without_touching_the_others() -> N
     assert payload == {"machMode": "2"}
     assert program_name == ""
     assert categories["auto"].parameters["machMode"].value == "1"
+
+
+# --- ancillaryParameters: the app's source for HPWH, each command's own for LEGACY ---
+
+
+def test_an_hw_mode_change_carries_the_settings_ancillaries_not_its_own() -> None:
+    from custom_components.addhon import hpwh
+
+    appliance = _Appliance()
+    settings = _settings(appliance, {"remoteActionable": _fixed("1")})
+    categories = _start_program(appliance, {"programFamily": _fixed("[hw]")})
+
+    ok, api = _dispatch_api(
+        appliance, [settings, *categories.values()], hpwh.mode_patch("eco", "2")
+    )
+
+    assert ok is True
+    assert api.calls[0][0] == "startProgram"
+    assert api.ancillaries == [{"remoteActionable": "1"}]
+
+
+def test_the_setparameters_category_is_found_behind_another_active_one() -> None:
+    appliance = _Appliance()
+    categories: dict = {}
+    for name, ancillary in (("setParameters", "1"), ("setConfig", "9")):
+        categories[name] = HonCommand(
+            "settings",
+            {
+                "parameters": {
+                    "tempSel": {"typology": "range", "minimumValue": "35",
+                                "maximumValue": "75", "incrementValue": "1",
+                                "defaultValue": "40", "category": "command",
+                                "mandatory": 0},
+                },
+                "ancillaryParameters": {"remoteActionable": _fixed(ancillary)},
+            },
+            appliance,
+            categories=categories,
+            category_name=name,
+        )
+    appliance.commands["settings"] = categories["setConfig"]
+
+    ok, api = _dispatch_api(
+        appliance,
+        categories.values(),
+        CommandPatch("settings", {"tempSel": "45"}, action="t"),
+    )
+
+    assert ok is True
+    assert api.ancillaries == [{"remoteActionable": "1"}]
+
+
+def test_an_hw_write_without_setparameters_ancillaries_sends_none() -> None:
+    appliance = _Appliance()
+    command = _settings(appliance)
+    ok, api = _dispatch_api(
+        appliance, [command], CommandPatch("settings", {"tempSel": "45"}, action="t")
+    )
+    assert ok is True
+    assert api.ancillaries == [{}]
+
+
+def test_an_hw_mode_change_without_a_settings_command_sends_none() -> None:
+    from custom_components.addhon import hpwh
+
+    appliance = _Appliance()
+    categories = _start_program(appliance, {"programFamily": _fixed("[hw]")})
+    ok, api = _dispatch_api(appliance, categories.values(), hpwh.mode_patch("eco", "2"))
+    assert ok is True
+    assert api.ancillaries == [{}]
+
+
+def test_a_legacy_dispatch_still_sends_the_commands_own_ancillaries() -> None:
+    appliance = _Appliance()
+    appliance.appliance_type = "HO"
+    command = _settings(appliance, {"remoteActionable": _fixed("1")})
+    ok, api = _dispatch_api(
+        appliance, [command], CommandPatch("settings", {"tempSel": "45"}, action="t")
+    )
+    assert ok is True
+    assert api.ancillaries == [{"remoteActionable": "1"}]
+
+
+# --- the payload diagnostic names what really went out (M7) ---
+
+
+def _payload_event(monkeypatch, appliance, commands, patch) -> dict:
+    import custom_components.addhon.command_dispatch as dispatch_module
+
+    events: list = []
+    monkeypatch.setattr(
+        dispatch_module,
+        "emit_command_event",
+        lambda event, fields: events.append((event, dict(fields))),
+    )
+    ok, _api = _dispatch_api(appliance, commands, patch)
+    assert ok is True
+    return next(fields for event, fields in events if event == "command_payload")
+
+
+def test_an_hw_payload_event_names_the_wire_command_and_the_label(monkeypatch) -> None:
+    from custom_components.addhon import hpwh
+
+    appliance = _Appliance()
+    settings = _settings(appliance)
+    fields = _payload_event(
+        monkeypatch, appliance, [settings],
+        CommandPatch("settings", {"tempSel": "45"}, action="t"),
+    )
+    assert fields["command"] == "settings"
+    assert (fields["wire_command"], fields["energy_label"]) == ("setParameters", False)
+
+    categories = _start_program(appliance)
+    fields = _payload_event(
+        monkeypatch, appliance, [settings, *categories.values()],
+        hpwh.mode_patch("eco", "2"),
+    )
+    assert (fields["wire_command"], fields["energy_label"]) == ("startProgram", False)
+
+
+def test_a_legacy_payload_event_is_unchanged(monkeypatch) -> None:
+    appliance = _Appliance()
+    appliance.appliance_type = "HO"
+    command = _settings(appliance)
+    fields = _payload_event(
+        monkeypatch, appliance, [command],
+        CommandPatch("settings", {"tempSel": "45"}, action="t"),
+    )
+    assert set(fields) == {
+        "action", "appliance_type", "command", "mandatory_keys", "payload",
+        "requested_keys", "rule_added_keys",
+    }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 import textwrap
@@ -762,6 +763,7 @@ class _DispatchCommand(HonCommand):
         program_name: str | None = None,
         wire_command: str | None = None,
         energy_label: bool = True,
+        ancillary_params: Mapping[str, str | float] | None = None,
     ) -> bool:
         self.program_names.append(program_name)
         self.wire_commands.append(wire_command)
@@ -850,6 +852,7 @@ def _block_command_sends(
         program_name: str | None = None,
         wire_command: str | None = None,
         energy_label: bool = True,
+        ancillary_params: Mapping[str, str | float] | None = None,
     ) -> bool:
         nonlocal call_index
         release = releases[call_index]
@@ -1454,6 +1457,7 @@ def test_dispatch_rollback_preserves_update_landing_while_send_is_suspended() ->
             program_name: str | None = None,
             wire_command: str | None = None,
             energy_label: bool = True,
+            ancillary_params: Mapping[str, str | float] | None = None,
         ) -> bool:
             second.sent_payloads.append(dict(payload))
             started.set()

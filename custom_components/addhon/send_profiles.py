@@ -26,6 +26,9 @@ class SendProfile:
     - `wire_commands`: the `commandName` the body carries, keyed by this
       integration's command name, where the two differ.
     - `energy_label`: put `energyLabel: "0"` in the body's `attributes`.
+    - `ancillary_source`: the `(command, category)` whose `ancillaryParameters`
+      every send carries, whatever command is sent; nothing if the appliance lacks
+      it. None: each command carries its own.
     """
 
     name: str
@@ -35,6 +38,7 @@ class SendProfile:
         default_factory=lambda: MappingProxyType({})
     )
     energy_label: bool = True
+    ancillary_source: tuple[str, str] | None = None
 
 
 LEGACY = SendProfile(name="legacy")
@@ -42,13 +46,17 @@ LEGACY = SendProfile(name="legacy")
 # The heat-pump water heater, as the app's `getSendCommandPayload` /
 # `mapSendCommandPayload` build it (apk2 decomp.txt:2328259-2328356,
 # 1551297-1551370): `parameters` is exactly what the caller passed, the command is
-# named `setParameters`, and `attributes` carries channel and origin only.
+# named `setParameters`, and `attributes` carries channel and origin only. Every
+# send, the `startProgram` of a mode change included, takes its
+# `ancillaryParameters` from `settings.setParameters` (decomp.txt:4506560-4506580
+# mode change, 2327080-2327090 boost auto-off), and none when that is missing.
 HPWH = SendProfile(
     name="hpwh",
     backfill_mandatory=False,
     include_rule_changes=False,
     wire_commands=MappingProxyType({"settings": "setParameters"}),
     energy_label=False,
+    ancillary_source=("settings", "setParameters"),
 )
 
 _BY_TYPE: Mapping[str, SendProfile] = MappingProxyType({"HW": HPWH})
