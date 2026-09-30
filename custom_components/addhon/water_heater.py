@@ -165,7 +165,9 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(auto_off.handle_update))
     entities = []
     for appliance_id, data in coordinator_data_map(coordinator).items():
-        if data.get("type") != APPLIANCE_HW:
+        # The same guard as `_BoostAutoOff.handle_update`: one malformed entry must not
+        # abort the setup and cost every water heater of the entry.
+        if not isinstance(data, Mapping) or data.get("type") != APPLIANCE_HW:
             continue
         appliance = data.get("appliance")
         if not controls_supported(appliance_series(appliance)):
@@ -268,10 +270,12 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
             and not isinstance(value, bool)
             and math.isfinite(value)
         )
-        if number and self._fahrenheit():
+        if number and self._fahrenheit() and _whole_fahrenheit(value):
             # Home Assistant converts a Fahrenheit setpoint to Celsius before it
             # gets here, and a whole °F falls between two whole °C (105 °F is
-            # 40.56 °C): the nearest whole degree is the one meant.
+            # 40.56 °C): the nearest whole degree is the one meant. Only a WHOLE °F
+            # is rounded (PR #117 review): 104.7 °F is refused below, as 40.4 °C is
+            # on a Celsius installation, instead of being changed silently.
             value = round(value)
         if (
             not number
@@ -304,3 +308,13 @@ def _number(raw) -> float | None:
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _whole_fahrenheit(celsius: float) -> bool:
+    """True when `celsius` is Home Assistant's conversion of a whole °F.
+
+    The tolerance absorbs the float error of the round trip (°F -> °C here -> °F),
+    which is of the order of 1e-13; a real fractional °F is off by at least 0.1.
+    """
+    fahrenheit = celsius * 9 / 5 + 32
+    return abs(fahrenheit - round(fahrenheit)) < 1e-6

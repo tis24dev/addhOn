@@ -189,6 +189,18 @@ class WaterHeaterTest(unittest.IsolatedAsyncioTestCase):
     async def test_not_created_without_the_experimental_option(self) -> None:
         self.assertEqual(await _build(experimental=False), [])
 
+    async def test_a_malformed_coordinator_entry_does_not_abort_the_setup(self) -> None:
+        # PR #117 review: the setup loop now carries the listener's Mapping guard, so
+        # one entry that is not a mapping costs nothing but itself.
+        rig = await _rig()
+        good = rig.coordinator.data["hw-1"]
+        coordinator = _Coordinator({"broken": "not a mapping", "hw-1": good})
+        rig.hass.data[DOMAIN]["entry-1"]["coordinator"] = coordinator
+        added: list = []
+        await platform.async_setup_entry(rig.hass, _Entry(True), added.extend)
+        self.assertEqual(len(added), 1)
+        self.assertIsInstance(added[0], platform.HonHeatPumpWaterHeater)
+
     async def test_reads_the_reporters_appliance(self) -> None:
         entity = (await _build(experimental=True))[0]
         self.assertEqual(entity.current_temperature, 33.0)
@@ -269,6 +281,21 @@ class WaterHeaterTest(unittest.IsolatedAsyncioTestCase):
         entity.hass.config = _units(_const.UnitOfTemperature.FAHRENHEIT)
         await entity.async_set_temperature(temperature=(105 - 32) * 5 / 9)  # 40.56
         self.assertEqual([dict(p.values) for p in SENT], [{"tempSel": "41"}])
+
+    async def test_a_fractional_fahrenheit_is_refused_not_rounded(self) -> None:
+        # PR #117 review: only a whole °F is rounded. 104.7 °F (40.39 °C) is refused,
+        # as 40.4 °C is on a Celsius installation, instead of being sent as 40.
+        entity = (await _build(experimental=True, onOffStatus=1))[0]
+        entity.hass.config = _units(_const.UnitOfTemperature.FAHRENHEIT)
+        for fahrenheit in (104.7, 105.5):
+            with self.assertRaises(HomeAssistantError) as ctx:
+                await entity.async_set_temperature(temperature=(fahrenheit - 32) * 5 / 9)
+            self.assertEqual(ctx.exception.translation_key, "invalid_setpoint", fahrenheit)
+        self.assertEqual(SENT, [])
+        # Positive control: every whole °F of the range still goes through.
+        for fahrenheit in range(95, 168):
+            await entity.async_set_temperature(temperature=(fahrenheit - 32) * 5 / 9)
+        self.assertEqual(len(SENT), 168 - 95)
 
     async def test_a_celsius_install_does_not_round(self) -> None:
         entity = (await _build(experimental=True, onOffStatus=1))[0]
