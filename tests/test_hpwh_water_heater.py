@@ -258,3 +258,30 @@ class BoostAutoOffTest(unittest.IsolatedAsyncioTestCase):
             entity._handle_coordinator_update()
             await _drain_tasks()
         self.assertEqual(SENT, [])
+
+    async def test_an_unexpected_error_is_logged_not_left_in_the_task(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
+
+        async def _boom(hass, client, appliance, patch) -> None:
+            raise RuntimeError("executor blew up")
+
+        with mock.patch.object(platform, "async_dispatch_patch", _boom):
+            with self.assertLogs(platform._LOGGER, level="WARNING"):
+                entity._handle_coordinator_update()
+                await _drain_tasks()
+
+    async def test_a_changed_target_within_the_same_boost_is_a_new_episode(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
+        entity._handle_coordinator_update()
+        _set_attr(entity, "tempSel", 45)
+        _set_attr(entity, "temp", 45)
+        entity._handle_coordinator_update()
+        await _drain_tasks()
+        self.assertEqual(len(SENT), 2)
+
+    async def test_float_temp_equals_string_target(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1,
+                               temp=40.0, tempSel="40"))[0]
+        entity._handle_coordinator_update()
+        await _drain_tasks()
+        self.assertEqual(len(SENT), 1)

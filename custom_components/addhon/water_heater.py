@@ -161,7 +161,7 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
             await async_dispatch_patch(
                 self.hass, self._hon_client, self._appliance, boost_patch(False)
             )
-        except HomeAssistantError as err:
+        except Exception as err:  # noqa: BLE001 - nobody awaits this task
             # An automatic send has no user to show the error to; log it. The episode
             # stays recorded, so there is no retry loop.
             _LOGGER.warning("Heat-pump water heater: automatic boost off failed: %s", err)
