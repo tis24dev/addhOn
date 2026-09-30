@@ -1754,6 +1754,38 @@ class WasherStartBodyTest(unittest.TestCase):
         self.assertIn("'prStr': '***'", blob)
         self.assertNotIn("Jeans di Luca", blob)
 
+    def test_the_programme_name_is_masked_when_the_post_raises(self) -> None:
+        from custom_components.addhon.client.engine.commands import HonCommand
+
+        conn = _RaisingConnection(RuntimeError("HTTP 500"))
+        cmd = HonCommand("startProgram", _washer_program(), _WasherAppliance(conn),
+                         category_name="PROGRAMS.WM_WD.HQD_COTTONS")
+        cmd.favourite_name = "Jeans di Luca"
+        with self.assertLogs(api_mod._LOGGER, level=logging.DEBUG) as logs:
+            with self.assertRaises(RuntimeError):
+                _run(cmd.send())
+        blob = "\n".join(logs.output)
+        self.assertIn("'prStr': '***'", blob)
+        self.assertNotIn("Jeans di Luca", blob)
+
+    def test_a_fridge_prstr_stays_readable_in_the_log(self) -> None:
+        # Only our washer start's attributes.prStr is masked: a fridge's
+        # parameters.prStr is a catalog key and stays as it was.
+        conn = FakeConnection({"payload": {"resultCode": "1"}})
+        with self.assertLogs(api_mod._LOGGER, level=logging.DEBUG) as logs:
+            _run(_call(conn).send_command(
+                FakeAppliance(), "startProgram",
+                {"prCode": "1", "prStr": "PROGRAMS.REF.SUPER_COOL"}, {},
+                "PROGRAMS.REF.SUPER_COOL",
+            ))
+        blob = "\n".join(logs.output)
+        self.assertIn("'prStr': 'PROGRAMS.REF.SUPER_COOL'", blob)
+        self.assertNotIn("'prStr': '***'", blob)
+
+    def test_the_platform_matches_in_any_case(self) -> None:
+        # As program_options.keep_fresh_hidden reads it.
+        self.assertEqual("3", self._label(platform="hqd"))
+
 
 if __name__ == "__main__":
     unittest.main()

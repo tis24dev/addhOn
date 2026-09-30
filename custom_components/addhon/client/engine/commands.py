@@ -322,9 +322,13 @@ class HonCommand:
         return self._favourite_name or program_label or self._category_name
 
     def _is_hqd(self) -> bool:
-        """True on the HQD platform (`platform` in the model attributes)."""
+        """True on the HQD platform (`platform` in the model attributes, any case).
+
+        Matched as `program_options.keep_fresh_hidden` matches it.
+        """
         model = getattr(self._appliance, "model_attributes", None)
-        return isinstance(model, Mapping) and model.get("platform") == "HQD"
+        platform = model.get("platform") if isinstance(model, Mapping) else None
+        return str(platform or "").upper() == "HQD"
 
     def _energy_label(self, params: Mapping[str, str | float]) -> str:
         """`energyLabel` as the app computes it for a washer start. Issue #112.

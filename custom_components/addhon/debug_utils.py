@@ -99,10 +99,6 @@ _IDENTITY_KEYS = frozenset(
         "sk_secondary",
         "applianceid",
         "eepromid",
-        # A washer start's `attributes.prStr` names the programme, and for a favourite
-        # that name is whatever the user typed in the app (issue #112). Log path only:
-        # the diagnostics dump keeps its own list.
-        "prstr",
     }
 )
 
