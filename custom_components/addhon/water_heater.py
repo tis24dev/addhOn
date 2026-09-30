@@ -131,11 +131,14 @@ class _BoostAutoOff:
             if temp is None or target is None or temp != target:
                 self._episodes.pop(appliance_id, None)
                 continue
-            if not boost_auto_off_due(get):
-                continue
+            # Before the boost check (PR #118 review): a new target ends the episode
+            # whatever boostStatus says, or a later boost back at the old target would
+            # find that episode still done.
             episode = self._episodes.get(appliance_id)
             if episode is None or episode.target != target:
                 episode = self._episodes[appliance_id] = _Episode(target)
+            if not boost_auto_off_due(get):
+                continue
             if episode.done or episode.in_flight or episode.attempts >= self._MAX_ATTEMPTS:
                 continue
             if boost_block(get, turning_on=False) is not None:

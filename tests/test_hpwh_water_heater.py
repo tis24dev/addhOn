@@ -453,6 +453,23 @@ class BoostAutoOffListenerTest(unittest.IsolatedAsyncioTestCase):
         await _drain_tasks()
         self.assertEqual(len(SENT), 2)
 
+    async def test_a_new_target_ends_the_episode_even_with_boost_off(self) -> None:
+        # PR #118 review: the target change was only seen while boost was on, so a
+        # 45/45 update with boost off kept the 40 episode alive and the later boost at
+        # 40/40 found it already done.
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40, tempSel=40)
+        rig.coordinator.fire()
+        await _drain_tasks()
+        rig.attributes.update(boostStatus="0", temp=45, tempSel=45)
+        rig.coordinator.fire()
+        await _drain_tasks()
+        rig.attributes.update(boostStatus="1", temp=40, tempSel=40)
+        rig.coordinator.fire()
+        await _drain_tasks()
+        self.assertEqual(
+            [dict(p.values) for p in SENT], [{"boostStatus": "0"}, {"boostStatus": "0"}]
+        )
+
     async def test_float_temp_equals_string_target(self) -> None:
         rig = await _rig(onOffStatus=1, boostStatus=1, temp=40.0, tempSel="40")
         rig.coordinator.fire()
