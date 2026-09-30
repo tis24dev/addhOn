@@ -298,6 +298,9 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
         # single builder every HO write goes through, and it is where the
         # `programName` suppression is pinned.
         Path("hood.py"),
+        # The heat-pump water heater's counterpart to hood.py: every HW write is built
+        # by one of hpwh.py's `*_patch` functions (#113).
+        Path("hpwh.py"),
         Path("fan.py"),
         Path("light.py"),
         # Mixed files: the AP entities dispatch, the legacy ones stay legacy.
