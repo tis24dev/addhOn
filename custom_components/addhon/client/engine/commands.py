@@ -17,6 +17,7 @@ false "sent".
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from copy import copy
 from typing import Any, Optional, Union
@@ -37,6 +38,23 @@ _LOGGER = logging.getLogger(__name__)
 def _is_zero(value: object) -> bool:
     """The app's `(value || '0') === '0'`: absent, empty or "0" all mean off."""
     return value is None or str(value) in ("", "0")
+
+
+def _js_number(value: object) -> float:
+    """The app's `value - 0`: a blank string is 0, anything unreadable NaN.
+
+    None stands for JavaScript's `undefined` (a missing node), which is NaN too.
+    """
+    if value is None:
+        return math.nan
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return 0.0
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return math.nan
 
 
 class _CanonicalExactPayload(dict[str, str | float]):
@@ -263,6 +281,67 @@ class HonCommand:
             return "0"
         return params["dryTime"]
 
+    def _is_washer_start(self) -> bool:
+        """A `startProgram` of a washer (WM) or washer-dryer (WD). Issue #112.
+
+        Where the app's washer builder (`getSendCommandPayload`, apk2
+        decomp.txt:1362211-1362920) adds what the generic body lacks. Every other
+        command and type goes out exactly as before.
+        """
+        appliance_type = getattr(self._appliance, "appliance_type", "")
+        return self._name == "startProgram" and appliance_type in ("WM", "WD")
+
+    def _is_hqd(self) -> bool:
+        """True on the HQD platform (`platform` in the model attributes)."""
+        model = getattr(self._appliance, "model_attributes", None)
+        return isinstance(model, Mapping) and model.get("platform") == "HQD"
+
+    def _energy_label(self, params: Mapping[str, str | float]) -> str:
+        """`energyLabel` as the app computes it for a washer start. Issue #112.
+
+        The builder (apk2 decomp.txt:1362480-1362560, 1362660-1362760) and
+        `calculateEnergyLabel` (@1364133-1364170):
+
+            temp not an enum, or no tempContribution.fixedValue  ->  '0'
+            floor((500 - 1.6*minutes + 5*tc*(maxT - temp)) / 100), clamped to 1..5
+            NaN                                                  ->  '0'
+
+        `maxT` is the LAST entry of the schema's `enumValues` in the order the cloud
+        sent them, not the highest; `minutes` the program's `remainingTime`; `temp`
+        the value this body carries. `tc` is tested the JavaScript way: only a
+        missing or blank value fails, the string '0' passes and zeroes the term.
+
+        Evidence: the app sends the result in both `attributes` and
+        `ancillaryParameters` (apk/analysis/issue112-wm-hqd-program-options.md
+        section 7.4); addhOn used to send '0' and the schema's default.
+        """
+        temp = self._parameters.get("temp")
+        contribution = self._parameters.get("tempContribution")
+        tc = contribution.schema_node.get("fixedValue") if contribution else None
+        if temp is None or temp.typology != "enum" or not tc:
+            return "0"
+        # `enumValues[length - 1]`: a list's last entry; on the rare `A|B|C` string
+        # shape, its last character, exactly as the app indexes it.
+        enum_values = temp.schema_node.get("enumValues")
+        max_temp = (
+            _js_number(enum_values[-1])
+            if isinstance(enum_values, (list, str)) and enum_values
+            else math.nan
+        )
+        remaining = self._parameters.get("remainingTime")
+        minutes = _js_number(remaining.schema_value) if remaining else math.nan
+        sent = _js_number(params.get("temp") or 0)
+        # Same operations in the same order as the app, so the float rounding agrees.
+        score = (500 - minutes * 1.6 + 5 * _js_number(tc) * (max_temp - sent)) / 100
+        if math.isnan(score):
+            return "0"
+        label = math.floor(score) if math.isfinite(score) else score
+        if label > 5:
+            return "5"
+        if label <= 0:
+            return "1"
+        return str(int(label))
+
     async def send_specific(self, param_names: list[str]) -> bool:
         params: dict[str, str | float] = {}
         for key, parameter in self._parameters.items():
@@ -312,6 +391,12 @@ class HonCommand:
             if ancillary_params is None
             else dict(ancillary_params)
         )
+        wire_energy_label: bool | str = energy_label
+        if energy_label and self._is_washer_start() and self._is_hqd():
+            # Issue #112: the app's value, the same in both places. Elsewhere the
+            # attributes keep "0" and the ancillaries the schema's own value.
+            wire_energy_label = self._energy_label(params)
+            ancillary["energyLabel"] = wire_energy_label
         if sync_shadow:
             self.appliance.sync_command_to_params(self.name)
         result = await self.api.send_command(
@@ -321,7 +406,7 @@ class HonCommand:
             ancillary,
             self._category_name if program_name is None else program_name,
             wire_command=wire_command,
-            energy_label=energy_label,
+            energy_label=wire_energy_label,
         )
         if not result:
             _LOGGER.error("Command rejected by cloud: %s", self._name)

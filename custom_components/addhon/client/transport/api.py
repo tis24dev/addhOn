@@ -481,8 +481,14 @@ class HonApi:
         program_name: str = "",
         *,
         wire_command: str | None = None,
-        energy_label: bool = True,
+        energy_label: bool | str = True,
     ) -> bool:
+        """POST one command body.
+
+        `energy_label`: True puts `energyLabel: "0"` in `attributes`, False leaves
+        the key out, and a string is sent as the value (a washer start on the HQD
+        platform, where the command computes it as the app does -- issue #112).
+        """
         timestamp = _command_timestamp()
         # `dryLevel` reaches the cloud for washer-dryers and tumble dryers only: the
         # app's transport stringifies it for TD/WD and drops it for every other type
@@ -493,7 +499,7 @@ class HonApi:
             parameters = {k: v for k, v in parameters.items() if k != "dryLevel"}
         attributes: dict[str, Any] = {"channel": "mobileApp", "origin": "standardProgram"}
         if energy_label:
-            attributes["energyLabel"] = "0"
+            attributes["energyLabel"] = "0" if energy_label is True else energy_label
         data: dict[str, Any] = {
             "macAddress": appliance.mac_address,
             "timestamp": timestamp,

@@ -9,6 +9,8 @@ which the rules drive the parameters; the commands+rules cluster interoperates w
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Callable
 
 
@@ -93,6 +95,17 @@ class HonParameter:
             if declared not in (None, ""):
                 return declared
         return None
+
+    @property
+    def schema_node(self) -> Mapping[str, Any]:
+        """The schema node exactly as the cloud sent it, read-only.
+
+        For a reader that needs what the subclasses normalise away: the raw ORDER of
+        `enumValues` (HonParameterEnum appends a `defaultValue` the list omits, and a
+        rule can replace its values), or `fixedValue` on its own rather than
+        `schema_value`'s fixed-then-default. Same node `schema_value` reads.
+        """
+        return MappingProxyType(self._attributes)
 
     @property
     def value(self) -> str | float:
