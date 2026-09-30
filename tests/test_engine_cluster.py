@@ -446,10 +446,43 @@ class LastCategoryRecoveryTest(unittest.TestCase):
         self.assertEqual("0", str(parameters["delayTime"].value))
 
     @staticmethod
-    def _app_start(parameters):
+    def _app_start(parameters, program_name=None):
         # The hOn app's own starts name no `program`/`category` parameter: the programme
-        # travels only as its prCode (both issue #112 dumps, 10 of 10 history entries).
-        return [{"command": {"commandName": "startProgram", "parameters": parameters}}]
+        # travels as the command's top-level `programName` and as its prCode (both issue
+        # #112 dumps, 10 of 10 history entries).
+        command = {"commandName": "startProgram", "parameters": parameters}
+        if program_name is not None:
+            command["programName"] = program_name
+        return [{"command": command}]
+
+    def test_the_programme_name_wins_over_a_shared_prcode(self) -> None:
+        # Issue #112, the Haier washer: prCode 115 belongs to three programmes, so only
+        # `programName` tells which one the app started.
+        commands = json.loads(json.dumps(_RICH_COMMANDS))
+        commands["startProgram"]["PROGRAMS.REF.IOT_FREEZE_A"] = _prog("5")
+        commands["startProgram"]["PROGRAMS.REF.IOT_FREEZE_B"] = _prog("5")
+        history = self._app_start({"prCode": "5", "tempSel": "7"}, "PROGRAMS.REF.IOT_FREEZE_A")
+        command = _build(NaAppliance, DictApi(commands, history=history)).commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.IOT_FREEZE_A", command.category)
+        self.assertTrue(command.selected_explicitly)
+        self.assertEqual("7", str(command.parameters["tempSel"].value))
+        for other in ("super_freeze", "iot_freeze_b"):
+            self.assertEqual("5", str(command.categories[other].parameters["tempSel"].value))
+
+    def test_an_unknown_programme_name_falls_back_to_the_prcode(self) -> None:
+        # A stale programme name, or one naming a favourite (a copy, not a programme):
+        # the prCode still singles the category out.
+        for program_name in ("PROGRAMS.REF.GONE", "MyFav"):
+            with self.subTest(program_name=program_name):
+                api = DictApi(
+                    _RICH_COMMANDS,
+                    favourites=_RICH_FAVOURITES,
+                    history=self._app_start({"prCode": "5", "tempSel": "7"}, program_name),
+                )
+                command = _build(NaAppliance, api).commands["startProgram"]
+                self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", command.category)
+                self.assertFalse(command.is_favourite)
+                self.assertEqual("7", str(command.parameters["tempSel"].value))
 
     def test_an_app_start_selects_the_category_of_its_prcode(self) -> None:
         # Issue #112: recovered onto the default category, an app start left the washer

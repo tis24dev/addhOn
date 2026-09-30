@@ -588,8 +588,26 @@ class HonCommandLoader:
                 codes[key] = _normalized_pr_code(code)
         return codes
 
+    def _named_programme(self, command: HonCommand, program_name: Any) -> Optional[str]:
+        """The category a start's top-level `programName` names, or None.
+
+        Cleaned like the category keys (see `_get_favourite_info`). A favourite is not
+        a programme of its own, so a name that lands on one does not count.
+        """
+        if not program_name:
+            return None
+        key = self._clean_name(str(program_name))
+        category = command.categories.get(key)
+        if category is None or category is command or category.is_favourite:
+            return None
+        return key
+
     def _set_last_category(
-        self, command: HonCommand, name: str, parameters: dict[str, Any]
+        self,
+        command: HonCommand,
+        name: str,
+        parameters: dict[str, Any],
+        program_name: Any = None,
     ) -> Optional[HonCommand]:
         """Point `name` at the category the last accepted command used.
 
@@ -602,10 +620,13 @@ class HonCommandLoader:
         what makes ``return self._commands[name]`` (this method's stated intent) true.
 
         The hOn app's own starts name neither `program` nor `category`: the programme
-        travels only as its `prCode`. Recovered onto the default category, such a start
-        left the command with one programme's prCode and another's parameters (issue
-        #112), so the category is looked up by that code instead. None means no single
-        category owns it: the caller must then recover nothing at all.
+        travels as the command's top-level `programName` and as its `prCode`. Recovered
+        onto the default category, such a start left the command with one programme's
+        prCode and another's parameters (issue #112), so the category is taken from
+        `programName` and, when that names none, looked up by the code -- which alone
+        is not enough, since several programmes can share one (prCode 115 on three of
+        the reporter's Haier programmes). None means neither singles a category out:
+        the caller must then recover nothing at all.
         """
         if not command.categories:
             return command
@@ -613,6 +634,8 @@ class HonCommandLoader:
             category = self._clean_name(str(program))
         elif (category := parameters.pop("category", None)) is not None:
             category = str(category)
+        elif named := self._named_programme(command, program_name):
+            category = named
         elif codes := self._programme_codes(command):
             if (pr_code := parameters.get("prCode")) is None:
                 return None
@@ -638,10 +661,13 @@ class HonCommandLoader:
         for name, command in self.commands.items():
             if (last_index := self._get_last_command_index(name)) is None:
                 continue
-            last_command = self._command_history[last_index]
-            raw_parameters = last_command.get("command", {}).get("parameters", {})
+            last_command = self._command_history[last_index].get("command", {})
+            raw_parameters = last_command.get("parameters", {})
             parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
-            if (target := self._set_last_category(command, name, parameters)) is None:
+            target = self._set_last_category(
+                command, name, parameters, last_command.get("programName")
+            )
+            if target is None:
                 continue
             for key, data in target.settings.items():
                 if key in _NOT_RECOVERED or parameters.get(key) is None:
