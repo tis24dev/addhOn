@@ -219,3 +219,42 @@ class BoostSwitchTest(unittest.IsolatedAsyncioTestCase):
     async def test_state(self) -> None:
         switch = (await _build_switches(experimental=True, onOffStatus=1, boostStatus=1))[0]
         self.assertTrue(switch.is_on)
+
+
+class BoostAutoOffTest(unittest.IsolatedAsyncioTestCase):
+    async def test_sent_once_when_the_water_reaches_the_target(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
+        entity._handle_coordinator_update()
+        entity._handle_coordinator_update()
+        await _drain_tasks()
+        self.assertEqual([dict(p.values) for p in SENT], [{"boostStatus": "0"}])
+
+    async def test_not_sent_below_the_target(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=39))[0]
+        entity._handle_coordinator_update()
+        await _drain_tasks()
+        self.assertEqual(SENT, [])
+
+    async def test_a_new_episode_sends_again(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
+        entity._handle_coordinator_update()
+        _set_attr(entity, "boostStatus", 0)
+        entity._handle_coordinator_update()
+        _set_attr(entity, "boostStatus", 1)
+        entity._handle_coordinator_update()
+        await _drain_tasks()
+        self.assertEqual(len(SENT), 2)
+
+    async def test_a_failed_send_is_logged_and_not_retried(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
+
+        async def _fail(hass, client, appliance, patch) -> None:
+            raise HomeAssistantError("nope")
+
+        with mock.patch.object(platform, "async_dispatch_patch", _fail):
+            with self.assertLogs(platform._LOGGER, level="WARNING"):
+                entity._handle_coordinator_update()
+                await _drain_tasks()
+            entity._handle_coordinator_update()
+            await _drain_tasks()
+        self.assertEqual(SENT, [])

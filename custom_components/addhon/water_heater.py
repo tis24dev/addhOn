@@ -34,6 +34,8 @@ from .hpwh import (
     HPWH_MODE_CATEGORIES,
     HPWH_SETTINGS_COMMAND,
     HPWH_START_COMMAND,
+    boost_auto_off_due,
+    boost_patch,
     code,
     mode_block,
     mode_patch,
@@ -92,6 +94,9 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
 
     _attr_translation_key = "heat_pump_water_heater"
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    # The (temp, tempSel) of the boost episode already switched off, until boostStatus
+    # stops being "1" (D7: one send per episode).
+    _auto_off_sent_for: tuple | None = None
 
     def __init__(self, coordinator, appliance_id: str) -> None:
         super().__init__(coordinator, appliance_id)
@@ -138,6 +143,28 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
         if code(self._get_attr("onOffStatus")) != "1":
             return STATE_OFF
         return _MACHMODE_TO_OPERATION.get(code(self._get_attr("machMode")) or "")
+
+    def _handle_coordinator_update(self) -> None:
+        """Do what the app's dashboard does: boost off once the water is at the target."""
+        get = self._get_attr
+        if code(get("boostStatus")) != "1":
+            self._auto_off_sent_for = None
+        elif boost_auto_off_due(get):
+            episode = (code(get("temp")), code(get("tempSel")))
+            if episode != self._auto_off_sent_for:
+                self._auto_off_sent_for = episode
+                self.hass.async_create_task(self._auto_boost_off())
+        super()._handle_coordinator_update()
+
+    async def _auto_boost_off(self) -> None:
+        try:
+            await async_dispatch_patch(
+                self.hass, self._hon_client, self._appliance, boost_patch(False)
+            )
+        except HomeAssistantError as err:
+            # An automatic send has no user to show the error to; log it. The episode
+            # stays recorded, so there is no retry loop.
+            _LOGGER.warning("Heat-pump water heater: automatic boost off failed: %s", err)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._send(power_patch(True))
