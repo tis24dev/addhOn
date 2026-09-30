@@ -48,7 +48,13 @@ from .const import (
 )
 from .debug_utils import redact_id
 from .hon_commands import command_param
-from .hpwh import boost_block, boost_patch, code as hpwh_code, controls_supported
+from .hpwh import (
+    boost_block,
+    boost_patch,
+    code as hpwh_code,
+    controls_supported,
+    raise_refusal,
+)
 from .hood import (
     HOOD_DELAY_STATUS_PARAM,
     HOOD_LIGHT_PARAM,
@@ -699,26 +705,7 @@ class HonHeatPumpBoostSwitch(HonBaseEntity, SwitchEntity):
         await self._set(False)
 
     async def _set(self, on: bool) -> None:
-        reason = boost_block(self._get_attr, turning_on=on)
-        # One literal raise per key: `test_translations` refuses a computed key.
-        if reason == "hpwh_unavailable":
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="hpwh_unavailable"
-            )
-        if reason == "hpwh_switch_on_first":
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="hpwh_switch_on_first"
-            )
-        if reason == "hpwh_vacation_active":
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="hpwh_vacation_active"
-            )
-        if reason == "hpwh_boost_at_target":
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="hpwh_boost_at_target"
-            )
-        if reason is not None:
-            raise ValueError(f"Unhandled boost refusal: {reason}")
+        raise_refusal(boost_block(self._get_attr, turning_on=on))
         await async_dispatch_patch(
             self.hass, self._hon_client, self._appliance, boost_patch(on)
         )

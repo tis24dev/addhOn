@@ -393,6 +393,23 @@ class ControlRulesTest(unittest.TestCase):
         self.assertFalse(boost_auto_off_due(self._get(boostStatus=1, temp=39)))
         self.assertFalse(boost_auto_off_due(self._get(boostStatus=0, temp=40)))
 
+    def test_every_refusal_is_raised_with_its_own_key(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        for key in (
+            "hpwh_unavailable",
+            "hpwh_switch_on_first",
+            "hpwh_vacation_active",
+            "hpwh_sterilization_running",
+            "hpwh_boost_at_target",
+        ):
+            with self.assertRaises(HomeAssistantError) as ctx:
+                hpwh.raise_refusal(key)
+            self.assertEqual(ctx.exception.translation_key, key)
+        hpwh.raise_refusal(None)  # no refusal, nothing raised
+        with self.assertRaises(ValueError):
+            hpwh.raise_refusal("hpwh_not_a_refusal")
+
     def test_controls_are_not_offered_on_the_series_whose_rules_are_not_rebuilt(self) -> None:
         for series in ("m7b", "M8B", " M11 ", "m11"):
             self.assertFalse(hpwh.controls_supported(series), series)

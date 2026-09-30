@@ -8,7 +8,8 @@ official app 2.30.7 (`apk2/decomp.txt`; the analysis is
 device: an HP110M8-9, `series: "m8"`.
 
 The write side lives here too: when the app refuses a mode, temperature or boost
-change (`mode_block`, `temperature_block`, `boost_block`) and the exact sparse
+change (`mode_block`, `temperature_block`, `boost_block`, raised as a localized
+error by `raise_refusal`) and the exact sparse
 `CommandPatch` it sends for power, temperature, mode and boost. Sends are shaped by
 the `HPWH` send profile in `send_profiles.py`, which keeps the app's own payloads
 free of the fixed parameters the `setParameters` schema declares (22 mandatory ones:
@@ -20,7 +21,10 @@ import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
 
+from homeassistant.exceptions import HomeAssistantError
+
 from .command_dispatch import CommandPatch
+from .const import DOMAIN
 
 # `HPWHMachMode` (decomp.txt:599199-599208): AUTO='1', ECO='2', ELEC='3', VAC='4'.
 # The same codes are the `machMode` fixed by the startProgram programs
@@ -379,6 +383,38 @@ def boost_block(get: Callable[[str], object], turning_on: bool) -> str | None:
     if turning_on and _js_number(get("temp")) >= _js_number(get("tempSel")):
         return "hpwh_boost_at_target"
     return None
+
+
+def raise_refusal(reason: str | None) -> None:
+    """Raise the localized error for a refusal the rules above named; None passes.
+
+    Shared by the water heater and the boost switch. One literal raise per key:
+    `test_translations` verifies raised keys against the JSON and refuses a computed
+    `translation_key`.
+    """
+    if reason is None:
+        return
+    if reason == "hpwh_unavailable":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_unavailable"
+        )
+    if reason == "hpwh_switch_on_first":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_switch_on_first"
+        )
+    if reason == "hpwh_vacation_active":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_vacation_active"
+        )
+    if reason == "hpwh_sterilization_running":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_sterilization_running"
+        )
+    if reason == "hpwh_boost_at_target":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_boost_at_target"
+        )
+    raise ValueError(f"Unhandled heat-pump water heater refusal: {reason}")
 
 
 def power_patch(on: bool) -> CommandPatch:

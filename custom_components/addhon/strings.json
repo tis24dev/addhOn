@@ -1230,6 +1230,9 @@
     "hpwh_boost_at_target": {
       "message": "Boost cannot start: the water is already at the set temperature."
     },
+    "hpwh_set_temperature_operation_mode": {
+      "message": "Set the mode with set_operation_mode, then the temperature."
+    },
     "hpwh_sterilization_running": {
       "message": "Not available while the anti-legionella cycle is running."
     },

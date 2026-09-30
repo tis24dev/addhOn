@@ -4,7 +4,7 @@
 import asyncio
 import enum
 import json
-import sys
+import math
 import types
 import unittest
 from pathlib import Path
@@ -32,6 +32,7 @@ for _name, _value in (("STATE_ECO", "eco"), ("STATE_ELECTRIC", "electric"),
 _mod("homeassistant.components").water_heater = water_heater
 _const = _mod("homeassistant.const")
 _const.ATTR_TEMPERATURE = getattr(_const, "ATTR_TEMPERATURE", "temperature")
+_const.UnitOfTemperature.FAHRENHEIT = getattr(_const.UnitOfTemperature, "FAHRENHEIT", "°F")
 _switch = _mod("homeassistant.components.switch")
 _switch.SwitchEntity = getattr(_switch, "SwitchEntity", type("SwitchEntity", (), {}))
 
@@ -237,6 +238,79 @@ class WaterHeaterTest(unittest.IsolatedAsyncioTestCase):
         entity = (await _build(experimental=True, onOffStatus=1, machMode=4))[0]
         self.assertIsNone(entity.current_operation)
 
+    async def test_an_unknown_power_state_is_unknown_not_off(self) -> None:
+        entity = (await _build(experimental=True))[0]
+        attributes = entity.coordinator.data["hw-1"]["attributes"]
+        self.assertEqual(entity.current_operation, "off")  # the fixture's 0
+        for value in ("2", ""):
+            attributes["onOffStatus"] = value
+            self.assertIsNone(entity.current_operation, value)
+        del attributes["onOffStatus"]
+        self.assertIsNone(entity.current_operation)
+
+    async def test_turn_off(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1))[0]
+        await entity.async_turn_off()
+        self.assertEqual(dict(SENT[0].values), {"onOffStatus": "0"})
+
+    async def test_non_numbers_are_refused_with_the_translated_error(self) -> None:
+        # A range that admits 1, so True is refused for being a bool, not for its value.
+        appliance = _appliance()
+        appliance.commands["settings"].parameters["tempSel"] = _range(40, 0, 75)
+        entity = (await _build(experimental=True, appliance=appliance, onOffStatus=1))[0]
+        for value in (True, math.nan, math.inf, -math.inf):
+            with self.assertRaises(HomeAssistantError) as ctx:
+                await entity.async_set_temperature(temperature=value)
+            self.assertEqual(ctx.exception.translation_key, "invalid_setpoint", value)
+        self.assertEqual(SENT, [])
+
+    async def test_a_fahrenheit_install_rounds_to_the_whole_degree(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1))[0]
+        entity.hass.config = _units(_const.UnitOfTemperature.FAHRENHEIT)
+        await entity.async_set_temperature(temperature=(105 - 32) * 5 / 9)  # 40.56
+        self.assertEqual([dict(p.values) for p in SENT], [{"tempSel": "41"}])
+
+    async def test_a_celsius_install_does_not_round(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1))[0]
+        for value in (45.5, (105 - 32) * 5 / 9):
+            with self.assertRaises(HomeAssistantError) as ctx:
+                await entity.async_set_temperature(temperature=value)
+            self.assertEqual(ctx.exception.translation_key, "invalid_setpoint", value)
+        self.assertEqual(SENT, [])
+
+    async def test_a_temperature_with_a_mode_is_refused(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=1))[0]
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await entity.async_set_temperature(temperature=45, operation_mode="eco")
+        self.assertEqual(ctx.exception.translation_key, "hpwh_set_temperature_operation_mode")
+        self.assertEqual(SENT, [])
+
+    async def test_vacation_and_sterilization_refuse_mode_and_temperature(self) -> None:
+        cases = (
+            ({"machMode": 4, "vacStartDate": "2026-10-01", "vacEndDate": "2026-10-10"},
+             "hpwh_vacation_active"),
+            ({"sterilizationCurrentStatus": 1}, "hpwh_sterilization_running"),
+        )
+        for overrides, key in cases:
+            entity = (await _build(experimental=True, onOffStatus=1, **overrides))[0]
+            with self.assertRaises(HomeAssistantError) as ctx:
+                await entity.async_set_operation_mode("eco")
+            self.assertEqual(ctx.exception.translation_key, key)
+            with self.assertRaises(HomeAssistantError) as ctx:
+                await entity.async_set_temperature(temperature=45)
+            self.assertEqual(ctx.exception.translation_key, key)
+            self.assertEqual(SENT, [])
+
+    async def test_no_operation_mode_without_every_mode_category(self) -> None:
+        feature = platform.WaterHeaterEntityFeature
+        entity = (await _build(experimental=True))[0]
+        self.assertTrue(entity.supported_features & feature.OPERATION_MODE)
+        appliance = _appliance()
+        del appliance.commands["startProgram"].categories["elec"]
+        entity = (await _build(experimental=True, appliance=appliance))[0]
+        self.assertFalse(entity.supported_features & feature.OPERATION_MODE)
+        self.assertTrue(entity.supported_features & feature.TARGET_TEMPERATURE)
+
 
 class BoostSwitchTest(unittest.IsolatedAsyncioTestCase):
     async def test_not_created_without_the_experimental_option(self) -> None:
@@ -262,6 +336,22 @@ class BoostSwitchTest(unittest.IsolatedAsyncioTestCase):
     async def test_state(self) -> None:
         switch = (await _build_switches(experimental=True, onOffStatus=1, boostStatus=1))[0]
         self.assertTrue(switch.is_on)
+
+    async def test_refusals_in_both_directions(self) -> None:
+        cases = (
+            ({"onOffStatus": 1, "errors": 5}, "hpwh_unavailable"),
+            ({"onOffStatus": 1, "remoteCtrValid": 0}, "hpwh_unavailable"),
+            ({"onOffStatus": 0}, "hpwh_switch_on_first"),
+            ({"onOffStatus": 1, "machMode": 4, "vacStartDate": "2026-10-01",
+              "vacEndDate": "2026-10-10"}, "hpwh_vacation_active"),
+        )
+        for overrides, key in cases:
+            switch = (await _build_switches(experimental=True, temp=30, **overrides))[0]
+            for turn in (switch.async_turn_on, switch.async_turn_off):
+                with self.assertRaises(HomeAssistantError) as ctx:
+                    await turn()
+                self.assertEqual(ctx.exception.translation_key, key, overrides)
+            self.assertEqual(SENT, [])
 
 
 class BoostAutoOffListenerTest(unittest.IsolatedAsyncioTestCase):

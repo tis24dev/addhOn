@@ -1230,6 +1230,9 @@
     "hpwh_boost_at_target": {
       "message": "Il boost non parte: l'acqua è già alla temperatura impostata."
     },
+    "hpwh_set_temperature_operation_mode": {
+      "message": "Imposta la modalità con set_operation_mode, poi la temperatura."
+    },
     "hpwh_sterilization_running": {
       "message": "Non disponibile durante la sterilizzazione."
     },

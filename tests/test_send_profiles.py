@@ -204,9 +204,11 @@ def test_hpwh_mode_patch_selects_its_category_without_touching_the_others() -> N
 
     assert ok is True
     assert len(api.calls) == 1
-    _name, payload, program_name, _wire, _label = api.calls[0]
+    _name, payload, program_name, wire, label = api.calls[0]
     assert payload == {"machMode": "2"}
     assert program_name == ""
+    # startProgram keeps its own name on the wire, without energyLabel.
+    assert (wire, label) == (None, False)
     assert categories["auto"].parameters["machMode"].value == "1"
 
 

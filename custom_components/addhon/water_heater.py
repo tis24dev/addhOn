@@ -1,4 +1,3 @@
-# custom_components/addhon/water_heater.py
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Heat-pump water heater (type HW, issue #113): temperature, mode, on/off.
@@ -10,6 +9,7 @@ so it carries the keys the official app sends and nothing else.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Mapping
 from functools import partial
 from typing import Any
@@ -43,6 +43,7 @@ from .hpwh import (
     mode_block,
     mode_patch,
     power_patch,
+    raise_refusal,
     temperature_block,
     temperature_patch,
 )
@@ -51,6 +52,8 @@ _LOGGER = logging.getLogger(__name__)
 
 _MACHMODE_TO_OPERATION = {"1": STATE_HEAT_PUMP, "2": STATE_ECO, "3": STATE_ELECTRIC}
 _OPERATIONS = [STATE_HEAT_PUMP, STATE_ECO, STATE_ELECTRIC, STATE_OFF]
+# The `set_temperature` service field that can carry a mode with the temperature.
+_ATTR_OPERATION_MODE = "operation_mode"
 
 
 def _settings(appliance):
@@ -228,8 +231,11 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
 
     @property
     def current_operation(self) -> str | None:
-        if code(self._get_attr("onOffStatus")) != "1":
+        power = code(self._get_attr("onOffStatus"))
+        if power == "0":
             return STATE_OFF
+        if power != "1":
+            return None  # missing or not a power state: unknown, not off
         return _MACHMODE_TO_OPERATION.get(code(self._get_attr("machMode")) or "")
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -249,14 +255,31 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
                 translation_key="program_not_supported",
                 translation_placeholders={"program": operation_mode},
             )
-        self._refuse(mode_block(self._get_attr))
+        raise_refusal(mode_block(self._get_attr))
         await self._send(mode_patch(HPWH_MODE_CATEGORIES[operation_mode], modes[operation_mode]))
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
+        if _ATTR_OPERATION_MODE in kwargs:
+            # Two writes the app refuses separately; one at a time, each through
+            # its own rules.
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="hpwh_set_temperature_operation_mode",
+            )
         value = kwargs.get(ATTR_TEMPERATURE)
         low, high, step = self._range()
+        number = (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        )
+        if number and self._fahrenheit():
+            # Home Assistant converts a Fahrenheit setpoint to Celsius before it
+            # gets here, and a whole °F falls between two whole °C (105 °F is
+            # 40.56 °C): the nearest whole degree is the one meant.
+            value = round(value)
         if (
-            not isinstance(value, (int, float))
+            not number
             or float(value) != int(value)
             or not low <= value <= high
             or (value - low) % step
@@ -270,41 +293,11 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
                     "allowed": f"{low:g}-{high:g}, step {step:g}",
                 },
             )
-        self._refuse(temperature_block(self._get_attr))
+        raise_refusal(temperature_block(self._get_attr))
         await self._send(temperature_patch(self._get_attr, int(value)))
 
-    @staticmethod
-    def _refuse(reason: str | None) -> None:
-        """Raise the localized refusal `hpwh.py` names, if it names one.
-
-        One literal raise per key: `test_translations` verifies raised keys against
-        the JSON and refuses a computed `translation_key`.
-        """
-        if reason is None:
-            return
-        if reason == "hpwh_unavailable":
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="hpwh_unavailable"
-            )
-        if reason == "hpwh_switch_on_first":
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="hpwh_switch_on_first"
-            )
-        if reason == "hpwh_vacation_active":
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="hpwh_vacation_active"
-            )
-        if reason == "hpwh_sterilization_running":
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="hpwh_sterilization_running"
-            )
-        if reason == "hpwh_boost_at_target":
-            # Not a water heater refusal: the boost switch raises it. It lives here
-            # so every hpwh.py refusal is raised from one place.
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="hpwh_boost_at_target"
-            )
-        raise ValueError(f"Unhandled water heater refusal: {reason}")
+    def _fahrenheit(self) -> bool:
+        return self.hass.config.units.temperature_unit == UnitOfTemperature.FAHRENHEIT
 
     async def _send(self, patch) -> None:
         await async_dispatch_patch(self.hass, self._hon_client, self._appliance, patch)
