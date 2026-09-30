@@ -34,6 +34,11 @@ import logging
 _LOGGER = logging.getLogger(__name__)
 
 
+def _is_zero(value: object) -> bool:
+    """The app's `(value || '0') === '0'`: absent, empty or "0" all mean off."""
+    return value is None or str(value) in ("", "0")
+
+
 class _CanonicalExactPayload(dict[str, str | float]):
     __slots__ = ("command",)
 
@@ -204,31 +209,59 @@ class HonCommand:
             self.mandatory_parameter_groups if only_mandatory else self.parameter_groups
         )
         params = grouped_params.get("parameters", {})
-        # A `dryTime` the schema left without a default goes out as null, as the hOn app
-        # sends it, and NOT as the `min` the range invents for reads. On a washer-dryer
-        # that invented value is not neutral: `dryTime` 1..4 is 30/60/90/120 minutes of
-        # TIMED drying (decomp.txt:1757888, `dryTime-1` = `drying-30`), and with a
-        # `dryLevel` > 0 it switches the cycle from level drying to 30 minutes by the
-        # clock -- issue #99, analysis apk/analysis/issue98-99-program-options-and-wd-dry.md
-        # section 11.
-        #
-        # IF DRYING PROGRAMS MISBEHAVE AFTER THIS (a start refused, drying not happening,
-        # a wrong cycle length), THIS NULL IS A CANDIDATE. It is what the app sends unless
-        # the user picks a drying time and then goes back to a dry level: the drying
-        # drawer starts with `dryLevel` as its selected dependency (`normalize`,
-        # decomp.txt:1774744-1775200), and `checkAndApplyDryingRules`
-        # (decomp.txt:2682881) resets `dryTime` to "0" only when that dependency changes.
-        # Picking a dry level from the start leaves `dryTime` null. We have never seen
-        # null accepted on the wire; the value proven on a real appliance
-        # (BHA6SD696M6DB980, #99) is "0".
-        dry_time = self._parameters.get("dryTime")
-        if (
-            "dryTime" in params
-            and isinstance(dry_time, HonParameterRange)
-            and dry_time.is_unset
-        ):
-            params["dryTime"] = None  # type: ignore[assignment]
+        if "dryTime" in params and self._resolves_dry_time():
+            params["dryTime"] = self._dry_time_to_send(params)
         return await self.send_parameters(params)
+
+    def _resolves_dry_time(self) -> bool:
+        """Whether this send carries the washer / washer-dryer `dryTime` rule.
+
+        Only a `startProgram` of a WM or WD: that is where the app's program screens
+        apply it (decomp.txt:4491766-4491914, skipped for DW), and a tumble dryer's
+        drying time is a different setting. Everything else sends `dryTime` untouched.
+        """
+        appliance_type = getattr(self._appliance, "appliance_type", "")
+        return self._name == "startProgram" and appliance_type in ("WM", "WD")
+
+    def _dry_time_to_send(self, params: Mapping[str, str | float]) -> str | float:
+        """`dryTime` as the app's classic program screen sends it. Issue #99.
+
+        On a washer-dryer `dryTime` 1..4 is 30/60/90/120 minutes of TIMED drying
+        (decomp.txt:1757888, `dryTime-1` = `drying-30`), and a dry level and a drying
+        time are two modes of the same drawer. The classic screen
+        (`ProgramCycleDetailsView`, decomp.txt:4491800-4491856) settles it once:
+
+            dryLevel != '0' and programType != 'D'  ->  dryTime = '0'  (the level wins)
+            otherwise                               ->  dryTime = its value, or '0'
+
+        A missing dryLevel counts as '0' (`dryLevel || '0'` there), and programType is
+        matched on its raw value as the app does: an enum reads back lower-cased
+        (`clean_value`), so `value` would never equal 'D'. "Its value" is what
+        the program or a write gave it; a range the schema left without a default has
+        none, only the `min` this engine invents for reads, so it goes as '0'.
+
+        This is the screen whose payload the reporter's own app history shows
+        (`dryLevel=1`, `dryTime=0`, `energyLabel=1`), and "0" is the only value proven
+        on his appliance (BHA6SD696M6DB980). What we sent before, and why it failed:
+        the range's `min`, 1, turned the Eco 40-60 wash-and-dry into wash + 30 minutes
+        by the clock (5.22.1); null got an HTTP 500 from the cloud (5.26.0-beta4) --
+        and no path of the app ever sends null. Analysis:
+        apk/analysis/wm-wd-send-pipeline.md and
+        apk/analysis/issue98-99-program-options-and-wd-dry.md sections 11-12.
+
+        IF DRYING PROGRAMS MISBEHAVE AFTER THIS, the app's other screen is the fallback:
+        `NewProgramCycleDetails` drops an unset `dryTime` from the body altogether
+        (`_normalize`, decomp.txt:2676915-2676974) instead of sending '0'.
+        """
+        program_type = self._parameters.get("programType")
+        if not _is_zero(params.get("dryLevel")) and (
+            program_type is None or program_type.intern_value != "D"
+        ):
+            return "0"
+        dry_time = self._parameters.get("dryTime")
+        if isinstance(dry_time, HonParameterRange) and dry_time.is_unset:
+            return "0"
+        return params["dryTime"]
 
     async def send_specific(self, param_names: list[str]) -> bool:
         params: dict[str, str | float] = {}

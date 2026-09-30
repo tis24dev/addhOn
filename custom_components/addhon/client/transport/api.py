@@ -481,6 +481,13 @@ class HonApi:
         program_name: str = "",
     ) -> bool:
         timestamp = _command_timestamp()
+        # `dryLevel` reaches the cloud for washer-dryers and tumble dryers only: the
+        # app's transport stringifies it for TD/WD and drops it for every other type
+        # (decomp.txt:554239-554338), whatever the schema says. Two real washing-machine
+        # bodies from the official app (2.27.9 and 2.29.8) carry none although the WM
+        # schema declares it, fixed "0" and mandatory.
+        if appliance.appliance_type not in ("WD", "TD") and "dryLevel" in parameters:
+            parameters = {k: v for k, v in parameters.items() if k != "dryLevel"}
         data: dict[str, Any] = {
             "macAddress": appliance.mac_address,
             "timestamp": timestamp,
@@ -500,24 +507,37 @@ class HonApi:
         if command == "startProgram" and program_name:
             data["programName"] = program_name.upper()
         url = f"{API_URL}/commands/v1/send"
-        async with self._connection.post(url, json=data) as response:
-            json_data = await response.json(content_type=None)
-            payload = json_data.get("payload") if isinstance(json_data, dict) else None
-            if isinstance(payload, dict) and payload.get("resultCode") == "0":
-                return True
-            # The request payload (data) carries macAddress, transactionId (= MAC)
-            # and device.mobileId; the response may echo them too. Log only the
-            # command + resultCode at ERROR (no identity, always emitted), and the
-            # full REDACTED payload/response at DEBUG (gated) for troubleshooting.
-            result_code = payload.get("resultCode") if isinstance(payload, dict) else None
-            _LOGGER.error(
-                "hOn send_command failed: command=%s resultCode=%s", command, result_code
-            )
+        try:
+            async with self._connection.post(url, json=data) as response:
+                json_data = await response.json(content_type=None)
+                payload = json_data.get("payload") if isinstance(json_data, dict) else None
+                if isinstance(payload, dict) and payload.get("resultCode") == "0":
+                    return True
+                # The request payload (data) carries macAddress, transactionId (= MAC)
+                # and device.mobileId; the response may echo them too. Log only the
+                # command + resultCode at ERROR (no identity, always emitted), and the
+                # full REDACTED payload/response at DEBUG (gated) for troubleshooting.
+                result_code = payload.get("resultCode") if isinstance(payload, dict) else None
+                _LOGGER.error(
+                    "hOn send_command failed: command=%s resultCode=%s", command, result_code
+                )
+                _LOGGER.debug(
+                    "hOn send_command failed payload (redacted)=%s response=%s",
+                    redact_identity(data),
+                    redact_identity(json_data),
+                )
+        except Exception:
+            # A 5xx never reaches the resultCode branch: the connection raises first
+            # (`_intercept`), and the caller logs the error without the body. Issue #99's
+            # beta4 500 had to be pinned on `dryTime: null` by inference, because the
+            # payload that caused it was nowhere in the log. Same redaction and gating
+            # as above; the exception goes on unchanged.
             _LOGGER.debug(
-                "hOn send_command failed payload (redacted)=%s response=%s",
+                "hOn send_command raised: command=%s payload (redacted)=%s",
+                command,
                 redact_identity(data),
-                redact_identity(json_data),
             )
+            raise
         return False
 
     async def close(self) -> None:
