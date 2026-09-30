@@ -847,6 +847,9 @@
       }
     },
     "switch": {
+      "boost": {
+        "name": "Boost"
+      },
       "sleep": {
         "name": "Sleep mode"
       },
@@ -1198,6 +1201,17 @@
       "hood": {
         "name": "Hood"
       }
+    },
+    "water_heater": {
+      "heat_pump_water_heater": {
+        "name": "Water heater",
+        "state": {
+          "heat_pump": "Auto",
+          "eco": "Eco",
+          "electric": "Electric",
+          "off": "Off"
+        }
+      }
     }
   },
   "exceptions": {
@@ -1212,6 +1226,24 @@
     },
     "command_rejected": {
       "message": "The hOn service did not accept the command."
+    },
+    "hpwh_boost_at_target": {
+      "message": "Boost cannot start: the water is already at the set temperature."
+    },
+    "hpwh_set_temperature_operation_mode": {
+      "message": "Set the mode with set_operation_mode, then the temperature."
+    },
+    "hpwh_sterilization_running": {
+      "message": "Not available while the anti-legionella cycle is running."
+    },
+    "hpwh_switch_on_first": {
+      "message": "Switch the water heater on first."
+    },
+    "hpwh_unavailable": {
+      "message": "The water heater does not accept commands right now: check errors and remote control on its panel."
+    },
+    "hpwh_vacation_active": {
+      "message": "Not available while holiday mode is on."
     },
     "invalid_setpoint": {
       "message": "Value {value} is not allowed (allowed: {allowed})."

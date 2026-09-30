@@ -1,23 +1,30 @@
 # Copyright (C) 2026 tis24dev
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Heat-pump water heater (appliance type `HW`, the app's "HPWH"): read side.
+"""Heat-pump water heater (appliance type `HW`, the app's "HPWH"): read and write rules.
 
-Everything here is a pure function over the shadow attributes, rebuilt from the
+The rules are pure functions over the shadow attributes (only `raise_refusal` has an
+effect: it turns a refusal into the localized `HomeAssistantError`), rebuilt from the
 official app 2.30.7 (`apk2/decomp.txt`; the analysis is
 `apk/analysis/issue113-hw-hpwh-control-model.md`). Issue #113 is the first real
 device: an HP110M8-9, `series: "m8"`.
 
-This module READS only. How the app writes to this appliance is documented in the
-analysis and deliberately not implemented yet: its `setParameters` declares 22
-mandatory fixed parameters (every eco/silent window, both vacation dates,
-`operationName: "grTimingPowerOnOff"`) that the app never sends, and our dispatcher
-would send all of them with every write.
+The write side lives here too: when the app refuses a mode, temperature or boost
+change (`mode_block`, `temperature_block`, `boost_block`) and the exact sparse
+`CommandPatch` it sends for power, temperature, mode and boost. Sends are shaped by
+the `HPWH` send profile in `send_profiles.py`, which keeps the app's own payloads
+free of the fixed parameters the `setParameters` schema declares (22 mandatory ones:
+every eco/silent window, both vacation dates, `operationName`).
 """
 from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
+
+from homeassistant.exceptions import HomeAssistantError
+
+from .command_dispatch import CommandPatch
+from .const import DOMAIN
 
 # `HPWHMachMode` (decomp.txt:599199-599208): AUTO='1', ECO='2', ELEC='3', VAC='4'.
 # The same codes are the `machMode` fixed by the startProgram programs
@@ -50,6 +57,26 @@ _JS_DAYS = (1, 2, 3, 4, 5, 6, 0)
 # Series whose eco/vacation logic takes other branches in the app (`isM7M8B`,
 # `isM11`, decomp.txt:2327397-2327435). Only the plain branch is rebuilt below.
 _OTHER_SERIES = frozenset({"m7b", "m8b", "m11"})
+
+
+def controls_supported(series: object) -> bool:
+    """Whether the controls (water heater, boost switch, boost auto-off) apply.
+
+    `series` is `model_attributes["series"]` as the appliance publishes it; it is
+    read like `HonHeatPumpStateSensor._series` does (stripped, lower-cased). The
+    M7B/M8B/M11 series are excluded: the app takes other branches there (vacation by
+    `vacModeDays`, a different power-off in vacation) and none of them is rebuilt.
+    A missing or unknown series is not excluded.
+    """
+    normalized = str(series).strip().lower() if series else None
+    return normalized not in _OTHER_SERIES
+
+
+def appliance_series(appliance) -> object:
+    """`model_attributes["series"]` as published; `controls_supported` normalizes it."""
+    attributes = getattr(appliance, "model_attributes", None)
+    return attributes.get("series") if isinstance(attributes, Mapping) else None
+
 
 # The phases `heat_pump_state` can answer, in the app's order
 # (`EnumHeatPumpWaterHeaterPhase`, decomp.txt:2329986-2330012). NOTCONNECTED is not
@@ -287,6 +314,169 @@ def heat_pump_state(
     if scheduled:
         return HPWH_STATE_SCHEDULED
     return HPWH_STATE_WORKING
+
+
+HPWH_SETTINGS_COMMAND = "settings"
+HPWH_START_COMMAND = "startProgram"
+# Home Assistant operation mode -> startProgram category (D1). The app's
+# ModeSettings offers exactly these three (apk2 decomp.txt:4498519-4498529).
+HPWH_MODE_CATEGORIES: dict[str, str] = {
+    "heat_pump": "auto",
+    "eco": "eco",
+    "electric": "elec",
+}
+_VAC_CLEARED = ("", "2000-01-01")
+
+
+def _disabled(get: Callable[[str], object]) -> bool:
+    errors = get("errors")
+    if not code(errors):
+        errors = get("error")
+    return _js_number(errors) > 0 or code(get("remoteCtrValid")) == "0"
+
+
+def _is_on(get: Callable[[str], object]) -> bool:
+    return code(get("onOffStatus")) == "1"
+
+
+def is_vacation_active(get: Callable[[str], object]) -> bool:
+    """`isVacModeActive` for the plain series (apk2 decomp.txt:2334140-2334200)."""
+    if code(get("machMode")) != "4":
+        return False
+    return all(
+        (code(get(name)) or "") not in _VAC_CLEARED
+        for name in ("vacStartDate", "vacEndDate")
+    )
+
+
+def _sterilizing(get: Callable[[str], object]) -> bool:
+    return code(get("sterilizationCurrentStatus")) == "1"
+
+
+def mode_block(get: Callable[[str], object]) -> str | None:
+    """Why the app would refuse a mode change, or None (onPressAutoMode)."""
+    if _disabled(get):
+        return "hpwh_unavailable"
+    if not _is_on(get):
+        return "hpwh_switch_on_first"
+    if is_vacation_active(get):
+        return "hpwh_vacation_active"
+    if _sterilizing(get):
+        return "hpwh_sterilization_running"
+    return None
+
+
+def temperature_block(get: Callable[[str], object]) -> str | None:
+    """Why the app would refuse a new target, or None (onPressTempMode)."""
+    if is_vacation_active(get):
+        return "hpwh_vacation_active"
+    if _disabled(get):
+        return "hpwh_unavailable"
+    if not _is_on(get):
+        return "hpwh_switch_on_first"
+    if _sterilizing(get):
+        return "hpwh_sterilization_running"
+    return None
+
+
+def boost_block(get: Callable[[str], object], turning_on: bool) -> str | None:
+    """Why the app would refuse the boost toggle, or None (OptionSettings)."""
+    if _disabled(get):
+        return "hpwh_unavailable"
+    if not _is_on(get):
+        return "hpwh_switch_on_first"
+    if is_vacation_active(get):
+        return "hpwh_vacation_active"
+    if turning_on and _js_number(get("temp")) >= _js_number(get("tempSel")):
+        return "hpwh_boost_at_target"
+    return None
+
+
+def raise_refusal(reason: str | None) -> None:
+    """Raise the localized error for a refusal the rules above named; None passes.
+
+    Shared by the water heater and the boost switch. One literal raise per key:
+    `test_translations` verifies raised keys against the JSON and refuses a computed
+    `translation_key`.
+    """
+    if reason is None:
+        return
+    if reason == "hpwh_unavailable":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_unavailable"
+        )
+    if reason == "hpwh_switch_on_first":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_switch_on_first"
+        )
+    if reason == "hpwh_vacation_active":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_vacation_active"
+        )
+    if reason == "hpwh_sterilization_running":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_sterilization_running"
+        )
+    if reason == "hpwh_boost_at_target":
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="hpwh_boost_at_target"
+        )
+    raise ValueError(f"Unhandled heat-pump water heater refusal: {reason}")
+
+
+def power_patch(on: bool) -> CommandPatch:
+    return CommandPatch(
+        HPWH_SETTINGS_COMMAND,
+        {"onOffStatus": "1" if on else "0"},
+        action="power_on" if on else "power_off",
+    )
+
+
+def temperature_patch(get: Callable[[str], object], value: int) -> CommandPatch:
+    values: dict[str, str] = {"tempSel": str(int(value))}
+    if code(get("boostStatus")) == "1" and value < _js_number(get("temp")):
+        values["boostStatus"] = "0"
+    return CommandPatch(HPWH_SETTINGS_COMMAND, values, action="set_temperature")
+
+
+def mode_patch(category: str, machmode: str) -> CommandPatch:
+    """`startProgram {machMode}` with no `programName`, as ModeSettings sends it.
+
+    The category is selected in `prepare` so that `machMode` lands on the category it
+    belongs to: writing it on whichever category happened to be active would
+    overwrite that category's own fixed value in memory.
+    """
+
+    def _select(parameters: dict) -> None:
+        parameters["program"].value = category
+
+    return CommandPatch(
+        HPWH_START_COMMAND,
+        {"machMode": machmode},
+        action=f"set_mode_{category}",
+        prepare=_select,
+        program_name="",
+    )
+
+
+def boost_patch(on: bool) -> CommandPatch:
+    return CommandPatch(
+        HPWH_SETTINGS_COMMAND,
+        {"boostStatus": "1" if on else "0"},
+        action="boost_on" if on else "boost_off",
+    )
+
+
+def boost_auto_off_due(get: Callable[[str], object]) -> bool:
+    """The app's dashboard switches boost off at the target (D7: numeric equality).
+
+    Only the condition. When it may send again (once per episode) is decided by
+    `water_heater._BoostAutoOff`, which owns the episode memory.
+    """
+    return (
+        code(get("boostStatus")) == "1"
+        and _js_number(get("temp")) == _js_number(get("tempSel"))
+    )
 
 
 def mapping_getter(attributes: Mapping[str, object]) -> Callable[[str], object]:

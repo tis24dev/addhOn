@@ -722,6 +722,9 @@ class _RecordingApi:
         params: Any,
         ancillary: Any,
         category: str,
+        *,
+        wire_command: str | None = None,
+        energy_label: bool = True,
     ) -> bool:
         self.calls.append((command_name, {k: str(v) for k, v in params.items()}))
         if self.error is not None:

@@ -534,6 +534,43 @@ class SendCommandTest(unittest.TestCase):
         api_mod.datetime = _Frozen
         self.addCleanup(lambda: setattr(api_mod, "datetime", real))
 
+    def test_send_command_wire_name_and_no_energy_label(self) -> None:
+        self._patch_clock("2026-06-18T12:34:56.789012")
+        conn = FakeConnection({"payload": {"resultCode": "0"}})
+        app = FakeAppliance()
+        ok = _run(
+            _call(conn).send_command(
+                app,
+                "settings",
+                {"tempSel": "45"},
+                {},
+                "setParameters",
+                wire_command="setParameters",
+                energy_label=False,
+            )
+        )
+        self.assertTrue(ok)
+        data = conn.calls[0][2]["json"]
+        self.assertEqual(data["commandName"], "setParameters")
+        self.assertEqual(
+            data["attributes"], {"channel": "mobileApp", "origin": "standardProgram"}
+        )
+        self.assertEqual(data["parameters"], {"tempSel": "45"})
+        self.assertNotIn("programName", data)
+
+    def test_send_command_startprogram_keeps_its_logical_name_for_programname(self) -> None:
+        conn = FakeConnection({"payload": {"resultCode": "0"}})
+        app = FakeAppliance()
+        _run(
+            _call(conn).send_command(
+                app, "startProgram", {"machMode": "2"}, {}, "",
+                energy_label=False,
+            )
+        )
+        data = conn.calls[0][2]["json"]
+        self.assertEqual(data["commandName"], "startProgram")
+        self.assertNotIn("programName", data)
+
     def test_send_command_body_exact(self) -> None:
         self._patch_clock("2026-06-18T12:34:56.789012")
         conn = FakeConnection({"payload": {"resultCode": "0"}})

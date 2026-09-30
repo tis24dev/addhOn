@@ -94,6 +94,9 @@ _IDENTITY_KEYS = frozenset(
         "personcontactid",
         "pk",
         "sk",
+        # The third key of the same table rows, on the `/history` entries the
+        # diagnostics dump prints (`command_history`, issue #112).
+        "sk_secondary",
         "applianceid",
         "eepromid",
     }

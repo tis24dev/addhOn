@@ -6,7 +6,7 @@
 DOMAIN = "addhon"
 
 # Supported platforms
-PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button", "number", "fan"]
+PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button", "number", "fan", "water_heater"]
 
 # Update interval in seconds
 # NOTE: the initial setup + first fetch takes ~22s on a slow cloud.

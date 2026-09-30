@@ -103,6 +103,17 @@ from custom_components.addhon.hpwh import (  # noqa: E402
     schedule_window,
     water_level_percent,
 )
+from custom_components.addhon.hpwh import (  # noqa: E402
+    boost_auto_off_due,
+    boost_block,
+    boost_patch,
+    is_vacation_active,
+    mode_block,
+    mode_patch,
+    power_patch,
+    temperature_block,
+    temperature_patch,
+)
 
 # 2026-09-28 is a Monday (JavaScript getDay 1); 2026-10-03 a Saturday (6).
 MONDAY = datetime(2026, 9, 28, 3, 0)
@@ -302,6 +313,109 @@ class HeatPumpStateTest(unittest.TestCase):
         # reads as working.
         attributes = _attrs(onOffStatus=1, sterilizationCurrentStatus=1)
         self.assertEqual(_state(attributes), "working")
+
+
+class ControlRulesTest(unittest.TestCase):
+    """What the app lets a user do, and what it sends (apk2 2.30.7)."""
+
+    def _get(self, **overrides):
+        return mapping_getter(_attrs(onOffStatus=1, **overrides))
+
+    def test_everything_is_allowed_on_a_healthy_appliance_that_is_on(self) -> None:
+        get = self._get()
+        self.assertIsNone(mode_block(get))
+        self.assertIsNone(temperature_block(get))
+        self.assertIsNone(boost_block(get, turning_on=True))
+
+    def test_off_asks_to_switch_on_first(self) -> None:
+        get = mapping_getter(_attrs())  # the reporter's appliance is off
+        self.assertEqual(mode_block(get), "hpwh_switch_on_first")
+        self.assertEqual(temperature_block(get), "hpwh_switch_on_first")
+        self.assertEqual(boost_block(get, turning_on=True), "hpwh_switch_on_first")
+
+    def test_an_error_or_remote_control_off_disables(self) -> None:
+        for overrides in ({"errors": 3}, {"remoteCtrValid": "0"}):
+            get = self._get(**overrides)
+            self.assertEqual(mode_block(get), "hpwh_unavailable", overrides)
+            self.assertEqual(temperature_block(get), "hpwh_unavailable", overrides)
+
+    def test_vacation_blocks_mode_temperature_and_boost(self) -> None:
+        get = self._get(machMode=4, vacStartDate="2026-10-01", vacEndDate="2026-10-08")
+        self.assertTrue(is_vacation_active(get))
+        self.assertEqual(mode_block(get), "hpwh_vacation_active")
+        self.assertEqual(temperature_block(get), "hpwh_vacation_active")
+        self.assertEqual(boost_block(get, turning_on=True), "hpwh_vacation_active")
+
+    def test_cleared_vacation_dates_are_not_a_vacation(self) -> None:
+        get = self._get(machMode=4, vacStartDate="2000-01-01", vacEndDate="2000-01-01")
+        self.assertFalse(is_vacation_active(get))
+
+    def test_sterilization_blocks_mode_and_temperature_not_boost(self) -> None:
+        get = self._get(sterilizationCurrentStatus=1)
+        self.assertEqual(mode_block(get), "hpwh_sterilization_running")
+        self.assertEqual(temperature_block(get), "hpwh_sterilization_running")
+        self.assertIsNone(boost_block(get, turning_on=False))
+
+    def test_boost_cannot_start_at_or_above_target(self) -> None:
+        self.assertEqual(
+            boost_block(self._get(temp=40), turning_on=True), "hpwh_boost_at_target"
+        )
+        self.assertIsNone(boost_block(self._get(temp=40, boostStatus=1), turning_on=False))
+
+    def test_power_patch(self) -> None:
+        patch = power_patch(True)
+        self.assertEqual((patch.command_name, dict(patch.values)), ("settings", {"onOffStatus": "1"}))
+        self.assertEqual(dict(power_patch(False).values), {"onOffStatus": "0"})
+
+    def test_temperature_patch_switches_boost_off_below_the_current_temperature(self) -> None:
+        get = self._get(temp=45, boostStatus=1)
+        self.assertEqual(
+            dict(temperature_patch(get, 40).values), {"tempSel": "40", "boostStatus": "0"}
+        )
+        self.assertEqual(dict(temperature_patch(get, 50).values), {"tempSel": "50"})
+        self.assertEqual(
+            dict(temperature_patch(self._get(temp=45), 40).values), {"tempSel": "40"}
+        )
+
+    def test_mode_patch_carries_machmode_only_and_no_program_name(self) -> None:
+        patch = mode_patch("eco", "2")
+        self.assertEqual(patch.command_name, "startProgram")
+        self.assertEqual(dict(patch.values), {"machMode": "2"})
+        self.assertEqual(patch.program_name, "")
+        self.assertIsNotNone(patch.prepare)
+
+    def test_boost_patch(self) -> None:
+        self.assertEqual(dict(boost_patch(True).values), {"boostStatus": "1"})
+        self.assertEqual(dict(boost_patch(False).values), {"boostStatus": "0"})
+
+    def test_boost_auto_off(self) -> None:
+        self.assertTrue(boost_auto_off_due(self._get(boostStatus=1, temp=40)))
+        self.assertFalse(boost_auto_off_due(self._get(boostStatus=1, temp=39)))
+        self.assertFalse(boost_auto_off_due(self._get(boostStatus=0, temp=40)))
+
+    def test_every_refusal_is_raised_with_its_own_key(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        for key in (
+            "hpwh_unavailable",
+            "hpwh_switch_on_first",
+            "hpwh_vacation_active",
+            "hpwh_sterilization_running",
+            "hpwh_boost_at_target",
+        ):
+            with self.assertRaises(HomeAssistantError) as ctx:
+                hpwh.raise_refusal(key)
+            self.assertEqual(ctx.exception.translation_key, key)
+        hpwh.raise_refusal(None)  # no refusal, nothing raised
+        with self.assertRaises(ValueError):
+            hpwh.raise_refusal("hpwh_not_a_refusal")
+
+    def test_controls_are_not_offered_on_the_series_whose_rules_are_not_rebuilt(self) -> None:
+        for series in ("m7b", "M8B", " M11 ", "m11"):
+            self.assertFalse(hpwh.controls_supported(series), series)
+        # Only those three: a missing or unknown series keeps the controls.
+        for series in ("m8", "M8", None, "", "x9"):
+            self.assertTrue(hpwh.controls_supported(series), series)
 
 
 class _Coordinator:

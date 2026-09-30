@@ -32,6 +32,7 @@ from .const import (
     APPLIANCE_FR,
     APPLIANCE_FRE,
     APPLIANCE_HO,
+    APPLIANCE_HW,
     APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
     APPLIANCE_TD,
@@ -39,12 +40,21 @@ from .const import (
     APPLIANCE_WD,
     APPLIANCE_WM,
     CONF_ENABLE_DEBUG,
+    CONF_ENABLE_EXPERIMENTAL,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
     WM_ATTR_STATUS,
 )
 from .debug_utils import redact_id
 from .hon_commands import command_param
+from .hpwh import (
+    appliance_series,
+    boost_block,
+    boost_patch,
+    code as hpwh_code,
+    controls_supported,
+    raise_refusal,
+)
 from .hood import (
     HOOD_DELAY_STATUS_PARAM,
     HOOD_LIGHT_PARAM,
@@ -411,7 +421,9 @@ def _param_snapshot(params) -> dict:
     }
 
 
-def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> list:
+def _appliance_switches(
+    coordinator, appliance_id: str, data: dict, client, experimental: bool = False
+) -> list:
     """Every switch ONE appliance contributes, or [] when it contributes none.
 
     Extracted from the setup loop so an appliance whose schema or state trips an
@@ -603,6 +615,15 @@ def _appliance_switches(coordinator, appliance_id: str, data: dict, client) -> l
             redact_id(data.get("name"), appliance_id), redact_id(appliance_id),
             app_type, len(created_modes), created_modes,
         )
+    elif app_type == APPLIANCE_HW:
+        # Heat-pump water heater (#113): experimental, only when the schema declares
+        # the boost parameter the app's toggle writes, and not on the M7B/M8B/M11
+        # series, whose rules are not rebuilt.
+        settings = (getattr(appliance, "commands", None) or {}).get("settings")
+        parameters = getattr(settings, "parameters", None) or {}
+        series = appliance_series(appliance)
+        if experimental and "boostStatus" in parameters and controls_supported(series):
+            found.append(HonHeatPumpBoostSwitch(coordinator, appliance_id, client))
     else:
         _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
     return found
@@ -625,7 +646,13 @@ async def async_setup_entry(
     for appliance_id, data in coordinator_data_map(coordinator).items():
         try:
             entities.extend(
-                _appliance_switches(coordinator, appliance_id, data, client)
+                _appliance_switches(
+                    coordinator,
+                    appliance_id,
+                    data,
+                    client,
+                    bool((getattr(entry, "options", None) or {}).get(CONF_ENABLE_EXPERIMENTAL, False)),
+                )
             )
         except Exception:  # noqa: BLE001 - one appliance must not cost the rest
             _LOGGER.exception(
@@ -654,6 +681,35 @@ async def async_setup_entry(
         )
     )
     async_add_entities(entities)
+
+class HonHeatPumpBoostSwitch(HonBaseEntity, SwitchEntity):
+    """Boost of the heat-pump water heater (#113), gated like the app's toggle."""
+
+    _attr_translation_key = "boost"
+    _attr_icon = "mdi:rocket-launch"
+
+    def __init__(self, coordinator, appliance_id: str, client=None) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._attr_unique_id = f"{appliance_id}_boost_switch"
+
+    @property
+    def is_on(self) -> bool | None:
+        value = hpwh_code(self._get_attr("boostStatus"))
+        return None if value is None else value == "1"
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._set(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._set(False)
+
+    async def _set(self, on: bool) -> None:
+        raise_refusal(boost_block(self._get_attr, turning_on=on))
+        await async_dispatch_patch(
+            self.hass, self._hon_client, self._appliance, boost_patch(on)
+        )
+        await self._async_request_command_refresh()
+
 
 class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
     """Switch to pause / resume the washer program."""

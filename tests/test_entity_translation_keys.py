@@ -174,6 +174,21 @@ def _install_stubs() -> None:
         button_mod, "ButtonEntity", type("ButtonEntity", (), {})
     )
 
+    const.ATTR_TEMPERATURE = getattr(const, "ATTR_TEMPERATURE", "temperature")
+
+    # water_heater platform (imported at module level by water_heater.py)
+    wh_mod = _mod("homeassistant.components.water_heater")
+    wh_mod.WaterHeaterEntity = getattr(wh_mod, "WaterHeaterEntity", type("WaterHeaterEntity", (), {}))
+    wh_mod.WaterHeaterEntityFeature = getattr(
+        wh_mod, "WaterHeaterEntityFeature",
+        type("WaterHeaterEntityFeature", (), {
+            "TARGET_TEMPERATURE": 1, "OPERATION_MODE": 2, "AWAY_MODE": 4, "ON_OFF": 8,
+        }),
+    )
+    for _n, _v in (("STATE_ECO", "eco"), ("STATE_ELECTRIC", "electric"),
+                   ("STATE_HEAT_PUMP", "heat_pump"), ("STATE_OFF", "off")):
+        setattr(wh_mod, _n, getattr(wh_mod, _n, _v))
+
     ha.config_entries = ce
     ha.core = core
     ha.exceptions = exc
@@ -200,6 +215,7 @@ def _tk(description) -> str:
 def _collect_code_keys() -> dict[str, set[str]]:
     from custom_components.addhon import (
         binary_sensor, fan, number, ref_programs, select, sensor, switch,
+        water_heater,
     )
 
     used: dict[str, set[str]] = {}
@@ -248,6 +264,8 @@ def _collect_code_keys() -> dict[str, set[str]]:
         # direction's ON and a sparse stopProgram for its OFF.
         | {d.key for d in switch._REF_MODE_SWITCHES}
         | {"pause", "debug_logging", "mqtt_realtime_debug"}
+        # The heat-pump water heater boost (#113): a fixed-key class.
+        | {switch.HonHeatPumpBoostSwitch._attr_translation_key}
         # The cooker hood's power switch is a fixed-key class, not a table row: it
         # writes `onOffStatus`, which the hood's settings command does not declare,
         # and it needs one command per direction.
@@ -280,6 +298,7 @@ def _collect_code_keys() -> dict[str, set[str]]:
         fan.HonAirPurifierFan._attr_translation_key,
         fan.HonHoodFan._attr_translation_key,
     }
+    used["water_heater"] = {water_heater.HonHeatPumpWaterHeater._attr_translation_key}
     return used
 
 

@@ -16,6 +16,7 @@ from .command_diagnostics import emit_command_event, record_expected_update
 from .const import DOMAIN
 from .client.engine.exceptions import ApiError
 from .param_rollback import restore_owned_params, snapshot_params
+from .send_profiles import LEGACY, SendProfile, profile_for
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -100,15 +101,34 @@ def _emit_intent_safely(
         _LOGGER.debug("Command diagnostics step failed", exc_info=True)
 
 
+def _wire_fields(profile: SendProfile, patch: CommandPatch) -> dict[str, object]:
+    """The body's real command name and energy label, for a non-legacy profile only.
+
+    Every legacy event stays byte-identical. For the others the command the entity
+    named (`settings`) is not what the cloud sees (`setParameters`), and a debug log
+    must show what actually went out.
+    """
+    wire_command = profile.wire_commands.get(patch.command_name)
+    if wire_command is None and profile.energy_label:
+        return {}
+    return {
+        "energy_label": profile.energy_label,
+        "wire_command": wire_command or patch.command_name,
+    }
+
+
 def _emit_payload_safely(
     common_fields: Mapping[str, object],
     prepared: PreparedCommand,
+    profile: SendProfile,
+    patch: CommandPatch,
 ) -> None:
     try:
         _emit_safely(
             "command_payload",
             {
                 **common_fields,
+                **_wire_fields(profile, patch),
                 "mandatory_keys": [
                     key
                     for key in prepared.payload
@@ -288,6 +308,28 @@ class CommandDispatcher:
             return commands.get(command_name, command)
         return command
 
+    @staticmethod
+    def _ancillary_params(
+        commands: Mapping[str, HonCommand],
+        profile: SendProfile,
+    ) -> Mapping[str, str | float] | None:
+        """The `ancillaryParameters` a send of this profile carries.
+
+        None for a profile without an `ancillary_source`: the sent command then
+        carries its own, as it always has. Otherwise the source command's
+        `category`, or the command itself when it IS that category; `{}` when the
+        appliance has neither, which is what the app sends then.
+        """
+        if profile.ancillary_source is None:
+            return None
+        command_name, category = profile.ancillary_source
+        command = commands.get(command_name)
+        categories = getattr(command, "categories", None)
+        source = categories.get(category) if isinstance(categories, Mapping) else None
+        if source is None and getattr(command, "category", None) == category:
+            source = command
+        return source.ancillary_parameters() if source is not None else {}
+
     @classmethod
     def _selector_key(
         cls,
@@ -307,6 +349,7 @@ class CommandDispatcher:
         self,
         command: HonCommand,
         patch: CommandPatch,
+        profile: SendProfile = LEGACY,
     ) -> PreparedCommand:
         parameters = command.parameters
         selector_key = self._selector_key(command, patch)
@@ -348,20 +391,28 @@ class CommandDispatcher:
 
         requested_order = list(patch.values)
         requested = frozenset(requested_order)
-        mandatory_order = [
-            key
-            for key, parameter in active_parameters.items()
-            if parameter.mandatory and key not in requested
-        ]
+        mandatory_order = (
+            [
+                key
+                for key, parameter in active_parameters.items()
+                if parameter.mandatory and key not in requested
+            ]
+            if profile.backfill_mandatory
+            else []
+        )
         mandatory = frozenset(mandatory_order)
-        changed_order = [
-            key
-            for key, parameter in active_parameters.items()
-            if key not in requested
-            and key not in mandatory
-            and key in before_values
-            and parameter.intern_value != before_values[key]
-        ]
+        changed_order = (
+            [
+                key
+                for key, parameter in active_parameters.items()
+                if key not in requested
+                and key not in mandatory
+                and key in before_values
+                and parameter.intern_value != before_values[key]
+            ]
+            if profile.include_rule_changes
+            else []
+        )
         changed = frozenset(changed_order)
 
         payload = {
@@ -395,6 +446,7 @@ class CommandDispatcher:
                 if command_before is None:
                     raise KeyError(patch.command_name)
 
+                profile = profile_for(getattr(appliance, "appliance_type", None))
                 parameter_snapshots = [
                     (command, snapshot_params(command.parameters))
                     for command in self._command_tree(commands)
@@ -429,7 +481,7 @@ class CommandDispatcher:
                 own_write_snapshots = parameter_snapshots
                 try:
                     try:
-                        prepared = self._prepare(command_before, patch)
+                        prepared = self._prepare(command_before, patch, profile)
                     finally:
                         # Taken right after _prepare()'s own mutations (success or
                         # partial failure), before send_exact is awaited: the
@@ -449,9 +501,13 @@ class CommandDispatcher:
                         mandatory_keys=prepared.mandatory_keys,
                         changed_keys=prepared.changed_keys,
                     )
-                    _emit_payload_safely(common_fields, prepared)
+                    _emit_payload_safely(common_fields, prepared, profile, patch)
                     result = await prepared.command.send_exact(
-                        prepared.payload, program_name=patch.program_name
+                        prepared.payload,
+                        program_name=patch.program_name,
+                        wire_command=profile.wire_commands.get(patch.command_name),
+                        energy_label=profile.energy_label,
+                        ancillary_params=self._ancillary_params(commands, profile),
                     )
                 except BaseException as error:
                     rollback(own_write_snapshots)

@@ -276,8 +276,16 @@ class HonCommand:
         *,
         sync_shadow: bool,
         program_name: str | None = None,
+        wire_command: str | None = None,
+        energy_label: bool = True,
+        ancillary_params: Mapping[str, str | float] | None = None,
     ) -> bool:
         """Transmit `params`; `program_name` overrides the category on the wire.
+
+        `ancillary_params` None (the default) sends this command's own
+        `ancillary_parameters()`, as always; a mapping, even an empty one, is sent
+        instead (the heat-pump water heater's profile takes them from
+        `settings.setParameters` for every command).
 
         `program_name` is the top-level `programName` of a `startProgram` body, and
         the default (None) keeps the historical behaviour: the command's own raw
@@ -299,38 +307,50 @@ class HonCommand:
             and params.command is self
         ):
             params = self.canonical_exact_payload(params)
-        # Built from the parameters rather than from `parameter_groups`, which has
-        # already collapsed everything to `intern_value` and so cannot tell a value the
-        # schema asked for from one a subclass invented to keep reads non-None. Only
-        # the former belongs on the wire: a descriptor-only node such as the AC's
-        # windDirectionVerticalPositionSequence would otherwise travel as "0", a value
-        # outside its own enumValues, into the slot the app reads the louvre position
-        # sequence from. See `HonParameter.declares_value`.
-        #
-        # programRules is dropped deliberately, NOT for parity: the app does send it
-        # back on an AC startProgram. It is the constraint set the cloud handed us, we
-        # have already applied it locally, and echoing it risks re-pinning parameters
-        # the user has since moved.
-        ancillary_params = {
-            name: parameter.intern_value
-            for name, parameter in self._parameters.items()
-            if parameter.group == "ancillaryParameters"
-            and name != "programRules"
-            and parameter.declares_value
-        }
+        ancillary = (
+            self.ancillary_parameters()
+            if ancillary_params is None
+            else dict(ancillary_params)
+        )
         if sync_shadow:
             self.appliance.sync_command_to_params(self.name)
         result = await self.api.send_command(
             self._appliance,
             self._name,
             params,
-            ancillary_params,
+            ancillary,
             self._category_name if program_name is None else program_name,
+            wire_command=wire_command,
+            energy_label=energy_label,
         )
         if not result:
             _LOGGER.error("Command rejected by cloud: %s", self._name)
             raise ApiError("Can't send command")
         return result
+
+    def ancillary_parameters(self) -> dict[str, str | float]:
+        """This command's `ancillaryParameters` as they go on the wire.
+
+        Built from the parameters rather than from `parameter_groups`, which has
+        already collapsed everything to `intern_value` and so cannot tell a value the
+        schema asked for from one a subclass invented to keep reads non-None. Only
+        the former belongs on the wire: a descriptor-only node such as the AC's
+        windDirectionVerticalPositionSequence would otherwise travel as "0", a value
+        outside its own enumValues, into the slot the app reads the louvre position
+        sequence from. See `HonParameter.declares_value`.
+
+        programRules is dropped deliberately, NOT for parity: the app does send it
+        back on an AC startProgram. It is the constraint set the cloud handed us, we
+        have already applied it locally, and echoing it risks re-pinning parameters
+        the user has since moved.
+        """
+        return {
+            name: parameter.intern_value
+            for name, parameter in self._parameters.items()
+            if parameter.group == "ancillaryParameters"
+            and name != "programRules"
+            and parameter.declares_value
+        }
 
     async def send_parameters(self, params: dict[str, str | float]) -> bool:
         return await self._send_parameters(params, sync_shadow=True)
@@ -349,9 +369,17 @@ class HonCommand:
         params: dict[str, str | float],
         *,
         program_name: str | None = None,
+        wire_command: str | None = None,
+        energy_label: bool = True,
+        ancillary_params: Mapping[str, str | float] | None = None,
     ) -> bool:
         return await self._send_parameters(
-            params, sync_shadow=False, program_name=program_name
+            params,
+            sync_shadow=False,
+            program_name=program_name,
+            wire_command=wire_command,
+            energy_label=energy_label,
+            ancillary_params=ancillary_params,
         )
 
     @property

@@ -479,6 +479,9 @@ class HonApi:
         parameters: dict[str, Any],
         ancillary_parameters: dict[str, Any],
         program_name: str = "",
+        *,
+        wire_command: str | None = None,
+        energy_label: bool = True,
     ) -> bool:
         timestamp = _command_timestamp()
         # `dryLevel` reaches the cloud for washer-dryers and tumble dryers only: the
@@ -488,18 +491,20 @@ class HonApi:
         # schema declares it, fixed "0" and mandatory.
         if appliance.appliance_type not in ("WD", "TD") and "dryLevel" in parameters:
             parameters = {k: v for k, v in parameters.items() if k != "dryLevel"}
+        attributes: dict[str, Any] = {"channel": "mobileApp", "origin": "standardProgram"}
+        if energy_label:
+            attributes["energyLabel"] = "0"
         data: dict[str, Any] = {
             "macAddress": appliance.mac_address,
             "timestamp": timestamp,
-            "commandName": command,
+            # The name on the wire can differ from this integration's command name:
+            # the heat-pump water heater's `settings` goes out as `setParameters`,
+            # which is what the app sends (send_profiles.HPWH).
+            "commandName": wire_command or command,
             "transactionId": f"{appliance.mac_address}_{timestamp}",
             "applianceOptions": appliance.options,
             "device": self._connection.device.payload(mobile=True),
-            "attributes": {
-                "channel": "mobileApp",
-                "origin": "standardProgram",
-                "energyLabel": "0",
-            },
+            "attributes": attributes,
             "ancillaryParameters": ancillary_parameters,
             "parameters": parameters,
             "applianceType": appliance.appliance_type,

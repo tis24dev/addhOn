@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ...error_codes import APPLIANCE_COMMANDS_UNAVAILABLE, HonCodedError
@@ -27,6 +27,11 @@ class CommandHydration:
     parsed_command_count: int
     favourites_outcome: str
     history_outcome: str
+    # The `/history` list exactly as the cloud sent it, whatever the enrichment made of
+    # it. Kept for the diagnostics dump: it holds the official app's own `startProgram`
+    # payloads, which the `commandHistory` attribute (one slot, and one the cloud resets
+    # to null -- issue #112) cannot be relied on to still carry when a dump is taken.
+    command_history: list[dict[str, Any]] = field(default_factory=list)
 
 
 class CommandCatalogUnavailable(HonCodedError):

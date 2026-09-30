@@ -271,6 +271,8 @@ class IdentityKeysBehaviouralTest(unittest.TestCase):
         # identity (`user#<region>:<identity>`) in plain text under two letters.
         "sfpersonaccountid", "personaccountid", "personcontactid",
         "pk", "sk", "applianceid", "eepromid",
+        # The `/history` rows carry the same table's third key (issue #112).
+        "sk_secondary",
     )
 
     # Keys no exact set would have contained, masked by the substring rule. Named the

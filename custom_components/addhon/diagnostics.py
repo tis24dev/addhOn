@@ -143,6 +143,13 @@ _TO_REDACT = frozenset(
         "transaction_id",
         "mobileid",
         "mobile_id",
+        # The `/history` entries (the `command_history` section) are cloud table rows.
+        # `PK` joins an account identity id and the MAC; `SK`/`SK_Secondary` are the
+        # row's sort keys (a name and a timestamp in the anonymised capture), redacted
+        # with it so no row key of that table ever reaches a dump.
+        "pk",
+        "sk",
+        "sk_secondary",
     }
 )
 
@@ -226,6 +233,18 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "tag": "sensor.heat_pump_state",
         "types": (APPLIANCE_HW,),
         "read": HPWH_STATE_ATTRS,
+    },
+    {
+        "tag": "water_heater.heat_pump_water_heater",
+        "types": (APPLIANCE_HW,),
+        "read": ("temp", "tempSel", "onOffStatus", "machMode", "boostStatus"),
+        "write": ("onOffStatus", "tempSel", "boostStatus", "machMode"),
+    },
+    {
+        "tag": "switch.boost_switch",
+        "types": (APPLIANCE_HW,),
+        "read": ("boostStatus",),
+        "write": ("boostStatus",),
     },
     # Reads machMode (3 = paused) but writes the `pause` parameter of the
     # pauseProgram/resumeProgram commands -- the one row in this table whose two
@@ -1132,6 +1151,81 @@ def _appliance_options(appliance, attributes: Mapping) -> dict:
     }
 
 
+# How many `/history` entries the dump prints, newest first.
+_COMMAND_HISTORY_SHOWN = 10
+
+
+def _history_moment(entry: Mapping) -> datetime | None:
+    """When one `/history` entry was issued: `command.timestamp`, else `timestampAccepted`."""
+    try:
+        command = entry.get("command")
+        candidates = (
+            command.get("timestamp") if isinstance(command, Mapping) else None,
+            entry.get("timestampAccepted"),
+        )
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        return None
+    for raw in candidates:
+        moment = _as_utc(_parse_cloud_moment(raw), True)
+        if moment is not None:
+            return moment
+    return None
+
+
+def _command_history_block(appliance) -> dict:
+    """The last commands the cloud recorded for this appliance, from ANY client.
+
+    Issue #112 is why this exists. The official app's `startProgram` payload is the
+    ground truth for what an option is called and what value it takes, and until now a
+    dump could only show it through `attributes.commandHistory`: ONE slot, overwritten
+    by the next command, and reset to null by the cloud between two of the reporter's
+    dumps. The engine already downloads the `/history` list at every catalog load to
+    recover the last-used programme; this prints it.
+
+    The list is the one of the last catalog load (setup or reload), not of this
+    instant: a command issued since then is absent until the integration reloads.
+
+    Newest first by `command.timestamp` (else `timestampAccepted`), because the order
+    the cloud sends has never been measured; entries without a readable instant follow
+    in the order received. Each entry is printed whole. `_redact`, which runs over the
+    finished block, masks `macAddress`, `transactionId`, `mobileId` and the table keys
+    `PK`/`SK`/`SK_Secondary`, and the MAC pattern in every string value.
+
+    The same four keys in every state, so two dumps of one issue stay diffable.
+    """
+    try:
+        raw = getattr(appliance, "command_history", _NO_OPTION_SURFACE)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: command history unreadable", exc_info=True)
+        raw = None
+    if raw is _NO_OPTION_SURFACE:
+        # An engine without the property: a statement about THIS integration, not
+        # about what the cloud sent.
+        return {"state": "unavailable", "total": None, "shown": 0, "entries": []}
+    if not isinstance(raw, list):
+        return {"state": "unreadable", "total": None, "shown": 0, "entries": []}
+    dated: list[tuple[datetime, int, Mapping]] = []
+    undated: list[Mapping] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, Mapping):
+            continue
+        moment = _history_moment(entry)
+        if moment is None:
+            undated.append(entry)
+        else:
+            dated.append((moment, index, entry))
+    # Newest first; on equal instants the order received is kept.
+    dated.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+    shown = [entry for _, _, entry in dated] + undated
+    shown = shown[:_COMMAND_HISTORY_SHOWN]
+    return {
+        "state": "ok" if shown else "empty",
+        "total": len(raw),
+        "shown": len(shown),
+        "entries": shown,
+    }
+
+
 # The model attribute `opt_compatibility` decodes, spelled as the cloud spells it. Named
 # rather than inlined because two places have to agree on it: the read below, and the
 # test that proves the value still reaches this module undamaged.
@@ -1634,7 +1728,7 @@ def _program_option_matrix(appliance) -> dict:
             # subclasses fabricate a "0" to keep reads non-None, and for a descriptor-only
             # node -- one that lists `enumValues` purely so a client can render a control --
             # that "0" is not even among its own values and is deliberately never
-            # transmitted (`_send_parameters` filters the ancillary group on
+            # transmitted (`HonCommand.ancillary_parameters` filters the ancillary group on
             # `declares_value`). Printing it would assert a starting value the program never
             # stated, which is the one thing this section may not do; `null` says "this
             # program prescribes nothing here", which is the truth.
@@ -2337,6 +2431,7 @@ def _mapped_sets(
         # The state sensor is a custom class with no description row, so the walk
         # above cannot see the eco windows, the scheme and the day mask it reads.
         mapped_attrs |= set(HPWH_STATE_ATTRS)
+        mapped_params |= {"onOffStatus", "tempSel", "boostStatus", "machMode"}
     if app_type == APPLIANCE_HO:
         # Same shape as the AP block below, same reason. The hood's five parameters
         # are each read as state AND written as a command field, but only two of the
@@ -3600,6 +3695,7 @@ def _appliance_block(
     # Below the `attributes` normalisation above, so the echo this reads is the same
     # mapping the block prints.
     appliance_options = _appliance_options(appliance, attributes)
+    command_history = _command_history_block(appliance)
     # Built LAST of the four, and out of the other three rather than out of the appliance:
     # it is a join, and handing it the finished sections is what makes it structurally
     # incapable of disagreeing with them.
@@ -3680,6 +3776,9 @@ def _appliance_block(
         # they say on the next line. Omitted for a model with no matrix -- every appliance
         # dumped so far except the one dishwasher -- rather than emitting an empty shape.
         **({"opt_compatibility": opt_compatibility} if opt_compatibility else {}),
+        # Above `attributes`, whose `commandHistory` is the single-slot echo of the same
+        # data: the list says what was sent before the slot was overwritten or nulled.
+        "command_history": command_history,
         "attributes": dict(attributes),
         # BESIDE the values, never inside them. `attributes` above has one
         # contract -- a flat name -> value echo of what the device said -- and a
@@ -3980,7 +4079,8 @@ def _parse_cloud_moment(value) -> datetime | None:
     diagnostics.py keeps a tiny top-level import surface so it cannot be caught in
     an import cycle, and this parser is only ever needed while a dump is being
     built. It costs one `sys.modules` lookup per call after the first, and it is
-    called at most twice per appliance.
+    called a bounded number of times per appliance: the `lastConnEvent` instants,
+    and up to two per `/history` entry.
     """
     try:
         from .client.helpers import parse_cloud_timestamp
