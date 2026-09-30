@@ -446,6 +446,22 @@ class LastCategoryRecoveryTest(unittest.TestCase):
         self.assertEqual("7", str(parameters["tempSel"].value))
         self.assertEqual("0", str(parameters["delayTime"].value))
 
+    def test_a_delayed_start_is_recovered_as_start_now(self) -> None:
+        # PR #118 review: the app writes delayTime "0", not the schema default, so a
+        # schema defaulting to a delay must not bring that delay back either.
+        commands = json.loads(json.dumps(_RICH_COMMANDS))
+        commands["startProgram"]["PROGRAMS.REF.SUPER_FREEZE"]["parameters"]["delayTime"] = {
+            "typology": "range", "category": "command", "mandatory": 1,
+            "defaultValue": "150", "minimumValue": "0", "maximumValue": "1410",
+            "incrementValue": "30"}
+        history = [{"command": {"commandName": "startProgram", "parameters": {
+            "program": "PROGRAMS.REF.SUPER_FREEZE", "tempSel": "7", "delayTime": "150"}}}]
+        app = _build(NaAppliance, DictApi(commands, history=history))
+        parameters = app.commands["startProgram"].parameters
+        self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", app.commands["startProgram"].category)
+        self.assertEqual("7", str(parameters["tempSel"].value))
+        self.assertEqual("0", str(parameters["delayTime"].value))
+
     @staticmethod
     def _app_start(parameters, program_name=None):
         # The hOn app's own starts name no `program`/`category` parameter: the programme

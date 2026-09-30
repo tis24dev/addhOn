@@ -47,12 +47,14 @@ from .parameter.program import HonParameterProgram
 
 _LOGGER = logging.getLogger(__name__)
 
-# Parameters the history recovery leaves at their schema default. `delayTime`: the app
-# zeroes it when it restarts the last programme ("Start now" on the dashboard card,
-# apk2 decomp.txt:2595045-2595056), while copying it back made a plain Start from Home
-# Assistant repeat the delay of the last delayed start made from the app -- issue #112,
-# where a reporter's washer showed a 150-minute delay while standing idle.
-_NOT_RECOVERED = frozenset({"delayTime"})
+# Parameters the history recovery writes with a fixed value instead of the recorded
+# one. `delayTime`: the app zeroes it when it restarts the last programme ("Start now"
+# on the dashboard card, apk2 decomp.txt:2595045-2595056), while copying it back made a
+# plain Start from Home Assistant repeat the delay of the last delayed start made from
+# the app -- issue #112, where a reporter's washer showed a 150-minute delay while
+# standing idle. "0" as the app writes it, not the schema default, which may itself be
+# a delay (PR #118 review).
+_RECOVERED_AS = {"delayTime": "0"}
 
 
 def _normalized_pr_code(value: Any) -> str:
@@ -673,10 +675,10 @@ class HonCommandLoader:
             if target is None:
                 continue
             for key, data in target.settings.items():
-                if key in _NOT_RECOVERED or parameters.get(key) is None:
+                if parameters.get(key) is None:
                     continue
                 with suppress(ValueError):
-                    data.value = parameters.get(key)
+                    data.value = _RECOVERED_AS.get(key, parameters.get(key))
 
     def _add_favourites(self) -> None:
         for favourite in self._favourites:
