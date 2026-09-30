@@ -4223,6 +4223,36 @@ class HobDerivedCoverageTest(unittest.TestCase):
         self.assertNotIn("sensor.remaining_time_zone1", sources)
 
 
+class HeatPumpStateCoverageTest(unittest.TestCase):
+    """The HW state sensor (#113) reads attributes no description table names."""
+
+    # Every attribute the reporter's HP110M8-9 published that an HW entity reads.
+    READ = (
+        "temp", "tempSel", "remainingWaterLevel", "machMode", "errors",
+        "onOffStatus", "sterilizationCurrentStatus", "offPeakPeriodScheme",
+        "opp1EcoDays", "opp1EcoStartTime1", "opp2EcoEndTime3",
+        "compressorHeatingCurrentStatus", "electricHeatingCurrentStatus",
+        "boostStatus",
+    )
+
+    def test_every_attribute_it_reads_is_mapped(self) -> None:
+        mapped_attrs, _params, _sources, _ = diagnostics._mapped_sets("HW")
+        for name in self.READ:
+            self.assertIn(name, mapped_attrs, name)
+
+    def test_the_source_row_names_the_eco_windows(self) -> None:
+        _attrs, _params, sources, _ = diagnostics._mapped_sets("HW")
+        row = sources["sensor.heat_pump_state"]
+        self.assertIn("opp2EcoStartTime1", row["read"])
+        self.assertIn("opp1EcoDays", row["read"])
+        self.assertNotIn("write", row)
+
+    def test_another_type_did_not_inherit_it(self) -> None:
+        mapped_attrs, _params, sources, _ = diagnostics._mapped_sets("WH")
+        self.assertNotIn("opp1EcoDays", mapped_attrs)
+        self.assertNotIn("sensor.heat_pump_state", sources)
+
+
 class CoverageExpectedAbsentTest(unittest.TestCase):
     """The mirror axis: what this code maps and the device does not have."""
 

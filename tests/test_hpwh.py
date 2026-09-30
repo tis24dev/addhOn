@@ -1,0 +1,436 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Heat-pump water heater (type HW, issue #113): the read-only entities.
+
+The pure helpers in `hpwh.py` rebuild what the hOn app 2.30.7 derives
+(`apk/analysis/issue113-hw-hpwh-control-model.md`); the entity tests build the
+platforms over the attributes the reporter's HP110M8-9 really published
+(`tests/fixtures/hw_hp110m8/attributes.json`).
+"""
+from __future__ import annotations
+
+import json
+import sys
+import types
+import unittest
+from datetime import datetime
+from pathlib import Path
+from unittest import mock
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+FIXTURE = REPO_ROOT / "tests" / "fixtures" / "hw_hp110m8" / "attributes.json"
+
+
+def _mod(name: str) -> types.ModuleType:
+    module = sys.modules.get(name)
+    if module is None:
+        module = types.ModuleType(name)
+        sys.modules[name] = module
+    return module
+
+
+def _install_package_stubs() -> None:
+    """The `homeassistant` pieces conftest does not provide (getattr-guarded)."""
+    ha = _mod("homeassistant")
+    config_entries = _mod("homeassistant.config_entries")
+    config_entries.ConfigEntry = getattr(
+        config_entries, "ConfigEntry", type("ConfigEntry", (), {})
+    )
+    core = _mod("homeassistant.core")
+    core.HomeAssistant = getattr(core, "HomeAssistant", type("HomeAssistant", (), {}))
+    exceptions = _mod("homeassistant.exceptions")
+    base_err = getattr(
+        exceptions, "HomeAssistantError", type("HomeAssistantError", (Exception,), {})
+    )
+    exceptions.HomeAssistantError = base_err
+    exceptions.ConfigEntryNotReady = getattr(
+        exceptions, "ConfigEntryNotReady", type("ConfigEntryNotReady", (base_err,), {})
+    )
+    exceptions.ConfigEntryAuthFailed = getattr(
+        exceptions, "ConfigEntryAuthFailed", type("ConfigEntryAuthFailed", (base_err,), {})
+    )
+    components = _mod("homeassistant.components")
+    sensor_mod = _mod("homeassistant.components.sensor")
+    sensor_mod.SensorEntity = getattr(
+        sensor_mod, "SensorEntity", type("SensorEntity", (), {})
+    )
+    components.sensor = sensor_mod
+    # conftest provides the binary-sensor description and device class but not the
+    # entity base, so this file could not import the platform when run on its own.
+    binary_mod = _mod("homeassistant.components.binary_sensor")
+    binary_mod.BinarySensorEntity = getattr(
+        binary_mod, "BinarySensorEntity", type("BinarySensorEntity", (), {})
+    )
+    components.binary_sensor = binary_mod
+    const = _mod("homeassistant.const")
+    const.UnitOfEnergy = getattr(
+        const, "UnitOfEnergy", type("UnitOfEnergy", (), {"KILO_WATT_HOUR": "kWh"})
+    )
+    const.UnitOfVolume = getattr(
+        const, "UnitOfVolume", type("UnitOfVolume", (), {"LITERS": "L"})
+    )
+    const.UnitOfTime = getattr(
+        const, "UnitOfTime", type("UnitOfTime", (), {"MINUTES": "min", "SECONDS": "s"})
+    )
+    const.UnitOfTemperature = getattr(
+        const, "UnitOfTemperature", type("UnitOfTemperature", (), {"CELSIUS": "°C"})
+    )
+    const.UnitOfMass = getattr(
+        const, "UnitOfMass", type("UnitOfMass", (), {"GRAMS": "g", "KILOGRAMS": "kg"})
+    )
+    const.EntityCategory = getattr(
+        const,
+        "EntityCategory",
+        type("EntityCategory", (), {"CONFIG": "config", "DIAGNOSTIC": "diagnostic"}),
+    )
+    ha.config_entries = config_entries
+    ha.core = core
+    ha.exceptions = exceptions
+    ha.components = components
+    ha.const = const
+
+
+_install_package_stubs()
+
+from custom_components.addhon import hpwh  # noqa: E402
+from custom_components.addhon.hpwh import (  # noqa: E402
+    heat_pump_state,
+    mapping_getter,
+    mode_key,
+    schedule_window,
+    water_level_percent,
+)
+
+# 2026-09-28 is a Monday (JavaScript getDay 1); 2026-10-03 a Saturday (6).
+MONDAY = datetime(2026, 9, 28, 3, 0)
+SATURDAY = datetime(2026, 10, 3, 3, 0)
+
+
+def _fixture() -> dict:
+    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+def _attrs(**overrides) -> dict:
+    attributes = dict(_fixture()["attributes"])
+    attributes.update(overrides)
+    return attributes
+
+
+def _state(attributes: dict, now: datetime = MONDAY, series: str | None = "m8") -> str:
+    return heat_pump_state(mapping_getter(attributes), now, series)
+
+
+def _window(attributes: dict, now: datetime = MONDAY, series: str | None = "m8"):
+    return schedule_window(mapping_getter(attributes), now, series)
+
+
+class WaterLevelTest(unittest.TestCase):
+    """`getWaterPercentage` (apk2 decomp.txt:2355651): a 0-12 scale."""
+
+    def test_the_reporters_level_is_the_apps_83_percent(self) -> None:
+        self.assertEqual(water_level_percent(_fixture()["attributes"]["remainingWaterLevel"]), 83)
+
+    def test_the_whole_table(self) -> None:
+        expected = {0: 8, 1: 8, 2: 16, 3: 25, 4: 35, 5: 41, 6: 50,
+                    7: 58, 8: 65, 9: 75, 10: 83, 11: 91, 12: 100}
+        for level, percent in expected.items():
+            self.assertEqual(water_level_percent(level), percent, level)
+
+    def test_string_and_integral_float_read_like_the_integer(self) -> None:
+        self.assertEqual(water_level_percent("10"), 83)
+        self.assertEqual(water_level_percent(10.0), 83)
+
+    def test_outside_the_table_is_unknown_not_the_apps_70(self) -> None:
+        for raw in (13, -1, 10.5, "abc", None, ""):
+            self.assertIsNone(water_level_percent(raw), raw)
+
+
+class ModeTest(unittest.TestCase):
+    """`HPWHMachMode` (apk2 decomp.txt:599199-599208)."""
+
+    def test_every_code_and_its_numeric_spellings(self) -> None:
+        for raw, key in (("1", "auto"), (2, "eco"), (3.0, "electric"), ("4", "vacation")):
+            self.assertEqual(mode_key(raw), key, raw)
+
+    def test_an_unknown_code_is_unknown(self) -> None:
+        for raw in ("0", 5, 1.5, None, ""):
+            self.assertIsNone(mode_key(raw), raw)
+
+
+class EcoDaysTest(unittest.TestCase):
+    """`hexToDays` (apk2 decomp.txt:2333056): Monday-first hex bytes, JS day numbers."""
+
+    def test_every_day_wraps_from_monday_to_sunday(self) -> None:
+        self.assertEqual(hpwh._hex_to_days("7F"), (1, 0))
+        self.assertEqual(hpwh._hex_to_days("7f"), (1, 0))
+
+    def test_monday_to_friday(self) -> None:
+        self.assertEqual(hpwh._hex_to_days("1f"), (1, 5))
+
+    def test_single_days_match_their_padded_byte_only(self) -> None:
+        self.assertEqual(hpwh._hex_to_days("01"), (1, 1))
+        self.assertEqual(hpwh._hex_to_days("40"), (0, 0))
+        # The app's own write path can produce "1" for Monday alone; its read path
+        # does not recognise it, and neither does this one.
+        self.assertIsNone(hpwh._hex_to_days("1"))
+
+    def test_a_non_contiguous_set_has_no_range(self) -> None:
+        self.assertIsNone(hpwh._hex_to_days("05"))  # Monday + Wednesday
+        self.assertIsNone(hpwh._hex_to_days(None))
+        self.assertIsNone(hpwh._hex_to_days("zz"))
+
+
+class ScheduleWindowTest(unittest.TestCase):
+    """`getScheduleTime` (apk2 decomp.txt:2327831) for the plain series."""
+
+    def test_the_reporters_empty_windows_give_no_schedule(self) -> None:
+        self.assertIsNone(_window(_attrs()))
+
+    def test_same_scheme_returns_the_current_opp2_window(self) -> None:
+        attributes = _attrs(opp2EcoStartTime1="01:00", opp2EcoEndTime1="06:00")
+        self.assertEqual(_window(attributes), ("01:00", "06:00"))
+
+    def test_same_scheme_returns_the_next_opp2_window(self) -> None:
+        attributes = _attrs(opp2EcoStartTime1="04:00", opp2EcoEndTime1="06:00")
+        self.assertEqual(_window(attributes), ("04:00", "06:00"))
+
+    def test_same_scheme_gives_up_after_the_last_opp2_window(self) -> None:
+        attributes = _attrs(
+            opp2EcoStartTime1="01:00", opp2EcoEndTime1="02:00",
+            opp1EcoStartTime1="04:00", opp1EcoEndTime1="05:00",
+        )
+        # opp1 is never consulted with offPeakPeriodScheme 1.
+        self.assertIsNone(_window(attributes))
+
+    def test_different_scheme_uses_opp2_on_the_mask_days_and_opp1_elsewhere(self) -> None:
+        attributes = _attrs(
+            offPeakPeriodScheme=0,
+            opp1EcoDays="1f",
+            opp2EcoStartTime1="04:00", opp2EcoEndTime1="05:00",
+            opp1EcoStartTime1="07:00", opp1EcoEndTime1="08:00",
+        )
+        self.assertEqual(_window(attributes, MONDAY), ("04:00", "05:00"))
+        self.assertEqual(_window(attributes, SATURDAY), ("07:00", "08:00"))
+
+    def test_different_scheme_falls_through_to_opp1_after_the_last_opp2_window(self) -> None:
+        # The app's own behaviour (apk2 decomp.txt:2328007-2328015): on a mask day,
+        # once the opp2 windows are over, the opp1 windows of the other days follow.
+        attributes = _attrs(
+            offPeakPeriodScheme=0,
+            opp1EcoDays="1f",
+            opp2EcoStartTime1="01:00", opp2EcoEndTime1="02:00",
+            opp1EcoStartTime1="07:00", opp1EcoEndTime1="08:00",
+        )
+        self.assertEqual(_window(attributes, MONDAY), ("07:00", "08:00"))
+
+    def test_a_zero_day_mask_means_no_schedule(self) -> None:
+        attributes = _attrs(opp1EcoDays="0", opp2EcoStartTime1="04:00", opp2EcoEndTime1="05:00")
+        self.assertIsNone(_window(attributes))
+
+    def test_the_third_opp1_window_is_matched_on_its_start_only(self) -> None:
+        attributes = _attrs(
+            offPeakPeriodScheme=0,
+            opp1EcoDays="40",  # Sunday only, so Monday takes opp1
+            opp1EcoStartTime3="02:00", opp1EcoEndTime3="05:00",
+        )
+        # 03:00 is inside the window, but the app returns it only before it starts.
+        self.assertIsNone(_window(attributes))
+
+    def test_other_series_are_not_rebuilt(self) -> None:
+        attributes = _attrs(opp2EcoStartTime1="04:00", opp2EcoEndTime1="06:00")
+        for series in ("m7b", "m8b", "m11"):
+            self.assertIsNone(_window(attributes, series=series), series)
+
+
+class HeatPumpStateTest(unittest.TestCase):
+    """`getActiveStatus` for ApplianceType.HW (apk2 decomp.txt:2328690)."""
+
+    def test_the_reporters_appliance_is_off(self) -> None:
+        self.assertEqual(_state(_attrs()), "off")
+
+    def test_on_in_auto_below_target_is_working(self) -> None:
+        self.assertEqual(_state(_attrs(onOffStatus=1)), "working")
+
+    def test_on_above_target_is_keeping_warm(self) -> None:
+        self.assertEqual(_state(_attrs(onOffStatus=1, temp=45)), "keep_warm")
+
+    def test_an_error_code_wins(self) -> None:
+        self.assertEqual(_state(_attrs(onOffStatus=1, errors=3)), "error")
+        self.assertEqual(_state(_attrs(errors="", error="5")), "error")
+
+    def test_remote_control_disabled(self) -> None:
+        self.assertEqual(_state(_attrs(onOffStatus=1, remoteCtrValid="0")), "remote_control_off")
+
+    def test_eco_before_its_window_is_scheduled_even_when_off(self) -> None:
+        attributes = _attrs(machMode=2, opp2EcoStartTime1="04:00", opp2EcoEndTime1="06:00")
+        self.assertEqual(_state(attributes), "scheduled")
+
+    def test_eco_inside_its_window_is_working(self) -> None:
+        attributes = _attrs(
+            onOffStatus=1, machMode=2,
+            opp2EcoStartTime1="01:00", opp2EcoEndTime1="06:00",
+        )
+        self.assertEqual(_state(attributes), "working")
+
+    def test_eco_without_windows_counts_as_active(self) -> None:
+        self.assertEqual(_state(_attrs(onOffStatus=1, machMode=2)), "working")
+
+    def test_vacation_falls_through_to_sterilization_or_working(self) -> None:
+        self.assertEqual(_state(_attrs(onOffStatus=1, machMode=4)), "working")
+        self.assertEqual(
+            _state(_attrs(onOffStatus=1, machMode=4, sterilizationCurrentStatus=1)),
+            "sterilizing",
+        )
+
+    def test_series_not_rebuilt_are_unknown_where_the_schedule_matters(self) -> None:
+        for series in ("m7b", "m8b", "m11"):
+            for mode in (2, 4):  # eco, vacation
+                self.assertIsNone(
+                    _state(_attrs(onOffStatus=1, machMode=mode), series=series),
+                    (series, mode),
+                )
+            # AUTO never consults the schedule, so the answer stays exact.
+            self.assertEqual(_state(_attrs(onOffStatus=1), series=series), "working")
+            # And an error still wins before any of that.
+            self.assertEqual(_state(_attrs(machMode=2, errors=3), series=series), "error")
+
+    def test_an_active_mode_reports_working_before_sterilization(self) -> None:
+        # The app checks the active mode first: AUTO with a cycle under way still
+        # reads as working.
+        attributes = _attrs(onOffStatus=1, sterilizationCurrentStatus=1)
+        self.assertEqual(_state(attributes), "working")
+
+
+class _Coordinator:
+    def __init__(self, data: dict) -> None:
+        self.data = data
+        self.hass = None
+        self.last_update_success = True
+
+
+class _Hass:
+    def __init__(self, data: dict) -> None:
+        self.data = data
+
+
+class _Entry:
+    entry_id = "entry-1"
+
+    def __init__(self) -> None:
+        self.options: dict = {}
+
+
+def _data() -> dict:
+    fixture = _fixture()
+    appliance = types.SimpleNamespace(model_attributes={"series": fixture["series"]})
+    return {
+        "hw-1": {
+            "type": fixture["type"],
+            "name": "Warmtepomp boiler",
+            "attributes": dict(fixture["attributes"]),
+            "settings": {},
+            "appliance": appliance,
+        }
+    }
+
+
+async def _build(platform) -> list:
+    from custom_components.addhon.const import DOMAIN
+
+    coordinator = _Coordinator(_data())
+    hass = _Hass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
+    added: list = []
+    await platform.async_setup_entry(hass, _Entry(), added.extend)
+    return [e for e in added if str(getattr(e, "_attr_unique_id", "")).startswith("hw-1_")]
+
+
+class HeatPumpEntitiesTest(unittest.IsolatedAsyncioTestCase):
+    """The entities the reporter's appliance gets, with its real values."""
+
+    async def test_the_sensors_and_their_values(self) -> None:
+        from custom_components.addhon import sensor
+
+        with mock.patch.object(
+            sensor.HonHeatPumpStateSensor, "_now", staticmethod(lambda: MONDAY)
+        ):
+            entities = {e._attr_unique_id: e for e in await _build(sensor)}
+            values = {key: entity.native_value for key, entity in entities.items()}
+        self.assertEqual(
+            values,
+            {
+                "hw-1_water_temp": 33.0,
+                "hw-1_target_temp": 40.0,
+                "hw-1_hot_water_available": 83,
+                "hw-1_heat_pump_mode": "auto",
+                "hw-1_errors": "0",
+                "hw-1_heat_pump_state": "off",
+            },
+        )
+
+    async def test_the_state_sensor_publishes_every_app_phase_as_an_option(self) -> None:
+        from custom_components.addhon import sensor
+
+        state = next(e for e in await _build(sensor) if e._attr_unique_id == "hw-1_heat_pump_state")
+        self.assertEqual(set(state._attr_options), set(hpwh.HPWH_STATES))
+
+    async def test_the_binary_sensors_and_their_values(self) -> None:
+        from custom_components.addhon import binary_sensor
+
+        entities = {
+            e._attr_unique_id: e.is_on
+            for e in await _build(binary_sensor)
+            # Every appliance type gets the connectivity binary; not an HW entity.
+            if e._attr_unique_id != "hw-1_connectivity"
+        }
+        self.assertEqual(
+            entities,
+            {
+                "hw-1_compressor_heating": False,
+                "hw-1_electric_heating": False,
+                "hw-1_boost": False,
+                "hw-1_sterilization_running": False,
+            },
+        )
+
+    async def test_the_heating_flags_read_any_non_zero_as_running(self) -> None:
+        from custom_components.addhon import binary_sensor
+
+        entities = {e._attr_unique_id: e for e in await _build(binary_sensor)}
+        compressor = entities["hw-1_compressor_heating"]
+        compressor.coordinator.data["hw-1"]["attributes"]["compressorHeatingCurrentStatus"] = 2
+        self.assertTrue(compressor.is_on)
+        boost = entities["hw-1_boost"]
+        boost.coordinator.data["hw-1"]["attributes"]["boostStatus"] = 1.0
+        self.assertTrue(boost.is_on)
+
+    async def test_the_mode_sensor_reads_an_integral_float(self) -> None:
+        from custom_components.addhon import sensor
+
+        mode = next(e for e in await _build(sensor) if e._attr_unique_id == "hw-1_heat_pump_mode")
+        mode.coordinator.data["hw-1"]["attributes"]["machMode"] = 1.0
+        self.assertEqual(mode.native_value, "auto")
+
+    async def test_no_hw_entity_without_its_attribute(self) -> None:
+        from custom_components.addhon import sensor
+
+        data = _data()
+        data["hw-1"]["attributes"].pop("machMode")
+        data["hw-1"]["attributes"].pop("remainingWaterLevel")
+        from custom_components.addhon.const import DOMAIN
+
+        coordinator = _Coordinator(data)
+        hass = _Hass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
+        added: list = []
+        await sensor.async_setup_entry(hass, _Entry(), added.extend)
+        keys = {e._attr_unique_id for e in added}
+        self.assertNotIn("hw-1_heat_pump_mode", keys)
+        self.assertNotIn("hw-1_hot_water_available", keys)
+        self.assertNotIn("hw-1_heat_pump_state", keys)
+        self.assertIn("hw-1_water_temp", keys)
+
+
+if __name__ == "__main__":
+    unittest.main()

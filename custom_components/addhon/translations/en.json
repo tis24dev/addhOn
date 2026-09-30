@@ -445,6 +445,33 @@
           "holding": "Holding"
         }
       },
+      "target_temp": {
+        "name": "Target temperature"
+      },
+      "hot_water_available": {
+        "name": "Available hot water"
+      },
+      "heat_pump_mode": {
+        "name": "Mode",
+        "state": {
+          "auto": "Auto",
+          "eco": "Eco",
+          "electric": "Electric",
+          "vacation": "Vacation"
+        }
+      },
+      "heat_pump_state": {
+        "name": "State",
+        "state": {
+          "off": "Off",
+          "working": "Working",
+          "keep_warm": "Keeping warm",
+          "sterilizing": "Sterilizing",
+          "scheduled": "Scheduled",
+          "error": "Error",
+          "remote_control_off": "Remote control disabled"
+        }
+      },
       "filter_life": {
         "name": "Filter life"
       },
@@ -604,6 +631,18 @@
       },
       "child_lock": {
         "name": "Child lock"
+      },
+      "compressor_heating": {
+        "name": "Compressor heating"
+      },
+      "electric_heating": {
+        "name": "Electric heating"
+      },
+      "boost": {
+        "name": "Boost"
+      },
+      "sterilization_running": {
+        "name": "Sterilization"
       },
       "drum_clean_needed": {
         "name": "Drum clean needed"

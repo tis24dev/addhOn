@@ -69,6 +69,7 @@ for them in a device schema yet. All their entities are capability-gated and
 | Dishwasher | `DW` | state, program, remaining time, salt level, rinse-aid level, wash temperature, errors | door |
 | Coffee machine / kettle | `KT` | instantaneous power, descaling counter, lifetime cycles | — |
 | Water heater | `WH` | water / inlet / outlet temperature, power, available water volume, time-to-target, phase | indicator light, child lock |
+| Heat-pump water heater | `HW` | water / target temperature, available hot water (%), mode, state (as the hOn app derives it), errors | compressor heating, electric heating, boost, sterilization |
 | Robot vacuum | `RVC` | battery, state, remaining time, suction power, last/total cleaned area, errors | — |
 
 ## Not yet supported (❌)

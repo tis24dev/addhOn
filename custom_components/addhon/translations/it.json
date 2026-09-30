@@ -445,6 +445,33 @@
           "holding": "Mantenimento"
         }
       },
+      "target_temp": {
+        "name": "Temperatura impostata"
+      },
+      "hot_water_available": {
+        "name": "Acqua calda disponibile"
+      },
+      "heat_pump_mode": {
+        "name": "Modalità",
+        "state": {
+          "auto": "Auto",
+          "eco": "Eco",
+          "electric": "Elettrica",
+          "vacation": "Vacanza"
+        }
+      },
+      "heat_pump_state": {
+        "name": "Stato",
+        "state": {
+          "off": "Spento",
+          "working": "In funzione",
+          "keep_warm": "Mantenimento",
+          "sterilizing": "Sterilizzazione",
+          "scheduled": "Programmato",
+          "error": "Errore",
+          "remote_control_off": "Controllo remoto disattivato"
+        }
+      },
       "filter_life": {
         "name": "Durata Filtro"
       },
@@ -604,6 +631,18 @@
       },
       "child_lock": {
         "name": "Blocco Comandi"
+      },
+      "compressor_heating": {
+        "name": "Riscaldamento con compressore"
+      },
+      "electric_heating": {
+        "name": "Riscaldamento elettrico"
+      },
+      "boost": {
+        "name": "Boost"
+      },
+      "sterilization_running": {
+        "name": "Sterilizzazione"
       },
       "drum_clean_needed": {
         "name": "Pulizia Cestello"

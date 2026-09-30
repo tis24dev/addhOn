@@ -39,6 +39,7 @@ APPLIANCE_HOB = "HOB"     # Hob (alias)
 APPLIANCE_HO  = "HO"      # Hood
 APPLIANCE_KT  = "KT"      # Coffee machine / kettle
 APPLIANCE_WH  = "WH"      # Water heater
+APPLIANCE_HW  = "HW"      # Heat-pump water heater (the app's HPWH, issue #113)
 APPLIANCE_RVC = "RVC"     # Robot vacuum cleaner
 
 # The types whose `startProgram` carries a CATALOGUE of programmes: a program select,
