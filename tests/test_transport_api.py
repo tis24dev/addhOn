@@ -1615,14 +1615,16 @@ class WasherStartBodyTest(unittest.TestCase):
     """Issue #112: what a washer start carries on the wire, end to end."""
 
     def _send(self, *, command="startProgram", appliance_type="WM", platform="HQD",
-              category="PROGRAMS.WM_WD.HQD_COTTONS", **program):
+              category="PROGRAMS.WM_WD.HQD_COTTONS", favourite="", label=None,
+              **program):
         from custom_components.addhon.client.engine.commands import HonCommand
 
         conn = FakeConnection({"payload": {"resultCode": "0"}})
         appliance = _WasherAppliance(conn, appliance_type, platform)
         cmd = HonCommand(command, _washer_program(**program), appliance,
                          category_name=category)
-        self.assertTrue(_run(cmd.send()))
+        cmd.favourite_name = favourite
+        self.assertTrue(_run(cmd.send(program_label=label)))
         return conn.calls[0][2]["json"], cmd
 
     def _label(self, **program) -> str:
@@ -1713,6 +1715,44 @@ class WasherStartBodyTest(unittest.TestCase):
             with self.subTest(**kwargs):
                 data, cmd = self._send(delay="150", **kwargs)
                 self.assertEqual(cmd.ancillary_parameters(), data["ancillaryParameters"])
+
+    def test_a_washer_start_names_its_programme(self) -> None:
+        for kwargs, expected in (
+            # The catalog label the Start button passes down, in the user's language.
+            (dict(label="Cotone"), "Cotone"),
+            # No translation: the raw key, as the app's translate(key, key) falls back.
+            (dict(), "PROGRAMS.WM_WD.HQD_COTTONS"),
+            # A favourite: the user's own name, whatever its base programme is called.
+            (dict(favourite="Jeans di Luca", label="Cotone"), "Jeans di Luca"),
+            (dict(appliance_type="WD", platform=None, label="Cotone"), "Cotone"),
+        ):
+            with self.subTest(**kwargs):
+                data, _ = self._send(**kwargs)
+                self.assertEqual(expected, data["attributes"]["prStr"])
+
+    def test_only_a_washer_start_carries_a_programme_name(self) -> None:
+        for kwargs in (
+            dict(appliance_type="DW", label="Eco"),
+            dict(appliance_type="REF", category="PROGRAMS.REF.SUPER_COOL"),
+            dict(command="settings", label="Cotone"),
+        ):
+            with self.subTest(**kwargs):
+                data, _ = self._send(**kwargs)
+                self.assertNotIn("prStr", data["attributes"])
+
+    def test_the_programme_name_is_masked_in_the_failure_log(self) -> None:
+        from custom_components.addhon.client.engine.commands import HonCommand
+
+        conn = FakeConnection({"payload": {"resultCode": "1"}})
+        cmd = HonCommand("startProgram", _washer_program(), _WasherAppliance(conn),
+                         category_name="PROGRAMS.WM_WD.HQD_COTTONS")
+        cmd.favourite_name = "Jeans di Luca"
+        with self.assertLogs(api_mod._LOGGER, level=logging.DEBUG) as logs:
+            with self.assertRaises(Exception):
+                _run(cmd.send())
+        blob = "\n".join(logs.output)
+        self.assertIn("'prStr': '***'", blob)
+        self.assertNotIn("Jeans di Luca", blob)
 
 
 if __name__ == "__main__":

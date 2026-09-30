@@ -66,7 +66,8 @@ class FakeApi:
         return _load("maintenance.json")
 
     async def send_command(
-        self, appliance, name, params, ancillary, category, *, wire_command=None, energy_label=True
+        self, appliance, name, params, ancillary, category, *, wire_command=None, energy_label=True,
+        program_label=None,
     ):
         self.sent.append((name, dict(params), dict(ancillary), category))
         return True
@@ -884,6 +885,15 @@ class ClusterBehaviorTest(unittest.TestCase):
         fav = start.categories["MyFav"]
         self.assertEqual(float(fav.parameters["tempSel"].value), 7.0)
         self.assertEqual(str(fav.parameters["favourite"].value), "1")
+
+    def test_a_favourite_knows_its_own_name(self) -> None:
+        # Issue #112: a washer start sends a favourite's name as `prStr`, and the copy
+        # still carries its base's category key, so the loader has to hand it over.
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=_RICH_FAVOURITES))
+        start = app.commands["startProgram"]
+        self.assertEqual("MyFav", start.categories["MyFav"].favourite_name)
+        self.assertEqual("PROGRAMS.REF.SUPER_COOL", start.categories["MyFav"].category)
+        self.assertEqual("", start.categories["super_cool"].favourite_name)
 
     def test_favourite_copy_rules_do_not_corrupt_base(self) -> None:
         # Regression: isolating `_parameters` in __copy__ was not enough. A shallow-copied

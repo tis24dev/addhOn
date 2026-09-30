@@ -681,6 +681,7 @@ class HonCommandLoader:
             if not base:
                 continue
             base_command: HonCommand = copy(base)
+            base_command.favourite_name = name
             self._update_base_command_with_data(base_command, favourite)
             self._update_base_command_with_favourite(base_command)
             self._update_program_categories(command_name, name, base_command)

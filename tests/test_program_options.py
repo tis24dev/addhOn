@@ -800,6 +800,52 @@ class RebuildAtStartTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("2", api.bodies[0]["params"]["prCode"])
 
 
+class _LabelApi(_WireApi):
+    """Also records the programme name a body carries (`attributes.prStr`)."""
+
+    async def send_command(
+        self, appliance, name, params, ancillary, category, *, wire_command=None,
+        energy_label=True, program_label=None,
+    ) -> bool:
+        self.bodies.append({"name": name, "category": category, "prStr": program_label})
+        return True
+
+
+class StartProgramLabelTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #112: the Start button hands the catalog label down as `prStr`."""
+
+    _button = RebuildAtStartTest._button
+
+    def _washer(self, labels=None):
+        from custom_components.addhon.program_labels import COORDINATOR_ATTR, ProgramLabels
+
+        api = _LabelApi()
+        appliance, categories = _real_categories(api)
+        appliance.appliance_type = "WM"
+        button = self._button(appliance, api, "cotton")
+        if labels is not None:
+            setattr(button.coordinator, COORDINATOR_ATTR, ProgramLabels(labels))
+        return api, appliance, categories, button
+
+    async def test_the_label_of_the_selected_programme_goes_down(self) -> None:
+        api, _, _, button = self._washer({"WM_WD": {"COTTON": "Cotone"}})
+        await button.async_press()
+        self.assertEqual("Cotone", api.bodies[0]["prStr"])
+
+    async def test_without_a_translation_the_raw_key_goes(self) -> None:
+        for labels in (None, {"WM_WD": {"DELICATE": "Delicati"}}):
+            with self.subTest(labels=labels):
+                api, _, _, button = self._washer(labels)
+                await button.async_press()
+                self.assertEqual("PROGRAMS.WM.COTTON", api.bodies[0]["prStr"])
+
+    async def test_a_favourite_keeps_its_own_name(self) -> None:
+        api, _, categories, button = self._washer({"WM_WD": {"COTTON": "Cotone"}})
+        categories["cotton"].favourite_name = "Jeans di Luca"
+        await button.async_press()
+        self.assertEqual("Jeans di Luca", api.bodies[0]["prStr"])
+
+
 def _prescribing_appliance(api=None, rules=None, favourite=False):
     """A REAL engine startProgram whose two categories prescribe different things.
 

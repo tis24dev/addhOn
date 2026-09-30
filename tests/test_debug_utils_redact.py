@@ -273,6 +273,8 @@ class IdentityKeysBehaviouralTest(unittest.TestCase):
         "pk", "sk", "applianceid", "eepromid",
         # The `/history` rows carry the same table's third key (issue #112).
         "sk_secondary",
+        # A washer start's programme name: a favourite's is the user's text (#112).
+        "prstr",
     )
 
     # Keys no exact set would have contained, masked by the substring rule. Named the
