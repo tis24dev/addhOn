@@ -36,6 +36,7 @@ _switch = _mod("homeassistant.components.switch")
 _switch.SwitchEntity = getattr(_switch, "SwitchEntity", type("SwitchEntity", (), {}))
 
 from homeassistant.exceptions import HomeAssistantError  # noqa: E402
+from custom_components.addhon import switch as switch_platform  # noqa: E402
 from custom_components.addhon import water_heater as platform  # noqa: E402
 from custom_components.addhon.const import CONF_ENABLE_EXPERIMENTAL, DOMAIN  # noqa: E402
 
@@ -105,6 +106,7 @@ def setUpModule() -> None:
     # Every write is recorded instead of sent; the refresh after it is a no-op.
     # pytest does not run unittest's module cleanups, so tearDownModule stops them.
     _PATCHERS.append(mock.patch.object(platform, "async_dispatch_patch", _record))
+    _PATCHERS.append(mock.patch.object(switch_platform, "async_dispatch_patch", _record))
     _PATCHERS.append(
         mock.patch(
             "custom_components.addhon.base_entity.HonBaseEntity._async_request_command_refresh",
@@ -122,6 +124,12 @@ def tearDownModule() -> None:
 
 async def _build(experimental: bool, **overrides) -> list:
     return await _setup(platform, experimental, overrides)
+
+
+async def _build_switches(experimental: bool, **overrides) -> list:
+    # The platform also adds the account's debug switches; only the boost is ours.
+    found = await _setup(switch_platform, experimental, overrides)
+    return [e for e in found if isinstance(e, switch_platform.HonHeatPumpBoostSwitch)]
 
 
 def _set_attr(entity, name: str, value) -> None:
@@ -185,3 +193,29 @@ class WaterHeaterTest(unittest.IsolatedAsyncioTestCase):
     async def test_vacation_is_unknown(self) -> None:
         entity = (await _build(experimental=True, onOffStatus=1, machMode=4))[0]
         self.assertIsNone(entity.current_operation)
+
+
+class BoostSwitchTest(unittest.IsolatedAsyncioTestCase):
+    async def test_not_created_without_the_experimental_option(self) -> None:
+        self.assertEqual(await _build_switches(experimental=False), [])
+
+    async def test_turning_on_at_target_is_refused(self) -> None:
+        switch = (await _build_switches(experimental=True, onOffStatus=1, temp=40, tempSel=40))[0]
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await switch.async_turn_on()
+        self.assertEqual(ctx.exception.translation_key, "hpwh_boost_at_target")
+        self.assertEqual(SENT, [])
+
+    async def test_turning_on_below_target(self) -> None:
+        switch = (await _build_switches(experimental=True, onOffStatus=1, temp=30, tempSel=40))[0]
+        await switch.async_turn_on()
+        self.assertEqual(dict(SENT[0].values), {"boostStatus": "1"})
+
+    async def test_turning_off_sends_zero(self) -> None:
+        switch = (await _build_switches(experimental=True, onOffStatus=1, boostStatus=1))[0]
+        await switch.async_turn_off()
+        self.assertEqual(dict(SENT[0].values), {"boostStatus": "0"})
+
+    async def test_state(self) -> None:
+        switch = (await _build_switches(experimental=True, onOffStatus=1, boostStatus=1))[0]
+        self.assertTrue(switch.is_on)

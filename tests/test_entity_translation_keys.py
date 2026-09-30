@@ -249,6 +249,8 @@ def _collect_code_keys() -> dict[str, set[str]]:
         # direction's ON and a sparse stopProgram for its OFF.
         | {d.key for d in switch._REF_MODE_SWITCHES}
         | {"pause", "debug_logging", "mqtt_realtime_debug"}
+        # The heat-pump water heater boost (#113): a fixed-key class.
+        | {switch.HonHeatPumpBoostSwitch._attr_translation_key}
         # The cooker hood's power switch is a fixed-key class, not a table row: it
         # writes `onOffStatus`, which the hood's settings command does not declare,
         # and it needs one command per direction.

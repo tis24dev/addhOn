@@ -847,6 +847,9 @@
       }
     },
     "switch": {
+      "boost": {
+        "name": "Boost"
+      },
       "sleep": {
         "name": "Modalità Notte"
       },
