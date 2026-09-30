@@ -20,6 +20,8 @@ from .const import (
     APPLIANCE_FRE,
     APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
+    APPLIANCE_WD,
+    APPLIANCE_WM,
     CONF_ENABLE_DEBUG,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
@@ -34,6 +36,7 @@ from .program_options import (
     apply_pending_options,
     async_send_program,
     couple_half_load_to_basket,
+    drop_hidden_keep_fresh,
     is_half_load_with_diverter,
 )
 from .ref_programs import download_codes
@@ -205,6 +208,12 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
             and self._appliance_data.get("type") == APPLIANCE_DW
             and is_half_load_with_diverter(appliance)
         )
+        # Issue #112: the app hides Keep Fresh in some washer programmes; decided here,
+        # on the event loop, like the buffers above.
+        washer_start = (
+            self._command_name == "startProgram"
+            and self._appliance_data.get("type") in (APPLIANCE_WM, APPLIANCE_WD)
+        )
         _LOGGER.debug(
             "Button debug: press '%s' id=%s pending_program=%s options=%s store=%s commands=%s",
             self._command_name,
@@ -330,8 +339,15 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                     # setter validates each value; a bad value raises BEFORE send() below,
                     # so nothing is transmitted and the option buffer is kept for retry
                     # (the in-memory param mutation is overwritten on the next refresh).
-                    if pending_options:
-                        applied = apply_pending_options(params, pending_options)
+                    # Keep Fresh where the app hides it (issue #112): the programme's own
+                    # value goes out, not the buffered choice.
+                    options = (
+                        drop_hidden_keep_fresh(appliance, command, params, pending_options)
+                        if washer_start
+                        else pending_options
+                    )
+                    if options:
+                        applied = apply_pending_options(params, options)
                         _LOGGER.debug(
                             "Button debug: applied %d/%d program options %s",
                             len(applied),

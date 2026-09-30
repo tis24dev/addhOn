@@ -5439,7 +5439,8 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
             # six washer option rows (Keep Fresh extended to WM/WD, night_wash,
             # silent_mode, soak_prewash, rinse_iterations, main_wash_time), each three
             # names (the parameter, its startProgram. read, the write) on WM and on WD.
-            609,
+            # 621 with the quick wash and intensive switches (#112): two rows, same shape.
+            621,
             seen,
             f"the sweep changed to {seen} names; re-measure and update this number "
             f"deliberately, naming what joined or left it",

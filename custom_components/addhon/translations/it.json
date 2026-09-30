@@ -934,6 +934,12 @@
       "soak_prewash": {
         "name": "Prelavaggio"
       },
+      "fast_mode": {
+        "name": "Lavaggio rapido"
+      },
+      "intensive_mode": {
+        "name": "Intensivo"
+      },
       "sterilization": {
         "name": "Sterilizzazione"
       },

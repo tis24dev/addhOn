@@ -402,6 +402,11 @@ _PROGRAM_OPTION_SWITCHES: tuple[HonProgramOptionSwitchDescription, ...] = (
     # `HonProgramOptionSwitch` (off "0", on = the first other value) gives exactly that,
     # as the app's own toggle rule does (step == max -> toggle, on = max).
     HonProgramOptionSwitchDescription(key="soak_prewash", param="haier_SoakPrewashSelection", types=_WASH_TYPES, icon="mdi:water-sync"),
+    # Quick wash and intensive (issue #112): settable in about a third of the programmes
+    # of the Candy reporter's washer. Mutually exclusive, as in the app: turning one on
+    # buffers "0" for the other (`EXCLUSIVE_OPTION_GROUPS` in program_options.py).
+    HonProgramOptionSwitchDescription(key="fast_mode", param="fastMode", types=_WASH_TYPES, icon="mdi:run-fast"),
+    HonProgramOptionSwitchDescription(key="intensive_mode", param="intensiveMode", types=_WASH_TYPES, icon="mdi:arm-flex"),
     # Dishwasher options. Every one is a startProgram parameter the XS 6B0S3FSB of #106
     # declares as range 0..1, i.e. exactly what the app renders as a toggle on a DW
     # (`isOnOffValueDw`, decomp.txt:1755771). Labels follow the app's own

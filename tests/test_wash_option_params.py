@@ -286,6 +286,8 @@ class CatalogPinTest(unittest.TestCase):
         "night_wash": "nightWashStatus",
         "silent_mode": "silentMode",
         "soak_prewash": "haier_SoakPrewashSelection",
+        "fast_mode": "fastMode",
+        "intensive_mode": "intensiveMode",
         # Dishwasher (issue #106). `hygiene` above now also serves DW; these six are DW-only.
         "eco_express": "ecoExpress",
         "half_load": "halfLoad",
@@ -534,22 +536,23 @@ class NewerWasherSchemaTest(unittest.TestCase):
     """Issue #112: the options of the newer washer schemas, on two real appliances.
 
     The expected sets are the `program_options` settable sets the reporters' own
-    diagnostics printed for the active programme, minus the three parameters the
+    diagnostics printed for the category each fixture carries, minus the parameters the
     official app never lets the user set (`delayStatus` and `energyLabel`, which are not
-    in its option registry, and `creaseResistSoakStatus`, which it excludes by name):
-    read off the dumps, never derived from the catalogue.
+    in its option registry, and `creaseResistSoakStatus`, which it excludes by name) and
+    `programCluster`, which no catalogue row names: read off the dumps, never derived
+    from the catalogue.
     """
 
     _EXPECTED = {
-        # Haier HW80-B14959TU1-S, `hqd_cottons` (prCode 115).
+        # Haier HW80-B14959TU1-S, category `hqd_smart`.
         _WM_HAIER_FIXTURE: {
             "delayTime", "haier_SoakPrewashSelection", "mainWashTime", "nightWashStatus",
             "permanentPressStatus", "rinseIterations", "spinSpeed", "temp",
         },
-        # Candy BP 49SBL8-FR, `synthetic_and_coloured` (prCode 205).
+        # Candy BP 49SBL8-FR, category `cottons_eu`.
         _WM_CANDY_HQD_FIXTURE: {
-            "anticrease", "delayTime", "nightWashStatus", "permanentPressStatus",
-            "prewash", "silentMode", "spinSpeed", "temp",
+            "anticrease", "delayTime", "fastMode", "intensiveMode", "nightWashStatus",
+            "permanentPressStatus", "prewash", "silentMode", "spinSpeed", "temp",
         },
     }
 
