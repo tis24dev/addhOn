@@ -123,6 +123,11 @@ def _js_number(raw: object) -> float:
         return math.nan
 
 
+def mode_key(raw: object) -> str | None:
+    """`machMode` as its `HPWH_MODE_MAP` key; an integral float (1.0) reads as "1"."""
+    return HPWH_MODE_MAP.get(code(raw) or "")
+
+
 def water_level_percent(raw: object) -> int | None:
     """`remainingWaterLevel` as the percentage the app shows (10 -> 83).
 
@@ -182,8 +187,8 @@ def schedule_window(
     compared as "HH:MM" STRINGS, as the app does; a "00:00"-"00:00" slot is never
     current or upcoming, which is how the app skips an empty one.
 
-    Returns None for the M7B/M8B/M11 series, whose branches are not rebuilt: for them
-    an eco mode then counts as active, never as scheduled.
+    Returns None for the M7B/M8B/M11 series, whose branches are not rebuilt;
+    `heat_pump_state` then answers unknown wherever the schedule would matter.
     """
     if series in _OTHER_SERIES:
         return None
@@ -217,11 +222,15 @@ def schedule_window(
                 return start, end
         if scheme == 1:
             return None
+        # With scheme 0, once today's opp2 windows are over the app goes on to the
+        # opp1 windows, which belong to the OTHER days (decomp.txt:2328007-2328015:
+        # only scheme 1 returns null there). Kept as the app does it: the state
+        # this feeds has to match what the app shows, not what the schedule means.
     for slot in (1, 2):
         start, end = window(1, slot)
         if clock < start or clock < end:
             return start, end
-    # The app checks only the START of the third opp1 window (decomp.txt:2328029):
+    # The app checks only the START of the third opp1 window (decomp.txt:2328027):
     # a third window already under way is not returned.
     start, end = window(1, 3)
     if clock < start:
@@ -231,13 +240,18 @@ def schedule_window(
 
 def heat_pump_state(
     get: Callable[[str], object], now: datetime, series: str | None
-) -> str:
+) -> str | None:
     """`getActiveStatus` for `ApplianceType.HW` (decomp.txt:2328690-2328900).
 
-    `get` reads one shadow attribute by name. Differs from the app in one place:
-    `tempSel < temp` is compared as numbers, where the app compares the two shadow
-    strings. Both give the same answer for every two-digit temperature, which is the
-    whole settable range (35-75).
+    `get` reads one shadow attribute by name. Differs from the app in two places:
+
+    - `tempSel < temp` is compared as numbers, where the app compares the two shadow
+      strings. Both give the same answer for every two-digit temperature, which is
+      the whole settable range (35-75).
+    - On the M7B/M8B/M11 series, whose schedule branches are not rebuilt, the answer
+      is None (unknown) unless the mode is AUTO or ELEC, the only two for which the
+      app never consults the schedule. Guessing there would publish "working" for an
+      appliance the app may be showing as scheduled.
     """
     # `getErrorCode` (decomp.txt:1353141): `errors`, or `error` when that is empty.
     errors = get("errors")
@@ -249,6 +263,8 @@ def heat_pump_state(
         return HPWH_STATE_REMOTE_CONTROL_OFF
 
     mode = _APP_MODES.get(code(get("machMode")) or "")
+    if series in _OTHER_SERIES and mode not in (_AUTO, _ELEC):
+        return None
     window = schedule_window(get, now, series)
     # `getActiveValue` (decomp.txt:2328360-2328510), called with vacation = inactive.
     if mode in (_AUTO, _ELEC):

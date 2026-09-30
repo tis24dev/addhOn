@@ -114,6 +114,7 @@ from .hpwh import (
     HPWH_MODE_MAP,
     HPWH_STATES,
     heat_pump_state,
+    mode_key,
     water_level_percent,
 )
 from .hon_commands import (
@@ -1168,7 +1169,17 @@ _HEAT_PUMP_WATER_HEATER: tuple[HonSensorEntityDescription, ...] = (
         value_fn=water_level_percent,
         gated=True,
     ),
-    _g_enum("heat_pump_mode", "machMode", HPWH_MODE_MAP, icon="mdi:water-boiler"),
+    # Not `_g_enum`: its shared value_fn reads 1.0 as "1.0", and this mode has to go
+    # through `hpwh.code` like every other HW reading.
+    HonSensorEntityDescription(
+        key="heat_pump_mode",
+        attr_key="machMode",
+        icon="mdi:water-boiler",
+        device_class=SensorDeviceClass.ENUM,
+        options=sorted(set(HPWH_MODE_MAP.values())),
+        value_fn=mode_key,
+        gated=True,
+    ),
     # The raw code: the app has no table for it and asks the cloud for the text
     # (`ApplianceHelp`, apk2 decomp.txt:2325610-2325717).
     HonSensorEntityDescription(
@@ -1888,7 +1899,7 @@ class HonHeatPumpStateSensor(HonBaseEntity, SensorEntity):
         return dt_util.now()
 
     @property
-    def native_value(self) -> str:
+    def native_value(self) -> str | None:
         return heat_pump_state(self._get_attr, self._now(), self._series)
 
 

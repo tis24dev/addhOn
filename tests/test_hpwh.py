@@ -58,6 +58,13 @@ def _install_package_stubs() -> None:
         sensor_mod, "SensorEntity", type("SensorEntity", (), {})
     )
     components.sensor = sensor_mod
+    # conftest provides the binary-sensor description and device class but not the
+    # entity base, so this file could not import the platform when run on its own.
+    binary_mod = _mod("homeassistant.components.binary_sensor")
+    binary_mod.BinarySensorEntity = getattr(
+        binary_mod, "BinarySensorEntity", type("BinarySensorEntity", (), {})
+    )
+    components.binary_sensor = binary_mod
     const = _mod("homeassistant.const")
     const.UnitOfEnergy = getattr(
         const, "UnitOfEnergy", type("UnitOfEnergy", (), {"KILO_WATT_HOUR": "kWh"})
@@ -92,6 +99,7 @@ from custom_components.addhon import hpwh  # noqa: E402
 from custom_components.addhon.hpwh import (  # noqa: E402
     heat_pump_state,
     mapping_getter,
+    mode_key,
     schedule_window,
     water_level_percent,
 )
@@ -138,6 +146,18 @@ class WaterLevelTest(unittest.TestCase):
     def test_outside_the_table_is_unknown_not_the_apps_70(self) -> None:
         for raw in (13, -1, 10.5, "abc", None, ""):
             self.assertIsNone(water_level_percent(raw), raw)
+
+
+class ModeTest(unittest.TestCase):
+    """`HPWHMachMode` (apk2 decomp.txt:599199-599208)."""
+
+    def test_every_code_and_its_numeric_spellings(self) -> None:
+        for raw, key in (("1", "auto"), (2, "eco"), (3.0, "electric"), ("4", "vacation")):
+            self.assertEqual(mode_key(raw), key, raw)
+
+    def test_an_unknown_code_is_unknown(self) -> None:
+        for raw in ("0", 5, 1.5, None, ""):
+            self.assertIsNone(mode_key(raw), raw)
 
 
 class EcoDaysTest(unittest.TestCase):
@@ -194,6 +214,17 @@ class ScheduleWindowTest(unittest.TestCase):
         )
         self.assertEqual(_window(attributes, MONDAY), ("04:00", "05:00"))
         self.assertEqual(_window(attributes, SATURDAY), ("07:00", "08:00"))
+
+    def test_different_scheme_falls_through_to_opp1_after_the_last_opp2_window(self) -> None:
+        # The app's own behaviour (apk2 decomp.txt:2328007-2328015): on a mask day,
+        # once the opp2 windows are over, the opp1 windows of the other days follow.
+        attributes = _attrs(
+            offPeakPeriodScheme=0,
+            opp1EcoDays="1f",
+            opp2EcoStartTime1="01:00", opp2EcoEndTime1="02:00",
+            opp1EcoStartTime1="07:00", opp1EcoEndTime1="08:00",
+        )
+        self.assertEqual(_window(attributes, MONDAY), ("07:00", "08:00"))
 
     def test_a_zero_day_mask_means_no_schedule(self) -> None:
         attributes = _attrs(opp1EcoDays="0", opp2EcoStartTime1="04:00", opp2EcoEndTime1="05:00")
@@ -253,6 +284,18 @@ class HeatPumpStateTest(unittest.TestCase):
             _state(_attrs(onOffStatus=1, machMode=4, sterilizationCurrentStatus=1)),
             "sterilizing",
         )
+
+    def test_series_not_rebuilt_are_unknown_where_the_schedule_matters(self) -> None:
+        for series in ("m7b", "m8b", "m11"):
+            for mode in (2, 4):  # eco, vacation
+                self.assertIsNone(
+                    _state(_attrs(onOffStatus=1, machMode=mode), series=series),
+                    (series, mode),
+                )
+            # AUTO never consults the schedule, so the answer stays exact.
+            self.assertEqual(_state(_attrs(onOffStatus=1), series=series), "working")
+            # And an error still wins before any of that.
+            self.assertEqual(_state(_attrs(machMode=2, errors=3), series=series), "error")
 
     def test_an_active_mode_reports_working_before_sterilization(self) -> None:
         # The app checks the active mode first: AUTO with a cycle under way still
@@ -362,6 +405,13 @@ class HeatPumpEntitiesTest(unittest.IsolatedAsyncioTestCase):
         boost = entities["hw-1_boost"]
         boost.coordinator.data["hw-1"]["attributes"]["boostStatus"] = 1.0
         self.assertTrue(boost.is_on)
+
+    async def test_the_mode_sensor_reads_an_integral_float(self) -> None:
+        from custom_components.addhon import sensor
+
+        mode = next(e for e in await _build(sensor) if e._attr_unique_id == "hw-1_heat_pump_mode")
+        mode.coordinator.data["hw-1"]["attributes"]["machMode"] = 1.0
+        self.assertEqual(mode.native_value, "auto")
 
     async def test_no_hw_entity_without_its_attribute(self) -> None:
         from custom_components.addhon import sensor
