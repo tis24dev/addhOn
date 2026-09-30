@@ -384,8 +384,29 @@ _PROGRAM_OPTION_SWITCHES: tuple[HonProgramOptionSwitchDescription, ...] = (
     HonProgramOptionSwitchDescription(key="good_night", param="goodNight", types=_WASH_TYPES, icon="mdi:weather-night"),
     HonProgramOptionSwitchDescription(key="sterilization", param="sterilizationStatus", types=_DRY_TYPES, icon="mdi:bacteria-outline"),
     HonProgramOptionSwitchDescription(key="tumbling", param="tumblingStatus", types=_DRY_TYPES, icon="mdi:tumble-dryer"),
-    HonProgramOptionSwitchDescription(key="permanent_press", param="permanentPressStatus", types=_DRY_TYPES, icon="mdi:tshirt-crew-outline"),
+    # Keep Fresh. The app's registry declares it for WM/WD/TD/DW/LC alike
+    # (`KEEP_FRESH_TITLE`, apk2 decomp.txt:994522), and issue #112 saw it on the wire as
+    # the user's choice on three washers of two brands.
+    HonProgramOptionSwitchDescription(key="permanent_press", param="permanentPressStatus", types=(*_WASH_TYPES, *_DRY_TYPES), icon="mdi:tshirt-crew-outline"),
     HonProgramOptionSwitchDescription(key="anti_crease_time", param="antiCreaseTime", types=_DRY_TYPES, icon="mdi:tshirt-crew"),
+    # Washer options of the newer schemas (issue #112), each sent by the official app as
+    # the user's choice (command history of two reporters) and each in the app's option
+    # registry for washers (apk2 decomp.txt:994341, 995034, 994832). None of them takes
+    # part in an exclusion rule of the app (`update`, apk2 decomp.txt:2637781).
+    #
+    # `nightWashStatus` is the newer name of the `goodNight` option above: the app labels
+    # both GOODNIGHT and writes whichever the schema has, so a model has one or the other.
+    HonProgramOptionSwitchDescription(key="night_wash", param="nightWashStatus", types=_WASH_TYPES, icon="mdi:weather-night"),
+    HonProgramOptionSwitchDescription(key="silent_mode", param="silentMode", types=_WASH_TYPES, icon="mdi:volume-off"),
+    # The soak pre-wash is a range 0..2 step 2: on is "2". The token resolution in
+    # `HonProgramOptionSwitch` (off "0", on = the first other value) gives exactly that,
+    # as the app's own toggle rule does (step == max -> toggle, on = max).
+    HonProgramOptionSwitchDescription(key="soak_prewash", param="haier_SoakPrewashSelection", types=_WASH_TYPES, icon="mdi:water-sync"),
+    # Quick wash and intensive (issue #112): settable in about a third of the programmes
+    # of the Candy reporter's washer. Mutually exclusive, as in the app: turning one on
+    # buffers "0" for the other (`EXCLUSIVE_OPTION_GROUPS` in program_options.py).
+    HonProgramOptionSwitchDescription(key="fast_mode", param="fastMode", types=_WASH_TYPES, icon="mdi:run-fast"),
+    HonProgramOptionSwitchDescription(key="intensive_mode", param="intensiveMode", types=_WASH_TYPES, icon="mdi:arm-flex"),
     # Dishwasher options. Every one is a startProgram parameter the XS 6B0S3FSB of #106
     # declares as range 0..1, i.e. exactly what the app renders as a toggle on a DW
     # (`isOnOffValueDw`, decomp.txt:1755771). Labels follow the app's own

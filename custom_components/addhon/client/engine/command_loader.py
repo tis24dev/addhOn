@@ -47,6 +47,25 @@ from .parameter.program import HonParameterProgram
 
 _LOGGER = logging.getLogger(__name__)
 
+# Parameters the history recovery writes with a fixed value instead of the recorded
+# one. `delayTime`: the app zeroes it when it restarts the last programme ("Start now"
+# on the dashboard card, apk2 decomp.txt:2595045-2595056), while copying it back made a
+# plain Start from Home Assistant repeat the delay of the last delayed start made from
+# the app -- issue #112, where a reporter's washer showed a 150-minute delay while
+# standing idle. "0" as the app writes it, not the schema default, which may itself be
+# a delay (PR #118 review).
+_RECOVERED_AS = {"delayTime": "0"}
+
+
+def _normalized_pr_code(value: Any) -> str:
+    """`prCode` as comparable text: "205", 205 and "205.0" are the same programme."""
+    text = str(value).strip()
+    with suppress(ValueError, OverflowError):
+        number = float(text)
+        if number.is_integer():
+            return str(int(number))
+    return text
+
 
 class _SemanticCatalogError(Exception):
     """Internal marker carrying only bounded parser counts."""
@@ -549,9 +568,52 @@ class HonCommandLoader:
             None,
         )
 
+    @staticmethod
+    def _programme_codes(command: HonCommand) -> dict[str, str]:
+        """Each programme category of `command` mapped to its fixed prCode, normalized.
+
+        Empty for a command without real categories (`categories` is then `{"_": self}`)
+        and for one whose categories declare no fixed prCode (e.g. `settings` split into
+        setParameters/setConfig): those keep the plain recovery. The code is read from
+        the schema, not from `value`, which a previous recovery may have overwritten.
+        Favourites are left out: each is a copy of a programme category carrying the
+        same code, so counting them would make every favourited programme ambiguous.
+        """
+        if command.categories.get("_") is command:
+            return {}
+        codes: dict[str, str] = {}
+        for key, category in command.categories.items():
+            parameter = category.parameters.get("prCode")
+            if category.is_favourite or not isinstance(parameter, HonParameterFixed):
+                continue
+            if (code := parameter.schema_value) is not None:
+                codes[key] = _normalized_pr_code(code)
+        return codes
+
+    def _named_programme(self, command: HonCommand, program_name: Any) -> Optional[str]:
+        """The category a start's top-level `programName` names, or None.
+
+        Cleaned like the category keys (see `_get_favourite_info`). A favourite is not
+        a programme of its own, so a name that lands on one does not count. The guard
+        is the one of `_programme_codes`, a command without real categories: the first
+        programme's category is the parent object itself, so `category is command`
+        turned its name away (PR #118 review).
+        """
+        if not program_name or command.categories.get("_") is command:
+            return None
+        key = self._clean_name(str(program_name))
+        category = command.categories.get(key)
+        if category is None or category.is_favourite:
+            return None
+        return key
+
     def _set_last_category(
-        self, command: HonCommand, name: str, parameters: dict[str, Any]
-    ) -> HonCommand:
+        self,
+        command: HonCommand,
+        name: str,
+        parameters: dict[str, Any],
+        program_name: Any = None,
+    ) -> Optional[HonCommand]:
         """Point `name` at the category the last accepted command used.
 
         The swap is applied to the LOADER's own dict rather than through the
@@ -561,6 +623,15 @@ class HonCommandLoader:
         ``self._commands = command_loader.commands`` only AFTER we return, which would
         overwrite the swapped entry and silently discard the recovery. Writing here is
         what makes ``return self._commands[name]`` (this method's stated intent) true.
+
+        The hOn app's own starts name neither `program` nor `category`: the programme
+        travels as the command's top-level `programName` and as its `prCode`. Recovered
+        onto the default category, such a start left the command with one programme's
+        prCode and another's parameters (issue #112), so the category is taken from
+        `programName` and, when that names none, looked up by the code -- which alone
+        is not enough, since several programmes can share one (prCode 115 on three of
+        the reporter's Haier programmes). None means neither singles a category out:
+        the caller must then recover nothing at all.
         """
         if not command.categories:
             return command
@@ -568,6 +639,16 @@ class HonCommandLoader:
             category = self._clean_name(str(program))
         elif (category := parameters.pop("category", None)) is not None:
             category = str(category)
+        elif named := self._named_programme(command, program_name):
+            category = named
+        elif codes := self._programme_codes(command):
+            if (pr_code := parameters.get("prCode")) is None:
+                return None
+            wanted = _normalized_pr_code(pr_code)
+            matches = [key for key, code in codes.items() if code == wanted]
+            if len(matches) != 1:
+                return None
+            category = matches[0]
         else:
             return command
         # Same guard as the category setter: an unknown category leaves the default in
@@ -585,15 +666,19 @@ class HonCommandLoader:
         for name, command in self.commands.items():
             if (last_index := self._get_last_command_index(name)) is None:
                 continue
-            last_command = self._command_history[last_index]
-            raw_parameters = last_command.get("command", {}).get("parameters", {})
+            last_command = self._command_history[last_index].get("command", {})
+            raw_parameters = last_command.get("parameters", {})
             parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
-            command = self._set_last_category(command, name, parameters)
-            for key, data in command.settings.items():
+            target = self._set_last_category(
+                command, name, parameters, last_command.get("programName")
+            )
+            if target is None:
+                continue
+            for key, data in target.settings.items():
                 if parameters.get(key) is None:
                     continue
                 with suppress(ValueError):
-                    data.value = parameters.get(key)
+                    data.value = _RECOVERED_AS.get(key, parameters.get(key))
 
     def _add_favourites(self) -> None:
         for favourite in self._favourites:
@@ -601,6 +686,7 @@ class HonCommandLoader:
             if not base:
                 continue
             base_command: HonCommand = copy(base)
+            base_command.favourite_name = name
             self._update_base_command_with_data(base_command, favourite)
             self._update_base_command_with_favourite(base_command)
             self._update_program_categories(command_name, name, base_command)

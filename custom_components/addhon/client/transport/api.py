@@ -45,6 +45,21 @@ from ...error_codes import APPLIANCE_LIST_EMPTY, classify
 _LOGGER = logging.getLogger(__name__)
 
 
+def _redacted_body(data: dict[str, Any]) -> Any:
+    """A send body as the debug log may show it: `redact_identity`, plus `prStr`.
+
+    `attributes.prStr` is what a washer start names its programme with, and for a
+    favourite that is the user's own text (issue #112). Masked here and only here:
+    the key is not an identity key, and a fridge's `parameters.prStr` (a catalog
+    key) stays readable in every log.
+    """
+    redacted = redact_identity(data)
+    attributes = redacted.get("attributes") if isinstance(redacted, dict) else None
+    if isinstance(attributes, dict) and "prStr" in attributes:
+        attributes["prStr"] = "***"
+    return redacted
+
+
 def _command_timestamp() -> str:
     """Command UTC timestamp in milliseconds + "Z" (e.g. 2026-06-18T12:34:56.789Z).
 
@@ -481,8 +496,19 @@ class HonApi:
         program_name: str = "",
         *,
         wire_command: str | None = None,
-        energy_label: bool = True,
+        energy_label: bool | str = True,
+        program_label: str | None = None,
     ) -> bool:
+        """POST one command body.
+
+        `energy_label`: True puts `energyLabel: "0"` in `attributes`, False leaves
+        the key out, and a string is sent as the value (a washer start on the HQD
+        platform, where the command computes it as the app does -- issue #112).
+
+        `program_label`: the programme's name as `attributes.prStr`, which only a
+        washer start carries (issue #112). A favourite's name is the user's own
+        text, so the key is masked in the debug logs (`_redacted_body`).
+        """
         timestamp = _command_timestamp()
         # `dryLevel` reaches the cloud for washer-dryers and tumble dryers only: the
         # app's transport stringifies it for TD/WD and drops it for every other type
@@ -493,7 +519,9 @@ class HonApi:
             parameters = {k: v for k, v in parameters.items() if k != "dryLevel"}
         attributes: dict[str, Any] = {"channel": "mobileApp", "origin": "standardProgram"}
         if energy_label:
-            attributes["energyLabel"] = "0"
+            attributes["energyLabel"] = "0" if energy_label is True else energy_label
+        if program_label:
+            attributes["prStr"] = program_label
         data: dict[str, Any] = {
             "macAddress": appliance.mac_address,
             "timestamp": timestamp,
@@ -528,7 +556,7 @@ class HonApi:
                 )
                 _LOGGER.debug(
                     "hOn send_command failed payload (redacted)=%s response=%s",
-                    redact_identity(data),
+                    _redacted_body(data),
                     redact_identity(json_data),
                 )
         except Exception:
@@ -540,7 +568,7 @@ class HonApi:
             _LOGGER.debug(
                 "hOn send_command raised: command=%s payload (redacted)=%s",
                 command,
-                redact_identity(data),
+                _redacted_body(data),
             )
             raise
         return False

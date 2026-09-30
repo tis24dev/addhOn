@@ -20,6 +20,8 @@ from .const import (
     APPLIANCE_FRE,
     APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
+    APPLIANCE_WD,
+    APPLIANCE_WM,
     CONF_ENABLE_DEBUG,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
@@ -30,10 +32,12 @@ from .const import (
 from .debug_utils import command_names, param_snapshot, redact_id, redact_store
 from .logging_utils import reset_integration_log_level, silence_mqtt_noise
 from .param_rollback import restore_params, snapshot_params
+from .program_labels import for_coordinator
 from .program_options import (
     apply_pending_options,
     async_send_program,
     couple_half_load_to_basket,
+    drop_hidden_keep_fresh,
     is_half_load_with_diverter,
 )
 from .ref_programs import download_codes
@@ -205,6 +209,16 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
             and self._appliance_data.get("type") == APPLIANCE_DW
             and is_half_load_with_diverter(appliance)
         )
+        # Issue #112: the app hides Keep Fresh in some washer programmes; decided here,
+        # on the event loop, like the buffers above.
+        appliance_type = self._appliance_data.get("type")
+        washer_start = (
+            self._command_name == "startProgram"
+            and appliance_type in (APPLIANCE_WM, APPLIANCE_WD)
+        )
+        # Issue #112: a washer start names its programme (`prStr`) in the user's
+        # language. The catalog is immutable, so reading it from `_inner` is safe.
+        program_labels = for_coordinator(self.coordinator) if washer_start else None
         _LOGGER.debug(
             "Button debug: press '%s' id=%s pending_program=%s options=%s store=%s commands=%s",
             self._command_name,
@@ -330,8 +344,15 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                     # setter validates each value; a bad value raises BEFORE send() below,
                     # so nothing is transmitted and the option buffer is kept for retry
                     # (the in-memory param mutation is overwritten on the next refresh).
-                    if pending_options:
-                        applied = apply_pending_options(params, pending_options)
+                    # Keep Fresh where the app hides it (issue #112): the programme's own
+                    # value goes out, not the buffered choice.
+                    options = (
+                        drop_hidden_keep_fresh(appliance, command, params, pending_options)
+                        if washer_start
+                        else pending_options
+                    )
+                    if options:
+                        applied = apply_pending_options(params, options)
                         _LOGGER.debug(
                             "Button debug: applied %d/%d program options %s",
                             len(applied),
@@ -365,7 +386,16 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                             self._command_name,
                             param_snapshot(params),
                         )
-                    await command.send()
+                    # (b3) The label of the programme actually sent, read off the final
+                    # command. Passed only when the catalog has one: the engine falls
+                    # back to the raw key, or to a favourite's own name, by itself.
+                    send_kwargs = {}
+                    if program_labels is not None:
+                        slug = str(getattr(command, "category", "") or "").rsplit(".", 1)[-1]
+                        label = program_labels.label(appliance_type, slug)
+                        if label:
+                            send_kwargs["program_label"] = label
+                    await command.send(**send_kwargs)
                     rollback.clear()  # sent: nothing to roll back
                     _LOGGER.debug("Button debug: command '%s' send completed", self._command_name)
 

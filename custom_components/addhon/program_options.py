@@ -297,6 +297,64 @@ def is_settable_option(param, drop: tuple[str, ...] = ()) -> bool:
     return len(option_value_set(param, drop)) >= 2
 
 
+# Programme options the app makes mutually exclusive (issue #112): its `MainOptions`
+# press handler, apk2 decomp.txt:4829001-4829094. Turning one ON puts to "0" every other
+# member the programme has with a value other than "0"; turning one OFF touches nothing.
+# The option manager has the same rule over four of these keys (@2638035-2638071); the
+# handler's five are the superset, and it never rewrites a sibling already at "0".
+EXCLUSIVE_OPTION_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset(
+        {"fastMode", "intensiveMode", "energySavingStatus", "strongStatus", "speedUpStatus"}
+    ),
+)
+
+# Where the app hides Keep Fresh on a washer (issue #112), so a Start must not send the
+# user's buffered choice there: on the HQD platform in the check-up and drum-clean
+# programmes (`isCheckUpDrumCleaningCycle`, apk2 decomp.txt:1390244-1390254 and constants
+# @1005478-1005505), and wherever `freshAirStatus` is shown (@1390231-1390243, @1390491).
+_KEEP_FRESH_PARAM = "permanentPressStatus"
+_KEEP_FRESH_HIDDEN_HQD_PROGRAMS = frozenset(
+    {"iot_checkup", "autoclean", "hqd_autoclean", "hqd_checkup"}
+)
+
+
+def keep_fresh_hidden(appliance, command, params: dict) -> bool:
+    """True where the app hides Keep Fresh for the programme `command` carries."""
+    fresh_air = params.get("freshAirStatus") if isinstance(params, dict) else None
+    if fresh_air is not None:
+        # Shown unless it is a fixed "0" (`setVisibility`, apk2 decomp.txt:1394296).
+        if getattr(fresh_air, "typology", None) != "fixed":
+            return True
+        if normalize_code(getattr(fresh_air, "value", None)) not in (None, "0"):
+            return True
+    model = getattr(appliance, "model_attributes", None)
+    platform = model.get("platform") if isinstance(model, dict) else None
+    if str(platform or "").upper() != "HQD":
+        return False
+    name = str(getattr(command, "category", "") or "").rsplit(".", 1)[-1].lower()
+    return name in _KEEP_FRESH_HIDDEN_HQD_PROGRAMS
+
+
+def drop_hidden_keep_fresh(appliance, command, params: dict, options: dict) -> dict:
+    """`options` without Keep Fresh where the app hides it, the parameter back at default.
+
+    The app sends the programme's own value when the option is hidden, so the buffered
+    choice is dropped and a value an earlier Start or the history recovery left on the
+    parameter goes back to the schema's (`reset`)."""
+    if not keep_fresh_hidden(appliance, command, params):
+        return options
+    param = params.get(_KEEP_FRESH_PARAM)
+    reset = getattr(param, "reset", None)
+    if callable(reset):
+        reset()
+    if _KEEP_FRESH_PARAM in options:
+        _LOGGER.debug(
+            "Keep Fresh is hidden by the app in this programme; buffered value dropped"
+        )
+        return {k: v for k, v in options.items() if k != _KEEP_FRESH_PARAM}
+    return options
+
+
 def apply_pending_options(params: dict, options: dict) -> list[str]:
     """Apply buffered option values to a command's parameters (the apply-on-start step).
 
@@ -408,15 +466,45 @@ class HonProgramOptionEntity(HonBaseEntity):
             per = {}
             store[self._appliance_id] = per
         per[self._param] = value
+        cleared = self._clear_exclusive_siblings(per, value)
         _LOGGER.debug(
-            "ProgramOption debug: buffered '%s'=%s id=%s param=%s",
+            "ProgramOption debug: buffered '%s'=%s id=%s param=%s cleared=%s",
             redact_id(getattr(self, "_attr_unique_id", None), self._appliance_id)
             or self.__class__.__name__,
             value,
             redact_id(self._appliance_id),
             self._param,
+            cleared,
         )
-        self.async_write_ha_state()
+        if cleared:
+            # The siblings' own entities show the "0" too; this entity rides along.
+            self.coordinator.async_update_listeners()
+        else:
+            self.async_write_ha_state()
+
+    def _clear_exclusive_siblings(self, per: dict, value) -> list[str]:
+        """Buffer "0" for the siblings of an exclusive group this ON turns off."""
+        if normalize_code(value) != "1":
+            return []
+        category = self._selected_category()
+        command = category if category is not None else startprogram_command(self._appliance)
+        params = getattr(command, "parameters", None) if command is not None else None
+        if not isinstance(params, dict):
+            return []
+        cleared: list[str] = []
+        for group in EXCLUSIVE_OPTION_GROUPS:
+            if self._param not in group:
+                continue
+            for name in sorted(group - {self._param}):
+                param = params.get(name)
+                if param is None:
+                    continue
+                raw = per.get(name, getattr(param, "value", None))
+                if normalize_code(raw) in (None, "0"):
+                    continue
+                per[name] = "0"
+                cleared.append(name)
+        return cleared
 
     def _selected_category(self):
         """The SELECTED program's category command, or None."""

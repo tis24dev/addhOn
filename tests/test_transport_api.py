@@ -605,6 +605,19 @@ class SendCommandTest(unittest.TestCase):
         self.assertEqual(data["applianceType"], "REF")
         self.assertNotIn("programName", data)  # not startProgram
 
+    def test_send_command_carries_a_given_energy_label(self) -> None:
+        # Issue #112: a string is the value itself, True stays "0" (above).
+        conn = FakeConnection({"payload": {"resultCode": "0"}})
+        _run(
+            _call(conn).send_command(
+                FakeAppliance(), "startProgram", {}, {}, energy_label="3"
+            )
+        )
+        self.assertEqual(
+            conn.calls[0][2]["json"]["attributes"],
+            {"channel": "mobileApp", "origin": "standardProgram", "energyLabel": "3"},
+        )
+
     def test_send_command_start_program_adds_program_name(self) -> None:
         self._patch_clock("2026-06-18T12:34:56.789012")
         conn = FakeConnection({"payload": {"resultCode": "0"}})
@@ -1540,6 +1553,238 @@ class FetchCensusEnvelopeTest(unittest.TestCase):
         for leak in ("SECRET", "cognitoTokenNew", OUR_ACCOUNT, OTHER_ACCOUNT,
                      "AA:BB:CC:DD:EE:FF", "PLAINTEXT-SERIAL", "Kitchen Fridge"):
             self.assertNotIn(leak, blob, leak)
+
+
+class _WasherAppliance:
+    """The root-appliance surface HonCommand and HonApi.send_command read."""
+
+    def __init__(self, conn, appliance_type="WM", platform="HQD") -> None:
+        self.api = HonApi(conn)
+        self.appliance_type = appliance_type
+        self.mac_address = "AA:BB:CC:DD:EE:FF"
+        self.options = {}
+        self.zone = 0
+        self.commands: dict = {}
+        self.model_attributes = {} if platform is None else {"platform": platform}
+
+    def sync_command_to_params(self, name) -> None:
+        pass
+
+
+def _washer_program(
+    *,
+    temp_values=("0", "20", "30", "40", "60"),
+    temp="60",
+    temp_typology="enum",
+    contribution="1",
+    remaining="63",
+    delay=None,
+) -> dict:
+    """One startProgram category as the catalog nests it, trimmed to what matters."""
+    if temp_typology == "enum":
+        temp_node = {"typology": "enum", "category": "command", "mandatory": 1,
+                     "enumValues": list(temp_values), "defaultValue": temp}
+    else:
+        temp_node = {"typology": "fixed", "category": "command", "mandatory": 1,
+                     "fixedValue": temp}
+    parameters = {"temp": temp_node}
+    if delay is not None:
+        parameters["delayTime"] = {
+            "typology": "range", "category": "command", "mandatory": 1,
+            "minimumValue": "0", "maximumValue": "1440", "incrementValue": "30",
+            "defaultValue": delay,
+        }
+    ancillary = {
+        "energyLabel": {"typology": "range", "category": "general", "mandatory": 1,
+                        "minimumValue": "3", "maximumValue": "5",
+                        "incrementValue": "1", "defaultValue": "4"},
+    }
+    if contribution is not None:
+        ancillary["tempContribution"] = {"typology": "fixed", "category": "general",
+                                         "mandatory": 1, "fixedValue": contribution}
+    data = {"description": "d", "protocolType": "p", "parameters": parameters,
+            "ancillaryParameters": ancillary}
+    if remaining is not None:
+        data["remainingTimes"] = {"remainingTime": {
+            "typology": "fixed", "category": "time", "mandatory": 1,
+            "fixedValue": remaining}}
+    return data
+
+
+class WasherStartBodyTest(unittest.TestCase):
+    """Issue #112: what a washer start carries on the wire, end to end."""
+
+    def _send(self, *, command="startProgram", appliance_type="WM", platform="HQD",
+              category="PROGRAMS.WM_WD.HQD_COTTONS", favourite="", label=None,
+              **program):
+        from custom_components.addhon.client.engine.commands import HonCommand
+
+        conn = FakeConnection({"payload": {"resultCode": "0"}})
+        appliance = _WasherAppliance(conn, appliance_type, platform)
+        cmd = HonCommand(command, _washer_program(**program), appliance,
+                         category_name=category)
+        cmd.favourite_name = favourite
+        self.assertTrue(_run(cmd.send(program_label=label)))
+        return conn.calls[0][2]["json"], cmd
+
+    def _label(self, **program) -> str:
+        data, _ = self._send(**program)
+        # The app writes one value in both places.
+        self.assertEqual(
+            data["attributes"]["energyLabel"],
+            data["ancillaryParameters"]["energyLabel"],
+        )
+        return data["attributes"]["energyLabel"]
+
+    def test_hqd_energy_label_matches_the_apps_real_sends(self) -> None:
+        # (minutes, last enum value, temp sent) -> label, from real app commands.
+        cases = (
+            (dict(remaining="63", temp_values=("0", "20", "30", "40", "60"),
+                  temp="60"), "3"),
+            (dict(remaining="82", temp_values=("0", "20", "40", "60", "90"),
+                  temp="60"), "5"),
+            (dict(remaining="95", temp_values=("0", "20", "30", "40", "60"),
+                  temp="30"), "4"),
+        )
+        for program, expected in cases:
+            with self.subTest(**program):
+                self.assertEqual(expected, self._label(**program))
+
+    def test_the_last_enum_value_counts_not_the_highest(self) -> None:
+        # 90 would give '5'; the last entry, 60, gives what the app sends.
+        self.assertEqual(
+            "3", self._label(remaining="82", temp_values=("90", "20", "60"), temp="60")
+        )
+
+    def test_a_temperature_that_is_not_an_enum_gives_zero(self) -> None:
+        self.assertEqual("0", self._label(temp_typology="fixed"))
+
+    def test_no_temperature_contribution_gives_zero(self) -> None:
+        self.assertEqual("0", self._label(contribution=None))
+        self.assertEqual("0", self._label(contribution=""))
+
+    def test_a_zero_contribution_still_computes(self) -> None:
+        # JavaScript: '0' is truthy, so the formula runs with the term zeroed.
+        self.assertEqual("3", self._label(remaining="95", temp="30", contribution="0"))
+
+    def test_the_label_is_clamped_to_one_through_five(self) -> None:
+        self.assertEqual(
+            "5", self._label(remaining="10", temp_values=("20", "90"), temp="20")
+        )
+        self.assertEqual("1", self._label(remaining="300"))
+        self.assertEqual("1", self._label(remaining="400"))
+
+    def test_no_remaining_time_gives_zero(self) -> None:
+        # NaN in the app, then `|| 0`.
+        self.assertEqual("0", self._label(remaining=None))
+
+    def test_outside_hqd_the_body_is_as_before(self) -> None:
+        for kwargs in (
+            dict(platform=None),
+            dict(platform="STANDARD"),
+            dict(command="settings"),
+            dict(appliance_type="DW"),
+        ):
+            with self.subTest(**kwargs):
+                data, cmd = self._send(**kwargs)
+                self.assertEqual("0", data["attributes"]["energyLabel"])
+                self.assertEqual(cmd.ancillary_parameters(), data["ancillaryParameters"])
+
+    def test_a_delayed_washer_start_confirms_eco_delay_off(self) -> None:
+        for kwargs in (
+            dict(platform=None),
+            dict(platform="HQD"),
+            dict(appliance_type="WD", platform=None),
+        ):
+            with self.subTest(**kwargs):
+                data, _ = self._send(delay="150", **kwargs)
+                self.assertEqual("150", str(data["parameters"]["delayTime"]))
+                self.assertEqual("0", data["ancillaryParameters"]["ecoDelayStart"])
+
+    def test_no_delay_no_eco_delay_start(self) -> None:
+        for kwargs in (dict(delay="0"), dict(delay=None)):
+            with self.subTest(**kwargs):
+                data, _ = self._send(**kwargs)
+                self.assertNotIn("ecoDelayStart", data["ancillaryParameters"])
+
+    def test_eco_delay_start_is_for_washer_starts_only(self) -> None:
+        for kwargs in (
+            dict(appliance_type="DW", platform=None),
+            dict(command="settings", platform=None),
+        ):
+            with self.subTest(**kwargs):
+                data, cmd = self._send(delay="150", **kwargs)
+                self.assertEqual(cmd.ancillary_parameters(), data["ancillaryParameters"])
+
+    def test_a_washer_start_names_its_programme(self) -> None:
+        for kwargs, expected in (
+            # The catalog label the Start button passes down, in the user's language.
+            (dict(label="Cotone"), "Cotone"),
+            # No translation: the raw key, as the app's translate(key, key) falls back.
+            (dict(), "PROGRAMS.WM_WD.HQD_COTTONS"),
+            # A favourite: the user's own name, whatever its base programme is called.
+            (dict(favourite="Jeans di Luca", label="Cotone"), "Jeans di Luca"),
+            (dict(appliance_type="WD", platform=None, label="Cotone"), "Cotone"),
+        ):
+            with self.subTest(**kwargs):
+                data, _ = self._send(**kwargs)
+                self.assertEqual(expected, data["attributes"]["prStr"])
+
+    def test_only_a_washer_start_carries_a_programme_name(self) -> None:
+        for kwargs in (
+            dict(appliance_type="DW", label="Eco"),
+            dict(appliance_type="REF", category="PROGRAMS.REF.SUPER_COOL"),
+            dict(command="settings", label="Cotone"),
+        ):
+            with self.subTest(**kwargs):
+                data, _ = self._send(**kwargs)
+                self.assertNotIn("prStr", data["attributes"])
+
+    def test_the_programme_name_is_masked_in_the_failure_log(self) -> None:
+        from custom_components.addhon.client.engine.commands import HonCommand
+
+        conn = FakeConnection({"payload": {"resultCode": "1"}})
+        cmd = HonCommand("startProgram", _washer_program(), _WasherAppliance(conn),
+                         category_name="PROGRAMS.WM_WD.HQD_COTTONS")
+        cmd.favourite_name = "Jeans di Luca"
+        with self.assertLogs(api_mod._LOGGER, level=logging.DEBUG) as logs:
+            with self.assertRaises(Exception):
+                _run(cmd.send())
+        blob = "\n".join(logs.output)
+        self.assertIn("'prStr': '***'", blob)
+        self.assertNotIn("Jeans di Luca", blob)
+
+    def test_the_programme_name_is_masked_when_the_post_raises(self) -> None:
+        from custom_components.addhon.client.engine.commands import HonCommand
+
+        conn = _RaisingConnection(RuntimeError("HTTP 500"))
+        cmd = HonCommand("startProgram", _washer_program(), _WasherAppliance(conn),
+                         category_name="PROGRAMS.WM_WD.HQD_COTTONS")
+        cmd.favourite_name = "Jeans di Luca"
+        with self.assertLogs(api_mod._LOGGER, level=logging.DEBUG) as logs:
+            with self.assertRaises(RuntimeError):
+                _run(cmd.send())
+        blob = "\n".join(logs.output)
+        self.assertIn("'prStr': '***'", blob)
+        self.assertNotIn("Jeans di Luca", blob)
+
+    def test_a_fridge_prstr_stays_readable_in_the_log(self) -> None:
+        # Only our washer start's attributes.prStr is masked: a fridge's
+        # parameters.prStr is a catalog key and stays as it was.
+        conn = FakeConnection({"payload": {"resultCode": "1"}})
+        with self.assertLogs(api_mod._LOGGER, level=logging.DEBUG) as logs:
+            _run(_call(conn).send_command(
+                FakeAppliance(), "startProgram",
+                {"prCode": "1", "prStr": "PROGRAMS.REF.SUPER_COOL"}, {},
+                "PROGRAMS.REF.SUPER_COOL",
+            ))
+        blob = "\n".join(logs.output)
+        self.assertIn("'prStr': 'PROGRAMS.REF.SUPER_COOL'", blob)
+        self.assertNotIn("'prStr': '***'", blob)
+
+    def test_the_platform_matches_in_any_case(self) -> None:
+        # As program_options.keep_fresh_hidden reads it.
+        self.assertEqual("3", self._label(platform="hqd"))
 
 
 if __name__ == "__main__":

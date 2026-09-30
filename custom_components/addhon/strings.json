@@ -925,6 +925,21 @@
       "good_night": {
         "name": "Good night"
       },
+      "night_wash": {
+        "name": "Good night"
+      },
+      "silent_mode": {
+        "name": "Silent mode"
+      },
+      "soak_prewash": {
+        "name": "Pre-wash"
+      },
+      "fast_mode": {
+        "name": "Quick wash"
+      },
+      "intensive_mode": {
+        "name": "Intensive"
+      },
       "sterilization": {
         "name": "Sterilization"
       },
@@ -1010,6 +1025,9 @@
       },
       "delay_time": {
         "name": "Delayed start"
+      },
+      "main_wash_time": {
+        "name": "Washing intensity"
       },
       "aroma_time_on": {
         "name": "Aroma on time (experimental)"
@@ -1114,6 +1132,9 @@
           "delicate": "Delicate",
           "synthetic": "Synthetic"
         }
+      },
+      "rinse_iterations": {
+        "name": "Number of rinses"
       },
       "fan_direction_vertical": {
         "name": "Vertical fan direction",

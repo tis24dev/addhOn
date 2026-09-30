@@ -17,6 +17,7 @@ false "sent".
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from copy import copy
 from typing import Any, Optional, Union
@@ -37,6 +38,31 @@ _LOGGER = logging.getLogger(__name__)
 def _is_zero(value: object) -> bool:
     """The app's `(value || '0') === '0'`: absent, empty or "0" all mean off."""
     return value is None or str(value) in ("", "0")
+
+
+def _js_number(value: object) -> float:
+    """The app's `value - 0`: a blank string is 0, anything unreadable NaN.
+
+    None stands for JavaScript's `undefined` (a missing node), which is NaN too.
+    """
+    if value is None:
+        return math.nan
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return 0.0
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return math.nan
+
+
+def _whole_minutes(value: object) -> int:
+    """`value` as a whole number of minutes; 0 when absent or unreadable."""
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 class _CanonicalExactPayload(dict[str, str | float]):
@@ -72,6 +98,9 @@ class HonCommand:
         # and `mark_selected_explicitly`). Declared here rather than created on first
         # write so the state is explicit and `__copy__` can reset it.
         self._selected_explicitly = False
+        # The name the user gave a favourite in the app; empty on a schema category.
+        # Set by `HonCommandLoader._add_favourites` on its copy (see `favourite_name`).
+        self._favourite_name = ""
         attributes.pop("description", "")
         attributes.pop("protocolType", "")
         self._load_parameters(attributes)
@@ -204,14 +233,22 @@ class HonCommand:
             name = "program" if "PROGRAM" in self._category_name else "category"
             self._parameters[name] = HonParameterProgram(name, self, "custom")
 
-    async def send(self, only_mandatory: bool = False) -> bool:
+    async def send(
+        self, only_mandatory: bool = False, *, program_label: str | None = None
+    ) -> bool:
+        """Send this command's parameters.
+
+        `program_label`: the programme's name in the user's language, which a washer
+        start carries as `prStr` (see `_program_label_to_send`). The catalog it comes
+        from lives in the Home Assistant layer, hence the argument.
+        """
         grouped_params = (
             self.mandatory_parameter_groups if only_mandatory else self.parameter_groups
         )
         params = grouped_params.get("parameters", {})
         if "dryTime" in params and self._resolves_dry_time():
             params["dryTime"] = self._dry_time_to_send(params)
-        return await self.send_parameters(params)
+        return await self.send_parameters(params, program_label=program_label)
 
     def _resolves_dry_time(self) -> bool:
         """Whether this send carries the washer / washer-dryer `dryTime` rule.
@@ -263,6 +300,82 @@ class HonCommand:
             return "0"
         return params["dryTime"]
 
+    def _is_washer_start(self) -> bool:
+        """A `startProgram` of a washer (WM) or washer-dryer (WD). Issue #112.
+
+        Where the app's washer builder (`getSendCommandPayload`, apk2
+        decomp.txt:1362211-1362920) adds what the generic body lacks. Every other
+        command and type goes out exactly as before.
+        """
+        appliance_type = getattr(self._appliance, "appliance_type", "")
+        return self._name == "startProgram" and appliance_type in ("WM", "WD")
+
+    def _program_label_to_send(self, program_label: str | None) -> str:
+        """`attributes.prStr` of a washer start, as the app names the programme.
+
+        The app sends `translate(key)` with the key itself as the fallback (issue
+        #112, apk/analysis/issue112-wm-hqd-program-options.md section 7.4): the
+        catalog label in the user's language, else the raw category key such as
+        `PROGRAMS.WM_WD.HQD_COTTONS`. A favourite goes by the name the user gave it,
+        whatever label its base programme has. "" when there is nothing to name.
+        """
+        return self._favourite_name or program_label or self._category_name
+
+    def _is_hqd(self) -> bool:
+        """True on the HQD platform (`platform` in the model attributes, any case).
+
+        Matched as `program_options.keep_fresh_hidden` matches it.
+        """
+        model = getattr(self._appliance, "model_attributes", None)
+        platform = model.get("platform") if isinstance(model, Mapping) else None
+        return str(platform or "").upper() == "HQD"
+
+    def _energy_label(self, params: Mapping[str, str | float]) -> str:
+        """`energyLabel` as the app computes it for a washer start. Issue #112.
+
+        The builder (apk2 decomp.txt:1362480-1362560, 1362660-1362760) and
+        `calculateEnergyLabel` (@1364133-1364170):
+
+            temp not an enum, or no tempContribution.fixedValue  ->  '0'
+            floor((500 - 1.6*minutes + 5*tc*(maxT - temp)) / 100), clamped to 1..5
+            NaN                                                  ->  '0'
+
+        `maxT` is the LAST entry of the schema's `enumValues` in the order the cloud
+        sent them, not the highest; `minutes` the program's `remainingTime`; `temp`
+        the value this body carries. `tc` is tested the JavaScript way: only a
+        missing or blank value fails, the string '0' passes and zeroes the term.
+
+        Evidence: the app sends the result in both `attributes` and
+        `ancillaryParameters` (apk/analysis/issue112-wm-hqd-program-options.md
+        section 7.4); addhOn used to send '0' and the schema's default.
+        """
+        temp = self._parameters.get("temp")
+        contribution = self._parameters.get("tempContribution")
+        tc = contribution.schema_node.get("fixedValue") if contribution else None
+        if temp is None or temp.typology != "enum" or not tc:
+            return "0"
+        # `enumValues[length - 1]`: a list's last entry; on the rare `A|B|C` string
+        # shape, its last character, exactly as the app indexes it.
+        enum_values = temp.schema_node.get("enumValues")
+        max_temp = (
+            _js_number(enum_values[-1])
+            if isinstance(enum_values, (list, str)) and enum_values
+            else math.nan
+        )
+        remaining = self._parameters.get("remainingTime")
+        minutes = _js_number(remaining.schema_value) if remaining else math.nan
+        sent = _js_number(params.get("temp") or 0)
+        # Same operations in the same order as the app, so the float rounding agrees.
+        score = (500 - minutes * 1.6 + 5 * _js_number(tc) * (max_temp - sent)) / 100
+        if math.isnan(score):
+            return "0"
+        label = math.floor(score) if math.isfinite(score) else score
+        if label > 5:
+            return "5"
+        if label <= 0:
+            return "1"
+        return str(int(label))
+
     async def send_specific(self, param_names: list[str]) -> bool:
         params: dict[str, str | float] = {}
         for key, parameter in self._parameters.items():
@@ -279,8 +392,12 @@ class HonCommand:
         wire_command: str | None = None,
         energy_label: bool = True,
         ancillary_params: Mapping[str, str | float] | None = None,
+        program_label: str | None = None,
     ) -> bool:
         """Transmit `params`; `program_name` overrides the category on the wire.
+
+        `program_label` is the translated programme name for a washer start's
+        `prStr` (see `_program_label_to_send`); ignored by every other send.
 
         `ancillary_params` None (the default) sends this command's own
         `ancillary_parameters()`, as always; a mapping, even an empty one, is sent
@@ -312,6 +429,23 @@ class HonCommand:
             if ancillary_params is None
             else dict(ancillary_params)
         )
+        wire_energy_label: bool | str = energy_label
+        if energy_label and self._is_washer_start() and self._is_hqd():
+            # Issue #112: the app's value, the same in both places. Elsewhere the
+            # attributes keep "0" and the ancillaries the schema's own value.
+            wire_energy_label = self._energy_label(params)
+            ancillary["energyLabel"] = wire_energy_label
+        if self._is_washer_start() and _whole_minutes(params.get("delayTime")) > 0:
+            # Issue #112: the app confirms every delayed washer start with
+            # ecoDelayStart '0' (seen in each delayed command of the reporters'
+            # histories); '1' belongs to its Eco Delay configuration, which we lack.
+            ancillary["ecoDelayStart"] = "0"
+        # Only a washer start names its programme; every other body keeps its shape.
+        extra: dict[str, str] = {}
+        if self._is_washer_start() and (
+            label := self._program_label_to_send(program_label)
+        ):
+            extra["program_label"] = label
         if sync_shadow:
             self.appliance.sync_command_to_params(self.name)
         result = await self.api.send_command(
@@ -321,7 +455,8 @@ class HonCommand:
             ancillary,
             self._category_name if program_name is None else program_name,
             wire_command=wire_command,
-            energy_label=energy_label,
+            energy_label=wire_energy_label,
+            **extra,
         )
         if not result:
             _LOGGER.error("Command rejected by cloud: %s", self._name)
@@ -352,8 +487,12 @@ class HonCommand:
             and parameter.declares_value
         }
 
-    async def send_parameters(self, params: dict[str, str | float]) -> bool:
-        return await self._send_parameters(params, sync_shadow=True)
+    async def send_parameters(
+        self, params: dict[str, str | float], *, program_label: str | None = None
+    ) -> bool:
+        return await self._send_parameters(
+            params, sync_shadow=True, program_label=program_label
+        )
 
     def canonical_exact_payload(
         self,
@@ -457,6 +596,20 @@ class HonCommand:
         for ruleset in self._rules:
             targets |= ruleset.rule_targets
         return targets
+
+    @property
+    def favourite_name(self) -> str:
+        """The user's name for this favourite, "" on a schema category.
+
+        The favourite is a copy of its base category, so its `category` is still the
+        base's raw key; this is the one place its own name survives. The app sends it
+        as `prStr` when the favourite starts (issue #112).
+        """
+        return self._favourite_name
+
+    @favourite_name.setter
+    def favourite_name(self, name: str) -> None:
+        self._favourite_name = name
 
     @property
     def is_favourite(self) -> bool:

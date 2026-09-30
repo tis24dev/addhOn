@@ -800,6 +800,52 @@ class RebuildAtStartTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("2", api.bodies[0]["params"]["prCode"])
 
 
+class _LabelApi(_WireApi):
+    """Also records the programme name a body carries (`attributes.prStr`)."""
+
+    async def send_command(
+        self, appliance, name, params, ancillary, category, *, wire_command=None,
+        energy_label=True, program_label=None,
+    ) -> bool:
+        self.bodies.append({"name": name, "category": category, "prStr": program_label})
+        return True
+
+
+class StartProgramLabelTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #112: the Start button hands the catalog label down as `prStr`."""
+
+    _button = RebuildAtStartTest._button
+
+    def _washer(self, labels=None):
+        from custom_components.addhon.program_labels import COORDINATOR_ATTR, ProgramLabels
+
+        api = _LabelApi()
+        appliance, categories = _real_categories(api)
+        appliance.appliance_type = "WM"
+        button = self._button(appliance, api, "cotton")
+        if labels is not None:
+            setattr(button.coordinator, COORDINATOR_ATTR, ProgramLabels(labels))
+        return api, appliance, categories, button
+
+    async def test_the_label_of_the_selected_programme_goes_down(self) -> None:
+        api, _, _, button = self._washer({"WM_WD": {"COTTON": "Cotone"}})
+        await button.async_press()
+        self.assertEqual("Cotone", api.bodies[0]["prStr"])
+
+    async def test_without_a_translation_the_raw_key_goes(self) -> None:
+        for labels in (None, {"WM_WD": {"DELICATE": "Delicati"}}):
+            with self.subTest(labels=labels):
+                api, _, _, button = self._washer(labels)
+                await button.async_press()
+                self.assertEqual("PROGRAMS.WM.COTTON", api.bodies[0]["prStr"])
+
+    async def test_a_favourite_keeps_its_own_name(self) -> None:
+        api, _, categories, button = self._washer({"WM_WD": {"COTTON": "Cotone"}})
+        categories["cotton"].favourite_name = "Jeans di Luca"
+        await button.async_press()
+        self.assertEqual("Jeans di Luca", api.bodies[0]["prStr"])
+
+
 def _prescribing_appliance(api=None, rules=None, favourite=False):
     """A REAL engine startProgram whose two categories prescribe different things.
 
@@ -1938,6 +1984,121 @@ class DishwasherUserFlowOnTheWireTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("1", body["params"]["ecoExpress"])
         self.assertEqual("1", body["params"]["extraDry"])
         self.assertEqual("0", body["params"]["halfLoad"])
+
+
+
+class _ResettableParam(Param):
+    """A Param with the engine's `reset()` back to a schema default."""
+
+    def __init__(self, value, default, typology="range") -> None:
+        super().__init__(value)
+        self.typology = typology
+        self._default = default
+        self.reset_calls = 0
+
+    def reset(self) -> None:
+        self.reset_calls += 1
+        self.value = self._default
+
+
+class ExclusiveOptionsTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #112: quick wash and intensive exclude each other, as in the app's UI."""
+
+    def _switch(self, coordinator, param: str, key: str):
+        from custom_components.addhon import switch
+
+        desc = switch.HonProgramOptionSwitchDescription(key=key, param=param, types=("WM", "WD"))
+        entity = switch.HonProgramOptionSwitch(coordinator, "washer-1", desc, FakeClient())
+        entity.hass = FakeHass()
+        return entity
+
+    def _coordinator(self, fast="1", intensive="0", extra=None):
+        params = {
+            "fastMode": RangeParam(0, 1, 1, value=fast),
+            "intensiveMode": RangeParam(0, 1, 1, value=intensive),
+        }
+        params.update(extra or {})
+        return FakeCoordinator(_washer({"startProgram": RecordingCommand(params)}))
+
+    async def test_turning_intensive_on_buffers_quick_wash_off(self) -> None:
+        # cottons_eu on the Candy: fastMode defaults to "1", intensiveMode is settable.
+        coordinator = self._coordinator(fast="1")
+        await self._switch(coordinator, "intensiveMode", "intensive_mode").async_turn_on()
+        self.assertEqual(
+            {"washer-1": {"intensiveMode": "1", "fastMode": "0"}}, coordinator.pending_options
+        )
+
+    async def test_turning_off_touches_nothing_else(self) -> None:
+        coordinator = self._coordinator(fast="1", intensive="1")
+        await self._switch(coordinator, "intensiveMode", "intensive_mode").async_turn_off()
+        self.assertEqual({"washer-1": {"intensiveMode": "0"}}, coordinator.pending_options)
+
+    async def test_the_last_one_turned_on_wins(self) -> None:
+        coordinator = self._coordinator(fast="0")
+        fast = self._switch(coordinator, "fastMode", "fast_mode")
+        intensive = self._switch(coordinator, "intensiveMode", "intensive_mode")
+        await fast.async_turn_on()
+        await intensive.async_turn_on()
+        await fast.async_turn_on()
+        self.assertEqual(
+            {"washer-1": {"fastMode": "1", "intensiveMode": "0"}}, coordinator.pending_options
+        )
+
+    async def test_a_sibling_already_at_zero_or_absent_is_left_alone(self) -> None:
+        # The UI rewrites only a present sibling whose value is not "0".
+        coordinator = self._coordinator(
+            fast="0", extra={"strongStatus": RangeParam(0, 1, 1, value="0")}
+        )
+        await self._switch(coordinator, "intensiveMode", "intensive_mode").async_turn_on()
+        self.assertEqual({"washer-1": {"intensiveMode": "1"}}, coordinator.pending_options)
+
+
+class KeepFreshHiddenAtStartTest(unittest.TestCase):
+    """Issue #112: where the app hides Keep Fresh, a Start sends the programme's value."""
+
+    def _run(self, category, params, platform="HQD", options=None):
+        from custom_components.addhon.program_options import drop_hidden_keep_fresh
+
+        appliance = types.SimpleNamespace(model_attributes={"platform": platform})
+        command = types.SimpleNamespace(category=category)
+        return drop_hidden_keep_fresh(
+            appliance, command, params, options or {"permanentPressStatus": "1", "temp": "40"}
+        )
+
+    def test_hqd_checkup_drops_the_buffered_choice_and_resets(self) -> None:
+        keep_fresh = _ResettableParam("1", "0")
+        options = self._run("hqd_checkup", {"permanentPressStatus": keep_fresh})
+        self.assertEqual({"temp": "40"}, options)
+        self.assertEqual("0", keep_fresh.value)
+        self.assertEqual(1, keep_fresh.reset_calls)
+
+    def test_the_same_programme_off_hqd_keeps_it(self) -> None:
+        keep_fresh = _ResettableParam("1", "0")
+        options = self._run("hqd_checkup", {"permanentPressStatus": keep_fresh}, platform="CHG")
+        self.assertIn("permanentPressStatus", options)
+        self.assertEqual(0, keep_fresh.reset_calls)
+
+    def test_an_ordinary_programme_keeps_it(self) -> None:
+        options = self._run("hqd_cottons", {"permanentPressStatus": _ResettableParam("1", "0")})
+        self.assertEqual({"permanentPressStatus": "1", "temp": "40"}, options)
+
+    def test_a_shown_fresh_air_hides_it_on_any_platform(self) -> None:
+        fresh_air = _ResettableParam("0", "0", typology="range")
+        options = self._run(
+            "cottons",
+            {"permanentPressStatus": _ResettableParam("1", "0"), "freshAirStatus": fresh_air},
+            platform="CHG",
+        )
+        self.assertNotIn("permanentPressStatus", options)
+
+    def test_a_fixed_zero_fresh_air_does_not(self) -> None:
+        fresh_air = _ResettableParam("0", "0", typology="fixed")
+        options = self._run(
+            "cottons",
+            {"permanentPressStatus": _ResettableParam("1", "0"), "freshAirStatus": fresh_air},
+            platform="CHG",
+        )
+        self.assertIn("permanentPressStatus", options)
 
 
 if __name__ == "__main__":

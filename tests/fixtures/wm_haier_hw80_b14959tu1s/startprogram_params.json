@@ -1,0 +1,306 @@
+{
+  "_comment": "Schema of the startProgram command active in memory at dump time: the `hqd_smart` category carrying the values the command-history recovery copied onto it from the app's last start, prCode 115 included (issue #112), on a real Haier HW80-B14959TU1-S washing machine (platform HQD, series 959). Typologies and bounds are the category's own. Rebuilt into the raw hOn node shape from the `commands.startProgram` section of the v5.26.0-beta7 diagnostics attached to issue #112 on 2026-09-30. range -> minimumValue/maximumValue/incrementValue, enum -> enumValues, fixed -> fixedValue; `defaultValue` is the value the dump printed. Left out on purpose: the `program` enum, which carries the favourites' placeholders and is not a programme option.",
+  "model": "HW80-B14959TU1-S",
+  "type": "WM",
+  "source": "issue #112, diagnostics v5.26.0-beta7",
+  "captured": "2026-09-30",
+  "startprogram_params": {
+    "antiAllergyStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "autoDetergentStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "autoDisinfectantStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "autoSoftenerStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "cloudProgId": {
+      "typology": "fixed",
+      "fixedValue": "255"
+    },
+    "cloudProgSrc": {
+      "typology": "fixed",
+      "fixedValue": "2"
+    },
+    "creaseResistSoakStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "delayStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "delayTime": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1410.0,
+      "incrementValue": 30.0,
+      "defaultValue": 150
+    },
+    "detergentBStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "dryLevel": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "dryProgFlag": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "dryTime": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "energySavingStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "haier_ConstantTempStatus": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "haier_MainWashRotateTime": {
+      "typology": "fixed",
+      "fixedValue": "25"
+    },
+    "haier_MainWashSpeed": {
+      "typology": "fixed",
+      "fixedValue": "45"
+    },
+    "haier_MainWashStopTime": {
+      "typology": "fixed",
+      "fixedValue": "5"
+    },
+    "haier_MainWashWaterLevel": {
+      "typology": "fixed",
+      "fixedValue": "2"
+    },
+    "haier_RinseRotateTime": {
+      "typology": "fixed",
+      "fixedValue": "15"
+    },
+    "haier_RinseSpeed": {
+      "typology": "fixed",
+      "fixedValue": "45"
+    },
+    "haier_RinseStopTime": {
+      "typology": "fixed",
+      "fixedValue": "10"
+    },
+    "haier_SoakPrewashRotateTime": {
+      "typology": "fixed",
+      "fixedValue": "20"
+    },
+    "haier_SoakPrewashSelection": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 2.0,
+      "incrementValue": 2.0,
+      "defaultValue": 2
+    },
+    "haier_SoakPrewashSpeed": {
+      "typology": "fixed",
+      "fixedValue": "45"
+    },
+    "haier_SoakPrewashStopTime": {
+      "typology": "fixed",
+      "fixedValue": "5"
+    },
+    "haier_SoakPrewashTemperature": {
+      "typology": "fixed",
+      "fixedValue": "30"
+    },
+    "haier_SoakPrewashTime": {
+      "typology": "fixed",
+      "fixedValue": "15"
+    },
+    "highWaterLevelStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "intelligenceStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "lockStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "mainWashTime": {
+      "typology": "range",
+      "minimumValue": 5.0,
+      "maximumValue": 50.0,
+      "incrementValue": 5.0,
+      "defaultValue": 5
+    },
+    "nightWashStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "operationName": {
+      "typology": "fixed",
+      "fixedValue": "grOnlineWash"
+    },
+    "permanentPressStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 1
+    },
+    "prCode": {
+      "typology": "fixed",
+      "fixedValue": "115"
+    },
+    "rinseIterations": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 5.0,
+      "incrementValue": 1.0,
+      "defaultValue": 3
+    },
+    "rinseIterationTime": {
+      "typology": "fixed",
+      "fixedValue": "9"
+    },
+    "soakWashStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "speedUpStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "spinSpeed": {
+      "typology": "enum",
+      "enumValues": [
+        "0",
+        "400",
+        "600",
+        "800",
+        "1000",
+        "1200"
+      ],
+      "defaultValue": "1000"
+    },
+    "strongStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "temp": {
+      "typology": "enum",
+      "enumValues": [
+        "0",
+        "20",
+        "30",
+        "40",
+        "60"
+      ],
+      "defaultValue": "60"
+    },
+    "texture": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "uvSterilizationStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "voiceStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "washerDryIntensity": {
+      "typology": "fixed",
+      "fixedValue": "4"
+    },
+    "weight": {
+      "typology": "fixed",
+      "fixedValue": "5"
+    },
+    "antiWrinkle": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "energyLabel": {
+      "typology": "range",
+      "minimumValue": 3.0,
+      "maximumValue": 5.0,
+      "incrementValue": 1.0,
+      "defaultValue": 4
+    },
+    "liquidDetergentDose": {
+      "typology": "fixed",
+      "fixedValue": "4"
+    },
+    "powderDetergentDose": {
+      "typology": "fixed",
+      "fixedValue": "4"
+    },
+    "programCluster": {
+      "typology": "enum",
+      "enumValues": [
+        "eco",
+        "traditional",
+        "eco_traditional"
+      ],
+      "defaultValue": "eco_traditional"
+    },
+    "programFamily": {
+      "typology": "enum",
+      "enumValues": [
+        "dashboard",
+        "smart",
+        "dashboard_smart"
+      ],
+      "defaultValue": "dashboard_smart"
+    },
+    "programIntensity": {
+      "typology": "fixed",
+      "fixedValue": "standard"
+    },
+    "programType": {
+      "typology": "fixed",
+      "fixedValue": "W"
+    },
+    "prPosition": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remoteActionable": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remoteVisible": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "suggestedLoadW": {
+      "typology": "fixed",
+      "fixedValue": 8
+    },
+    "tempContribution": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remainingTime": {
+      "typology": "fixed",
+      "fixedValue": "63"
+    }
+  }
+}

@@ -66,7 +66,8 @@ class FakeApi:
         return _load("maintenance.json")
 
     async def send_command(
-        self, appliance, name, params, ancillary, category, *, wire_command=None, energy_label=True
+        self, appliance, name, params, ancillary, category, *, wire_command=None, energy_label=True,
+        program_label=None,
     ):
         self.sent.append((name, dict(params), dict(ancillary), category))
         return True
@@ -428,6 +429,135 @@ class LastCategoryRecoveryTest(unittest.TestCase):
             self._recovered(history).commands["startProgram"].category,
         )
 
+    def test_a_delayed_start_is_not_inherited(self) -> None:
+        # Issue #112: the app zeroes `delayTime` when it restarts the last programme, so
+        # the recovery must not copy the delay of an app-scheduled start into the next
+        # Start from Home Assistant. The other recovered values still come back.
+        commands = json.loads(json.dumps(_RICH_COMMANDS))
+        commands["startProgram"]["PROGRAMS.REF.SUPER_FREEZE"]["parameters"]["delayTime"] = {
+            "typology": "range", "category": "command", "mandatory": 1,
+            "defaultValue": "0", "minimumValue": "0", "maximumValue": "1410",
+            "incrementValue": "30"}
+        history = [{"command": {"commandName": "startProgram", "parameters": {
+            "program": "PROGRAMS.REF.SUPER_FREEZE", "tempSel": "7", "delayTime": "150"}}}]
+        app = _build(NaAppliance, DictApi(commands, history=history))
+        parameters = app.commands["startProgram"].parameters
+        self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", app.commands["startProgram"].category)
+        self.assertEqual("7", str(parameters["tempSel"].value))
+        self.assertEqual("0", str(parameters["delayTime"].value))
+
+    def test_a_delayed_start_is_recovered_as_start_now(self) -> None:
+        # PR #118 review: the app writes delayTime "0", not the schema default, so a
+        # schema defaulting to a delay must not bring that delay back either.
+        commands = json.loads(json.dumps(_RICH_COMMANDS))
+        commands["startProgram"]["PROGRAMS.REF.SUPER_FREEZE"]["parameters"]["delayTime"] = {
+            "typology": "range", "category": "command", "mandatory": 1,
+            "defaultValue": "150", "minimumValue": "0", "maximumValue": "1410",
+            "incrementValue": "30"}
+        history = [{"command": {"commandName": "startProgram", "parameters": {
+            "program": "PROGRAMS.REF.SUPER_FREEZE", "tempSel": "7", "delayTime": "150"}}}]
+        app = _build(NaAppliance, DictApi(commands, history=history))
+        parameters = app.commands["startProgram"].parameters
+        self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", app.commands["startProgram"].category)
+        self.assertEqual("7", str(parameters["tempSel"].value))
+        self.assertEqual("0", str(parameters["delayTime"].value))
+
+    @staticmethod
+    def _app_start(parameters, program_name=None):
+        # The hOn app's own starts name no `program`/`category` parameter: the programme
+        # travels as the command's top-level `programName` and as its prCode (both issue
+        # #112 dumps, 10 of 10 history entries).
+        command = {"commandName": "startProgram", "parameters": parameters}
+        if program_name is not None:
+            command["programName"] = program_name
+        return [{"command": command}]
+
+    def test_the_programme_name_wins_over_a_shared_prcode(self) -> None:
+        # Issue #112, the Haier washer: prCode 115 belongs to three programmes, so only
+        # `programName` tells which one the app started.
+        commands = json.loads(json.dumps(_RICH_COMMANDS))
+        commands["startProgram"]["PROGRAMS.REF.IOT_FREEZE_A"] = _prog("5")
+        commands["startProgram"]["PROGRAMS.REF.IOT_FREEZE_B"] = _prog("5")
+        history = self._app_start({"prCode": "5", "tempSel": "7"}, "PROGRAMS.REF.IOT_FREEZE_A")
+        command = _build(NaAppliance, DictApi(commands, history=history)).commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.IOT_FREEZE_A", command.category)
+        self.assertTrue(command.selected_explicitly)
+        self.assertEqual("7", str(command.parameters["tempSel"].value))
+        for other in ("super_freeze", "iot_freeze_b"):
+            self.assertEqual("5", str(command.categories[other].parameters["tempSel"].value))
+
+    def test_the_first_programme_is_found_by_its_name(self) -> None:
+        # PR #118 review: the first category is the parent command object itself, so a
+        # guard on `category is command` turned its name away and a shared prCode then
+        # left nothing to recover.
+        commands = json.loads(json.dumps(_RICH_COMMANDS))
+        commands["startProgram"]["PROGRAMS.REF.IOT_COOL_B"] = _prog("1")
+        history = self._app_start({"prCode": "1", "tempSel": "7"}, "PROGRAMS.REF.SUPER_COOL")
+        command = _build(NaAppliance, DictApi(commands, history=history)).commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.SUPER_COOL", command.category)
+        self.assertTrue(command.selected_explicitly)
+        self.assertEqual("7", str(command.parameters["tempSel"].value))
+        self.assertEqual("5", str(command.categories["iot_cool_b"].parameters["tempSel"].value))
+
+    def test_an_unknown_programme_name_falls_back_to_the_prcode(self) -> None:
+        # A stale programme name, or one naming a favourite (a copy, not a programme):
+        # the prCode still singles the category out.
+        for program_name in ("PROGRAMS.REF.GONE", "MyFav"):
+            with self.subTest(program_name=program_name):
+                api = DictApi(
+                    _RICH_COMMANDS,
+                    favourites=_RICH_FAVOURITES,
+                    history=self._app_start({"prCode": "5", "tempSel": "7"}, program_name),
+                )
+                command = _build(NaAppliance, api).commands["startProgram"]
+                self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", command.category)
+                self.assertFalse(command.is_favourite)
+                self.assertEqual("7", str(command.parameters["tempSel"].value))
+
+    def test_an_app_start_selects_the_category_of_its_prcode(self) -> None:
+        # Issue #112: recovered onto the default category, an app start left the washer
+        # holding one programme's prCode with another's parameters.
+        for pr_code in ("5", 5, "5.0"):
+            with self.subTest(pr_code=pr_code):
+                app = self._recovered(self._app_start({"prCode": pr_code, "tempSel": "7"}))
+                command = app.commands["startProgram"]
+                self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", command.category)
+                self.assertTrue(command.selected_explicitly)
+                self.assertEqual("7", str(command.parameters["tempSel"].value))
+                default = command.categories["super_cool"]
+                self.assertEqual("1", str(default.parameters["prCode"].value))
+                self.assertEqual("5", str(default.parameters["tempSel"].value))
+
+    def test_an_unknown_prcode_recovers_nothing(self) -> None:
+        # No category owns the code, so there is no programme to put the values on: the
+        # default stays as the schema built it rather than taking a stranger's values.
+        app = self._recovered(self._app_start({"prCode": "77", "tempSel": "7"}))
+        command = app.commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.SUPER_COOL", command.category)
+        self.assertFalse(command.selected_explicitly)
+        self.assertEqual("1", str(command.parameters["prCode"].value))
+        self.assertEqual("5", str(command.parameters["tempSel"].value))
+
+    def test_a_favourite_does_not_make_the_prcode_ambiguous(self) -> None:
+        # A favourite is a copy of its programme's category, prCode included; the base
+        # category is the one the code names.
+        api = DictApi(
+            _RICH_COMMANDS,
+            favourites=_RICH_FAVOURITES,
+            history=self._app_start({"prCode": "1", "tempSel": "6"}),
+        )
+        command = _build(NaAppliance, api).commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.SUPER_COOL", command.category)
+        self.assertFalse(command.is_favourite)
+        self.assertTrue(command.selected_explicitly)
+        self.assertEqual("6", str(command.parameters["tempSel"].value))
+
+    def test_a_named_program_still_recovers_its_values(self) -> None:
+        app = self._recovered(_RICH_HISTORY)
+        command = app.commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", command.category)
+        self.assertEqual("7", str(command.parameters["tempSel"].value))
+
 
 class ClusterBehaviorTest(unittest.TestCase):
     def test_send_prstr_and_programrules(self) -> None:
@@ -784,6 +914,15 @@ class ClusterBehaviorTest(unittest.TestCase):
         fav = start.categories["MyFav"]
         self.assertEqual(float(fav.parameters["tempSel"].value), 7.0)
         self.assertEqual(str(fav.parameters["favourite"].value), "1")
+
+    def test_a_favourite_knows_its_own_name(self) -> None:
+        # Issue #112: a washer start sends a favourite's name as `prStr`, and the copy
+        # still carries its base's category key, so the loader has to hand it over.
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=_RICH_FAVOURITES))
+        start = app.commands["startProgram"]
+        self.assertEqual("MyFav", start.categories["MyFav"].favourite_name)
+        self.assertEqual("PROGRAMS.REF.SUPER_COOL", start.categories["MyFav"].category)
+        self.assertEqual("", start.categories["super_cool"].favourite_name)
 
     def test_favourite_copy_rules_do_not_corrupt_base(self) -> None:
         # Regression: isolating `_parameters` in __copy__ was not enough. A shallow-copied

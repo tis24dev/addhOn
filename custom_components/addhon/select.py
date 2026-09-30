@@ -204,6 +204,13 @@ _PROGRAM_OPTION_SELECTS: tuple[HonProgramOptionSelectDescription, ...] = (
         key="steam_level", param="steamLevel", translation_key="steam_level",
         types=_WASH_TYPES, label_map=STEAM_LEVEL_LABELS, icon="mdi:weather-fog",
     ),
+    # Number of rinses (issue #112), a range 0..5 on the newer washer schemas. The app
+    # offers it as a list of values ("Number of rinses", apk2 decomp.txt:994554), so it is
+    # a select of the raw values the selected programme allows.
+    HonProgramOptionSelectDescription(
+        key="rinse_iterations", param="rinseIterations",
+        translation_key="rinse_iterations", types=_WASH_TYPES, icon="mdi:water-plus",
+    ),
 )
 
 @dataclass(frozen=True, kw_only=True)
