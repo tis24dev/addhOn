@@ -925,6 +925,15 @@
       "good_night": {
         "name": "Buonanotte"
       },
+      "night_wash": {
+        "name": "Buonanotte"
+      },
+      "silent_mode": {
+        "name": "Modalità silenziosa"
+      },
+      "soak_prewash": {
+        "name": "Prelavaggio"
+      },
       "sterilization": {
         "name": "Sterilizzazione"
       },
@@ -1010,6 +1019,9 @@
       },
       "delay_time": {
         "name": "Partenza ritardata"
+      },
+      "main_wash_time": {
+        "name": "Intensità di lavaggio"
       },
       "aroma_time_on": {
         "name": "Durata Aroma Attivo (sperimentale)"
@@ -1114,6 +1126,9 @@
           "delicate": "Delicati",
           "synthetic": "Sintetici"
         }
+      },
+      "rinse_iterations": {
+        "name": "Numero di risciacqui"
       },
       "fan_direction_vertical": {
         "name": "Direzione aria verticale",

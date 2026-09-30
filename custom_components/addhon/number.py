@@ -66,6 +66,8 @@ from .const import (
     APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
     APPLIANCE_WC,
+    APPLIANCE_WD,
+    APPLIANCE_WM,
     CONF_ENABLE_EXPERIMENTAL,
     DOMAIN,
 )
@@ -286,6 +288,17 @@ _PROGRAM_OPTION_NUMBERS: tuple[HonProgramOptionNumberDescription, ...] = (
         translation_key="delay_time",
         types=APPLIANCE_PROGRAM_GROUP,
         icon="mdi:timer-outline",
+        unit=UnitOfTime.MINUTES,
+    ),
+    # Main wash time (issue #112), shown by the app as "Washing intensity" in minutes
+    # (`WASHING_TIME`, cluster main, apk2 decomp.txt:994596). Its bounds differ per
+    # programme (5..50 step 5 on the reporter's cottons), and they are read live.
+    HonProgramOptionNumberDescription(
+        key="main_wash_time",
+        param="mainWashTime",
+        translation_key="main_wash_time",
+        types=(APPLIANCE_WM, APPLIANCE_WD),
+        icon="mdi:timer-sand",
         unit=UnitOfTime.MINUTES,
     ),
 )

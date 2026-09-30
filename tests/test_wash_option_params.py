@@ -38,6 +38,9 @@ if str(REPO) not in sys.path:
 _WM_FIXTURE = REPO / "tests" / "fixtures" / "wm_candy_tca286" / "startprogram_params.json"
 _TD_FIXTURE = REPO / "tests" / "fixtures" / "td_haier_hd90" / "startprogram_params.json"
 _DW_FIXTURE = REPO / "tests" / "fixtures" / "dw_haier_xs6b0s3fsb" / "startprogram_params.json"
+# Issue #112: two washers of the newer schemas, from the reporters' beta7 diagnostics.
+_WM_HAIER_FIXTURE = REPO / "tests" / "fixtures" / "wm_haier_hw80_b14959tu1s" / "startprogram_params.json"
+_WM_CANDY_HQD_FIXTURE = REPO / "tests" / "fixtures" / "wm_candy_bp49sbl8fr" / "startprogram_params.json"
 
 
 def _mod(name: str) -> types.ModuleType:
@@ -279,6 +282,10 @@ class CatalogPinTest(unittest.TestCase):
         "tumbling": "tumblingStatus",
         "permanent_press": "permanentPressStatus",
         "anti_crease_time": "antiCreaseTime",
+        # Washers of the newer schemas (issue #112).
+        "night_wash": "nightWashStatus",
+        "silent_mode": "silentMode",
+        "soak_prewash": "haier_SoakPrewashSelection",
         # Dishwasher (issue #106). `hygiene` above now also serves DW; these six are DW-only.
         "eco_express": "ecoExpress",
         "half_load": "halfLoad",
@@ -296,8 +303,12 @@ class CatalogPinTest(unittest.TestCase):
         ("spin_speed", "spinSpeed"),
         ("wash_temp", "temp"),
         ("diverter_level", "diverterLevel"),  # dishwasher, issue #106
+        ("rinse_iterations", "rinseIterations"),  # washers, issue #112
     }
-    _PINNED_NUMBERS = {"delay_time": "delayTime"}
+    _PINNED_NUMBERS = {
+        "delay_time": "delayTime",
+        "main_wash_time": "mainWashTime",  # washers, issue #112
+    }
 
     def test_switch_catalog_pinned(self) -> None:
         actual = {d.key: d.param for d in switch._PROGRAM_OPTION_SWITCHES}
@@ -517,6 +528,79 @@ class DishwasherSwitchBuilderTest(unittest.TestCase):
             any(type(e).__name__ == "HonWashingMachinePauseSwitch" for e in built),
             [type(e).__name__ for e in built],
         )
+
+
+class NewerWasherSchemaTest(unittest.TestCase):
+    """Issue #112: the options of the newer washer schemas, on two real appliances.
+
+    The expected sets are the `program_options` settable sets the reporters' own
+    diagnostics printed for the active programme, minus the three parameters the
+    official app never lets the user set (`delayStatus` and `energyLabel`, which are not
+    in its option registry, and `creaseResistSoakStatus`, which it excludes by name):
+    read off the dumps, never derived from the catalogue.
+    """
+
+    _EXPECTED = {
+        # Haier HW80-B14959TU1-S, `hqd_cottons` (prCode 115).
+        _WM_HAIER_FIXTURE: {
+            "delayTime", "haier_SoakPrewashSelection", "mainWashTime", "nightWashStatus",
+            "permanentPressStatus", "rinseIterations", "spinSpeed", "temp",
+        },
+        # Candy BP 49SBL8-FR, `synthetic_and_coloured` (prCode 205).
+        _WM_CANDY_HQD_FIXTURE: {
+            "anticrease", "delayTime", "nightWashStatus", "permanentPressStatus",
+            "prewash", "silentMode", "spinSpeed", "temp",
+        },
+    }
+
+    def _built(self, fixture):
+        appliance, _ = _build_appliance(fixture)
+        data = {"type": APPLIANCE_WM, "appliance": appliance, "name": "Washer", "attributes": {}}
+        coordinator = types.SimpleNamespace(data={"wm1": data}, hass=None)
+        return switch._appliance_switches(coordinator, "wm1", data, None)
+
+    def test_the_settable_sets_match_the_reporters_appliances(self) -> None:
+        for fixture, expected in self._EXPECTED.items():
+            with self.subTest(fixture=fixture.parent.name):
+                appliance, _ = _build_appliance(fixture)
+                settable = {
+                    param
+                    for param, drop in _catalog_entries(APPLIANCE_WM)
+                    if is_settable_option(startprogram_option_param(appliance, param), drop)
+                }
+                self.assertEqual(settable, expected)
+
+    def test_the_params_the_app_never_sets_create_nothing(self) -> None:
+        # Settable in the schema, yet no control: they are in no catalogue table.
+        catalogue = {param for param, _ in _catalog_entries(APPLIANCE_WM)}
+        for fixture in self._EXPECTED:
+            _, present = _build_appliance(fixture)
+            for param in ("delayStatus", "energyLabel", "creaseResistSoakStatus"):
+                if param in present:
+                    self.assertNotIn(param, catalogue, param)
+
+    def test_the_soak_pre_wash_switches_on_to_2(self) -> None:
+        # The app sends haier_SoakPrewashSelection "2" when Pre-wash is on (the command
+        # history of the Haier reporter); its schema is a range 0..2 step 2.
+        soak = next(
+            e for e in self._built(_WM_HAIER_FIXTURE)
+            if getattr(e, "_desc", None) is not None and e._desc.key == "soak_prewash"
+        )
+        self.assertEqual((soak._off, soak._on), ("0", "2"))
+
+    def test_keep_fresh_is_built_on_a_washer(self) -> None:
+        for fixture in self._EXPECTED:
+            with self.subTest(fixture=fixture.parent.name):
+                keys = {e._desc.key for e in self._built(fixture) if hasattr(e, "_desc")}
+                self.assertIn("permanent_press", keys)
+                self.assertIn("night_wash", keys)
+
+    def test_rinses_and_main_wash_time_take_the_schema_values(self) -> None:
+        appliance, _ = _build_appliance(_WM_HAIER_FIXTURE)
+        rinses = option_choices(startprogram_option_param(appliance, "rinseIterations"))
+        self.assertEqual(rinses, ["0", "1", "2", "3", "4", "5"])
+        wash_time = option_choices(startprogram_option_param(appliance, "mainWashTime"))
+        self.assertEqual(wash_time, [str(m) for m in range(5, 55, 5)])
 
 
 if __name__ == "__main__":

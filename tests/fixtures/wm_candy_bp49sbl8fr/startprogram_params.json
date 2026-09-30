@@ -1,0 +1,218 @@
+{
+  "_comment": "startProgram schema of the ACTIVE category (prCode 205) of a real Candy BP 49SBL8-FR washing machine (platform HQD, series betterPro), rebuilt into the raw hOn node shape from the `commands.startProgram` section of the v5.26.0-beta7 diagnostics attached to issue #112 on 2026-09-30. range -> minimumValue/maximumValue/incrementValue, enum -> enumValues, fixed -> fixedValue; `defaultValue` is the value the dump printed. Left out on purpose: the `program` enum, which carries the favourites' placeholders and is not a programme option.",
+  "model": "BP 49SBL8-FR",
+  "type": "WM",
+  "source": "issue #112, diagnostics v5.26.0-beta7",
+  "captured": "2026-09-30",
+  "startprogram_params": {
+    "antiAllergyStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "childLock": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "clothesWeightPercentage": {
+      "typology": "fixed",
+      "fixedValue": "50"
+    },
+    "creaseResistSoakStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "delayTime": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1410.0,
+      "incrementValue": 30.0,
+      "defaultValue": 0
+    },
+    "dirtyLevel": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "dryProgFlag": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "fastMode": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "haier_MainWashWaterLevel": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "highWaterLevelStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "intensiveMode": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "nightWashStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 1
+    },
+    "operationName": {
+      "typology": "fixed",
+      "fixedValue": "grCHGWash"
+    },
+    "prewash": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 1
+    },
+    "anticrease": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 1
+    },
+    "extraRinse1": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "extraRinse2": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "extraRinse3": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "permanentPressStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 1
+    },
+    "prCode": {
+      "typology": "fixed",
+      "fixedValue": "205"
+    },
+    "silentMode": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 1
+    },
+    "spinSpeed": {
+      "typology": "enum",
+      "enumValues": [
+        "0",
+        "400",
+        "600",
+        "800",
+        "1000",
+        "1200",
+        "1400"
+      ],
+      "defaultValue": "1000"
+    },
+    "steamStatus": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "temp": {
+      "typology": "enum",
+      "enumValues": [
+        "0",
+        "20",
+        "30",
+        "40",
+        "60",
+        "90"
+      ],
+      "defaultValue": "30"
+    },
+    "texture": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "delayStatus": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "energyLabel": {
+      "typology": "range",
+      "minimumValue": 3.0,
+      "maximumValue": 4.0,
+      "incrementValue": 1.0,
+      "defaultValue": 3
+    },
+    "liquidDetergentDose": {
+      "typology": "fixed",
+      "fixedValue": "4"
+    },
+    "powderDetergentDose": {
+      "typology": "fixed",
+      "fixedValue": "4"
+    },
+    "programCluster": {
+      "typology": "fixed",
+      "fixedValue": "traditional"
+    },
+    "programFamily": {
+      "typology": "enum",
+      "enumValues": [
+        "dashboard"
+      ],
+      "defaultValue": "dashboard"
+    },
+    "programIntensity": {
+      "typology": "fixed",
+      "fixedValue": "intensiveWashing"
+    },
+    "programType": {
+      "typology": "fixed",
+      "fixedValue": "W"
+    },
+    "prPosition": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remoteActionable": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remoteVisible": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "suggestedLoadW": {
+      "typology": "fixed",
+      "fixedValue": 9
+    },
+    "tempContribution": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remainingTime": {
+      "typology": "fixed",
+      "fixedValue": "59"
+    }
+  }
+}
