@@ -1198,6 +1198,17 @@
       "hood": {
         "name": "Cappa"
       }
+    },
+    "water_heater": {
+      "heat_pump_water_heater": {
+        "name": "Scaldacqua",
+        "state": {
+          "heat_pump": "Auto",
+          "eco": "Eco",
+          "electric": "Elettrica",
+          "off": "Spento"
+        }
+      }
     }
   },
   "exceptions": {
@@ -1212,6 +1223,21 @@
     },
     "command_rejected": {
       "message": "Il servizio hOn non ha accettato il comando."
+    },
+    "hpwh_boost_at_target": {
+      "message": "Il boost non parte: l'acqua è già alla temperatura impostata."
+    },
+    "hpwh_sterilization_running": {
+      "message": "Non disponibile durante la sterilizzazione."
+    },
+    "hpwh_switch_on_first": {
+      "message": "Accendi prima lo scaldacqua."
+    },
+    "hpwh_unavailable": {
+      "message": "Lo scaldacqua ora non accetta comandi: controlla errori e controllo remoto sul pannello."
+    },
+    "hpwh_vacation_active": {
+      "message": "Non disponibile con la modalità vacanza attiva."
     },
     "invalid_setpoint": {
       "message": "Il valore {value} non è ammesso (ammessi: {allowed})."

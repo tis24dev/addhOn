@@ -200,6 +200,7 @@ def _tk(description) -> str:
 def _collect_code_keys() -> dict[str, set[str]]:
     from custom_components.addhon import (
         binary_sensor, fan, number, ref_programs, select, sensor, switch,
+        water_heater,
     )
 
     used: dict[str, set[str]] = {}
@@ -280,6 +281,7 @@ def _collect_code_keys() -> dict[str, set[str]]:
         fan.HonAirPurifierFan._attr_translation_key,
         fan.HonHoodFan._attr_translation_key,
     }
+    used["water_heater"] = {water_heater.HonHeatPumpWaterHeater._attr_translation_key}
     return used
 
 

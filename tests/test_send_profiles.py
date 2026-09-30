@@ -133,3 +133,45 @@ def test_another_type_goes_out_exactly_as_before() -> None:
     name, payload, program_name, wire, label = calls[0]
     assert (name, wire, label) == ("settings", None, True)
     assert set(payload) == {"tempSel", "operationName", "opp1EcoDays"}
+
+
+def test_hpwh_mode_patch_selects_its_category_without_touching_the_others() -> None:
+    """`mode_patch` selects the category in `prepare`, so `machMode` lands on the
+    category it belongs to; the fixed `machMode` of every other category, which the
+    real HW schema declares, stays as it was."""
+    from custom_components.addhon import hpwh
+
+    appliance = _Appliance()
+    categories: dict = {}
+    for name, mach_mode in (("auto", "1"), ("eco", "2"), ("elec", "3"), ("vac", "4")):
+        categories[name] = HonCommand(
+            "startProgram",
+            {
+                "parameters": {
+                    "machMode": {"typology": "fixed", "fixedValue": mach_mode,
+                                 "category": "command", "mandatory": 1},
+                    "onOffStatus": {"typology": "fixed", "fixedValue": "1",
+                                    "category": "command", "mandatory": 1},
+                },
+                "ancillaryParameters": {},
+            },
+            appliance,
+            categories=categories,
+            category_name=f"PROGRAMS.HW.{name.upper()}",
+        )
+    appliance.commands["startProgram"] = categories["auto"]
+    api = _RecordingApi()
+    for command in categories.values():
+        command._api = api
+    appliance.sync_payload_to_params = lambda payload: None
+
+    ok = asyncio.run(
+        CommandDispatcher().dispatch(appliance, hpwh.mode_patch("eco", "2"))
+    )
+
+    assert ok is True
+    assert len(api.calls) == 1
+    _name, payload, program_name, _wire, _label = api.calls[0]
+    assert payload == {"machMode": "2"}
+    assert program_name == ""
+    assert categories["auto"].parameters["machMode"].value == "1"

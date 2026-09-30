@@ -301,6 +301,8 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
         # The heat-pump water heater's counterpart to hood.py: every HW write is built
         # by one of hpwh.py's `*_patch` functions (#113).
         Path("hpwh.py"),
+        # The water heater platform dispatches the hpwh.py patches it builds (#113).
+        Path("water_heater.py"),
         Path("fan.py"),
         Path("light.py"),
         # Mixed files: the AP entities dispatch, the legacy ones stay legacy.
