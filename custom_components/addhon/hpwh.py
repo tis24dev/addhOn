@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Heat-pump water heater (appliance type `HW`, the app's "HPWH"): read and write rules.
 
-Everything here is a pure function over the shadow attributes, rebuilt from the
+The rules are pure functions over the shadow attributes (only `raise_refusal` has an
+effect: it turns a refusal into the localized `HomeAssistantError`), rebuilt from the
 official app 2.30.7 (`apk2/decomp.txt`; the analysis is
 `apk/analysis/issue113-hw-hpwh-control-model.md`). Issue #113 is the first real
 device: an HP110M8-9, `series: "m8"`.
 
 The write side lives here too: when the app refuses a mode, temperature or boost
-change (`mode_block`, `temperature_block`, `boost_block`, raised as a localized
-error by `raise_refusal`) and the exact sparse
+change (`mode_block`, `temperature_block`, `boost_block`) and the exact sparse
 `CommandPatch` it sends for power, temperature, mode and boost. Sends are shaped by
 the `HPWH` send profile in `send_profiles.py`, which keeps the app's own payloads
 free of the fixed parameters the `setParameters` schema declares (22 mandatory ones:
@@ -70,6 +70,13 @@ def controls_supported(series: object) -> bool:
     """
     normalized = str(series).strip().lower() if series else None
     return normalized not in _OTHER_SERIES
+
+
+def appliance_series(appliance) -> object:
+    """`model_attributes["series"]` as published; `controls_supported` normalizes it."""
+    attributes = getattr(appliance, "model_attributes", None)
+    return attributes.get("series") if isinstance(attributes, Mapping) else None
+
 
 # The phases `heat_pump_state` can answer, in the app's order
 # (`EnumHeatPumpWaterHeaterPhase`, decomp.txt:2329986-2330012). NOTCONNECTED is not

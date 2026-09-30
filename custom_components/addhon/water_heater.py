@@ -36,6 +36,7 @@ from .hpwh import (
     HPWH_MODE_CATEGORIES,
     HPWH_SETTINGS_COMMAND,
     HPWH_START_COMMAND,
+    appliance_series,
     boost_auto_off_due,
     boost_patch,
     code,
@@ -59,12 +60,6 @@ _ATTR_OPERATION_MODE = "operation_mode"
 def _settings(appliance):
     commands = getattr(appliance, "commands", None) or {}
     return commands.get(HPWH_SETTINGS_COMMAND)
-
-
-def _series(appliance) -> object:
-    """`model_attributes["series"]` as published; `controls_supported` normalizes it."""
-    attributes = getattr(appliance, "model_attributes", None)
-    return attributes.get("series") if isinstance(attributes, Mapping) else None
 
 
 def _has_boost(appliance) -> bool:
@@ -117,7 +112,7 @@ class _BoostAutoOff:
             if not isinstance(data, Mapping) or data.get("type") != APPLIANCE_HW:
                 continue
             appliance = data.get("appliance")
-            if not _has_boost(appliance) or not controls_supported(_series(appliance)):
+            if not _has_boost(appliance) or not controls_supported(appliance_series(appliance)):
                 continue
             get = partial(_read, data.get("attributes"))
             temp, target = _number(get("temp")), _number(get("tempSel"))
@@ -173,7 +168,7 @@ async def async_setup_entry(
         if data.get("type") != APPLIANCE_HW:
             continue
         appliance = data.get("appliance")
-        if not controls_supported(_series(appliance)):
+        if not controls_supported(appliance_series(appliance)):
             continue
         settings = _settings(appliance)
         parameters = getattr(settings, "parameters", {}) if settings else {}

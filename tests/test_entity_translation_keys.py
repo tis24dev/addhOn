@@ -174,6 +174,21 @@ def _install_stubs() -> None:
         button_mod, "ButtonEntity", type("ButtonEntity", (), {})
     )
 
+    const.ATTR_TEMPERATURE = getattr(const, "ATTR_TEMPERATURE", "temperature")
+
+    # water_heater platform (imported at module level by water_heater.py)
+    wh_mod = _mod("homeassistant.components.water_heater")
+    wh_mod.WaterHeaterEntity = getattr(wh_mod, "WaterHeaterEntity", type("WaterHeaterEntity", (), {}))
+    wh_mod.WaterHeaterEntityFeature = getattr(
+        wh_mod, "WaterHeaterEntityFeature",
+        type("WaterHeaterEntityFeature", (), {
+            "TARGET_TEMPERATURE": 1, "OPERATION_MODE": 2, "AWAY_MODE": 4, "ON_OFF": 8,
+        }),
+    )
+    for _n, _v in (("STATE_ECO", "eco"), ("STATE_ELECTRIC", "electric"),
+                   ("STATE_HEAT_PUMP", "heat_pump"), ("STATE_OFF", "off")):
+        setattr(wh_mod, _n, getattr(wh_mod, _n, _v))
+
     ha.config_entries = ce
     ha.core = core
     ha.exceptions = exc

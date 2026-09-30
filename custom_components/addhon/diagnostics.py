@@ -1646,7 +1646,7 @@ def _program_option_matrix(appliance) -> dict:
             # subclasses fabricate a "0" to keep reads non-None, and for a descriptor-only
             # node -- one that lists `enumValues` purely so a client can render a control --
             # that "0" is not even among its own values and is deliberately never
-            # transmitted (`_send_parameters` filters the ancillary group on
+            # transmitted (`HonCommand.ancillary_parameters` filters the ancillary group on
             # `declares_value`). Printing it would assert a starting value the program never
             # stated, which is the one thing this section may not do; `null` says "this
             # program prescribes nothing here", which is the truth.
