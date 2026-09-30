@@ -740,6 +740,8 @@ class _DispatchCommand(HonCommand):
         # What the dispatcher asked the transport to stamp as `programName`:
         # None means "use my own category", "" means "suppress the field".
         self.program_names: list[str | None] = []
+        self.wire_commands: list[str | None] = []
+        self.energy_labels: list[bool] = []
         super().__init__(
             name,
             attributes,
@@ -753,8 +755,12 @@ class _DispatchCommand(HonCommand):
         payload: dict[str, str | float],
         *,
         program_name: str | None = None,
+        wire_command: str | None = None,
+        energy_label: bool = True,
     ) -> bool:
         self.program_names.append(program_name)
+        self.wire_commands.append(wire_command)
+        self.energy_labels.append(energy_label)
         self.sent_payloads.append(dict(payload))
         if self.before_send is not None:
             self.before_send()
@@ -837,6 +843,8 @@ def _block_command_sends(
         payload: dict[str, str | float],
         *,
         program_name: str | None = None,
+        wire_command: str | None = None,
+        energy_label: bool = True,
     ) -> bool:
         nonlocal call_index
         release = releases[call_index]
@@ -1439,6 +1447,8 @@ def test_dispatch_rollback_preserves_update_landing_while_send_is_suspended() ->
             payload: dict[str, str | float],
             *,
             program_name: str | None = None,
+            wire_command: str | None = None,
+            energy_label: bool = True,
         ) -> bool:
             second.sent_payloads.append(dict(payload))
             started.set()
@@ -2098,3 +2108,10 @@ def test_ap_diagnostic_records_carry_no_appliance_identity() -> None:
         "SYNTHETIC-AP-MODEL",
     ):
         assert identity not in joined, identity
+
+
+def test_a_legacy_dispatch_asks_for_the_historical_wire_shape() -> None:
+    appliance, _first, second = _dispatch_appliance()
+    asyncio.run(CommandDispatcher().dispatch(appliance, _category_patch()))
+    assert second.wire_commands == [None]
+    assert second.energy_labels == [True]

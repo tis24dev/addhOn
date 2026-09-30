@@ -276,6 +276,8 @@ class HonCommand:
         *,
         sync_shadow: bool,
         program_name: str | None = None,
+        wire_command: str | None = None,
+        energy_label: bool = True,
     ) -> bool:
         """Transmit `params`; `program_name` overrides the category on the wire.
 
@@ -326,6 +328,8 @@ class HonCommand:
             params,
             ancillary_params,
             self._category_name if program_name is None else program_name,
+            wire_command=wire_command,
+            energy_label=energy_label,
         )
         if not result:
             _LOGGER.error("Command rejected by cloud: %s", self._name)
@@ -349,9 +353,15 @@ class HonCommand:
         params: dict[str, str | float],
         *,
         program_name: str | None = None,
+        wire_command: str | None = None,
+        energy_label: bool = True,
     ) -> bool:
         return await self._send_parameters(
-            params, sync_shadow=False, program_name=program_name
+            params,
+            sync_shadow=False,
+            program_name=program_name,
+            wire_command=wire_command,
+            energy_label=energy_label,
         )
 
     @property

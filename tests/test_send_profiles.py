@@ -3,6 +3,8 @@
 """The per-type send profile: which keys a sparse patch puts on the wire."""
 from __future__ import annotations
 
+import asyncio
+
 from tests._golden import install_stubs
 
 install_stubs()
@@ -87,3 +89,47 @@ def test_the_hpwh_profile_keeps_the_requested_order() -> None:
         HPWH,
     )
     assert list(prepared.payload) == ["onOffStatus", "tempSel"]
+
+
+class _RecordingApi:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def send_command(self, appliance, command, parameters, ancillary,
+                           program_name="", *, wire_command=None, energy_label=True):
+        self.calls.append((command, dict(parameters), program_name,
+                           wire_command, energy_label))
+        return True
+
+
+def _dispatch(appliance, command, patch):
+    api = _RecordingApi()
+    command._api = api
+    appliance.sync_payload_to_params = lambda payload: None
+    ok = asyncio.run(CommandDispatcher().dispatch(appliance, patch))
+    return ok, api.calls
+
+
+def test_an_hw_write_goes_out_as_setparameters_without_energy_label() -> None:
+    appliance = _Appliance()
+    command = _settings(appliance)
+    ok, calls = _dispatch(
+        appliance, command, CommandPatch("settings", {"tempSel": "45"}, action="t")
+    )
+    assert ok is True
+    assert calls == [
+        ("settings", {"tempSel": "45"}, "setParameters", "setParameters", False)
+    ]
+
+
+def test_another_type_goes_out_exactly_as_before() -> None:
+    appliance = _Appliance()
+    appliance.appliance_type = "HO"
+    command = _settings(appliance)
+    ok, calls = _dispatch(
+        appliance, command, CommandPatch("settings", {"tempSel": "45"}, action="t")
+    )
+    assert ok is True
+    name, payload, program_name, wire, label = calls[0]
+    assert (name, wire, label) == ("settings", None, True)
+    assert set(payload) == {"tempSel", "operationName", "opp1EcoDays"}

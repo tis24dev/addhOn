@@ -653,7 +653,9 @@ class _WireApi:
         self.bodies: list[dict] = []
         self.fail = fail
 
-    async def send_command(self, appliance, name, params, ancillary, category) -> bool:
+    async def send_command(
+        self, appliance, name, params, ancillary, category, *, wire_command=None, energy_label=True
+    ) -> bool:
         if self.fail:
             raise RuntimeError("cloud refused")
         self.bodies.append({"name": name, "params": dict(params), "category": category})
@@ -1700,7 +1702,9 @@ class _DwWireApi:
     def __init__(self) -> None:
         self.bodies: list[dict] = []
 
-    async def send_command(self, appliance, name, params, ancillary, category) -> bool:
+    async def send_command(
+        self, appliance, name, params, ancillary, category, *, wire_command=None, energy_label=True
+    ) -> bool:
         self.bodies.append({
             "name": name, "params": dict(params), "ancillary": dict(ancillary), "category": category,
         })

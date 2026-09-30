@@ -65,7 +65,9 @@ class FakeApi:
     async def load_maintenance(self, a):
         return _load("maintenance.json")
 
-    async def send_command(self, appliance, name, params, ancillary, category):
+    async def send_command(
+        self, appliance, name, params, ancillary, category, *, wire_command=None, energy_label=True
+    ):
         self.sent.append((name, dict(params), dict(ancillary), category))
         return True
 
@@ -527,7 +529,7 @@ class ClusterBehaviorTest(unittest.TestCase):
                 self.wire_payload = None
 
             async def send_command(
-                self, appliance, name, params, ancillary, category
+                self, appliance, name, params, ancillary, category, *, wire_command=None, energy_label=True
             ):
                 self.wire_payload = params
                 return await super().send_command(
@@ -637,7 +639,9 @@ class ClusterBehaviorTest(unittest.TestCase):
         release = asyncio.Event()
 
         class BlockingFailApi(FakeApi):
-            async def send_command(self, appliance, name, params, ancillary, category):
+            async def send_command(
+        self, appliance, name, params, ancillary, category, *, wire_command=None, energy_label=True
+    ):
                 started.set()
                 await release.wait()
                 raise RuntimeError("cloud send failed")

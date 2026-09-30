@@ -66,6 +66,8 @@ class Command(Protocol):
         params: dict[str, str | float],
         *,
         program_name: str | None = None,
+        wire_command: str | None = None,
+        energy_label: bool = True,
     ) -> Awaitable[bool]: ...
 
 

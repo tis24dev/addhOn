@@ -462,7 +462,10 @@ class CommandDispatcher:
                     )
                     _emit_payload_safely(common_fields, prepared)
                     result = await prepared.command.send_exact(
-                        prepared.payload, program_name=patch.program_name
+                        prepared.payload,
+                        program_name=patch.program_name,
+                        wire_command=profile.wire_commands.get(patch.command_name),
+                        energy_label=profile.energy_label,
                     )
                 except BaseException as error:
                     rollback(own_write_snapshots)

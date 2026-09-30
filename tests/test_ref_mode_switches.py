@@ -198,7 +198,8 @@ class RecordingApi:
         self.sent: list[dict] = []
 
     async def send_command(
-        self, appliance, command, parameters, ancillary_parameters, program_name=""
+        self, appliance, command, parameters, ancillary_parameters, program_name="",
+        *, wire_command=None, energy_label=True,
     ) -> bool:
         self.sent.append(
             {
