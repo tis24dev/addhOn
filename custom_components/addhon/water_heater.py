@@ -38,6 +38,7 @@ from .hpwh import (
     HPWH_START_COMMAND,
     appliance_series,
     boost_auto_off_due,
+    boost_block,
     boost_patch,
     code,
     controls_supported,
@@ -91,21 +92,32 @@ class _BoostAutoOff:
     It belongs to the config entry, not to an entity, so it keeps working when the
     water heater entity is disabled or was never created.
 
-    D7, one send per episode. An episode is the water standing at one numeric
-    target. It ends only when the water leaves the target (`temp != tempSel`, or
-    either missing or unreadable) or when `tempSel` changes. A local `boostStatus`
+    D7, one successful send per episode. An episode is the water standing at one
+    numeric target. It ends only when the water leaves the target (`temp != tempSel`,
+    or either missing or unreadable) or when `tempSel` changes. A local `boostStatus`
     "0" does NOT end it: the dispatcher writes that "0" into the shadow itself when a
     send succeeds, so ending the episode there made a stale cloud "1" look like a new
     boost and switched it off again on every poll.
+
+    A failed send is retried on the following updates, at most `_MAX_ATTEMPTS` sends
+    per episode and never two at once (PR #117 review): one transient failure no longer
+    leaves the boost on, and a cloud that keeps refusing costs three warnings, not one
+    a minute.
+
+    It sends only where the manual boost switch would (`boost_block`: no active error,
+    remote control allowed, heater on, no vacation), which the app's own effect does
+    not check (PR #117 review). A refused update costs no attempt.
     """
+
+    _MAX_ATTEMPTS = 3
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, coordinator, client) -> None:
         self._hass = hass
         self._entry = entry
         self._coordinator = coordinator
         self._client = client
-        # {appliance_id: the numeric tempSel the last automatic off was sent for}
-        self._sent_for: dict[str, float] = {}
+        # {appliance_id: the episode of the numeric tempSel the water stands at}
+        self._episodes: dict[str, _Episode] = {}
 
     def handle_update(self) -> None:
         for appliance_id, data in coordinator_data_map(self._coordinator).items():
@@ -117,24 +129,58 @@ class _BoostAutoOff:
             get = partial(_read, data.get("attributes"))
             temp, target = _number(get("temp")), _number(get("tempSel"))
             if temp is None or target is None or temp != target:
-                self._sent_for.pop(appliance_id, None)
+                self._episodes.pop(appliance_id, None)
                 continue
-            if not boost_auto_off_due(get) or self._sent_for.get(appliance_id) == target:
+            if not boost_auto_off_due(get):
                 continue
-            self._sent_for[appliance_id] = target
+            episode = self._episodes.get(appliance_id)
+            if episode is None or episode.target != target:
+                episode = self._episodes[appliance_id] = _Episode(target)
+            if episode.done or episode.in_flight or episode.attempts >= self._MAX_ATTEMPTS:
+                continue
+            if boost_block(get, turning_on=False) is not None:
+                continue
+            episode.in_flight = True
+            episode.attempts += 1
             self._entry.async_create_background_task(
-                self._hass, self._send(appliance), name="addhon_hpwh_boost_auto_off"
+                self._hass, self._send(appliance, episode), name="addhon_hpwh_boost_auto_off"
             )
 
-    async def _send(self, appliance) -> None:
+    async def _send(self, appliance, episode: _Episode) -> None:
         try:
             await async_dispatch_patch(
                 self._hass, self._client, appliance, boost_patch(False)
             )
         except Exception as err:  # noqa: BLE001 - nobody awaits this task
-            # An automatic send has no user to show the error to; log it. The episode
-            # stays recorded, so there is no retry loop.
-            _LOGGER.warning("Heat-pump water heater: automatic boost off failed: %s", err)
+            # An automatic send has no user to show the error to; log it.
+            if episode.attempts >= self._MAX_ATTEMPTS:
+                _LOGGER.warning(
+                    "Heat-pump water heater: automatic boost off failed (attempt %d of %d, "
+                    "giving up until the water leaves the target): %s",
+                    episode.attempts, self._MAX_ATTEMPTS, err,
+                )
+            else:
+                _LOGGER.warning(
+                    "Heat-pump water heater: automatic boost off failed (attempt %d of %d, "
+                    "retried on the next update): %s",
+                    episode.attempts, self._MAX_ATTEMPTS, err,
+                )
+        else:
+            episode.done = True
+        finally:
+            episode.in_flight = False
+
+
+class _Episode:
+    """One stay of the water at one target: how the automatic boost off went there."""
+
+    __slots__ = ("target", "attempts", "in_flight", "done")
+
+    def __init__(self, target: float) -> None:
+        self.target = target
+        self.attempts = 0
+        self.in_flight = False
+        self.done = False
 
 
 def _mode_categories(appliance) -> dict[str, str] | None:

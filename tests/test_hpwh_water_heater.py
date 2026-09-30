@@ -490,7 +490,9 @@ class BoostAutoOffListenerTest(unittest.IsolatedAsyncioTestCase):
         await _drain_tasks()
         self.assertEqual(SENT, [])
 
-    async def test_a_failed_send_is_logged_and_not_retried(self) -> None:
+    async def test_a_failed_send_is_retried_at_most_three_times(self) -> None:
+        # PR #117 review: one transient failure must not leave the boost on, and a
+        # cloud that keeps refusing must not cost a warning a minute.
         rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
         calls: list = []
 
@@ -499,12 +501,65 @@ class BoostAutoOffListenerTest(unittest.IsolatedAsyncioTestCase):
             raise HomeAssistantError("nope")
 
         with mock.patch.object(platform, "async_dispatch_patch", _fail):
+            with self.assertLogs(platform._LOGGER, level="WARNING") as logs:
+                for _ in range(6):
+                    rig.coordinator.fire()
+                    await _drain_tasks()
+        self.assertEqual(len(calls), 3)
+        self.assertIn("giving up", logs.output[-1])
+
+    async def test_a_retry_that_succeeds_stops_the_episode(self) -> None:
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
+        calls: list = []
+
+        async def _fail_once(hass, client, appliance, patch) -> None:
+            calls.append(patch)
+            if len(calls) == 1:
+                raise HomeAssistantError("transient")
+
+        with mock.patch.object(platform, "async_dispatch_patch", _fail_once):
             with self.assertLogs(platform._LOGGER, level="WARNING"):
+                for _ in range(5):
+                    rig.coordinator.fire()
+                    await _drain_tasks()
+        self.assertEqual(len(calls), 2)
+
+    async def test_no_second_send_while_one_is_in_flight(self) -> None:
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
+        release = asyncio.Event()
+        calls: list = []
+
+        async def _slow(hass, client, appliance, patch) -> None:
+            calls.append(patch)
+            await release.wait()
+
+        with mock.patch.object(platform, "async_dispatch_patch", _slow):
+            for _ in range(3):
                 rig.coordinator.fire()
                 await _drain_tasks()
-            rig.coordinator.fire()
+            self.assertEqual(len(calls), 1)
+            release.set()
             await _drain_tasks()
-        self.assertEqual(len(calls), 1)
+
+    async def test_refused_states_send_nothing_and_cost_no_attempt(self) -> None:
+        # PR #117 review: the automatic off obeys the manual switch's refusals, which the
+        # app's own effect does not check. A refused update is not an attempt.
+        for overrides in (
+            {"onOffStatus": 0},
+            {"onOffStatus": 1, "remoteCtrValid": 0},
+            {"onOffStatus": 1, "errors": 5},
+        ):
+            with self.subTest(**overrides):
+                rig = await _rig(boostStatus=1, temp=40, **overrides)
+                for _ in range(4):
+                    rig.coordinator.fire()
+                    await _drain_tasks()
+                self.assertEqual(SENT, [])
+                # Once the refusal clears, the episode still has all its attempts.
+                rig.attributes.update({"onOffStatus": 1, "remoteCtrValid": 1, "errors": 0})
+                rig.coordinator.fire()
+                await _drain_tasks()
+                self.assertEqual([dict(p.values) for p in SENT], [{"boostStatus": "0"}])
 
     async def test_an_unexpected_error_is_logged_not_left_in_the_task(self) -> None:
         rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
