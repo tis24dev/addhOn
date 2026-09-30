@@ -227,6 +227,18 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "types": (APPLIANCE_HW,),
         "read": HPWH_STATE_ATTRS,
     },
+    {
+        "tag": "water_heater.heat_pump_water_heater",
+        "types": (APPLIANCE_HW,),
+        "read": ("temp", "tempSel", "onOffStatus", "machMode", "boostStatus"),
+        "write": ("onOffStatus", "tempSel", "boostStatus", "machMode"),
+    },
+    {
+        "tag": "switch.boost_switch",
+        "types": (APPLIANCE_HW,),
+        "read": ("boostStatus",),
+        "write": ("boostStatus",),
+    },
     # Reads machMode (3 = paused) but writes the `pause` parameter of the
     # pauseProgram/resumeProgram commands -- the one row in this table whose two
     # halves name different parameters, and a reader who assumed they matched
@@ -2337,6 +2349,7 @@ def _mapped_sets(
         # The state sensor is a custom class with no description row, so the walk
         # above cannot see the eco windows, the scheme and the day mask it reads.
         mapped_attrs |= set(HPWH_STATE_ATTRS)
+        mapped_params |= {"onOffStatus", "tempSel", "boostStatus", "machMode"}
     if app_type == APPLIANCE_HO:
         # Same shape as the AP block below, same reason. The hood's five parameters
         # are each read as state AND written as a command field, but only two of the

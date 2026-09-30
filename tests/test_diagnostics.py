@@ -4252,6 +4252,14 @@ class HeatPumpStateCoverageTest(unittest.TestCase):
         self.assertNotIn("opp1EcoDays", mapped_attrs)
         self.assertNotIn("sensor.heat_pump_state", sources)
 
+    def test_the_controls_name_what_they_write(self) -> None:
+        _attrs, params, sources, _ = diagnostics._mapped_sets("HW")
+        heater = sources["water_heater.heat_pump_water_heater"]
+        self.assertEqual(set(heater["write"]), {"onOffStatus", "tempSel", "boostStatus", "machMode"})
+        self.assertEqual(sources["switch.boost_switch"]["write"], ["boostStatus"])
+        for name in ("onOffStatus", "tempSel", "boostStatus", "machMode"):
+            self.assertIn(name, params)
+
 
 class CoverageExpectedAbsentTest(unittest.TestCase):
     """The mirror axis: what this code maps and the device does not have."""
@@ -5568,7 +5576,7 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         # reader can never see, and a row whose domain is not a real platform
         # would never join with `by_domain`.
         domains = {"sensor", "binary_sensor", "number", "select", "switch",
-                   "button", "climate", "fan"}
+                   "button", "climate", "fan", "water_heater"}
         for entry in diagnostics._CUSTOM_ENTITY_SOURCES:
             domain, _dot, suffix = entry["tag"].partition(".")
             self.assertIn(domain, domains, entry["tag"])
