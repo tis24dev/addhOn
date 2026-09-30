@@ -315,6 +315,12 @@ def _whole_fahrenheit(celsius: float) -> bool:
 
     The tolerance absorbs the float error of the round trip (°F -> °C here -> °F),
     which is of the order of 1e-13; a real fractional °F is off by at least 0.1.
+
+    False when the round trip overflows (a finite 1e308 °F becomes an infinite °F
+    here, and `round` raises on infinity): the value then reaches the range check
+    unrounded and is refused there with the translated error (PR #117 review).
     """
     fahrenheit = celsius * 9 / 5 + 32
+    if not math.isfinite(fahrenheit):
+        return False
     return abs(fahrenheit - round(fahrenheit)) < 1e-6

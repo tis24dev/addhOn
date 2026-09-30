@@ -292,6 +292,13 @@ class WaterHeaterTest(unittest.IsolatedAsyncioTestCase):
                 await entity.async_set_temperature(temperature=(fahrenheit - 32) * 5 / 9)
             self.assertEqual(ctx.exception.translation_key, "invalid_setpoint", fahrenheit)
         self.assertEqual(SENT, [])
+        # A finite but huge °F overflows the round trip back to °F: it must still be
+        # the translated refusal, never an OverflowError (PR #117 review).
+        for fahrenheit in (1e308, -1e308):
+            with self.assertRaises(HomeAssistantError) as ctx:
+                await entity.async_set_temperature(temperature=(fahrenheit - 32) / 1.8)
+            self.assertEqual(ctx.exception.translation_key, "invalid_setpoint", fahrenheit)
+        self.assertEqual(SENT, [])
         # Positive control: every whole °F of the range still goes through.
         for fahrenheit in range(95, 168):
             await entity.async_set_temperature(temperature=(fahrenheit - 32) * 5 / 9)
