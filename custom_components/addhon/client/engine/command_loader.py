@@ -370,6 +370,11 @@ class HonCommandLoader:
             parsed_command_count=parsed_commands,
             favourites_outcome=favourite_outcome,
             history_outcome=history_outcome,
+            # From `history_data`, not `self._command_history`: the recovery above may
+            # have failed and reset the latter, and the dump wants the list either way.
+            command_history=(
+                deepcopy(history_data) if isinstance(history_data, list) else []
+            ),
         )
 
     def _parse_candidate(

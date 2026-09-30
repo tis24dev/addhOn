@@ -731,6 +731,8 @@ class DiagnosticsRedactionTest(unittest.TestCase):
         "password", "token", "access_token", "refresh_token",
         "authorization", "secret",
         "transactionid", "transaction_id", "mobileid", "mobile_id",
+        # The table keys of the `/history` rows printed by `command_history` (#112).
+        "pk", "sk", "sk_secondary",
     )
 
     def test_credential_key_names_are_redacted_anywhere_they_appear(self):
@@ -9995,6 +9997,150 @@ class FavouriteNameMaskingTest(unittest.TestCase):
         block = _favourite_block(favourites=("hqd_cottons",))
         enum = block["commands"]["startProgram"]["program"]["enum"]
         self.assertEqual(["Capi nuovi", "Zeta mia", "<favourite 1>"], enum)
+
+
+def _history_entry(timestamp=None, accepted=None, name="startProgram", **parameters):
+    """One `/history` row in the shape the cloud sends (tests/fixtures/ref_10136)."""
+    command = {"commandName": name, "parameters": dict(parameters)}
+    if timestamp is not None:
+        command["timestamp"] = timestamp
+    entry = {"command": command}
+    if accepted is not None:
+        entry["timestampAccepted"] = accepted
+    return entry
+
+
+def _history_appliance(history):
+    appliance = OptionAppliance(options={}, additional_data={})
+    appliance.command_history = history
+    return appliance
+
+
+class CommandHistorySectionTest(unittest.TestCase):
+    """`command_history`: the `/history` list the engine already downloads, printed.
+
+    Issue #112: the official app's `startProgram` payload was the evidence wanted, and
+    the only place a dump showed it -- `attributes.commandHistory` -- was reset to null
+    by the cloud between the reporter's two dumps.
+    """
+
+    def _section(self, appliance):
+        return _option_block(appliance)["command_history"]
+
+    def test_the_same_keys_in_every_state(self):
+        class Raising(OptionAppliance):
+            @property
+            def command_history(self):
+                raise RuntimeError("boom")
+
+        sections = {
+            "unavailable": self._section(OptionAppliance(options={}, additional_data={})),
+            "unreadable": self._section(Raising(options={}, additional_data={})),
+            "empty": self._section(_history_appliance([])),
+            "ok": self._section(_history_appliance([_history_entry()])),
+        }
+        for state, section in sections.items():
+            with self.subTest(state=state):
+                self.assertEqual(state, section["state"])
+                self.assertEqual({"state", "total", "shown", "entries"}, set(section))
+        self.assertEqual(
+            "unreadable", self._section(_history_appliance("not a list"))["state"]
+        )
+
+    def test_newest_first_whatever_order_the_cloud_sends(self):
+        history = [
+            _history_entry(timestamp="2026-09-01T10:00:00.0Z", temp="20"),
+            _history_entry(temp="undated-1"),
+            _history_entry(accepted="2026-09-28T10:30:55.7Z", temp="accepted-only"),
+            _history_entry(timestamp="2026-09-30T16:49:38.123Z", temp="newest"),
+            _history_entry(temp="undated-2"),
+        ]
+        entries = self._section(_history_appliance(history))["entries"]
+        self.assertEqual(
+            ["newest", "accepted-only", "20", "undated-1", "undated-2"],
+            [entry["command"]["parameters"]["temp"] for entry in entries],
+        )
+
+    def test_equal_instants_keep_the_order_received(self):
+        same = "2026-09-30T16:49:38Z"
+        history = [
+            _history_entry(timestamp=same, temp="first"),
+            _history_entry(timestamp=same, temp="second"),
+        ]
+        entries = self._section(_history_appliance(history))["entries"]
+        self.assertEqual(
+            ["first", "second"],
+            [entry["command"]["parameters"]["temp"] for entry in entries],
+        )
+
+    def test_at_most_ten_are_shown_and_the_total_says_how_many_came(self):
+        history = [
+            _history_entry(timestamp=f"2026-09-{day:02d}T10:00:00Z", day=str(day))
+            for day in range(1, 13)
+        ]
+        section = self._section(_history_appliance(history))
+        self.assertEqual(12, section["total"])
+        self.assertEqual(10, section["shown"])
+        self.assertEqual(
+            [str(day) for day in range(12, 2, -1)],
+            [entry["command"]["parameters"]["day"] for entry in section["entries"]],
+        )
+
+    def test_every_command_name_is_kept(self):
+        history = [
+            _history_entry(timestamp="2026-09-02T10:00:00Z", name="settings"),
+            _history_entry(timestamp="2026-09-01T10:00:00Z"),
+        ]
+        entries = self._section(_history_appliance(history))["entries"]
+        self.assertEqual(
+            ["settings", "startProgram"],
+            [entry["command"]["commandName"] for entry in entries],
+        )
+
+    def test_a_non_mapping_entry_is_skipped_but_counted(self):
+        section = self._section(_history_appliance(["junk", _history_entry()]))
+        self.assertEqual(2, section["total"])
+        self.assertEqual(1, section["shown"])
+
+    def test_entries_are_whole_but_identity_is_masked(self):
+        mac = "AA:BB:CC:DD:EE:FF"
+        entry = {
+            "PK": f"user#eu-west-1:identity#mac#{mac}",
+            "SK": "command#startProgram#2026-09-28T10:30:53.344Z",
+            "SK_Secondary": "startProgram#2026-09-28T10:30:53.344Z",
+            "command": {
+                "macAddress": mac,
+                "commandName": "startProgram",
+                "transactionId": f"{mac}_2026-09-28T10:30:53.344Z",
+                "device": {"mobileId": "phone-install-id", "appVersion": "2.29.8"},
+                "attributes": {"channel": "mobileApp"},
+                "parameters": {"permanentPressStatus": "1"},
+                "ancillaryParameters": {"delayStatus": "0"},
+                "timestamp": "2026-09-28T10:30:53.344Z",
+            },
+            "timestampExecuted": "2026-09-28T10:30:55.7Z",
+        }
+        printed = json.loads(
+            json.dumps(self._section(_history_appliance([entry]))["entries"][0])
+        )
+        for key in ("PK", "SK", "SK_Secondary"):
+            self.assertEqual("***", printed[key], key)
+        command = printed["command"]
+        for key in ("macAddress", "transactionId"):
+            self.assertEqual("***", command[key], key)
+        self.assertEqual("***", command["device"]["mobileId"])
+        self.assertNotIn(mac, json.dumps(printed))
+        # Positive control: the payload the section exists for arrives intact.
+        self.assertEqual({"permanentPressStatus": "1"}, command["parameters"])
+        self.assertEqual({"delayStatus": "0"}, command["ancillaryParameters"])
+        self.assertEqual("2.29.8", command["device"]["appVersion"])
+        self.assertEqual("mobileApp", command["attributes"]["channel"])
+        self.assertEqual("2026-09-28T10:30:55.7Z", printed["timestampExecuted"])
+
+    def test_the_section_sits_directly_above_attributes(self):
+        keys = list(_option_block(_history_appliance([_history_entry()])))
+        self.assertEqual(keys.index("command_history") + 1, keys.index("attributes"))
+        self.assertLess(keys.index("appliance_options"), keys.index("command_history"))
 
 
 if __name__ == "__main__":

@@ -470,9 +470,86 @@ class CommandCatalogHydrationTest(unittest.TestCase):
         self.assertEqual(hydration.favourites_outcome, "invalid")
         self.assertEqual(hydration.history_outcome, "invalid")
         self.assertIn("settings", hydration.commands)
+        # A stream that is not a list leaves nothing to show in a dump either.
+        self.assertEqual(hydration.command_history, [])
+
+    def test_the_history_list_is_carried_verbatim_for_the_dump(self) -> None:
+        # Issue #112: the official app's own `startProgram` payloads live in this list,
+        # and the diagnostics section prints it. Every entry and every key, as sent.
+        history = [
+            {
+                "PK": "row-key",
+                "command": {
+                    "commandName": "startProgram",
+                    "parameters": {"permanentPressStatus": "1", "silentMode": "1"},
+                    "ancillaryParameters": {"delayStatus": "0"},
+                    "attributes": {"channel": "mobileApp"},
+                },
+                "timestampAccepted": "2026-09-28T10:30:53.344Z",
+            },
+            {"command": {"commandName": "settings"}},
+        ]
+        original = copy.deepcopy(history)
+
+        hydration = self.load(
+            TypedApi(_fetch(_valid_catalog(), self.request), history=history)
+        )
+
+        self.assertEqual(hydration.command_history, original)
+        # A copy, so neither side can reach into the other.
+        self.assertIsNot(hydration.command_history, history)
+        hydration.command_history[0]["command"]["parameters"]["silentMode"] = "0"
+        self.assertEqual(history, original)
+
+    def test_the_list_survives_a_history_recovery_that_failed(self) -> None:
+        # The enrichment that reads this list resets its own copy when it trips on a
+        # malformed entry. The dump must still get what the cloud sent: a malformed
+        # history is itself something a maintainer wants to see.
+        history = [{"command": "not a mapping"}]
+
+        hydration = self.load(
+            TypedApi(_fetch(_valid_catalog(), self.request), history=history)
+        )
+
+        self.assertEqual(hydration.history_outcome, "invalid")
+        self.assertEqual(hydration.command_history, history)
+
+    def test_a_cache_hydration_still_carries_the_live_history(self) -> None:
+        # The history is its own request, fetched beside the catalog: a catalog that
+        # falls back to the cache does not take the history down with it.
+        self.repo.replace(self.request, _valid_catalog())
+        history = [{"command": {"commandName": "startProgram"}}]
+
+        hydration = self.load(
+            TypedApi(_structural_error(self.request), history=history)
+        )
+
+        self.assertEqual(hydration.source, "cache")
+        self.assertEqual(hydration.command_history, history)
 
 
 class ApplianceAtomicAdoptionTest(unittest.TestCase):
+    def test_a_successful_hydration_hands_the_history_to_the_appliance(self) -> None:
+        appliance_double = ApplianceDouble()
+        request = _request(appliance_double)
+        history = [{"command": {"commandName": "startProgram"}}]
+        api = TypedApi(_fetch(_valid_catalog(), request), history=history)
+        appliance = HonAppliance(
+            api,
+            {
+                "applianceTypeName": "FRE",
+                "applianceModelId": "4321",
+                "macAddress": "AA:BB",
+                "code": "CODE123",
+            },
+            catalog_repository=CommandCatalogRepository(None, "it"),
+        )
+        self.assertEqual(appliance.command_history, [])
+
+        _run(appliance.load_commands())
+
+        self.assertEqual(appliance.command_history, history)
+
     def test_failed_hydration_keeps_all_previous_engine_mappings(self) -> None:
         appliance_double = ApplianceDouble()
         request = _request(appliance_double)
@@ -490,9 +567,11 @@ class ApplianceAtomicAdoptionTest(unittest.TestCase):
         old_commands = {"old": object()}
         old_additional = {"old": object()}
         old_model = {"old": object()}
+        old_history = [{"old": object()}]
         appliance._commands = old_commands  # noqa: SLF001 - atomicity contract
         appliance._additional_data = old_additional  # noqa: SLF001
         appliance._appliance_model = old_model  # noqa: SLF001
+        appliance._command_history = old_history  # noqa: SLF001
 
         with self.assertRaises(CommandCatalogUnavailable):
             _run(appliance.load_commands())
@@ -500,6 +579,7 @@ class ApplianceAtomicAdoptionTest(unittest.TestCase):
         self.assertIs(appliance.commands, old_commands)
         self.assertIs(appliance.additional_data, old_additional)
         self.assertIs(appliance._appliance_model, old_model)  # noqa: SLF001
+        self.assertIs(appliance.command_history, old_history)
 
 
 class CatalogOptionsSiblingTest(unittest.TestCase):

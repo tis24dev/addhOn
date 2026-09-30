@@ -67,6 +67,7 @@ class HonAppliance:
         self._attributes: dict[str, Any] = {}
         self._zone = zone
         self._additional_data: dict[str, Any] = {}
+        self._command_history: list[dict[str, Any]] = []
         self._last_update: Optional[datetime] = None
         self._default_setting = HonParameter("", {}, "")
         self._connection = (
@@ -205,6 +206,15 @@ class HonAppliance:
         return self._additional_data
 
     @property
+    def command_history(self) -> list[dict[str, Any]]:
+        """The cloud's `/history` list from the last catalog load, verbatim.
+
+        Read by the diagnostics dump only. Refreshed when the catalog is loaded (setup
+        or reload), not on every poll.
+        """
+        return self._command_history
+
+    @property
     def zone(self) -> int:
         return self._zone
 
@@ -281,6 +291,7 @@ class HonAppliance:
         ).load_commands()
         self._commands = hydration.commands
         self._additional_data = hydration.additional_data
+        self._command_history = hydration.command_history
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 
