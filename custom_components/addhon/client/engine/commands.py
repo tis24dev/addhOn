@@ -57,6 +57,14 @@ def _js_number(value: object) -> float:
         return math.nan
 
 
+def _whole_minutes(value: object) -> int:
+    """`value` as a whole number of minutes; 0 when absent or unreadable."""
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 class _CanonicalExactPayload(dict[str, str | float]):
     __slots__ = ("command",)
 
@@ -397,6 +405,11 @@ class HonCommand:
             # attributes keep "0" and the ancillaries the schema's own value.
             wire_energy_label = self._energy_label(params)
             ancillary["energyLabel"] = wire_energy_label
+        if self._is_washer_start() and _whole_minutes(params.get("delayTime")) > 0:
+            # Issue #112: the app confirms every delayed washer start with
+            # ecoDelayStart '0' (seen in each delayed command of the reporters'
+            # histories); '1' belongs to its Eco Delay configuration, which we lack.
+            ancillary["ecoDelayStart"] = "0"
         if sync_shadow:
             self.appliance.sync_command_to_params(self.name)
         result = await self.api.send_command(

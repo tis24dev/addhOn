@@ -1688,6 +1688,32 @@ class WasherStartBodyTest(unittest.TestCase):
                 self.assertEqual("0", data["attributes"]["energyLabel"])
                 self.assertEqual(cmd.ancillary_parameters(), data["ancillaryParameters"])
 
+    def test_a_delayed_washer_start_confirms_eco_delay_off(self) -> None:
+        for kwargs in (
+            dict(platform=None),
+            dict(platform="HQD"),
+            dict(appliance_type="WD", platform=None),
+        ):
+            with self.subTest(**kwargs):
+                data, _ = self._send(delay="150", **kwargs)
+                self.assertEqual("150", str(data["parameters"]["delayTime"]))
+                self.assertEqual("0", data["ancillaryParameters"]["ecoDelayStart"])
+
+    def test_no_delay_no_eco_delay_start(self) -> None:
+        for kwargs in (dict(delay="0"), dict(delay=None)):
+            with self.subTest(**kwargs):
+                data, _ = self._send(**kwargs)
+                self.assertNotIn("ecoDelayStart", data["ancillaryParameters"])
+
+    def test_eco_delay_start_is_for_washer_starts_only(self) -> None:
+        for kwargs in (
+            dict(appliance_type="DW", platform=None),
+            dict(command="settings", platform=None),
+        ):
+            with self.subTest(**kwargs):
+                data, cmd = self._send(delay="150", **kwargs)
+                self.assertEqual(cmd.ancillary_parameters(), data["ancillaryParameters"])
+
 
 if __name__ == "__main__":
     unittest.main()
