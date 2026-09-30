@@ -16,6 +16,7 @@ from .command_diagnostics import emit_command_event, record_expected_update
 from .const import DOMAIN
 from .client.engine.exceptions import ApiError
 from .param_rollback import restore_owned_params, snapshot_params
+from .send_profiles import LEGACY, SendProfile, profile_for
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -307,6 +308,7 @@ class CommandDispatcher:
         self,
         command: HonCommand,
         patch: CommandPatch,
+        profile: SendProfile = LEGACY,
     ) -> PreparedCommand:
         parameters = command.parameters
         selector_key = self._selector_key(command, patch)
@@ -348,20 +350,28 @@ class CommandDispatcher:
 
         requested_order = list(patch.values)
         requested = frozenset(requested_order)
-        mandatory_order = [
-            key
-            for key, parameter in active_parameters.items()
-            if parameter.mandatory and key not in requested
-        ]
+        mandatory_order = (
+            [
+                key
+                for key, parameter in active_parameters.items()
+                if parameter.mandatory and key not in requested
+            ]
+            if profile.backfill_mandatory
+            else []
+        )
         mandatory = frozenset(mandatory_order)
-        changed_order = [
-            key
-            for key, parameter in active_parameters.items()
-            if key not in requested
-            and key not in mandatory
-            and key in before_values
-            and parameter.intern_value != before_values[key]
-        ]
+        changed_order = (
+            [
+                key
+                for key, parameter in active_parameters.items()
+                if key not in requested
+                and key not in mandatory
+                and key in before_values
+                and parameter.intern_value != before_values[key]
+            ]
+            if profile.include_rule_changes
+            else []
+        )
         changed = frozenset(changed_order)
 
         payload = {
@@ -395,6 +405,7 @@ class CommandDispatcher:
                 if command_before is None:
                     raise KeyError(patch.command_name)
 
+                profile = profile_for(getattr(appliance, "appliance_type", None))
                 parameter_snapshots = [
                     (command, snapshot_params(command.parameters))
                     for command in self._command_tree(commands)
@@ -429,7 +440,7 @@ class CommandDispatcher:
                 own_write_snapshots = parameter_snapshots
                 try:
                     try:
-                        prepared = self._prepare(command_before, patch)
+                        prepared = self._prepare(command_before, patch, profile)
                     finally:
                         # Taken right after _prepare()'s own mutations (success or
                         # partial failure), before send_exact is awaited: the
