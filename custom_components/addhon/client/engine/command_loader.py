@@ -55,6 +55,16 @@ _LOGGER = logging.getLogger(__name__)
 _NOT_RECOVERED = frozenset({"delayTime"})
 
 
+def _normalized_pr_code(value: Any) -> str:
+    """`prCode` as comparable text: "205", 205 and "205.0" are the same programme."""
+    text = str(value).strip()
+    with suppress(ValueError, OverflowError):
+        number = float(text)
+        if number.is_integer():
+            return str(int(number))
+    return text
+
+
 class _SemanticCatalogError(Exception):
     """Internal marker carrying only bounded parser counts."""
 
@@ -556,9 +566,31 @@ class HonCommandLoader:
             None,
         )
 
+    @staticmethod
+    def _programme_codes(command: HonCommand) -> dict[str, str]:
+        """Each programme category of `command` mapped to its fixed prCode, normalized.
+
+        Empty for a command without real categories (`categories` is then `{"_": self}`)
+        and for one whose categories declare no fixed prCode (e.g. `settings` split into
+        setParameters/setConfig): those keep the plain recovery. The code is read from
+        the schema, not from `value`, which a previous recovery may have overwritten.
+        Favourites are left out: each is a copy of a programme category carrying the
+        same code, so counting them would make every favourited programme ambiguous.
+        """
+        if command.categories.get("_") is command:
+            return {}
+        codes: dict[str, str] = {}
+        for key, category in command.categories.items():
+            parameter = category.parameters.get("prCode")
+            if category.is_favourite or not isinstance(parameter, HonParameterFixed):
+                continue
+            if (code := parameter.schema_value) is not None:
+                codes[key] = _normalized_pr_code(code)
+        return codes
+
     def _set_last_category(
         self, command: HonCommand, name: str, parameters: dict[str, Any]
-    ) -> HonCommand:
+    ) -> Optional[HonCommand]:
         """Point `name` at the category the last accepted command used.
 
         The swap is applied to the LOADER's own dict rather than through the
@@ -568,6 +600,12 @@ class HonCommandLoader:
         ``self._commands = command_loader.commands`` only AFTER we return, which would
         overwrite the swapped entry and silently discard the recovery. Writing here is
         what makes ``return self._commands[name]`` (this method's stated intent) true.
+
+        The hOn app's own starts name neither `program` nor `category`: the programme
+        travels only as its `prCode`. Recovered onto the default category, such a start
+        left the command with one programme's prCode and another's parameters (issue
+        #112), so the category is looked up by that code instead. None means no single
+        category owns it: the caller must then recover nothing at all.
         """
         if not command.categories:
             return command
@@ -575,6 +613,14 @@ class HonCommandLoader:
             category = self._clean_name(str(program))
         elif (category := parameters.pop("category", None)) is not None:
             category = str(category)
+        elif codes := self._programme_codes(command):
+            if (pr_code := parameters.get("prCode")) is None:
+                return None
+            wanted = _normalized_pr_code(pr_code)
+            matches = [key for key, code in codes.items() if code == wanted]
+            if len(matches) != 1:
+                return None
+            category = matches[0]
         else:
             return command
         # Same guard as the category setter: an unknown category leaves the default in
@@ -595,8 +641,9 @@ class HonCommandLoader:
             last_command = self._command_history[last_index]
             raw_parameters = last_command.get("command", {}).get("parameters", {})
             parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
-            command = self._set_last_category(command, name, parameters)
-            for key, data in command.settings.items():
+            if (target := self._set_last_category(command, name, parameters)) is None:
+                continue
+            for key, data in target.settings.items():
                 if key in _NOT_RECOVERED or parameters.get(key) is None:
                     continue
                 with suppress(ValueError):

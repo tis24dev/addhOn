@@ -445,6 +445,56 @@ class LastCategoryRecoveryTest(unittest.TestCase):
         self.assertEqual("7", str(parameters["tempSel"].value))
         self.assertEqual("0", str(parameters["delayTime"].value))
 
+    @staticmethod
+    def _app_start(parameters):
+        # The hOn app's own starts name no `program`/`category` parameter: the programme
+        # travels only as its prCode (both issue #112 dumps, 10 of 10 history entries).
+        return [{"command": {"commandName": "startProgram", "parameters": parameters}}]
+
+    def test_an_app_start_selects_the_category_of_its_prcode(self) -> None:
+        # Issue #112: recovered onto the default category, an app start left the washer
+        # holding one programme's prCode with another's parameters.
+        for pr_code in ("5", 5, "5.0"):
+            with self.subTest(pr_code=pr_code):
+                app = self._recovered(self._app_start({"prCode": pr_code, "tempSel": "7"}))
+                command = app.commands["startProgram"]
+                self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", command.category)
+                self.assertTrue(command.selected_explicitly)
+                self.assertEqual("7", str(command.parameters["tempSel"].value))
+                default = command.categories["super_cool"]
+                self.assertEqual("1", str(default.parameters["prCode"].value))
+                self.assertEqual("5", str(default.parameters["tempSel"].value))
+
+    def test_an_unknown_prcode_recovers_nothing(self) -> None:
+        # No category owns the code, so there is no programme to put the values on: the
+        # default stays as the schema built it rather than taking a stranger's values.
+        app = self._recovered(self._app_start({"prCode": "77", "tempSel": "7"}))
+        command = app.commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.SUPER_COOL", command.category)
+        self.assertFalse(command.selected_explicitly)
+        self.assertEqual("1", str(command.parameters["prCode"].value))
+        self.assertEqual("5", str(command.parameters["tempSel"].value))
+
+    def test_a_favourite_does_not_make_the_prcode_ambiguous(self) -> None:
+        # A favourite is a copy of its programme's category, prCode included; the base
+        # category is the one the code names.
+        api = DictApi(
+            _RICH_COMMANDS,
+            favourites=_RICH_FAVOURITES,
+            history=self._app_start({"prCode": "1", "tempSel": "6"}),
+        )
+        command = _build(NaAppliance, api).commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.SUPER_COOL", command.category)
+        self.assertFalse(command.is_favourite)
+        self.assertTrue(command.selected_explicitly)
+        self.assertEqual("6", str(command.parameters["tempSel"].value))
+
+    def test_a_named_program_still_recovers_its_values(self) -> None:
+        app = self._recovered(_RICH_HISTORY)
+        command = app.commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", command.category)
+        self.assertEqual("7", str(command.parameters["tempSel"].value))
+
 
 class ClusterBehaviorTest(unittest.TestCase):
     def test_send_prstr_and_programrules(self) -> None:
