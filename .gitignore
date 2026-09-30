@@ -14,6 +14,7 @@ __pycache__/
 !/diagnostics/issue106-dumps/
 # Local working artifacts (not versioned)
 /apk/
+/apk2/
 /docs/hon-internal-notes.md
 /docs/superpowers/
 
