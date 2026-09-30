@@ -5,6 +5,7 @@
 the cooker hood's power, and the fridge's independent boost modes."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import logging
 
@@ -47,7 +48,7 @@ from .const import (
 )
 from .debug_utils import redact_id
 from .hon_commands import command_param
-from .hpwh import boost_block, boost_patch, code as hpwh_code
+from .hpwh import boost_block, boost_patch, code as hpwh_code, controls_supported
 from .hood import (
     HOOD_DELAY_STATUS_PARAM,
     HOOD_LIGHT_PARAM,
@@ -609,11 +610,14 @@ def _appliance_switches(
             app_type, len(created_modes), created_modes,
         )
     elif app_type == APPLIANCE_HW:
-        # Heat-pump water heater (#113): experimental, and only when the schema
-        # declares the boost parameter the app's toggle writes.
+        # Heat-pump water heater (#113): experimental, only when the schema declares
+        # the boost parameter the app's toggle writes, and not on the M7B/M8B/M11
+        # series, whose rules are not rebuilt.
         settings = (getattr(appliance, "commands", None) or {}).get("settings")
         parameters = getattr(settings, "parameters", None) or {}
-        if experimental and "boostStatus" in parameters:
+        model = getattr(appliance, "model_attributes", None)
+        series = model.get("series") if isinstance(model, Mapping) else None
+        if experimental and "boostStatus" in parameters and controls_supported(series):
             found.append(HonHeatPumpBoostSwitch(coordinator, appliance_id, client))
     else:
         _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)

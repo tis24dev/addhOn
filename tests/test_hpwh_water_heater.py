@@ -65,10 +65,26 @@ def _appliance():
 
 
 class _Coordinator:
+    """The pieces of HA's DataUpdateCoordinator the platform and its listener use."""
+
     def __init__(self, data) -> None:
         self.data = data
         self.hass = None
         self.last_update_success = True
+        self.listeners: list = []
+
+    def async_add_listener(self, update_callback):
+        self.listeners.append(update_callback)
+
+        def _remove() -> None:
+            self.listeners.remove(update_callback)
+
+        return _remove
+
+    def fire(self) -> None:
+        """What `async_set_updated_data` / a poll does: call every listener."""
+        for update_callback in list(self.listeners):
+            update_callback()
 
 
 class _Entry:
@@ -76,23 +92,50 @@ class _Entry:
 
     def __init__(self, experimental: bool) -> None:
         self.options = {CONF_ENABLE_EXPERIMENTAL: experimental}
+        self.on_unload: list = []
+        self.task_names: list = []
+
+    def async_on_unload(self, func) -> None:
+        self.on_unload.append(func)
+
+    def async_create_background_task(self, hass, target, name):
+        self.task_names.append(name)
+        return asyncio.ensure_future(target)
+
+    def unload(self) -> None:
+        while self.on_unload:
+            self.on_unload.pop()()
 
 
-async def _setup(module, experimental: bool, overrides: dict) -> list:
+class _Rig(types.SimpleNamespace):
+    """One platform set up over one HW appliance: what a test needs to poke at."""
+
+    @property
+    def attributes(self) -> dict:
+        return self.coordinator.data["hw-1"]["attributes"]
+
+
+def _units(unit: str):
+    return types.SimpleNamespace(units=types.SimpleNamespace(temperature_unit=unit))
+
+
+async def _setup(module, experimental: bool, overrides: dict, appliance=None) -> _Rig:
     SENT.clear()
     attributes = dict(json.loads(FIXTURE.read_text(encoding="utf-8"))["attributes"])
     attributes.update(overrides)
     data = {"hw-1": {"type": "HW", "name": "Boiler", "attributes": attributes,
-                     "settings": {}, "appliance": _appliance()}}
+                     "settings": {}, "appliance": appliance or _appliance()}}
+    coordinator = _Coordinator(data)
     hass = types.SimpleNamespace(
-        data={DOMAIN: {"entry-1": {"coordinator": _Coordinator(data), "client": None}}},
-        async_create_task=lambda coro: asyncio.ensure_future(coro),
+        data={DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}},
+        config=_units(_const.UnitOfTemperature.CELSIUS),
     )
+    entry = _Entry(experimental)
     added: list = []
-    await module.async_setup_entry(hass, _Entry(experimental), added.extend)
+    await module.async_setup_entry(hass, entry, added.extend)
     for entity in added:
         entity.hass = hass
-    return added
+    return _Rig(hass=hass, entry=entry, coordinator=coordinator, added=added)
 
 
 async def _record(hass, client, appliance, patch) -> None:
@@ -122,18 +165,18 @@ def tearDownModule() -> None:
         _PATCHERS.pop().stop()
 
 
-async def _build(experimental: bool, **overrides) -> list:
-    return await _setup(platform, experimental, overrides)
+async def _rig(experimental: bool = True, appliance=None, **overrides) -> _Rig:
+    return await _setup(platform, experimental, overrides, appliance)
 
 
-async def _build_switches(experimental: bool, **overrides) -> list:
+async def _build(experimental: bool, appliance=None, **overrides) -> list:
+    return (await _setup(platform, experimental, overrides, appliance)).added
+
+
+async def _build_switches(experimental: bool, appliance=None, **overrides) -> list:
     # The platform also adds the account's debug switches; only the boost is ours.
-    found = await _setup(switch_platform, experimental, overrides)
+    found = (await _setup(switch_platform, experimental, overrides, appliance)).added
     return [e for e in found if isinstance(e, switch_platform.HonHeatPumpBoostSwitch)]
-
-
-def _set_attr(entity, name: str, value) -> None:
-    entity.coordinator.data["hw-1"]["attributes"][name] = value
 
 
 async def _drain_tasks() -> None:
@@ -221,67 +264,166 @@ class BoostSwitchTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(switch.is_on)
 
 
-class BoostAutoOffTest(unittest.IsolatedAsyncioTestCase):
-    async def test_sent_once_when_the_water_reaches_the_target(self) -> None:
-        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
-        entity._handle_coordinator_update()
-        entity._handle_coordinator_update()
-        await _drain_tasks()
+class BoostAutoOffListenerTest(unittest.IsolatedAsyncioTestCase):
+    """The automatic boost off belongs to the config entry, not to an entity (I1/M10)."""
+
+    async def test_the_dispatchers_own_echo_does_not_rearm_it(self) -> None:
+        # The bug: a successful send writes boostStatus "0" into the local shadow
+        # (dispatcher post-commit). If that "0" ended the episode, the cloud's stale
+        # "1" on the next poll would look like a new boost and be switched off again,
+        # once per poll.
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
+
+        async def _echo(hass, client, appliance, patch) -> None:
+            SENT.append(patch)
+            rig.attributes["boostStatus"] = "0"
+            rig.coordinator.fire()
+
+        with mock.patch.object(platform, "async_dispatch_patch", _echo):
+            rig.coordinator.fire()
+            await _drain_tasks()
+            rig.attributes["boostStatus"] = "1"  # the cloud has not caught up yet
+            rig.coordinator.fire()
+            await _drain_tasks()
         self.assertEqual([dict(p.values) for p in SENT], [{"boostStatus": "0"}])
 
+    async def test_sent_once_when_the_water_reaches_the_target(self) -> None:
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
+        rig.coordinator.fire()
+        rig.coordinator.fire()
+        await _drain_tasks()
+        self.assertEqual([dict(p.values) for p in SENT], [{"boostStatus": "0"}])
+        # As a background task of the entry, so Home Assistant cancels it on unload.
+        self.assertEqual(rig.entry.task_names, ["addhon_hpwh_boost_auto_off"])
+
     async def test_not_sent_below_the_target(self) -> None:
-        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=39))[0]
-        entity._handle_coordinator_update()
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=39)
+        rig.coordinator.fire()
         await _drain_tasks()
         self.assertEqual(SENT, [])
 
-    async def test_a_new_episode_sends_again(self) -> None:
-        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
-        entity._handle_coordinator_update()
-        _set_attr(entity, "boostStatus", 0)
-        entity._handle_coordinator_update()
-        _set_attr(entity, "boostStatus", 1)
-        entity._handle_coordinator_update()
+    async def test_not_sent_when_neither_temperature_is_known(self) -> None:
+        rig = await _rig(onOffStatus=1, boostStatus=1)
+        del rig.attributes["temp"]
+        del rig.attributes["tempSel"]
+        rig.coordinator.fire()
+        await _drain_tasks()
+        self.assertEqual(SENT, [])
+
+    async def test_the_water_leaving_the_target_and_coming_back_sends_again(self) -> None:
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
+        rig.coordinator.fire()
+        rig.attributes["temp"] = 39
+        rig.coordinator.fire()
+        rig.attributes["temp"] = 40
+        rig.coordinator.fire()
         await _drain_tasks()
         self.assertEqual(len(SENT), 2)
 
+    async def test_a_new_target_reached_within_the_same_boost_sends_again(self) -> None:
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
+        rig.coordinator.fire()
+        rig.attributes["tempSel"] = 45
+        rig.attributes["temp"] = 45
+        rig.coordinator.fire()
+        await _drain_tasks()
+        self.assertEqual(len(SENT), 2)
+
+    async def test_float_temp_equals_string_target(self) -> None:
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40.0, tempSel="40")
+        rig.coordinator.fire()
+        await _drain_tasks()
+        self.assertEqual(len(SENT), 1)
+
+    async def test_works_without_a_water_heater_entity(self) -> None:
+        appliance = _appliance()
+        del appliance.commands["settings"].parameters["onOffStatus"]
+        rig = await _rig(appliance=appliance, onOffStatus=1, boostStatus=1, temp=40)
+        self.assertEqual(rig.added, [])
+        rig.coordinator.fire()
+        await _drain_tasks()
+        self.assertEqual([dict(p.values) for p in SENT], [{"boostStatus": "0"}])
+
+    async def test_not_registered_without_the_experimental_option(self) -> None:
+        rig = await _rig(experimental=False, onOffStatus=1, boostStatus=1, temp=40)
+        self.assertEqual(rig.coordinator.listeners, [])
+        self.assertEqual(rig.entry.on_unload, [])
+
+    async def test_skipped_for_the_m8b_series(self) -> None:
+        appliance = _appliance()
+        appliance.model_attributes = {"series": "M8B"}
+        rig = await _rig(appliance=appliance, onOffStatus=1, boostStatus=1, temp=40)
+        rig.coordinator.fire()
+        await _drain_tasks()
+        self.assertEqual(SENT, [])
+
+    async def test_unload_removes_the_listener(self) -> None:
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
+        self.assertEqual(len(rig.coordinator.listeners), 1)
+        rig.entry.unload()
+        self.assertEqual(rig.coordinator.listeners, [])
+        rig.coordinator.fire()
+        await _drain_tasks()
+        self.assertEqual(SENT, [])
+
     async def test_a_failed_send_is_logged_and_not_retried(self) -> None:
-        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
+        calls: list = []
 
         async def _fail(hass, client, appliance, patch) -> None:
+            calls.append(patch)
             raise HomeAssistantError("nope")
 
         with mock.patch.object(platform, "async_dispatch_patch", _fail):
             with self.assertLogs(platform._LOGGER, level="WARNING"):
-                entity._handle_coordinator_update()
+                rig.coordinator.fire()
                 await _drain_tasks()
-            entity._handle_coordinator_update()
+            rig.coordinator.fire()
             await _drain_tasks()
-        self.assertEqual(SENT, [])
+        self.assertEqual(len(calls), 1)
 
     async def test_an_unexpected_error_is_logged_not_left_in_the_task(self) -> None:
-        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
+        rig = await _rig(onOffStatus=1, boostStatus=1, temp=40)
 
         async def _boom(hass, client, appliance, patch) -> None:
             raise RuntimeError("executor blew up")
 
         with mock.patch.object(platform, "async_dispatch_patch", _boom):
             with self.assertLogs(platform._LOGGER, level="WARNING"):
-                entity._handle_coordinator_update()
+                rig.coordinator.fire()
                 await _drain_tasks()
 
-    async def test_a_changed_target_within_the_same_boost_is_a_new_episode(self) -> None:
-        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1, temp=40))[0]
-        entity._handle_coordinator_update()
-        _set_attr(entity, "tempSel", 45)
-        _set_attr(entity, "temp", 45)
-        entity._handle_coordinator_update()
-        await _drain_tasks()
-        self.assertEqual(len(SENT), 2)
 
-    async def test_float_temp_equals_string_target(self) -> None:
-        entity = (await _build(experimental=True, onOffStatus=1, boostStatus=1,
-                               temp=40.0, tempSel="40"))[0]
-        entity._handle_coordinator_update()
-        await _drain_tasks()
-        self.assertEqual(len(SENT), 1)
+class SeriesGateTest(unittest.IsolatedAsyncioTestCase):
+    """No controls on the M7B/M8B/M11 series, whose rules are not rebuilt (M3)."""
+
+    @staticmethod
+    def _appliance(series):
+        appliance = _appliance()
+        appliance.model_attributes = {} if series is None else {"series": series}
+        return appliance
+
+    async def test_no_water_heater_on_an_excluded_series(self) -> None:
+        for series in ("M7B", "m8b", " M11 "):
+            self.assertEqual(
+                await _build(experimental=True, appliance=self._appliance(series)), [], series
+            )
+
+    async def test_no_boost_switch_on_an_excluded_series(self) -> None:
+        for series in ("M7B", "m8b", " M11 "):
+            self.assertEqual(
+                await _build_switches(experimental=True, appliance=self._appliance(series)),
+                [],
+                series,
+            )
+
+    async def test_a_missing_or_unknown_series_keeps_the_controls(self) -> None:
+        for series in (None, "m8", "x9"):
+            self.assertEqual(
+                len(await _build(experimental=True, appliance=self._appliance(series))), 1, series
+            )
+            self.assertEqual(
+                len(await _build_switches(experimental=True, appliance=self._appliance(series))),
+                1,
+                series,
+            )

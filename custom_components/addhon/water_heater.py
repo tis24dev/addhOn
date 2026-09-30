@@ -10,6 +10,8 @@ so it carries the keys the official app sends and nothing else.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from functools import partial
 from typing import Any
 
 from homeassistant.components.water_heater import (
@@ -37,6 +39,7 @@ from .hpwh import (
     boost_auto_off_due,
     boost_patch,
     code,
+    controls_supported,
     mode_block,
     mode_patch,
     power_patch,
@@ -53,6 +56,87 @@ _OPERATIONS = [STATE_HEAT_PUMP, STATE_ECO, STATE_ELECTRIC, STATE_OFF]
 def _settings(appliance):
     commands = getattr(appliance, "commands", None) or {}
     return commands.get(HPWH_SETTINGS_COMMAND)
+
+
+def _series(appliance) -> object:
+    """`model_attributes["series"]` as published; `controls_supported` normalizes it."""
+    attributes = getattr(appliance, "model_attributes", None)
+    return attributes.get("series") if isinstance(attributes, Mapping) else None
+
+
+def _has_boost(appliance) -> bool:
+    """The boost switch's own gate: the schema declares the parameter the app writes."""
+    settings = _settings(appliance)
+    return "boostStatus" in (getattr(settings, "parameters", None) or {})
+
+
+def _read(attributes: object, key: str) -> object:
+    """One shadow attribute, read like `HonBaseEntity._get_attr`'s first lookup step:
+    `attributes[key]`, its `.value` when it has one, and "" as None."""
+    if not isinstance(attributes, Mapping):
+        return None
+    value = attributes.get(key)
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        value = value.value
+    return None if value == "" else value
+
+
+class _BoostAutoOff:
+    """Switch boost off once the water is at the target, as the app's dashboard does.
+
+    The app does it in a `useEffect` of `HPWHDashboard` (apk2
+    decomp.txt:2327096-2327135), so only while that screen is open. Here it runs on
+    every coordinator update, at any hour.
+
+    It belongs to the config entry, not to an entity, so it keeps working when the
+    water heater entity is disabled or was never created.
+
+    D7, one send per episode. An episode is the water standing at one numeric
+    target. It ends only when the water leaves the target (`temp != tempSel`, or
+    either missing or unreadable) or when `tempSel` changes. A local `boostStatus`
+    "0" does NOT end it: the dispatcher writes that "0" into the shadow itself when a
+    send succeeds, so ending the episode there made a stale cloud "1" look like a new
+    boost and switched it off again on every poll.
+    """
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, coordinator, client) -> None:
+        self._hass = hass
+        self._entry = entry
+        self._coordinator = coordinator
+        self._client = client
+        # {appliance_id: the numeric tempSel the last automatic off was sent for}
+        self._sent_for: dict[str, float] = {}
+
+    def handle_update(self) -> None:
+        for appliance_id, data in coordinator_data_map(self._coordinator).items():
+            if not isinstance(data, Mapping) or data.get("type") != APPLIANCE_HW:
+                continue
+            appliance = data.get("appliance")
+            if not _has_boost(appliance) or not controls_supported(_series(appliance)):
+                continue
+            get = partial(_read, data.get("attributes"))
+            temp, target = _number(get("temp")), _number(get("tempSel"))
+            if temp is None or target is None or temp != target:
+                self._sent_for.pop(appliance_id, None)
+                continue
+            if not boost_auto_off_due(get) or self._sent_for.get(appliance_id) == target:
+                continue
+            self._sent_for[appliance_id] = target
+            self._entry.async_create_background_task(
+                self._hass, self._send(appliance), name="addhon_hpwh_boost_auto_off"
+            )
+
+    async def _send(self, appliance) -> None:
+        try:
+            await async_dispatch_patch(
+                self._hass, self._client, appliance, boost_patch(False)
+            )
+        except Exception as err:  # noqa: BLE001 - nobody awaits this task
+            # An automatic send has no user to show the error to; log it. The episode
+            # stays recorded, so there is no retry loop.
+            _LOGGER.warning("Heat-pump water heater: automatic boost off failed: %s", err)
 
 
 def _mode_categories(appliance) -> dict[str, str] | None:
@@ -76,12 +160,19 @@ async def async_setup_entry(
 ) -> None:
     if not bool(entry.options.get(CONF_ENABLE_EXPERIMENTAL, False)):
         return
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry_data["coordinator"]
+    # Registered before, and independently of, the entities below.
+    auto_off = _BoostAutoOff(hass, entry, coordinator, entry_data.get("client"))
+    entry.async_on_unload(coordinator.async_add_listener(auto_off.handle_update))
     entities = []
     for appliance_id, data in coordinator_data_map(coordinator).items():
         if data.get("type") != APPLIANCE_HW:
             continue
-        settings = _settings(data.get("appliance"))
+        appliance = data.get("appliance")
+        if not controls_supported(_series(appliance)):
+            continue
+        settings = _settings(appliance)
         parameters = getattr(settings, "parameters", {}) if settings else {}
         if "onOffStatus" not in parameters or "tempSel" not in parameters:
             continue
@@ -94,9 +185,6 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
 
     _attr_translation_key = "heat_pump_water_heater"
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
-    # The (temp, tempSel) of the boost episode already switched off, until boostStatus
-    # stops being "1" (D7: one send per episode).
-    _auto_off_sent_for: tuple | None = None
 
     def __init__(self, coordinator, appliance_id: str) -> None:
         super().__init__(coordinator, appliance_id)
@@ -143,28 +231,6 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
         if code(self._get_attr("onOffStatus")) != "1":
             return STATE_OFF
         return _MACHMODE_TO_OPERATION.get(code(self._get_attr("machMode")) or "")
-
-    def _handle_coordinator_update(self) -> None:
-        """Do what the app's dashboard does: boost off once the water is at the target."""
-        get = self._get_attr
-        if code(get("boostStatus")) != "1":
-            self._auto_off_sent_for = None
-        elif boost_auto_off_due(get):
-            episode = (code(get("temp")), code(get("tempSel")))
-            if episode != self._auto_off_sent_for:
-                self._auto_off_sent_for = episode
-                self.hass.async_create_task(self._auto_boost_off())
-        super()._handle_coordinator_update()
-
-    async def _auto_boost_off(self) -> None:
-        try:
-            await async_dispatch_patch(
-                self.hass, self._hon_client, self._appliance, boost_patch(False)
-            )
-        except Exception as err:  # noqa: BLE001 - nobody awaits this task
-            # An automatic send has no user to show the error to; log it. The episode
-            # stays recorded, so there is no retry loop.
-            _LOGGER.warning("Heat-pump water heater: automatic boost off failed: %s", err)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._send(power_patch(True))

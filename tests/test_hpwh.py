@@ -393,6 +393,13 @@ class ControlRulesTest(unittest.TestCase):
         self.assertFalse(boost_auto_off_due(self._get(boostStatus=1, temp=39)))
         self.assertFalse(boost_auto_off_due(self._get(boostStatus=0, temp=40)))
 
+    def test_controls_are_not_offered_on_the_series_whose_rules_are_not_rebuilt(self) -> None:
+        for series in ("m7b", "M8B", " M11 ", "m11"):
+            self.assertFalse(hpwh.controls_supported(series), series)
+        # Only those three: a missing or unknown series keeps the controls.
+        for series in ("m8", "M8", None, "", "x9"):
+            self.assertTrue(hpwh.controls_supported(series), series)
+
 
 class _Coordinator:
     def __init__(self, data: dict) -> None:

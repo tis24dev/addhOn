@@ -54,6 +54,19 @@ _JS_DAYS = (1, 2, 3, 4, 5, 6, 0)
 # `isM11`, decomp.txt:2327397-2327435). Only the plain branch is rebuilt below.
 _OTHER_SERIES = frozenset({"m7b", "m8b", "m11"})
 
+
+def controls_supported(series: object) -> bool:
+    """Whether the controls (water heater, boost switch, boost auto-off) apply.
+
+    `series` is `model_attributes["series"]` as the appliance publishes it; it is
+    read like `HonHeatPumpStateSensor._series` does (stripped, lower-cased). The
+    M7B/M8B/M11 series are excluded: the app takes other branches there (vacation by
+    `vacModeDays`, a different power-off in vacation) and none of them is rebuilt.
+    A missing or unknown series is not excluded.
+    """
+    normalized = str(series).strip().lower() if series else None
+    return normalized not in _OTHER_SERIES
+
 # The phases `heat_pump_state` can answer, in the app's order
 # (`EnumHeatPumpWaterHeaterPhase`, decomp.txt:2329986-2330012). NOTCONNECTED is not
 # among them: a disconnected appliance makes the entity unavailable instead.
@@ -412,7 +425,11 @@ def boost_patch(on: bool) -> CommandPatch:
 
 
 def boost_auto_off_due(get: Callable[[str], object]) -> bool:
-    """The app's dashboard switches boost off at the target (D7: numeric equality)."""
+    """The app's dashboard switches boost off at the target (D7: numeric equality).
+
+    Only the condition. When it may send again (once per episode) is decided by
+    `water_heater._BoostAutoOff`, which owns the episode memory.
+    """
     return (
         code(get("boostStatus")) == "1"
         and _js_number(get("temp")) == _js_number(get("tempSel"))
