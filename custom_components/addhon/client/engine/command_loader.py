@@ -47,6 +47,13 @@ from .parameter.program import HonParameterProgram
 
 _LOGGER = logging.getLogger(__name__)
 
+# Parameters the history recovery leaves at their schema default. `delayTime`: the app
+# zeroes it when it restarts the last programme ("Start now" on the dashboard card,
+# apk2 decomp.txt:2595045-2595056), while copying it back made a plain Start from Home
+# Assistant repeat the delay of the last delayed start made from the app -- issue #112,
+# where a reporter's washer showed a 150-minute delay while standing idle.
+_NOT_RECOVERED = frozenset({"delayTime"})
+
 
 class _SemanticCatalogError(Exception):
     """Internal marker carrying only bounded parser counts."""
@@ -590,7 +597,7 @@ class HonCommandLoader:
             parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
             command = self._set_last_category(command, name, parameters)
             for key, data in command.settings.items():
-                if parameters.get(key) is None:
+                if key in _NOT_RECOVERED or parameters.get(key) is None:
                     continue
                 with suppress(ValueError):
                     data.value = parameters.get(key)

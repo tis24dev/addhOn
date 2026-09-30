@@ -428,6 +428,23 @@ class LastCategoryRecoveryTest(unittest.TestCase):
             self._recovered(history).commands["startProgram"].category,
         )
 
+    def test_a_delayed_start_is_not_inherited(self) -> None:
+        # Issue #112: the app zeroes `delayTime` when it restarts the last programme, so
+        # the recovery must not copy the delay of an app-scheduled start into the next
+        # Start from Home Assistant. The other recovered values still come back.
+        commands = json.loads(json.dumps(_RICH_COMMANDS))
+        commands["startProgram"]["PROGRAMS.REF.SUPER_FREEZE"]["parameters"]["delayTime"] = {
+            "typology": "range", "category": "command", "mandatory": 1,
+            "defaultValue": "0", "minimumValue": "0", "maximumValue": "1410",
+            "incrementValue": "30"}
+        history = [{"command": {"commandName": "startProgram", "parameters": {
+            "program": "PROGRAMS.REF.SUPER_FREEZE", "tempSel": "7", "delayTime": "150"}}}]
+        app = _build(NaAppliance, DictApi(commands, history=history))
+        parameters = app.commands["startProgram"].parameters
+        self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", app.commands["startProgram"].category)
+        self.assertEqual("7", str(parameters["tempSel"].value))
+        self.assertEqual("0", str(parameters["delayTime"].value))
+
 
 class ClusterBehaviorTest(unittest.TestCase):
     def test_send_prstr_and_programrules(self) -> None:
