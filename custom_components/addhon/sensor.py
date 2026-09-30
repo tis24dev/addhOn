@@ -52,6 +52,7 @@ from .const import (
     APPLIANCE_FRE,
     APPLIANCE_HO,
     APPLIANCE_HOB,
+    APPLIANCE_HW,
     APPLIANCE_IH,
     APPLIANCE_KT,
     APPLIANCE_OV,
@@ -109,6 +110,12 @@ from .air_purifier import (
     normalize_error,
 )
 from .debug_utils import redact_id
+from .hpwh import (
+    HPWH_MODE_MAP,
+    HPWH_STATES,
+    heat_pump_state,
+    water_level_percent,
+)
 from .hon_commands import (
     find_settings_param,
     param_range,
@@ -1145,6 +1152,36 @@ _WATER_HEATER: tuple[HonSensorEntityDescription, ...] = (
             translation_key="heater_phase", icon="mdi:water-boiler"),
 )
 
+# Heat-pump water heater (HW, the app's HPWH; issue #113). Read-only: the write side
+# waits for a send that carries only the changed keys, as the app's does (hpwh.py).
+# The state is derived from several attributes, so it is a class of its own
+# (HonHeatPumpStateSensor), created in async_setup_entry.
+_HEAT_PUMP_WATER_HEATER: tuple[HonSensorEntityDescription, ...] = (
+    _g_temp("water_temp", "temp"),
+    _g_temp("target_temp", "tempSel"),
+    HonSensorEntityDescription(
+        key="hot_water_available",
+        attr_key="remainingWaterLevel",
+        icon="mdi:water-percent",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=water_level_percent,
+        gated=True,
+    ),
+    _g_enum("heat_pump_mode", "machMode", HPWH_MODE_MAP, icon="mdi:water-boiler"),
+    # The raw code: the app has no table for it and asks the cloud for the text
+    # (`ApplianceHelp`, apk2 decomp.txt:2325610-2325717).
+    HonSensorEntityDescription(
+        key="errors",
+        attr_key="errors",
+        attr_fallbacks=("error",),
+        icon="mdi:alert-circle-outline",
+        value_fn=_as_text,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        gated=True,
+    ),
+)
+
 # Robot vacuum (RVC): battery, state, time, power, areas, errors.
 _VACUUM: tuple[HonSensorEntityDescription, ...] = (
     HonSensorEntityDescription(
@@ -1324,6 +1361,7 @@ SENSORS: dict[str, tuple[HonSensorEntityDescription, ...]] = {
     APPLIANCE_HO: _HOOD,
     APPLIANCE_KT: _COFFEE,
     APPLIANCE_WH: _WATER_HEATER,
+    APPLIANCE_HW: _HEAT_PUMP_WATER_HEATER,
     APPLIANCE_RVC: _VACUUM,
 }
 
@@ -1435,6 +1473,16 @@ async def async_setup_entry(
                     HonHobZoneRemainingTime(coordinator, appliance_id, zone)
                 )
                 created.append(f"remaining_time_zone{zone}")
+        # Heat-pump water heater state: the app derives it from power, mode,
+        # temperatures, sterilization, errors and the eco windows together (#113).
+        # Gated on the two attributes every branch of the derivation reads.
+        if (
+            app_type == APPLIANCE_HW
+            and "onOffStatus" in attributes
+            and "machMode" in attributes
+        ):
+            entities.append(HonHeatPumpStateSensor(coordinator, appliance_id))
+            created.append(HonHeatPumpStateSensor.KEY)
         _LOGGER.debug(
             "Sensor debug: '%s' (type=%s, id=%s) -> %d/%d sensors %s",
             data.get("name", "Haier"),
@@ -1801,6 +1849,47 @@ class HonHobZoneRemainingTime(HonBaseEntity, SensorEntity):
             return int(hours) * 60 + int(minutes)
         except (ValueError, TypeError, OverflowError):
             return None
+
+
+class HonHeatPumpStateSensor(HonBaseEntity, SensorEntity):
+    """State of a heat-pump water heater (HW) as the hOn app shows it (#113).
+
+    DERIVED: `hpwh.heat_pump_state` rebuilds the app's `getActiveStatus` over power,
+    mode, the two temperatures, sterilization, errors and the eco windows, so no
+    single attribute carries it. The eco schedule depends on the time of day, which
+    is read at each coordinator update: a window that opens between two updates shows
+    on the next one.
+    """
+
+    KEY = "heat_pump_state"
+    _attr_translation_key = KEY
+    _attr_icon = "mdi:water-boiler"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = sorted(HPWH_STATES)
+
+    def __init__(self, coordinator, appliance_id: str) -> None:
+        super().__init__(coordinator, appliance_id)
+        self._attr_unique_id = f"{appliance_id}_{self.KEY}"
+
+    @property
+    def _series(self) -> str | None:
+        attributes = getattr(self._appliance, "model_attributes", None)
+        if not isinstance(attributes, dict):
+            return None
+        series = attributes.get("series")
+        return str(series).strip().lower() if series else None
+
+    @staticmethod
+    def _now():
+        # Local time: the eco windows are wall-clock times on the appliance's panel.
+        # Lazy import, for the same reason as HonLastRefreshSensor._now.
+        from homeassistant.util import dt as dt_util
+
+        return dt_util.now()
+
+    @property
+    def native_value(self) -> str:
+        return heat_pump_state(self._get_attr, self._now(), self._series)
 
 
 class HonDebugStatusSensor(HonAccountEntity, SensorEntity):

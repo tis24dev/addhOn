@@ -91,6 +91,7 @@ from .const import (
     APPLIANCE_FRE,
     APPLIANCE_HO,
     APPLIANCE_HOB,
+    APPLIANCE_HW,
     APPLIANCE_IH,
     APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
@@ -104,6 +105,7 @@ from .const import (
 )
 from .debug_utils import _MAC_RE, redact_id
 from .hon_commands import SETTINGS_COMMANDS, param_range, param_values
+from .hpwh import HPWH_STATE_ATTRS
 from .ref_programs import favourite_names, program_categories
 
 _LOGGER = logging.getLogger(__name__)
@@ -217,6 +219,13 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "tag": "sensor.mean_water_consumption",
         "types": (APPLIANCE_WM, APPLIANCE_WD),
         "read": ("totalWaterUsed", "totalWashCycle"),
+    },
+    # The heat-pump water heater's state, derived like the app's `getActiveStatus`
+    # from every attribute `hpwh.HPWH_STATE_ATTRS` lists (#113).
+    {
+        "tag": "sensor.heat_pump_state",
+        "types": (APPLIANCE_HW,),
+        "read": HPWH_STATE_ATTRS,
     },
     # Reads machMode (3 = paused) but writes the `pause` parameter of the
     # pauseProgram/resumeProgram commands -- the one row in this table whose two
@@ -2324,6 +2333,10 @@ def _mapped_sets(
                     for key in _read_chain(f"remainingTime{unit}Z{zone}")
                 ]
             )
+    if app_type == APPLIANCE_HW:
+        # The state sensor is a custom class with no description row, so the walk
+        # above cannot see the eco windows, the scheme and the day mask it reads.
+        mapped_attrs |= set(HPWH_STATE_ATTRS)
     if app_type == APPLIANCE_HO:
         # Same shape as the AP block below, same reason. The hood's five parameters
         # are each read as state AND written as a command field, but only two of the

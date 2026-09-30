@@ -582,6 +582,13 @@ class AirPurifierBinaryTableTest(unittest.TestCase):
                 # The hood spells this one as the text "false", not as 0/1, so the
                 # shared comparison would read every value as off.
                 ("HO", "filter_cleaning"),
+                # The heat-pump water heater (#113): the heating sources are on at
+                # anything but "0", as the app's energy-source rows read them, and all
+                # four fold an integral float (1.0) onto the app's string "1".
+                ("HW", "compressor_heating"),
+                ("HW", "electric_heating"),
+                ("HW", "boost"),
+                ("HW", "sterilization_running"),
             }
             # The hob's per-zone fault reads through `has_problem` because "no
             # error" has three spellings on that device; the flex-bridge flag has

@@ -34,6 +34,7 @@ from .const import (
     APPLIANCE_FRE,
     APPLIANCE_HO,
     APPLIANCE_HOB,
+    APPLIANCE_HW,
     APPLIANCE_IH,
     APPLIANCE_OV,
     APPLIANCE_REF,
@@ -53,6 +54,7 @@ from .const import (
 )
 from .air_purifier import co_alarm, has_problem, is_engaged
 from .debug_utils import redact_id
+from .hpwh import code as _hpwh_code
 from .ref_programs import REF_FLAG_TO_PARAM, flag_codes
 
 # The fridge family, named because the mode-reading hiding rule below is its alone.
@@ -452,6 +454,50 @@ _WATER_HEATER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     ),
 )
 
+# Heat-pump water heater (HW, #113). The two heating sources count as running on
+# anything but "0", as the app's energy-source rows do (`getEnergySources`, apk2
+# decomp.txt:2331127); boost and sterilization are on at exactly "1", as the app
+# compares them (decomp.txt:2327096, 2328821).
+def _hpwh_not_zero(raw) -> bool | None:
+    value = _hpwh_code(raw)
+    return None if value is None else value != "0"
+
+
+def _hpwh_is_one(raw) -> bool | None:
+    value = _hpwh_code(raw)
+    return None if value is None else value == "1"
+
+
+_HEAT_PUMP_WATER_HEATER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    HonBinarySensorEntityDescription(
+        key="compressor_heating",
+        icon="mdi:heat-pump",
+        attr_key="compressorHeatingCurrentStatus",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        value_fn=_hpwh_not_zero,
+    ),
+    HonBinarySensorEntityDescription(
+        key="electric_heating",
+        icon="mdi:heating-coil",
+        attr_key="electricHeatingCurrentStatus",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        value_fn=_hpwh_not_zero,
+    ),
+    HonBinarySensorEntityDescription(
+        key="boost",
+        icon="mdi:rocket-launch",
+        attr_key="boostStatus",
+        value_fn=_hpwh_is_one,
+    ),
+    HonBinarySensorEntityDescription(
+        key="sterilization_running",
+        icon="mdi:bacteria-outline",
+        attr_key="sterilizationCurrentStatus",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        value_fn=_hpwh_is_one,
+    ),
+)
+
 # Air purifier (AP). Both signals are reported and meaningful with the purifier
 # stopped, so neither is gated on power (unlike the AP environmental sensors).
 _AIR_PURIFIER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
@@ -503,6 +549,7 @@ BINARY_SENSORS: dict[str, tuple[HonBinarySensorEntityDescription, ...]] = {
     APPLIANCE_HOB: _HOB_BINARY,
     APPLIANCE_HO: _HOOD_BINARY,
     APPLIANCE_WH: _WATER_HEATER_BINARY,
+    APPLIANCE_HW: _HEAT_PUMP_WATER_HEATER_BINARY,
 }
 
 

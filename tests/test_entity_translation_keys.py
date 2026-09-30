@@ -211,6 +211,7 @@ def _collect_code_keys() -> dict[str, set[str]]:
     # several attributes, so the tables above cannot see them and each has to
     # register the key it publishes here.
     used["sensor"].add(sensor.HonMeanWaterConsumption._attr_translation_key)
+    used["sensor"].add(sensor.HonHeatPumpStateSensor._attr_translation_key)
     used["sensor"].update(
         f"remaining_time_zone{zone}" for zone in sensor._HOB_ZONES
     )
