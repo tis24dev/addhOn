@@ -592,13 +592,16 @@ class HonCommandLoader:
         """The category a start's top-level `programName` names, or None.
 
         Cleaned like the category keys (see `_get_favourite_info`). A favourite is not
-        a programme of its own, so a name that lands on one does not count.
+        a programme of its own, so a name that lands on one does not count. The guard
+        is the one of `_programme_codes`, a command without real categories: the first
+        programme's category is the parent object itself, so `category is command`
+        turned its name away (PR #118 review).
         """
-        if not program_name:
+        if not program_name or command.categories.get("_") is command:
             return None
         key = self._clean_name(str(program_name))
         category = command.categories.get(key)
-        if category is None or category is command or category.is_favourite:
+        if category is None or category.is_favourite:
             return None
         return key
 

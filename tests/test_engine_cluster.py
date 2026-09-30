@@ -470,6 +470,19 @@ class LastCategoryRecoveryTest(unittest.TestCase):
         for other in ("super_freeze", "iot_freeze_b"):
             self.assertEqual("5", str(command.categories[other].parameters["tempSel"].value))
 
+    def test_the_first_programme_is_found_by_its_name(self) -> None:
+        # PR #118 review: the first category is the parent command object itself, so a
+        # guard on `category is command` turned its name away and a shared prCode then
+        # left nothing to recover.
+        commands = json.loads(json.dumps(_RICH_COMMANDS))
+        commands["startProgram"]["PROGRAMS.REF.IOT_COOL_B"] = _prog("1")
+        history = self._app_start({"prCode": "1", "tempSel": "7"}, "PROGRAMS.REF.SUPER_COOL")
+        command = _build(NaAppliance, DictApi(commands, history=history)).commands["startProgram"]
+        self.assertEqual("PROGRAMS.REF.SUPER_COOL", command.category)
+        self.assertTrue(command.selected_explicitly)
+        self.assertEqual("7", str(command.parameters["tempSel"].value))
+        self.assertEqual("5", str(command.categories["iot_cool_b"].parameters["tempSel"].value))
+
     def test_an_unknown_programme_name_falls_back_to_the_prcode(self) -> None:
         # A stale programme name, or one naming a favourite (a copy, not a programme):
         # the prCode still singles the category out.
