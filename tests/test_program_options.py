@@ -1000,12 +1000,61 @@ class PrescribedReadTest(unittest.IsolatedAsyncioTestCase):
         entity = self._select(appliance, {"spinSpeed": "0"}, "spinSpeed", pending="delicate")
         self.assertEqual("400", entity.current_option)
 
-    async def test_a_prescription_the_control_cannot_render_falls_back(self) -> None:
-        # `delicate` pins temp to 60, which its merged control does not offer: showing it
-        # would blank the entity, which is worse than the honest device reading.
+    async def test_a_pinned_option_offers_only_its_value(self) -> None:
+        # #112: `delicate` pins temp to 60, which the merged control does not offer. The
+        # app shows a pinned option locked at its value (setVisibility, apk2
+        # decomp.txt:1394296); the select used to fall back to another programme's list and
+        # read `unknown` (Eco 40-60 pins spin to 1400 on a real HW80).
         appliance, _ = _prescribing_appliance()
         entity = self._select(appliance, {"temp": "40"}, "temp", pending="delicate")
-        self.assertEqual("40", entity.current_option)
+        self.assertEqual(["60"], entity.options)
+        self.assertEqual("60", entity.current_option)
+
+    async def test_a_pinned_option_follows_the_running_programme(self) -> None:
+        # Nothing selected: the control describes the active category, i.e. what the
+        # machine last ran or is running.
+        appliance, categories = _prescribing_appliance()
+        appliance.commands["startProgram"] = categories["delicate"]
+        entity = self._select(appliance, {"temp": "60"}, "temp")
+        self.assertEqual(["60"], entity.options)
+        self.assertEqual("60", entity.current_option)
+
+    async def test_a_settable_programme_gets_its_list_back(self) -> None:
+        appliance, _ = _prescribing_appliance()
+        entity = self._select(appliance, {"temp": "40"}, "temp", pending="delicate")
+        self.assertEqual(["60"], entity.options)
+        entity.coordinator.pending_programs["washer-1"] = "cotton"
+        self.assertEqual(["20", "40"], entity.options)
+
+    async def test_a_pinned_sentinel_keeps_the_merged_list(self) -> None:
+        # A wash-only programme pins dryLevel to the "0" sentinel, which the select never
+        # shows: offering it alone would leave no option, so the control stays as it was.
+        from custom_components.addhon import select as select_mod
+        from custom_components.addhon.client.engine.parameter.enum import HonParameterEnum
+        from custom_components.addhon.client.engine.parameter.fixed import HonParameterFixed
+
+        appliance, categories = _prescribing_appliance()
+        categories["cotton"].parameters["dryLevel"] = HonParameterEnum(
+            "dryLevel", {"typology": "enum", "category": "command", "mandatory": 1,
+                         "defaultValue": "1", "enumValues": ["0", "1", "2"]}, "parameters",
+        )
+        categories["delicate"].parameters["dryLevel"] = HonParameterFixed(
+            "dryLevel", {"typology": "fixed", "category": "command", "fixedValue": "0"},
+            "parameters",
+        )
+        coordinator = FakeCoordinator(
+            {"washer-1": {"type": "WD", "name": "W", "appliance": appliance,
+                          "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_programs = {"washer-1": "delicate"}
+        coordinator.pending_options = {}
+        desc = select_mod.HonProgramOptionSelectDescription(
+            key="dry_level", param="dryLevel", translation_key="dry_level",
+            types=("WM", "WD"), drop=("", "0", "11"),
+        )
+        entity = select_mod.HonProgramOptionSelect(coordinator, "washer-1", desc, FakeClient())
+        entity.hass = FakeHass()
+        self.assertEqual(["1", "2"], entity.options)
 
     async def test_a_rule_target_falls_back_to_the_device(self) -> None:
         # A parameter a rule can move is not described by its schema node: the cascade
@@ -1575,12 +1624,12 @@ class SelectedProgramTest(unittest.IsolatedAsyncioTestCase):
         await entity.async_turn_off()
         self.assertEqual("0", coordinator.pending_options["washer-1"]["anticrease"])
 
-    async def test_a_program_that_pins_the_option_keeps_the_widest_value_set(self) -> None:
-        # A program that declares the option FIXED must not empty the control: hiding it is
-        # issue #98's own request and belongs to the `available` gate, a separate and
-        # user-visible decision. Here the resolver walks past the unusable candidate.
-        # Mutation-proof: taking the pinned param unconditionally leaves ONE option (or
-        # none), so the assertion on the full set fails.
+    async def test_a_program_that_pins_the_option_offers_only_that_value(self) -> None:
+        # #112: a program that declares the option FIXED shows it locked at its value in
+        # the app (setVisibility, apk2 decomp.txt:1394296), so the select offers that one
+        # value. It stays available: hiding it is issue #98's own request and belongs to
+        # the `available` gate. Mutation-proof: the old walk past the pinned candidate
+        # returns the merged ["0", "400", "800"].
         command, coordinator = self._appliance(
             {
                 "cotton": {"spinSpeed": SetParam(["0", "400", "800"])},
@@ -1590,15 +1639,14 @@ class SelectedProgramTest(unittest.IsolatedAsyncioTestCase):
         )
         entity = self._select(coordinator, "spinSpeed", "spin_speed")
         coordinator.pending_programs = {"washer-1": "eco"}
-        self.assertEqual(["0", "400", "800"], entity.options)
+        self.assertEqual(["800"], entity.options)
 
     async def test_a_pinning_program_never_borrows_the_last_started_value_set(self) -> None:
-        # PR #103 review (sourcery-ai + greptile P1): when the pending program cannot answer,
-        # the fallback must be the MERGED superset and never the active command. The active
-        # command is the last program STARTED, so preferring it would answer a question about
-        # the selected program with another program's narrower set -- exactly the substitution
-        # this resolver exists to remove. Mutation-proof: walking category -> active -> merged
-        # returns the active `["0", "400"]` here.
+        # PR #103 review (sourcery-ai + greptile P1): a question about the selected program
+        # is never answered with the active command, which is the last program STARTED and
+        # carries another program's narrower set. Since #112 a pinning program answers with
+        # its own pinned value. Mutation-proof: walking category -> active returns the
+        # active `["0", "400"]` here.
         command, coordinator = self._appliance(
             {
                 # The widest variant, so `available_settings` caches THIS one as merged.
@@ -1612,8 +1660,9 @@ class SelectedProgramTest(unittest.IsolatedAsyncioTestCase):
         # Idle after `rapid_30_min`: with nothing pending the active command still answers.
         self.assertEqual(["0", "400"], entity.options)
 
+        # A pinning program offers its own value, never the active command's set.
         coordinator.pending_programs = {"washer-1": "eco"}
-        self.assertEqual(["0", "400", "800", "1000"], entity.options)
+        self.assertEqual(["800"], entity.options)
 
     async def test_a_program_that_omits_the_option_keeps_the_widest_value_set(self) -> None:
         # Same rule for total ABSENCE, which is how the real HW80 schema says "this

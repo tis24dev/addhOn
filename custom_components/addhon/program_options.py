@@ -656,7 +656,9 @@ class HonProgramOptionEntity(HonBaseEntity):
         and not something to smuggle in through a resolver. Until then the two outcomes
         are the documented ones: an absent option is skipped by
         ``apply_pending_options`` at Start, and a pinned one is refused by the engine
-        setter with ``command_error``.
+        setter with ``command_error``. The select narrows a pinned option to its value on
+        top of this (``HonProgramOptionSelect._pinned_choice``, #112), as the app shows it
+        locked; the switch and the number still read this resolver as is.
 
         ``drop`` is the description's sentinel tuple, passed through so a sentinel-only
         candidate is not mistaken for a usable one."""

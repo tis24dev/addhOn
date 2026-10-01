@@ -75,6 +75,7 @@ from .ac_command import async_send_settings, param_allowed_values, settings_para
 from .program_options import (
     HonProgramOptionEntity,
     async_send_program,
+    is_settable_option,
     normalize_code,
     option_choices,
 )
@@ -928,12 +929,16 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
         it): a program change resolves to a different category's parameter and rebuilds,
         while a program that does not narrow this option resolves to the same merged
         parameter and costs one identity check."""
-        param = self._selected_option_param(self._desc.drop)
+        pinned_param, pinned = self._pinned_choice()
+        param = pinned_param if pinned is not None else self._selected_option_param(self._desc.drop)
         if self._maps_built and param is self._maps_param:
             return
         self._maps_param = param
         self._maps_built = True
-        choices = option_choices(param, self._desc.drop) if param is not None else []
+        if pinned is not None:
+            choices = [pinned]
+        else:
+            choices = option_choices(param, self._desc.drop) if param is not None else []
         # raw schema value -> base label (label map, raw value as fallback).
         base_keys = {raw: self._label_map.get(raw, raw) for raw in choices}
         # Collision-aware disambiguation (PR #38 / Greptile P2): when two EXPOSED raw codes
@@ -943,6 +948,33 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
         # `state.<key>`; a suffixed colliding key renders literally (rare-model-only).
         self._raw_to_key = disambiguate_labels(base_keys)
         self._key_to_raw = {key: raw for raw, key in self._raw_to_key.items()}
+
+    def _pinned_choice(self):
+        """``(param, value)`` when the program this control describes PINS the option.
+
+        The program is the selected one, else the active category -- the same pair
+        ``_selected_option_param`` walks. Pinned means present there but not settable
+        (``fixed``, or a single reachable value). The app shows such an option locked at
+        its value (`setVisibility`, apk2 decomp.txt:1394296), so the select offers that one
+        value instead of falling back to another program's list (#112: Eco 40-60 pins spin
+        to 1400 on a real HW80, and the fallback list stopped at 1000 and read `unknown`).
+
+        ``(None, None)`` otherwise, and also when the pinned value is one of the
+        description's sentinels: a sentinel is never offered, so the select would be left
+        with no option at all, and the old fallback is kept instead."""
+        if self._selected_program_code() is not None:
+            candidate = self._category_option_param()
+        else:
+            candidate = self._active_option_param()
+        if candidate is None or is_settable_option(candidate, self._desc.drop):
+            return None, None
+        value = getattr(candidate, "schema_value", None)
+        if value is None:
+            value = getattr(candidate, "value", None)
+        value = normalize_code(value)
+        if value is None or value in self._desc.drop:
+            return None, None
+        return candidate, value
 
     def _renderable(self, raw) -> bool:
         # A prescribed code this select does not offer would blank the entity; the device
