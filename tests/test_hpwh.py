@@ -347,6 +347,20 @@ class HeatPumpStateTest(unittest.TestCase):
         self.assertEqual(_state(attributes, _at(16, 1)), "scheduled")
         self.assertEqual(_state(attributes, _at(18, 0)), "scheduled")
 
+    def test_the_last_of_several_windows_is_working_through_its_end_minute(self) -> None:
+        # PR #119 review: with an earlier window first, the end minute of the last one
+        # took tomorrow's first window and read scheduled. One window alone hid it,
+        # since tomorrow's first IS that window.
+        attributes = _attrs(
+            onOffStatus=1, machMode=2, temp=60, tempSel=65.0,
+            opp2EcoStartTime1="01:00", opp2EcoEndTime1="02:00",
+            opp2EcoStartTime2="11:00", opp2EcoEndTime2="16:00",
+        )
+        self.assertEqual(_window(attributes, _at(16, 0)), ("11:00", "16:00"))
+        self.assertEqual(_state(attributes, _at(16, 0)), "working")
+        self.assertEqual(_window(attributes, _at(16, 1)), ("01:00", "02:00"))
+        self.assertEqual(_state(attributes, _at(16, 1)), "scheduled")
+
     def test_vacation_falls_through_to_sterilization_or_working(self) -> None:
         self.assertEqual(_state(_attrs(onOffStatus=1, machMode=4)), "working")
         self.assertEqual(

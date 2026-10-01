@@ -258,6 +258,12 @@ def schedule_window(
             # (decomp.txt:2328197-2328213). A slot without an end is not a window.
             windows = [window(2, slot) for slot in (1, 2, 3)]
             windows = [w for w in windows if w[1] and w[1] != "00:00"]
+            # Its end minute still belongs to the window that ends now: the
+            # comparison above is strict, `heat_pump_state` reads the end as
+            # inside (PR #119 review).
+            ending = [w for w in windows if w[1] == clock]
+            if ending:
+                return ending[0]
             return min(windows, key=lambda w: w[0], default=None)
         # With scheme 0, once today's opp2 windows are over the app goes on to the
         # opp1 windows, which belong to the OTHER days (decomp.txt:2328007-2328015:
