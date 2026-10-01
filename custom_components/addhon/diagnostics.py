@@ -1268,6 +1268,83 @@ def _command_history_block(appliance) -> dict:
     }
 
 
+# The window in which `timestampExecuted - timestampAccepted` of the shadow's
+# `commandHistory` slot reads as "the command reached the device". Measured over every
+# distinct pair in diagnostics/, apk/dump/ and the live AC probe of 2026-10-01
+# (apk2/analysis/issue115-hw/decisioni/9-prova-ac-mik.md): 44 deliveries between 0.6
+# and 2.6 s, 0 s on the sparse setParameters the AC never received. The floor sits
+# between the shortest delivery and the one unexplained 0.1 s of that probe; the
+# ceiling is about four times the longest delivery, so a slow link still reads as
+# delivered while two instants written by two different commands do not.
+_DELIVERED_MIN_GAP_S = 0.5
+_DELIVERED_MAX_GAP_S = 10.0
+
+_LAST_COMMAND_CAVEAT = (
+    "About the last command the cloud accepted, of any kind. The `command` body in"
+    " attributes.commandHistory may belong to an earlier command: the cloud rewrites"
+    " it only on startProgram and stopProgram, while the two instants move with every"
+    " command, setParameters included. Delivered means it reached the device, not"
+    " that the device applied it."
+)
+
+
+def _last_command_delivery(attributes: Mapping) -> dict:
+    """Whether the last command the cloud accepted reached the appliance.
+
+    Read off `attributes.commandHistory`, the shadow's one-slot echo, and only off
+    its two instants. Measured live on an AC (issue #115, D9): for a command the
+    cloud never forwarded, `timestampExecuted` equals `timestampAccepted` (4 of 4);
+    for one that reached the device it follows by 0.7-1.2 s. Reaching the device is
+    not being applied: a sparse `{tempSel, operationName}` arrived in about 1 s and
+    the AC left the setpoint where it was.
+
+    `delivered` for a gap inside `_DELIVERED_MIN_GAP_S`..`_DELIVERED_MAX_GAP_S`,
+    `not_delivered` for a gap of exactly zero, `unknown` for everything else. A
+    NEGATIVE gap is not a delivery problem: a later command moved only
+    `timestampAccepted` (issue #106 beta2, -6408.9 s; three `/history` rows of
+    issue #112), so the two instants belong to two different commands.
+
+    The instants are parsed and re-rendered, never echoed, as in `_conn_event_row`.
+    The same five keys in every state, so two dumps of one issue stay diffable.
+    """
+    accepted = executed = None
+    try:
+        slot = (
+            attributes.get("commandHistory") if isinstance(attributes, Mapping) else None
+        )
+        if isinstance(slot, Mapping):
+            accepted = _as_utc(_parse_cloud_moment(slot.get("timestampAccepted")), True)
+            executed = _as_utc(_parse_cloud_moment(slot.get("timestampExecuted")), True)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: commandHistory unreadable", exc_info=True)
+        accepted = executed = None
+    accepted_text = _stamp_text(accepted)
+    executed_text = _stamp_text(executed)
+    gap = verdict = None
+    if accepted_text is not None and executed_text is not None:
+        try:
+            gap = round((executed - accepted).total_seconds(), 3)
+        except Exception:  # noqa: BLE001 - a foreign datetime subclass
+            gap = None
+    # An anonymised capture writes every instant at the epoch (tests/fixtures/
+    # ref_10136): two equal placeholders say nothing about a delivery.
+    if any(moment is not None and moment.year <= 1970 for moment in (accepted, executed)):
+        gap_read = None
+    else:
+        gap_read = gap
+    if gap_read == 0:
+        verdict = "not_delivered"
+    elif gap_read is not None and _DELIVERED_MIN_GAP_S <= gap_read <= _DELIVERED_MAX_GAP_S:
+        verdict = "delivered"
+    return {
+        "accepted": accepted_text,
+        "executed": executed_text,
+        "gap_s": gap,
+        "verdict": verdict or "unknown",
+        "caveat": _LAST_COMMAND_CAVEAT,
+    }
+
+
 # The model attribute `opt_compatibility` decodes, spelled as the cloud spells it. Named
 # rather than inlined because two places have to agree on it: the read below, and the
 # test that proves the value still reaches this module undamaged.
@@ -3818,6 +3895,10 @@ def _appliance_block(
         # they say on the next line. Omitted for a model with no matrix -- every appliance
         # dumped so far except the one dishwasher -- rather than emitting an empty shape.
         **({"opt_compatibility": opt_compatibility} if opt_compatibility else {}),
+        # Directly above `command_history`, and read off the same `attributes` mapping
+        # printed two keys below: the verdict on the slot's instants, with the warning
+        # that the slot's body may be an older command.
+        "last_command_delivery": _last_command_delivery(attributes),
         # Above `attributes`, whose `commandHistory` is the single-slot echo of the same
         # data: the list says what was sent before the slot was overwritten or nulled.
         "command_history": command_history,
