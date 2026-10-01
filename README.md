@@ -63,8 +63,12 @@ Open the integration entry and choose **Configure** to toggle:
 
 - **Enable debug logging** — verbose integration logs.
 - **Enable MQTT realtime debug** — verbose logs for the live MQTT stream.
+- **Enable experimental entities** — entities and controls not yet confirmed on a real
+  appliance. The heat-pump water heater (type `HW`) gets its `water_heater` entity and
+  boost switch only with this option; without it, its sensors only. What each
+  appliance type gets is in [`docs/appliance-support.md`](docs/appliance-support.md).
 
-Both persist across restarts. The polling interval is fixed at 60 seconds.
+All three persist across restarts. The polling interval is fixed at 60 seconds.
 
 These toggles are also exposed as switches on a dedicated **addhOn diagnostics**
 device (Settings > Devices & Services > addhOn), alongside read-only diagnostics
