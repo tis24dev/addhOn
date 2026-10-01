@@ -1,0 +1,1154 @@
+{
+ "_comment": "Per-category startProgram `programFamily` of four real appliances (issue #71), keyed by program code. Reduced from diagnostics dumps: catalogue data only, no favourites, no user data. Each list is the family's words, i.e. the schema's `enumValues` (e.g. `[hidden|maintenance]` -> ['hidden', 'maintenance']).",
+ "wm_haier_hw80_b14959tu1s": {
+  "type": "WM",
+  "model": "HW80-B14959TU1-S",
+  "programs": {
+   "hqd_20_degrees": [
+    "dashboard"
+   ],
+   "hqd_allergy": [
+    "dashboard"
+   ],
+   "hqd_autoclean": [
+    "hidden",
+    "maintenance"
+   ],
+   "hqd_babycare": [
+    "hidden",
+    "guided",
+    "dashboard"
+   ],
+   "hqd_checkup": [
+    "hidden",
+    "diagnostic"
+   ],
+   "hqd_cottons": [
+    "dashboard"
+   ],
+   "hqd_delicate_cradle": [
+    "hidden",
+    "dashboard"
+   ],
+   "hqd_duvet": [
+    "hidden",
+    "dashboard"
+   ],
+   "hqd_eco_40_60_degrees": [
+    "dashboard"
+   ],
+   "hqd_handwash_wool": [
+    "dashboard"
+   ],
+   "hqd_mix": [
+    "dashboard"
+   ],
+   "hqd_quick_15": [
+    "dashboard"
+   ],
+   "hqd_quick_wash_57": [
+    "hidden",
+    "dashboard"
+   ],
+   "hqd_refresh": [
+    "dashboard"
+   ],
+   "hqd_rinse": [
+    "hidden",
+    "dashboard"
+   ],
+   "hqd_shirts": [
+    "hidden",
+    "guided",
+    "dashboard"
+   ],
+   "hqd_smart": [
+    "dashboard",
+    "smart"
+   ],
+   "hqd_spin": [
+    "dashboard"
+   ],
+   "hqd_sport": [
+    "hidden",
+    "dashboard"
+   ],
+   "hqd_synthetic_and_coloured": [
+    "dashboard"
+   ],
+   "iot_wash_anti_mites": [
+    "download"
+   ],
+   "iot_wash_ariel_clean_cycle": [
+    "download",
+    "featured"
+   ],
+   "iot_wash_ariel_cold_cycle": [
+    "download",
+    "featured"
+   ],
+   "iot_wash_ariel_fresh_cycle": [
+    "download",
+    "featured"
+   ],
+   "iot_wash_baby_sanitizer": [
+    "download"
+   ],
+   "iot_wash_backpacks": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_bathrobe": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_bed_linen": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_bleaching": [
+    "download"
+   ],
+   "iot_wash_blood_stains": [
+    "download"
+   ],
+   "iot_wash_cashmere": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_chocolate_stains": [
+    "download"
+   ],
+   "iot_wash_cold_wash": [
+    "care"
+   ],
+   "iot_wash_colored": [
+    "care"
+   ],
+   "iot_wash_colored_anti_stain": [
+    "download"
+   ],
+   "iot_wash_colored_delicate": [
+    "care"
+   ],
+   "iot_wash_coloured": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_cotton": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_cuddly_toys": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_curtains": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_dark": [
+    "download",
+    "guided",
+    "care"
+   ],
+   "iot_wash_dash_clean_cycle": [
+    "download",
+    "featured"
+   ],
+   "iot_wash_dash_cold_cycle": [
+    "download",
+    "featured"
+   ],
+   "iot_wash_dash_fresh_cycle": [
+    "download",
+    "featured"
+   ],
+   "iot_wash_delicate": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_delicate_antiallergy": [
+    "download"
+   ],
+   "iot_wash_delicate_colors": [
+    "download"
+   ],
+   "iot_wash_delicate_dark": [
+    "care"
+   ],
+   "iot_wash_delicate_tablecloths": [
+    "download"
+   ],
+   "iot_wash_delicate_whites": [
+    "care"
+   ],
+   "iot_wash_denim_jeans": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_diving_suits": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_down_jackets": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_fruit_stains": [
+    "download"
+   ],
+   "iot_wash_handwash": [
+    "care"
+   ],
+   "iot_wash_handwash_colored": [
+    "care"
+   ],
+   "iot_wash_handwash_dark": [
+    "care"
+   ],
+   "iot_wash_lingerie": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_masks_refresh": [
+    "download"
+   ],
+   "iot_wash_masks_sanification": [
+    "download"
+   ],
+   "iot_wash_mats": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_men_s_trousers": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_mixed": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_new_clothes": [
+    "download"
+   ],
+   "iot_wash_perfect_white": [
+    "download"
+   ],
+   "iot_wash_pets": [
+    "download"
+   ],
+   "iot_wash_pets_hair_removal": [
+    "download"
+   ],
+   "iot_wash_pets_odours_stains_removal": [
+    "download"
+   ],
+   "iot_wash_rapid_14": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_rapid_30": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_rapid_44": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_rapid_59": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_resistant_colored": [
+    "care"
+   ],
+   "iot_wash_resistant_dark": [
+    "care"
+   ],
+   "iot_wash_resistant_whites": [
+    "care"
+   ],
+   "iot_wash_rinse": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_silk": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_ski_suit": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_spin": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_sport": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_sport_anti_odor": [
+    "download"
+   ],
+   "iot_wash_swimsuits_and_bikinis": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_synthetic": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_tablecloths": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_technical_fabrics": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_technical_jackets": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_tennis_tie_break": [
+    "download"
+   ],
+   "iot_wash_trainers": [
+    "download"
+   ],
+   "iot_wash_whites": [
+    "care"
+   ],
+   "iot_wash_wine_stains": [
+    "download"
+   ],
+   "iot_wash_wool": [
+    "guided",
+    "voice"
+   ]
+  }
+ },
+ "wm_candy_bp49sbl8fr": {
+  "type": "WM",
+  "model": "BP 49SBL8-FR",
+  "programs": {
+   "20_degrees_new_energy_label": [
+    "dashboard"
+   ],
+   "active_wash": [
+    "hidden"
+   ],
+   "all_in_one_49": [
+    "hidden"
+   ],
+   "all_in_one_59": [
+    "hidden"
+   ],
+   "allergy_care_pro": [
+    "hidden"
+   ],
+   "anti_pollution": [
+    "hidden"
+   ],
+   "autocare": [
+    "hidden"
+   ],
+   "autoclean": [
+    "dashboard",
+    "maintenance"
+   ],
+   "cottons": [
+    "hidden"
+   ],
+   "cottons_eu": [
+    "dashboard"
+   ],
+   "delicate": [
+    "dashboard"
+   ],
+   "drain_spin": [
+    "dashboard"
+   ],
+   "eco_40_60_new_energy_label": [
+    "dashboard"
+   ],
+   "fitness": [
+    "hidden"
+   ],
+   "fresh_vapor_cottons": [
+    "dashboard"
+   ],
+   "handwash": [
+    "dashboard"
+   ],
+   "handwash_wool": [
+    "hidden"
+   ],
+   "hygiene_plus_59": [
+    "dashboard"
+   ],
+   "iot_checkup": [
+    "diagnostic"
+   ],
+   "iot_wash_100_custom_wash": [
+    "download"
+   ],
+   "iot_wash_anti_mites": [
+    "hidden"
+   ],
+   "iot_wash_ariel_clean_cycle": [
+    "download"
+   ],
+   "iot_wash_ariel_cold_cycle": [
+    "download"
+   ],
+   "iot_wash_ariel_fresh_cycle": [
+    "download"
+   ],
+   "iot_wash_baby_sanitizer": [
+    "download"
+   ],
+   "iot_wash_backpacks": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_bathrobe": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_bed_linen": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_big_single_load": [
+    "hidden"
+   ],
+   "iot_wash_bleaching": [
+    "download"
+   ],
+   "iot_wash_blood_stains": [
+    "download"
+   ],
+   "iot_wash_cashmere": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_chocolate_stains": [
+    "download"
+   ],
+   "iot_wash_cold_wash": [
+    "care"
+   ],
+   "iot_wash_colored": [
+    "care"
+   ],
+   "iot_wash_colored_anti_stain": [
+    "download"
+   ],
+   "iot_wash_colored_delicate": [
+    "care"
+   ],
+   "iot_wash_coloured": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_coloured_bed_linen": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_coloured_curtains": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_coloured_shirts": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_coloured_tableclothes": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_cotton": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_cuddly_toys": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_curtains": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_dark": [
+    "download",
+    "guided",
+    "care"
+   ],
+   "iot_wash_darks_and_coloured_44": [
+    "snap"
+   ],
+   "iot_wash_darks_and_coloured_59": [
+    "snap"
+   ],
+   "iot_wash_darks_and_coloured_xl": [
+    "snap"
+   ],
+   "iot_wash_dash_clean_cycle": [
+    "download"
+   ],
+   "iot_wash_dash_cold_cycle": [
+    "download"
+   ],
+   "iot_wash_dash_fresh_cycle": [
+    "download"
+   ],
+   "iot_wash_delicate": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_delicate_antiallergy": [
+    "download"
+   ],
+   "iot_wash_delicate_colors": [
+    "download"
+   ],
+   "iot_wash_delicate_dark": [
+    "care"
+   ],
+   "iot_wash_delicate_tablecloths": [
+    "download"
+   ],
+   "iot_wash_delicate_whites": [
+    "care"
+   ],
+   "iot_wash_denim_jeans": [
+    "dashboard"
+   ],
+   "iot_wash_diving_suits": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_down_jackets": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_duvet": [
+    "hidden",
+    "guided"
+   ],
+   "iot_wash_fruit_stains": [
+    "download"
+   ],
+   "iot_wash_handwash": [
+    "care"
+   ],
+   "iot_wash_handwash_colored": [
+    "care"
+   ],
+   "iot_wash_handwash_dark": [
+    "care"
+   ],
+   "iot_wash_lingerie": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_masks_refresh": [
+    "download"
+   ],
+   "iot_wash_masks_sanification": [
+    "download"
+   ],
+   "iot_wash_mats": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_men_s_trousers": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_mix_and_coloured_44": [
+    "snap"
+   ],
+   "iot_wash_mix_and_coloured_59": [
+    "snap"
+   ],
+   "iot_wash_mix_and_coloured_xl": [
+    "snap"
+   ],
+   "iot_wash_mixed": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_new_clothes": [
+    "download"
+   ],
+   "iot_wash_perfect_white": [
+    "download"
+   ],
+   "iot_wash_pets": [
+    "download"
+   ],
+   "iot_wash_pets_hair_removal": [
+    "download"
+   ],
+   "iot_wash_pets_odours_stains_removal": [
+    "download"
+   ],
+   "iot_wash_playsuits": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_quick_drum_cleaner": [
+    "download"
+   ],
+   "iot_wash_rapid_14": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_rapid_30": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_rapid_44": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_rapid_59": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_resistant_colored": [
+    "care"
+   ],
+   "iot_wash_resistant_dark": [
+    "care"
+   ],
+   "iot_wash_resistant_whites": [
+    "care"
+   ],
+   "iot_wash_rinse": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_shirts": [
+    "hidden",
+    "guided"
+   ],
+   "iot_wash_silk": [
+    "hidden",
+    "guided"
+   ],
+   "iot_wash_ski_suit": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_spin": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_sport": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_sport_anti_odor": [
+    "download"
+   ],
+   "iot_wash_stains_remover": [
+    "download"
+   ],
+   "iot_wash_super_saving": [
+    "download"
+   ],
+   "iot_wash_swimsuits_and_bikinis": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_synthetic": [
+    "guided",
+    "voice"
+   ],
+   "iot_wash_tablecloths": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_technical_fabrics": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_technical_jackets": [
+    "download",
+    "guided"
+   ],
+   "iot_wash_trainers": [
+    "download"
+   ],
+   "iot_wash_whites": [
+    "care"
+   ],
+   "iot_wash_whites_44": [
+    "snap"
+   ],
+   "iot_wash_whites_59": [
+    "snap"
+   ],
+   "iot_wash_whites_xl": [
+    "snap"
+   ],
+   "iot_wash_wine_stains": [
+    "download"
+   ],
+   "iot_wash_wool": [
+    "guided",
+    "voice"
+   ],
+   "rapid_14": [
+    "dashboard"
+   ],
+   "rapid_30": [
+    "hidden"
+   ],
+   "rapid_44": [
+    "hidden"
+   ],
+   "rinse": [
+    "dashboard"
+   ],
+   "smart_wash": [
+    "dashboard"
+   ],
+   "special_39": [
+    "dashboard"
+   ],
+   "synthetic_and_coloured": [
+    "hidden"
+   ],
+   "synthetic_and_coloured_eu": [
+    "dashboard"
+   ],
+   "tumbling": [
+    "hidden"
+   ],
+   "whites": [
+    "dashboard"
+   ]
+  }
+ },
+ "td_haier_hd100_c367gu1": {
+  "type": "TD",
+  "model": "HD100-C367GU1-IT",
+  "programs": {
+   "hqd_baby_care": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_bed_sheets": [
+    "hidden",
+    "auto"
+   ],
+   "hqd_bulky": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_casual": [
+    "hidden"
+   ],
+   "hqd_checkup": [
+    "hidden",
+    "diagnostic"
+   ],
+   "hqd_cold_wind_timing": [
+    "hidden"
+   ],
+   "hqd_cotton": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_curtain": [
+    "hidden"
+   ],
+   "hqd_delicate": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_duvet": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_eco": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_feather": [
+    "hidden"
+   ],
+   "hqd_hot_wind_timing": [
+    "hidden"
+   ],
+   "hqd_hygienic": [
+    "hidden",
+    "auto"
+   ],
+   "hqd_i_refresh": [
+    "dashboard"
+   ],
+   "hqd_jacket": [
+    "hidden"
+   ],
+   "hqd_jeans": [
+    "hidden"
+   ],
+   "hqd_mix": [
+    "dashboard"
+   ],
+   "hqd_night_dry": [
+    "hidden",
+    "auto"
+   ],
+   "hqd_outdoor": [
+    "hidden"
+   ],
+   "hqd_quick_dry": [
+    "hidden",
+    "wmsync"
+   ],
+   "hqd_quilt": [
+    "hidden"
+   ],
+   "hqd_shirt": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_shoes": [
+    "hidden"
+   ],
+   "hqd_silk": [
+    "hidden",
+    "auto"
+   ],
+   "hqd_smart_ai": [
+    "hidden",
+    "wmsync",
+    "guided",
+    "voice",
+    "care"
+   ],
+   "hqd_sports": [
+    "dashboard",
+    "wmsync",
+    "auto"
+   ],
+   "hqd_super_fast_30": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_synthetics": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_timer": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_towel": [
+    "dashboard",
+    "auto"
+   ],
+   "hqd_underwear": [
+    "hidden",
+    "auto"
+   ],
+   "hqd_wool": [
+    "dashboard",
+    "auto"
+   ],
+   "iot_dry_baby": [
+    "guided",
+    "auto"
+   ],
+   "iot_dry_backpacks": [
+    "download",
+    "guided"
+   ],
+   "iot_dry_bathrobe": [
+    "guided",
+    "auto"
+   ],
+   "iot_dry_bed_linen": [
+    "download",
+    "guided",
+    "auto"
+   ],
+   "iot_dry_bed_quilt": [
+    "wmsync"
+   ],
+   "iot_dry_cotton": [
+    "wmsync",
+    "guided",
+    "voice",
+    "care",
+    "auto"
+   ],
+   "iot_dry_cuddly_toys": [
+    "download",
+    "guided",
+    "auto"
+   ],
+   "iot_dry_curtains": [
+    "guided",
+    "auto"
+   ],
+   "iot_dry_delicates": [
+    "wmsync",
+    "guided",
+    "voice",
+    "care"
+   ],
+   "iot_dry_denim_jeans": [
+    "guided",
+    "auto"
+   ],
+   "iot_dry_down_jacket": [
+    "download",
+    "guided",
+    "auto"
+   ],
+   "iot_dry_duvet": [
+    "guided",
+    "auto"
+   ],
+   "iot_dry_gym_fit": [
+    "download",
+    "guided"
+   ],
+   "iot_dry_lingerie": [
+    "download",
+    "guided"
+   ],
+   "iot_dry_mixed": [
+    "wmsync",
+    "guided",
+    "voice",
+    "auto"
+   ],
+   "iot_dry_pet_accessories": [
+    "download",
+    "auto"
+   ],
+   "iot_dry_pet_hair_removal": [
+    "download"
+   ],
+   "iot_dry_rapid_30": [
+    "wmsync",
+    "voice"
+   ],
+   "iot_dry_rapid_59": [
+    "wmsync",
+    "voice"
+   ],
+   "iot_dry_shirts": [
+    "wmsync",
+    "guided",
+    "auto"
+   ],
+   "iot_dry_swimsuits_and_bikinis": [
+    "download",
+    "guided",
+    "auto"
+   ],
+   "iot_dry_synthetics": [
+    "wmsync",
+    "guided",
+    "voice",
+    "care",
+    "auto"
+   ],
+   "iot_dry_tablecloths": [
+    "download",
+    "guided"
+   ],
+   "iot_dry_technical_fabrics": [
+    "download",
+    "guided",
+    "auto"
+   ],
+   "iot_dry_tennis_tie_break": [
+    "download"
+   ],
+   "iot_dry_wool": [
+    "wmsync",
+    "guided",
+    "voice"
+   ]
+  }
+ },
+ "dw_haier_xs6b0s3fsb": {
+  "type": "DW",
+  "model": "XS 6B0S3FSB",
+  "programs": {
+   "auto_care": [
+    "hidden",
+    "guided",
+    "snap"
+   ],
+   "auto_wash_soil": [
+    "hidden",
+    "guided",
+    "snap",
+    "auto"
+   ],
+   "dishwasher_care": [
+    "hidden",
+    "maintenance"
+   ],
+   "eco": [
+    "dashboard",
+    "guided",
+    "snap"
+   ],
+   "glass_care": [
+    "hidden",
+    "guided",
+    "snap"
+   ],
+   "intensive": [
+    "dashboard",
+    "guided",
+    "snap"
+   ],
+   "iot_baby_care": [
+    "download"
+   ],
+   "iot_breakfast": [
+    "download"
+   ],
+   "iot_checkup": [
+    "diagnostic"
+   ],
+   "iot_china_crystals": [
+    "download"
+   ],
+   "iot_cocktail_glasses_soil": [
+    "download"
+   ],
+   "iot_daily_care_soil": [
+    "download"
+   ],
+   "iot_dinner_for_two": [
+    "download"
+   ],
+   "iot_extra_hygiene": [
+    "download"
+   ],
+   "iot_happy_hour": [
+    "download"
+   ],
+   "iot_party": [
+    "download"
+   ],
+   "iot_pizza_menu_soil": [
+    "download"
+   ],
+   "iot_plastic_tupperware": [
+    "download"
+   ],
+   "iot_porcelain": [
+    "download"
+   ],
+   "iot_pot_&_pans": [
+    "download"
+   ],
+   "iot_power_mix_wash_soil": [
+    "download"
+   ],
+   "iot_pyrex_and_glassware": [
+    "download"
+   ],
+   "iot_super_flash": [
+    "download"
+   ],
+   "iot_super_wash": [
+    "download"
+   ],
+   "iot_turbopower": [
+    "download"
+   ],
+   "iot_voice_automatic": [
+    "voice"
+   ],
+   "iot_voice_delicate": [
+    "voice"
+   ],
+   "iot_voice_eco": [
+    "voice"
+   ],
+   "iot_voice_intensive": [
+    "voice"
+   ],
+   "iot_voice_prewash": [
+    "voice"
+   ],
+   "iot_voice_universal": [
+    "voice",
+    "auto"
+   ],
+   "iot_wok_grids_maxi_pans_soil": [
+    "download"
+   ],
+   "prewash": [
+    "dashboard"
+   ],
+   "rapid_20": [
+    "dashboard"
+   ],
+   "rapid_35": [
+    "hidden",
+    "guided",
+    "snap"
+   ],
+   "rapid_49": [
+    "hidden",
+    "guided",
+    "snap"
+   ],
+   "rapid_59": [
+    "dashboard",
+    "guided",
+    "snap"
+   ],
+   "silent": [
+    "dashboard"
+   ],
+   "smart_ai_pro_soil": [
+    "dashboard",
+    "guided",
+    "snap",
+    "auto",
+    "smart"
+   ],
+   "smart_ai_rapid_soil": [
+    "hidden",
+    "snap",
+    "auto",
+    "smart"
+   ],
+   "smart_ai_soil": [
+    "dashboard",
+    "guided",
+    "snap",
+    "auto",
+    "smart"
+   ],
+   "universal": [
+    "dashboard",
+    "guided",
+    "snap"
+   ],
+   "zone_wash": [
+    "dashboard"
+   ]
+  }
+ }
+}

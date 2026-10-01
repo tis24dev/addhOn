@@ -82,6 +82,7 @@ from .ref_programs import (
     REF_MY_ZONE_PARAM,
     REF_MY_ZONE_ZONE,
     REF_PARAM_TO_FLAG,
+    STARTPROGRAM,
     STOPPROGRAM,
     flag_codes,
     has_replacement_controls,
@@ -133,6 +134,90 @@ def disambiguate_labels(base: dict[str, str]) -> dict[str, str]:
         code: (f"{label} ({code})" if counts[label] > 1 else label)
         for code, label in base.items()
     }
+
+
+# Program list of the washer/dryer/dishwasher select (#71). The hOn app's own list is
+# written last by `filterProgramListEpic` (apk2 decomp.txt:1395015): a favourite, or a
+# program whose `programFamily` holds one of these words (`DashboardDownloadPrograms`
+# @1031170). What it leaves out are the `care` / `guided_voice` variants its garment and
+# guided-wash flows start by name -- and on a real HW80 those are the hidden twin of every
+# translated label that collided (91 programs, 7 collisions in Greek; none once dropped).
+_APP_LISTED_FAMILIES = frozenset({"dashboard", "download", "hidden"})
+# Listed on top of the app: the families its Maintenance screen starts the check-up by
+# (the card @3171144-3171178, the epic @1410345). The app takes HQD_CHECKUP out by key and
+# a `diagnostic`-only check-up out by family, but HA has no Maintenance screen, so this
+# select is the only place left to start one from.
+_MAINTENANCE_FAMILIES = frozenset({"diagnostic", "cleaning"})
+_LISTED_FAMILIES = _APP_LISTED_FAMILIES | _MAINTENANCE_FAMILIES
+
+
+def _family_words(param) -> frozenset[str]:
+    """The words of a `programFamily` parameter, or an empty set.
+
+    The schema says `enumValues: ['hidden', 'maintenance']` with `defaultValue:
+    '[hidden|maintenance]'`, and the engine hands both back through `clean_value`, so a
+    value may arrive as a word or as the joined `hidden_maintenance`. Splitting on both
+    separators reads every shape as the same words (no family word observed contains one).
+    """
+    values = getattr(param, "values", None) if param is not None else None
+    if not isinstance(values, (list, tuple)):
+        return frozenset()
+    return frozenset(
+        word
+        for value in values
+        for word in str(value).strip().strip("[]").lower().replace("|", "_").split("_")
+        if word
+    )
+
+
+def listed_programs(appliance, programs: dict[str, str]) -> dict[str, str]:
+    """`programs` narrowed to the ones the program select lists (#71), order kept.
+
+    Read off `startProgram`'s categories, where the app reads `programFamily`. Listed: a
+    favourite (the engine's `favourite` marker -- the app keeps every favourite), a program
+    whose family names a listed word, and a program with no family at all, because one we
+    cannot classify is not one we hide. If the rule would leave no program but favourites
+    it is not applied: an empty select on a catalogue shape never seen is worse than the
+    full list it replaces.
+
+    The select only: the engine keeps every category, so a hidden program started from the
+    app is still recovered from the history and named by the program-name sensor.
+    """
+    command = get_command(appliance, STARTPROGRAM)
+    categories = getattr(command, "categories", None) if command is not None else None
+    if not isinstance(categories, dict):
+        return programs
+    listed: dict[str, str] = {}
+    dropped: list[str] = []
+    catalogue_listed = 0
+    for code, label in programs.items():
+        params = getattr(categories.get(code), "parameters", None)
+        params = params if isinstance(params, dict) else {}
+        favourite = params.get("favourite")
+        if favourite is not None and str(getattr(favourite, "value", "")) == "1":
+            listed[code] = label
+            continue
+        words = _family_words(params.get("programFamily"))
+        if not words or words & _LISTED_FAMILIES:
+            listed[code] = label
+            catalogue_listed += 1
+        else:
+            dropped.append(code)
+    if not dropped:
+        return programs
+    if not catalogue_listed:
+        _LOGGER.debug(
+            "Select debug: program list filter would keep no program; listing all %d",
+            len(programs),
+        )
+        return programs
+    # Safe to name: a favourite is never dropped, so every code here is a catalogue slug.
+    _LOGGER.debug(
+        "Select debug: %d program(s) left out of the list as the app does: %s",
+        len(dropped),
+        dropped,
+    )
+    return listed
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -524,7 +609,8 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         self._program_map: dict[str, str] = {}
         appliance = self._appliance
         if appliance is not None:
-            self._program_map = self._load_programs(appliance)
+            # Only the programs the app lists (#71); see listed_programs.
+            self._program_map = listed_programs(appliance, self._load_programs(appliance))
 
         # Readable program names (#71). The schema gives no labels -- `_load_programs`
         # can only echo the code back -- so `hqd_autoclean` reached the UI verbatim.

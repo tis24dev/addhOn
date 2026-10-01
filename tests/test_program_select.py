@@ -707,6 +707,159 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("Inesistente", ctx.exception.translation_placeholders["program"])
 
 
+_FAMILIES = REPO_ROOT / "tests" / "fixtures" / "program_families.json"
+
+
+def _category(family: list[str] | None, favourite: bool = False):
+    """A startProgram category double carrying only what the list filter reads."""
+    parameters: dict = {}
+    if family is not None:
+        parameters["programFamily"] = Param(values=list(family))
+    if favourite:
+        parameters["favourite"] = Param(value="1")
+    return types.SimpleNamespace(parameters=parameters)
+
+
+def _catalog_appliance(app_type: str, categories: dict, attributes: dict | None = None):
+    """An appliance whose startProgram offers `categories` (code -> category double)."""
+    start = RecordingCommand({"program": Param(values=list(categories))})
+    start.categories = categories
+    return {
+        "dev-1": {
+            "type": app_type,
+            "name": "Device",
+            "appliance": types.SimpleNamespace(commands={"startProgram": start}),
+            "attributes": attributes or {},
+            "settings": {},
+        }
+    }
+
+
+def _real_catalog(name: str) -> tuple[str, dict]:
+    import json
+
+    entry = json.loads(_FAMILIES.read_text(encoding="utf-8"))[name]
+    return entry["type"], {code: _category(words) for code, words in entry["programs"].items()}
+
+
+class ProgramListFilterTest(unittest.TestCase):
+    """#71: the select lists what the hOn app's program list shows, by `programFamily`.
+
+    The app's visible list is written last by `filterProgramListEpic` (apk2 decomp.txt
+    @1395015): favourites, plus families containing dashboard/download/hidden (@1031170).
+    On top of that we keep the check-up families (diagnostic/cleaning), which the app
+    launches from its Maintenance screen and HA has no equivalent of. Data: four real
+    catalogues reduced to `programFamily` in tests/fixtures/program_families.json.
+    """
+
+    def _options(self, app_type: str, categories: dict, attributes: dict | None = None):
+        from custom_components.addhon.select import HonProgramSelect
+
+        coordinator = FakeCoordinator(_catalog_appliance(app_type, categories, attributes))
+        return HonProgramSelect(coordinator, "dev-1", FakeClient())
+
+    def test_hw80_drops_the_care_and_guided_voice_programs(self) -> None:
+        app_type, categories = _real_catalog("wm_haier_hw80_b14959tu1s")
+        entity = self._options(app_type, categories)
+
+        dropped = set(categories) - set(entity._attr_options)
+        self.assertEqual(91, len(categories))
+        self.assertEqual(66, len(entity._attr_options))
+        self.assertEqual(
+            {
+                "iot_wash_cold_wash", "iot_wash_colored", "iot_wash_colored_delicate",
+                "iot_wash_coloured", "iot_wash_cotton", "iot_wash_delicate",
+                "iot_wash_delicate_dark", "iot_wash_delicate_whites", "iot_wash_handwash",
+                "iot_wash_handwash_colored", "iot_wash_handwash_dark", "iot_wash_mixed",
+                "iot_wash_rapid_14", "iot_wash_rapid_30", "iot_wash_rapid_44",
+                "iot_wash_rapid_59", "iot_wash_resistant_colored", "iot_wash_resistant_dark",
+                "iot_wash_resistant_whites", "iot_wash_rinse", "iot_wash_spin",
+                "iot_wash_sport", "iot_wash_synthetic", "iot_wash_whites", "iot_wash_wool",
+            },
+            dropped,
+        )
+        # Drum clean is in the app's list (family hidden|maintenance); check-up is kept
+        # although the app drops it by key, because HA has no Maintenance screen.
+        self.assertIn("hqd_autoclean", entity._attr_options)
+        self.assertIn("hqd_checkup", entity._attr_options)
+
+    def test_check_up_kept_where_its_only_family_is_diagnostic(self) -> None:
+        for name, kept in (
+            ("wm_candy_bp49sbl8fr", {"iot_checkup", "autoclean"}),
+            ("dw_haier_xs6b0s3fsb", {"iot_checkup", "dishwasher_care"}),
+            ("td_haier_hd100_c367gu1", {"hqd_checkup"}),
+        ):
+            with self.subTest(name):
+                app_type, categories = _real_catalog(name)
+                entity = self._options(app_type, categories)
+                self.assertLessEqual(kept, set(entity._attr_options))
+
+    def test_every_program_select_type_is_filtered(self) -> None:
+        for name, expected in (
+            ("wm_candy_bp49sbl8fr", 86),
+            ("td_haier_hd100_c367gu1", 45),
+            ("dw_haier_xs6b0s3fsb", 37),
+        ):
+            with self.subTest(name):
+                app_type, categories = _real_catalog(name)
+                self.assertEqual(expected, len(self._options(app_type, categories)._attr_options))
+
+    def test_favourite_is_listed_whatever_its_family(self) -> None:
+        categories = {
+            "hqd_cottons": _category(["dashboard"]),
+            "iot_wash_cotton": _category(["guided", "voice"]),
+            "Mio cotone": _category(["guided", "voice"], favourite=True),
+        }
+        entity = self._options("WM", categories)
+        self.assertEqual(["hqd_cottons", "Mio cotone"], entity._attr_options)
+
+    def test_program_without_family_is_listed(self) -> None:
+        categories = {
+            "hqd_cottons": _category(["dashboard"]),
+            "iot_wash_cotton": _category(["guided", "voice"]),
+            "mystery": _category(None),
+        }
+        entity = self._options("WM", categories)
+        self.assertEqual(["hqd_cottons", "mystery"], entity._attr_options)
+
+    def test_nothing_is_filtered_when_the_filter_would_empty_the_list(self) -> None:
+        categories = {
+            "iot_wash_cotton": _category(["guided", "voice"]),
+            "iot_wash_whites": _category(["care"]),
+        }
+        entity = self._options("WM", categories)
+        self.assertEqual(["iot_wash_cotton", "iot_wash_whites"], entity._attr_options)
+
+    def test_family_words_read_off_the_engine_parameters(self) -> None:
+        # The doubles above carry plain word lists; the engine hands back the schema's
+        # words plus the joined default (`hidden_maintenance`), and a fixed family keeps
+        # its brackets. Both must read as the same words.
+        from custom_components.addhon.client.engine.parameter.enum import HonParameterEnum
+        from custom_components.addhon.client.engine.parameter.fixed import HonParameterFixed
+        from custom_components.addhon.select import _family_words
+
+        enum_family = HonParameterEnum(
+            "programFamily",
+            {"typology": "enum", "enumValues": ["hidden", "maintenance"],
+             "defaultValue": "[hidden|maintenance]"},
+            "ancillaryParameters",
+        )
+        fixed_family = HonParameterFixed(
+            "programFamily", {"typology": "fixed", "fixedValue": "[download]"},
+            "ancillaryParameters",
+        )
+        self.assertEqual({"hidden", "maintenance"}, _family_words(enum_family))
+        self.assertEqual({"download"}, _family_words(fixed_family))
+
+    def test_running_hidden_program_leaves_the_select_empty(self) -> None:
+        categories = {
+            "hqd_cottons": _category(["dashboard"]),
+            "iot_wash_cotton": _category(["guided", "voice"]),
+        }
+        entity = self._options("WM", categories, {"programName": "iot_wash_cotton"})
+        self.assertIsNone(entity.current_option)
+
+
 class LegacyPowerCleanupTest(unittest.TestCase):
     def test_removes_only_power_entities(self) -> None:
         from homeassistant.helpers import entity_registry as er
