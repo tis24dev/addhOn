@@ -5,7 +5,7 @@
 The rules are pure functions over the shadow attributes (only `raise_refusal` has an
 effect: it turns a refusal into the localized `HomeAssistantError`), rebuilt from the
 official app 2.30.7 (`apk2/decomp.txt`; the analysis is
-`apk/analysis/issue113-hw-hpwh-control-model.md`). Issue #113 is the first real
+`apk2/analysis/issue113-hw-hpwh-control-model.md`). Issue #113 is the first real
 device: an HP110M8-9, `series: "m8"`.
 
 The write side lives here too: when the app refuses a mode, temperature or boost

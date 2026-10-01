@@ -3,7 +3,7 @@
 """Heat-pump water heater (type HW, issue #113): the read-only entities.
 
 The pure helpers in `hpwh.py` rebuild what the hOn app 2.30.7 derives
-(`apk/analysis/issue113-hw-hpwh-control-model.md`); the entity tests build the
+(`apk2/analysis/issue113-hw-hpwh-control-model.md`); the entity tests build the
 platforms over the attributes the reporter's HP110M8-9 really published
 (`tests/fixtures/hw_hp110m8/attributes.json`).
 """

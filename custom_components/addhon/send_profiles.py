@@ -4,7 +4,7 @@
 
 The official app has no single way of building a command body: it has one builder
 per appliance family, and they disagree on what goes in `parameters`
-(apk/analysis/issue113-hw-hpwh-control-model.md, section 7, and
+(apk2/analysis/issue113-hw-hpwh-control-model.md, section 7, and
 apk/analysis/app-command-model.md). A profile is this integration's copy of one of
 them. `LEGACY` is what the dispatcher has always done and stays the answer for every
 type until that type is migrated deliberately, with a real device behind it.
