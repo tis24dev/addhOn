@@ -104,15 +104,49 @@ _CHILD_LOCK = HonBinarySensorEntityDescription(
     icon="mdi:lock-alert",
     attr_key=WM_ATTR_CHILD_LOCK,         # lockStatus: 1 = active
 )
+def _counter(value) -> float | None:
+    """A maintenance-counter field as a number, or None if it is not one."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _maintenance_due(raw) -> bool | None:
+    """True when a drum/filter cleaning is due.
+
+    `drumCleaning` / `filterCleaning` come from the statistics endpoint as a counter,
+    `{tot, count, remaining, percentage}` (HW80-B14959TU1-S: `{90, 43, 47, 48}`), not as a
+    0/1 flag, so the default `== "1"` could never turn on. The hOn app writes "maintenance
+    needed" at `remaining <= 0` (apk2 decomp.txt:3191560-3191720) and raises its health
+    warning at `count >= tot` (@3172170-3172235) -- the same moment, so the second is the
+    fallback for a counter without `remaining`. A value that is not a counter keeps the
+    old flag reading; a counter with no usable number is unknown.
+    """
+    if not isinstance(raw, dict):
+        return str(raw) == "1"
+    remaining = _counter(raw.get("remaining"))
+    if remaining is not None:
+        return remaining <= 0
+    count, total = _counter(raw.get("count")), _counter(raw.get("tot"))
+    if count is not None and total is not None:
+        return count >= total
+    return None
+
+
 _DRUM_CLEAN = HonBinarySensorEntityDescription(
     key="drum_clean_needed",
     attr_key=WM_ATTR_DRUM_CLEAN,
     device_class=BinarySensorDeviceClass.PROBLEM,
+    value_fn=_maintenance_due,
 )
 _FILTER_CLEAN = HonBinarySensorEntityDescription(
     key="filter_clean_needed",
     attr_key=WM_ATTR_FILTER_CLEAN,
     device_class=BinarySensorDeviceClass.PROBLEM,
+    value_fn=_maintenance_due,
 )
 _DRY_CLEAN = HonBinarySensorEntityDescription(
     key="dry_clean_needed",
