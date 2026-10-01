@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.exceptions import HomeAssistantError
 
-from .command_diagnostics import emit_command_event, record_expected_update
+from .command_diagnostics import (
+    DeliveryBaseline,
+    delivery_baseline,
+    emit_command_event,
+    record_delivery_check,
+    record_expected_update,
+)
 from .const import DOMAIN
 from .client.engine.exceptions import ApiError
 from .param_rollback import restore_owned_params, snapshot_params
@@ -46,6 +52,45 @@ def _record_expected_safely(
 ) -> None:
     try:
         record_expected_update(appliance, action, payload)
+    except Exception:
+        # Diagnostics must never affect the command; that is the whole point of these
+        # wrappers. A trace still has to be left: a systematically broken diagnostic
+        # was previously indistinguishable from a healthy one that had nothing to say.
+        _LOGGER.debug("Command diagnostics step failed", exc_info=True)
+
+
+def _delivery_baseline_safely(
+    appliance: Appliance,
+    profile: SendProfile,
+    payload: Mapping[str, object],
+) -> DeliveryBaseline | None:
+    if not profile.verify_delivery:
+        return None
+    try:
+        return delivery_baseline(appliance, payload)
+    except Exception:
+        # Diagnostics must never affect the command; that is the whole point of these
+        # wrappers. A trace still has to be left: a systematically broken diagnostic
+        # was previously indistinguishable from a healthy one that had nothing to say.
+        _LOGGER.debug("Command diagnostics step failed", exc_info=True)
+        return None
+
+
+def _record_delivery_safely(
+    appliance: Appliance,
+    profile: SendProfile,
+    patch: CommandPatch,
+    baseline: DeliveryBaseline | None,
+) -> None:
+    if not profile.verify_delivery:
+        return
+    try:
+        record_delivery_check(
+            appliance,
+            patch.action,
+            profile.wire_commands.get(patch.command_name) or patch.command_name,
+            baseline,
+        )
     except Exception:
         # Diagnostics must never affect the command; that is the whole point of these
         # wrappers. A trace still has to be left: a systematically broken diagnostic
@@ -502,6 +547,11 @@ class CommandDispatcher:
                         changed_keys=prepared.changed_keys,
                     )
                     _emit_payload_safely(common_fields, prepared, profile, patch)
+                    # Before the await: a poll landing during the send would put our
+                    # own command in the history slot and leave nothing to compare.
+                    delivery_before = _delivery_baseline_safely(
+                        appliance, profile, prepared.payload
+                    )
                     result = await prepared.command.send_exact(
                         prepared.payload,
                         program_name=patch.program_name,
@@ -551,6 +601,7 @@ class CommandDispatcher:
                     patch.action,
                     prepared.payload,
                 )
+                _record_delivery_safely(appliance, profile, patch, delivery_before)
                 _emit_result_safely(
                     common_fields,
                     started,

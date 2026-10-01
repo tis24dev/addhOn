@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any, Optional
 
+from ...command_diagnostics import observe_shadow_read
 from ..catalog_repository import CommandCatalogRepository
 from ..helpers import parse_cloud_timestamp
 from .appliances import registry as _native_appliances
@@ -363,6 +364,14 @@ class HonAppliance:
         self._attributes["available"] = self._connection
         if self._extra:
             self._attributes = self._extra.attributes(self._attributes)
+        # A command the cloud accepted but the device never applied shows up only
+        # here, in the next cloud read (issue #115, O4). Whoever asked for the read
+        # (refresh after the command, poll, fallback) it is judged once, and it only
+        # logs. observe_shadow_read is failure-safe itself; the guard is mqtt.py's.
+        try:
+            observe_shadow_read(self)
+        except Exception:
+            _LOGGER.debug("Delivery check failed", exc_info=True)
 
     async def load_statistics(self) -> None:
         self._statistics = await self.api.load_statistics(self)
