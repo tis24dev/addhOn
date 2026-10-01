@@ -770,7 +770,26 @@ def _param_schema(param) -> dict:
         enum = param_values(param)
         if enum:
             schema["enum"] = enum
+    # A FIXED parameter whose live value has left what its schema fixes: the enum above
+    # is the live value, so without this the dump showed the move as the schema (issue
+    # #115, the vac programme with ECO's machMode "2" over its own "4"). Only for fixed:
+    # an enum or a range moves by design. Omitted when the two agree, so it reads as a
+    # flag.
+    if schema["typology"] == "fixed":
+        declared = _jsonable(getattr(param, "schema_value", None))
+        if declared is not None and not _same_scalar(schema["value"], declared):
+            schema["schema_value"] = declared
     return schema
+
+
+def _same_scalar(left, right) -> bool:
+    """Two schema scalars spelled differently but equal ("65", 65.0) compare equal."""
+    if str(left).strip() == str(right).strip():
+        return True
+    try:
+        return float(left) == float(right)
+    except (TypeError, ValueError):
+        return False
 
 
 def _model_attributes(appliance) -> dict:
@@ -1170,6 +1189,27 @@ def _history_moment(entry: Mapping) -> datetime | None:
         if moment is not None:
             return moment
     return None
+
+
+def _history_recovery(appliance) -> dict | None:
+    """{command name: how the last catalog load chose the category it restored}.
+
+    The engine's `HonAppliance.history_recovery`: `program`, `category`,
+    `programName`, `prCode` or `machMode` name the discriminant, `default` means the
+    values went on the default category, `none` that nothing was recovered. Issue
+    #115: `commands` showed a category active and could not say why.
+
+    None for an engine without the property (or one that raises), so that it is not
+    read as {} -- a load that recovered nothing.
+    """
+    try:
+        raw = getattr(appliance, "history_recovery", None)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: history recovery unreadable", exc_info=True)
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+    return {str(name): str(how) for name, how in raw.items()}
 
 
 def _command_history_block(appliance) -> dict:
@@ -3807,6 +3847,8 @@ def _appliance_block(
         # and is always present -- `{}` is the finding "no key had two sources".
         "statistics": dict(statistics),
         "attributes_overridden": overrides,
+        # Just before `commands`, whose active category it explains.
+        "history_recovery": _history_recovery(appliance),
         "commands": commands,
         # Directly after `commands`, which prints the ACTIVE program only: this is
         # the same schema read per PROGRAM, and reading the two together is what

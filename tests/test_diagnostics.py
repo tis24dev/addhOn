@@ -473,6 +473,21 @@ class DiagnosticsValuesTest(unittest.TestCase):
         self.assertNotIn("enum", schema)
         self.assertNotIn("values", schema)
 
+    def test_a_fixed_value_moved_off_its_schema_shows_both(self):
+        # Issue #115: the dump showed the vac programme with machMode "2" as its only
+        # `enum`, while its schema fixes "4", and nothing told the two apart.
+        moved = FakeParam(value="2", values=["2"], typology="fixed", schema="4")
+        schema = diagnostics._param_schema(moved)
+        self.assertEqual(("2", "4"), (schema["value"], schema["schema_value"]))
+        for kept in (
+            FakeParam(value="4", values=["4"], typology="fixed"),
+            FakeParam(value=65.0, values=["65.0"], typology="fixed", schema="65"),
+            # Only a fixed value is worth flagging: an enum or a range moves by design.
+            FakeParam(value="1", values=["0", "1"], typology="enum", schema="0"),
+        ):
+            with self.subTest(value=kept.value, typology=kept.typology):
+                self.assertNotIn("schema_value", diagnostics._param_schema(kept))
+
     def test_a_small_range_carries_the_values_it_materialises(self):
         """min/max/step cannot answer why a 0/1 control is missing: param_range
         casts through float(), so "0"/"1" and "0.0"/"1.0" print the same here,
@@ -9579,9 +9594,10 @@ class StatisticsSectionTest(unittest.TestCase):
         _, blocks = _entry_diag()
         keys = list(blocks["AC"])
         at = keys.index("attributes_last_update")
+        # `history_recovery` explains the active category of `commands` (issue #115).
         self.assertEqual(
-            ["statistics", "attributes_overridden", "commands"],
-            keys[at + 1:at + 4],
+            ["statistics", "attributes_overridden", "history_recovery", "commands"],
+            keys[at + 1:at + 5],
         )
 
 
@@ -10001,6 +10017,40 @@ class FavouriteNameMaskingTest(unittest.TestCase):
         block = _favourite_block(favourites=("hqd_cottons",))
         enum = block["commands"]["startProgram"]["program"]["enum"]
         self.assertEqual(["Capi nuovi", "Zeta mia", "<favourite 1>"], enum)
+
+
+class HistoryRecoverySectionTest(unittest.TestCase):
+    """`history_recovery`: how the catalog load chose the category it restored.
+
+    Issue #115: `commands.startProgram` showed the vac programme active with ECO's
+    machMode, and the dump could not say whether the history or the schema put it there.
+    """
+
+    def test_printed_just_before_the_commands(self):
+        appliance = OptionAppliance(options={}, additional_data={})
+        appliance.history_recovery = {"startProgram": "machMode", "settings": "default"}
+        block = _option_block(appliance)
+        keys = list(block)
+        self.assertEqual("commands", keys[keys.index("history_recovery") + 1])
+        self.assertEqual(
+            {"startProgram": "machMode", "settings": "default"}, block["history_recovery"]
+        )
+        json.dumps(block)
+
+    def test_an_engine_without_it_prints_null(self):
+        # None, not {}: {} means a load that recovered nothing.
+        class Raising(OptionAppliance):
+            @property
+            def history_recovery(self):
+                raise RuntimeError("boom")
+
+        for appliance in (OptionAppliance(options={}, additional_data={}),
+                          Raising(options={}, additional_data={})):
+            with self.subTest(appliance=type(appliance).__name__):
+                self.assertIsNone(_option_block(appliance)["history_recovery"])
+        empty = OptionAppliance(options={}, additional_data={})
+        empty.history_recovery = {}
+        self.assertEqual({}, _option_block(empty)["history_recovery"])
 
 
 def _history_entry(timestamp=None, accepted=None, name="startProgram", **parameters):
