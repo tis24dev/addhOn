@@ -128,21 +128,32 @@ def test_a_value_that_went_back_warns_even_if_the_slot_says_executed(caplog) -> 
     assert "never reached" not in warnings[0]
 
 
-def test_the_slot_alone_warns_when_the_key_is_not_in_the_shadow(caplog) -> None:
-    """(a) alone: nothing in the shadow to compare, the slot still tells."""
+def test_the_slot_alone_never_warns(caplog) -> None:
+    """PR #119 review (Greptile): the slot is shared with every other client. With
+    nothing in the shadow to compare, a short gap may be another command's."""
     appliance = _Appliance()
     _arm(appliance, {"tempSel": "60"})
     appliance.cloud_read("2026-10-01T10:18:01.3Z", "2026-10-01T10:18:01.3Z")
 
     diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 47)
 
-    warnings = _warnings(caplog)
-    assert len(warnings) == 1
-    assert "never reached" in warnings[0]
+    assert _warnings(caplog) == []
+
+
+def test_an_applied_value_is_silent_whatever_the_slot_says(caplog) -> None:
+    """PR #119 review (Greptile): our command applied, its MQTT push missed, then the
+    official app's command moved the slot with a short gap. Not ours to blame."""
+    appliance = _Appliance(tempSel="65")
+    _arm(appliance, {"tempSel": "60"})
+    appliance.cloud_read("2026-10-01T10:18:01.3Z", "2026-10-01T10:18:01.3Z", tempSel="60")
+
+    diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 47)
+
+    assert _warnings(caplog) == []
 
 
 @pytest.mark.parametrize(
-    ("executed", "warns"),
+    ("executed", "explains"),
     [
         ("2026-10-01T10:18:01.3Z", True),   # 0.0 s: 4 of 4 undelivered on the AC
         ("2026-10-01T10:18:01.5Z", True),   # 0.2 s: under the threshold
@@ -152,14 +163,17 @@ def test_the_slot_alone_warns_when_the_key_is_not_in_the_shadow(caplog) -> None:
         ("not a time", False),
     ],
 )
-def test_the_slot_threshold(caplog, executed: str, warns: bool) -> None:
-    appliance = _Appliance()
+def test_the_slot_threshold(caplog, executed: str, explains: bool) -> None:
+    """With the value not applied, the slot only adds the likely reason."""
+    appliance = _Appliance(tempSel="65")
     _arm(appliance, {"tempSel": "60"})
-    appliance.cloud_read("2026-10-01T10:18:01.3Z", executed)
+    appliance.cloud_read("2026-10-01T10:18:01.3Z", executed, tempSel="65")
 
     diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 47)
 
-    assert bool(_warnings(caplog)) is warns
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert ("never reached" in warnings[0]) is explains
 
 
 def test_a_slot_that_did_not_move_is_no_verdict(caplog) -> None:

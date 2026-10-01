@@ -508,21 +508,24 @@ def observe_shadow_read(appliance: object, timestamp: float | None = None) -> No
         if age >= _DELIVERY_TTL:
             return
         attributes = getattr(appliance, "attributes", None)
-        reasons: list[str] = []
-        gap = _undelivered_gap(attributes, check.accepted)
-        if gap is not None:
-            reasons.append(
-                f"the cloud marked it executed {gap:.1f} s after accepting it, "
-                "so it likely never reached the appliance"
-            )
         stale = []
         for key, sent in check.expected.items():
             current = _shadow_text(attributes, key)
             if current is not None and current != sent:
                 stale.append(f"{key} is {redact_identity(current)}, {sent} was sent")
+        # Only a sent value the shadow does not hold is evidence about OUR send. The
+        # history slot is shared with every client: a short gap there may be another
+        # command's, the official app's included, so it only adds the likely reason
+        # (PR #119 review).
         if stale:
+            reasons: list[str] = []
+            gap = _undelivered_gap(attributes, check.accepted)
+            if gap is not None:
+                reasons.append(
+                    f"the cloud marked it executed {gap:.1f} s after accepting it, "
+                    "so it likely never reached the appliance"
+                )
             reasons.append(f"{age:.0f} s after the send " + ", ".join(stale))
-        if reasons:
             _LOGGER.warning(
                 "hOn accepted %s (%s) for a %s appliance but it does not look "
                 "applied: %s",
