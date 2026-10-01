@@ -558,6 +558,81 @@ class LastCategoryRecoveryTest(unittest.TestCase):
         self.assertEqual("PROGRAMS.REF.SUPER_FREEZE", command.category)
         self.assertEqual("7", str(command.parameters["tempSel"].value))
 
+    @staticmethod
+    def _hw_commands(order=("AUTO", "ECO", "ELEC", "VAC")) -> dict:
+        # The heat-pump water heater's startProgram (issues #113 and #115): one
+        # programme per mode, told apart only by the machMode each fixes. No prCode,
+        # and the app's mode change names no programme.
+        codes = {"AUTO": "1", "ECO": "2", "ELEC": "3", "VAC": "4"}
+
+        def fixed(value):
+            return {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": value}
+
+        return {
+            "applianceModel": {"options": {}},
+            "startProgram": {
+                f"PROGRAMS.HW.{mode}": {"description": "d", "protocolType": "MQTT", "parameters": {
+                    "machMode": fixed(codes[mode]), "onOffStatus": fixed("1")}}
+                for mode in order
+            },
+            "dictionaryId": 1,
+        }
+
+    def test_a_mode_start_selects_the_category_of_its_machmode(self) -> None:
+        # Issue #115: recovered onto the first category, the app's startProgram
+        # {machMode: "2"} overwrote that programme's own machMode. With AUTO first (the
+        # M7 catalogues) the water heater then sent ECO for heat_pump.
+        for order in (("AUTO", "ECO", "ELEC", "VAC"), ("VAC", "AUTO", "ECO", "ELEC")):
+            with self.subTest(first=order[0]):
+                api = DictApi(self._hw_commands(order), history=self._app_start({"machMode": "2"}))
+                command = _build(NaAppliance, api).commands["startProgram"]
+                self.assertEqual("PROGRAMS.HW.ECO", command.category)
+                self.assertTrue(command.selected_explicitly)
+                self.assertEqual(
+                    {"auto": "1", "eco": "2", "elec": "3", "vac": "4"},
+                    {key: str(category.parameters["machMode"].value)
+                     for key, category in command.categories.items()},
+                )
+
+    def test_a_start_no_programme_owns_recovers_nothing(self) -> None:
+        # Nothing names a programme and no machMode singles one out: there is no
+        # programme to put the values on, so the default stays as the schema built it.
+        commands = self._hw_commands()
+        commands["startProgram"]["PROGRAMS.HW.ELEC"]["parameters"]["machMode"]["fixedValue"] = "2"
+        for parameters in ({"machMode": "9"}, {"machMode": "2"}, {"onOffStatus": "1"}):
+            with self.subTest(parameters=parameters):
+                api = DictApi(commands, history=self._app_start(parameters))
+                command = _build(NaAppliance, api).commands["startProgram"]
+                self.assertEqual("PROGRAMS.HW.AUTO", command.category)
+                self.assertFalse(command.selected_explicitly)
+                self.assertEqual("1", str(command.parameters["machMode"].value))
+
+    def test_a_single_programme_still_recovers_without_a_name(self) -> None:
+        # One programme leaves nothing to choose (the hood's startProgram).
+        commands = self._hw_commands(("AUTO",))
+        commands["startProgram"]["PROGRAMS.HW.AUTO"]["parameters"]["tempSel"] = {
+            "typology": "range", "category": "command", "mandatory": 0,
+            "defaultValue": "65", "minimumValue": "35", "maximumValue": "75", "incrementValue": "1"}
+        api = DictApi(commands, history=self._app_start({"tempSel": "50"}))
+        command = _build(NaAppliance, api).commands["startProgram"]
+        self.assertEqual("50", str(command.parameters["tempSel"].value))
+
+    def test_the_recovery_says_how_it_chose(self) -> None:
+        # Issue #115: the dump showed vac active with ECO's machMode and nothing said why.
+        cases = (
+            (self._hw_commands(), self._app_start({"machMode": "2"}), "machMode"),
+            (self._hw_commands(), self._app_start({"machMode": "9"}), "none"),
+            (_RICH_COMMANDS, self._app_start({"prCode": "5"}), "prCode"),
+            (_RICH_COMMANDS, self._app_start({"prCode": "5"}, "PROGRAMS.REF.SUPER_FREEZE"),
+             "programName"),
+            (_RICH_COMMANDS, _RICH_HISTORY, "program"),
+        )
+        for commands, history, how in cases:
+            with self.subTest(how=how):
+                app = _build(NaAppliance, DictApi(commands, history=history))
+                self.assertEqual(how, app.history_recovery["startProgram"])
+        self.assertEqual({}, _build(NaAppliance, DictApi(self._hw_commands())).history_recovery)
+
 
 class ClusterBehaviorTest(unittest.TestCase):
     def test_send_prstr_and_programrules(self) -> None:

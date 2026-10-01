@@ -96,6 +96,9 @@ class HonCommandLoader:
         self._api_commands: dict[str, Any] = {}
         self._favourites: list[dict[str, Any]] = []
         self._command_history: list[dict[str, Any]] = []
+        # {command name: how the history recovery chose its category}; see
+        # `_set_last_category`.
+        self._history_recovery: dict[str, str] = {}
         self._commands: dict[str, HonCommand] = {}
         self._appliance_data: dict[str, Any] = {}
         self._additional_data: dict[str, Any] = {}
@@ -394,6 +397,7 @@ class HonCommandLoader:
             command_history=(
                 deepcopy(history_data) if isinstance(history_data, list) else []
             ),
+            history_recovery=dict(self._history_recovery),
         )
 
     def _parse_candidate(
@@ -402,6 +406,7 @@ class HonCommandLoader:
         self._api_commands = deepcopy(commands)
         self._favourites = []
         self._command_history = []
+        self._history_recovery = {}
         self._commands = {}
         self._appliance_data = deepcopy(appliance_model)
         self._additional_data = {}
@@ -590,6 +595,45 @@ class HonCommandLoader:
                 codes[key] = _normalized_pr_code(code)
         return codes
 
+    @staticmethod
+    def _programmes(command: HonCommand) -> dict[str, HonCommand]:
+        """The programme categories of `command` (`PROGRAMS.*`), favourites left out.
+
+        Empty for a command without real categories, and for `settings`, whose
+        categories are setParameters/setConfig. "Programme" is the test
+        `HonCommand._load_parameters` applies when it names the `program` parameter.
+        """
+        if command.categories.get("_") is command:
+            return {}
+        return {
+            key: category
+            for key, category in command.categories.items()
+            if not category.is_favourite and "PROGRAM" in category.category
+        }
+
+    def _programme_by_mach_mode(
+        self, command: HonCommand, parameters: dict[str, Any]
+    ) -> Optional[str]:
+        """The one programme whose schema fixes the start's `machMode`, or None.
+
+        The heat-pump water heater's modes are programmes told apart by this value
+        alone: the app's mode change sends `{machMode}` and nothing else, and its
+        dashboard maps a recorded `machMode` back to the mode with `getMachModeIndex`
+        (apk2 decomp.txt:2328623; issue #115). Read from the schema, as the codes are.
+        """
+        if (wanted := parameters.get("machMode")) is None:
+            return None
+        wanted = _normalized_pr_code(wanted)
+        matches = []
+        for key, category in self._programmes(command).items():
+            parameter = category.parameters.get("machMode")
+            if not isinstance(parameter, HonParameterFixed):
+                continue
+            code = parameter.schema_value
+            if code is not None and _normalized_pr_code(code) == wanted:
+                matches.append(key)
+        return matches[0] if len(matches) == 1 else None
+
     def _named_programme(self, command: HonCommand, program_name: Any) -> Optional[str]:
         """The category a start's top-level `programName` names, or None.
 
@@ -630,29 +674,44 @@ class HonCommandLoader:
         prCode and another's parameters (issue #112), so the category is taken from
         `programName` and, when that names none, looked up by the code -- which alone
         is not enough, since several programmes can share one (prCode 115 on three of
-        the reporter's Haier programmes). None means neither singles a category out:
-        the caller must then recover nothing at all.
+        the reporter's Haier programmes). Without codes, a `machMode` that one programme
+        alone fixes names it (the heat-pump water heater, issue #115). None means
+        nothing singles a category out: the caller must then recover nothing at all.
+        Several programmes and no discriminant at all is that same case: written onto
+        the first programme, the water heater's start overwrote the fixed `machMode`
+        of whichever mode the catalog listed first (issue #115).
+
+        How the category was chosen is recorded in `_history_recovery`, for the dump.
         """
         if not command.categories:
             return command
         if program := parameters.pop("program", None):
-            category = self._clean_name(str(program))
+            category, how = self._clean_name(str(program)), "program"
         elif (category := parameters.pop("category", None)) is not None:
-            category = str(category)
+            category, how = str(category), "category"
         elif named := self._named_programme(command, program_name):
-            category = named
+            category, how = named, "programName"
         elif codes := self._programme_codes(command):
             if (pr_code := parameters.get("prCode")) is None:
+                self._history_recovery[name] = "none"
                 return None
             wanted = _normalized_pr_code(pr_code)
             matches = [key for key, code in codes.items() if code == wanted]
             if len(matches) != 1:
+                self._history_recovery[name] = "none"
                 return None
-            category = matches[0]
+            category, how = matches[0], "prCode"
+        elif by_mode := self._programme_by_mach_mode(command, parameters):
+            category, how = by_mode, "machMode"
+        elif len(self._programmes(command)) > 1:
+            self._history_recovery[name] = "none"
+            return None
         else:
+            self._history_recovery[name] = "default"
             return command
         # Same guard as the category setter: an unknown category leaves the default in
         # place instead of raising on a stale/renamed program in the history.
+        self._history_recovery[name] = how if category in command.categories else "default"
         if category in command.categories:
             selected = command.categories[category]
             # This swap bypasses the `category` setter (see the docstring), so the

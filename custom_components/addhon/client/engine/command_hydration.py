@@ -32,6 +32,11 @@ class CommandHydration:
     # payloads, which the `commandHistory` attribute (one slot, and one the cloud resets
     # to null -- issue #112) cannot be relied on to still carry when a dump is taken.
     command_history: list[dict[str, Any]] = field(default_factory=list)
+    # {command name: how the history recovery chose the category it restored}: the
+    # discriminant (`program`, `category`, `programName`, `prCode`, `machMode`),
+    # `default` (the values went on the default category) or `none` (nothing was
+    # recovered). Issue #115: without it a dump cannot say why a category is active.
+    history_recovery: dict[str, str] = field(default_factory=dict)
 
 
 class CommandCatalogUnavailable(HonCodedError):

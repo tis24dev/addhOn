@@ -68,6 +68,7 @@ class HonAppliance:
         self._zone = zone
         self._additional_data: dict[str, Any] = {}
         self._command_history: list[dict[str, Any]] = []
+        self._history_recovery: dict[str, str] = {}
         self._last_update: Optional[datetime] = None
         self._default_setting = HonParameter("", {}, "")
         self._connection = (
@@ -215,6 +216,14 @@ class HonAppliance:
         return self._command_history
 
     @property
+    def history_recovery(self) -> dict[str, str]:
+        """{command name: how the last catalog load chose the category it restored}.
+
+        See `CommandHydration.history_recovery`. Read by the diagnostics dump only.
+        """
+        return self._history_recovery
+
+    @property
     def zone(self) -> int:
         return self._zone
 
@@ -292,6 +301,7 @@ class HonAppliance:
         self._commands = hydration.commands
         self._additional_data = hydration.additional_data
         self._command_history = hydration.command_history
+        self._history_recovery = hydration.history_recovery
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 
