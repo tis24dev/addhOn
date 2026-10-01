@@ -1217,18 +1217,20 @@ def _command_history_block(appliance) -> dict:
 
     Issue #112 is why this exists. The official app's `startProgram` payload is the
     ground truth for what an option is called and what value it takes, and until now a
-    dump could only show it through `attributes.commandHistory`: ONE slot, overwritten
-    by the next command, and reset to null by the cloud between two of the reporter's
-    dumps. The engine already downloads the `/history` list at every catalog load to
-    recover the last-used programme; this prints it.
+    dump could only show it through `attributes.commandHistory`: ONE slot, its
+    timestamps updated by every command but its body only by a start or a stop (seen
+    live on an air conditioner, 2026-10-01), and reset to null by the cloud between
+    two of the reporter's dumps. The engine already downloads the `/history` list at
+    every catalog load to recover the last-used programme; this prints it.
 
     The list is the one of the last catalog load (setup or reload), not of this
     instant: a command issued since then is absent until the integration reloads.
 
-    Newest first by `command.timestamp` (else `timestampAccepted`), because the order
-    the cloud sends has never been measured; entries without a readable instant follow
-    in the order received. Each entry is printed whole. `_redact`, which runs over the
-    finished block, masks `macAddress`, `transactionId`, `mobileId` and the table keys
+    Newest first by `command.timestamp` (else `timestampAccepted`), the order the cloud
+    itself sends (2 beta7 dumps out of 2; 38 same-phone pairs out of 40 in
+    hon-test-data); entries without a readable instant follow in the order received.
+    Each entry is printed whole. `_redact`, which runs over the finished block, masks
+    `macAddress`, `transactionId`, `mobileId` and the table keys
     `PK`/`SK`/`SK_Secondary`, and the MAC pattern in every string value.
 
     The same four keys in every state, so two dumps of one issue stay diffable.

@@ -564,6 +564,10 @@ class HonCommandLoader:
         return None
 
     def _get_last_command_index(self, name: str) -> Optional[int]:
+        # The FIRST `/history` entry with that name, in the order received: the cloud
+        # lists the newest first (2 beta7 dumps out of 2; 38 same-phone pairs out of 40
+        # in hon-test-data), and the app reads `[0]` too (`getLastCommand`, apk2
+        # decomp.txt:990201-990212).
         return next(
             (
                 index
