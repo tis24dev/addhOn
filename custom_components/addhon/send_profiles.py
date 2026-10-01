@@ -4,7 +4,7 @@
 
 The official app has no single way of building a command body: it has one builder
 per appliance family, and they disagree on what goes in `parameters`
-(apk/analysis/issue113-hw-hpwh-control-model.md, section 7, and
+(apk2/analysis/issue113-hw-hpwh-control-model.md, section 7, and
 apk/analysis/app-command-model.md). A profile is this integration's copy of one of
 them. `LEGACY` is what the dispatcher has always done and stays the answer for every
 type until that type is migrated deliberately, with a real device behind it.
@@ -29,6 +29,10 @@ class SendProfile:
     - `ancillary_source`: the `(command, category)` whose `ancillaryParameters`
       every send carries, whatever command is sent; nothing if the appliance lacks
       it. None: each command carries its own.
+    - `verify_delivery`: after an accepted send, watch the next cloud read for a
+      command the appliance never applied, and log it once
+      (`command_diagnostics.record_delivery_check`). Only a body shape no client
+      but the app has sent needs it; the legacy one has worked for years.
     """
 
     name: str
@@ -39,6 +43,7 @@ class SendProfile:
     )
     energy_label: bool = True
     ancillary_source: tuple[str, str] | None = None
+    verify_delivery: bool = False
 
 
 LEGACY = SendProfile(name="legacy")
@@ -50,6 +55,8 @@ LEGACY = SendProfile(name="legacy")
 # send, the `startProgram` of a mode change included, takes its
 # `ancillaryParameters` from `settings.setParameters` (decomp.txt:4506560-4506580
 # mode change, 2327080-2327090 boost auto-off), and none when that is missing.
+# Its sparse `setParameters` is accepted with resultCode "0" even when the device
+# does not run it (live AC test, issue #115 D9), hence `verify_delivery`.
 HPWH = SendProfile(
     name="hpwh",
     backfill_mandatory=False,
@@ -57,6 +64,7 @@ HPWH = SendProfile(
     wire_commands=MappingProxyType({"settings": "setParameters"}),
     energy_label=False,
     ancillary_source=("settings", "setParameters"),
+    verify_delivery=True,
 )
 
 _BY_TYPE: Mapping[str, SendProfile] = MappingProxyType({"HW": HPWH})

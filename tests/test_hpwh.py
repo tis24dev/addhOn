@@ -3,7 +3,7 @@
 """Heat-pump water heater (type HW, issue #113): the read-only entities.
 
 The pure helpers in `hpwh.py` rebuild what the hOn app 2.30.7 derives
-(`apk/analysis/issue113-hw-hpwh-control-model.md`); the entity tests build the
+(`apk2/analysis/issue113-hw-hpwh-control-model.md`); the entity tests build the
 platforms over the attributes the reporter's HP110M8-9 really published
 (`tests/fixtures/hw_hp110m8/attributes.json`).
 """
@@ -120,6 +120,10 @@ MONDAY = datetime(2026, 9, 28, 3, 0)
 SATURDAY = datetime(2026, 10, 3, 3, 0)
 
 
+def _at(hour: int, minute: int) -> datetime:
+    return MONDAY.replace(hour=hour, minute=minute)
+
+
 def _fixture() -> dict:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
 
@@ -208,13 +212,36 @@ class ScheduleWindowTest(unittest.TestCase):
         attributes = _attrs(opp2EcoStartTime1="04:00", opp2EcoEndTime1="06:00")
         self.assertEqual(_window(attributes), ("04:00", "06:00"))
 
-    def test_same_scheme_gives_up_after_the_last_opp2_window(self) -> None:
+    def test_same_scheme_after_the_last_opp2_window_returns_tomorrows_first(self) -> None:
+        # The app returns null here (apk2 decomp.txt:2328062); the next window is
+        # the first one of tomorrow instead, as its isM11 branch answers.
         attributes = _attrs(
             opp2EcoStartTime1="01:00", opp2EcoEndTime1="02:00",
             opp1EcoStartTime1="04:00", opp1EcoEndTime1="05:00",
         )
         # opp1 is never consulted with offPeakPeriodScheme 1.
-        self.assertIsNone(_window(attributes))
+        self.assertEqual(_window(attributes), ("01:00", "02:00"))
+
+    def test_tomorrows_first_is_the_set_window_with_the_earliest_start(self) -> None:
+        # A slot without an end ("00:00") is not a window; a "00:00" start is.
+        attributes = _attrs(
+            opp2EcoStartTime1="01:00", opp2EcoEndTime1="02:00",
+            opp2EcoStartTime2="02:00", opp2EcoEndTime2="00:00",
+            opp2EcoStartTime3="00:00", opp2EcoEndTime3="00:30",
+        )
+        self.assertEqual(_window(attributes), ("00:00", "00:30"))
+        attributes["opp2EcoEndTime3"] = "00:00"
+        self.assertEqual(_window(attributes), ("01:00", "02:00"))
+
+    def test_different_scheme_still_gives_up_after_the_last_window(self) -> None:
+        # Not extended to scheme 0: there the app goes on to the opp1 windows of
+        # the other days first, and "tomorrow" may take the other set.
+        attributes = _attrs(
+            offPeakPeriodScheme=0,
+            opp1EcoDays="1f",
+            opp2EcoStartTime1="01:00", opp2EcoEndTime1="02:00",
+        )
+        self.assertIsNone(_window(attributes, MONDAY))
 
     def test_different_scheme_uses_opp2_on_the_mask_days_and_opp1_elsewhere(self) -> None:
         attributes = _attrs(
@@ -288,6 +315,51 @@ class HeatPumpStateTest(unittest.TestCase):
 
     def test_eco_without_windows_counts_as_active(self) -> None:
         self.assertEqual(_state(_attrs(onOffStatus=1, machMode=2)), "working")
+
+    def test_issue_115_after_its_window_waits_for_tomorrows(self) -> None:
+        # Issue #115 (HP150M8-9): eco, one window 00:15-23:45, on, 62 towards 65.
+        attributes = _attrs(
+            onOffStatus=1, machMode=2, temp=62, tempSel=65.0,
+            opp2EcoStartTime1="00:15", opp2EcoEndTime1="23:45",
+        )
+        self.assertEqual(_state(attributes, _at(0, 14)), "scheduled")
+        self.assertEqual(_state(attributes, _at(0, 15)), "working")
+        # The app counts the end minute as inside the window (decomp.txt:2328453).
+        self.assertEqual(_state(attributes, _at(23, 45)), "working")
+        # The app just opened says working here; it says scheduled when its screen
+        # was opened before 23:45.
+        self.assertEqual(_state(attributes, _at(23, 46)), "scheduled")
+        self.assertEqual(_state(attributes, _at(23, 59)), "scheduled")
+        # Off, the same stretch reads scheduled too, as before the window.
+        attributes["onOffStatus"] = 0
+        self.assertEqual(_state(attributes, _at(23, 46)), "scheduled")
+        self.assertEqual(_state(attributes, _at(12, 0)), "off")
+
+    def test_a_daytime_window_is_scheduled_all_evening(self) -> None:
+        # The hon-test-data #65 dump (HP110M8-9, Amsterdam): eco, 11:00-16:00, on,
+        # 65 of 65. The app just opened says working from 16:01 to midnight.
+        attributes = _attrs(
+            onOffStatus=1, machMode=2, temp=65, tempSel=65.0,
+            opp2EcoStartTime1="11:00", opp2EcoEndTime1="16:00",
+        )
+        self.assertEqual(_state(attributes, _at(10, 59)), "scheduled")
+        self.assertEqual(_state(attributes, _at(16, 0)), "working")
+        self.assertEqual(_state(attributes, _at(16, 1)), "scheduled")
+        self.assertEqual(_state(attributes, _at(18, 0)), "scheduled")
+
+    def test_the_last_of_several_windows_is_working_through_its_end_minute(self) -> None:
+        # PR #119 review: with an earlier window first, the end minute of the last one
+        # took tomorrow's first window and read scheduled. One window alone hid it,
+        # since tomorrow's first IS that window.
+        attributes = _attrs(
+            onOffStatus=1, machMode=2, temp=60, tempSel=65.0,
+            opp2EcoStartTime1="01:00", opp2EcoEndTime1="02:00",
+            opp2EcoStartTime2="11:00", opp2EcoEndTime2="16:00",
+        )
+        self.assertEqual(_window(attributes, _at(16, 0)), ("11:00", "16:00"))
+        self.assertEqual(_state(attributes, _at(16, 0)), "working")
+        self.assertEqual(_window(attributes, _at(16, 1)), ("01:00", "02:00"))
+        self.assertEqual(_state(attributes, _at(16, 1)), "scheduled")
 
     def test_vacation_falls_through_to_sterilization_or_working(self) -> None:
         self.assertEqual(_state(_attrs(onOffStatus=1, machMode=4)), "working")

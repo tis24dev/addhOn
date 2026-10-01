@@ -15,6 +15,8 @@ __pycache__/
 # Local working artifacts (not versioned)
 /apk/
 /apk2/
+# Live-probe tool for a tester's Home Assistant (issue #115): local only
+/scripts/dev/
 /docs/hon-internal-notes.md
 /docs/superpowers/
 

@@ -187,7 +187,13 @@ class _Episode:
 
 
 def _mode_categories(appliance) -> dict[str, str] | None:
-    """{HA operation: machMode fixed value}, or None if a category is missing."""
+    """{HA operation: machMode fixed value}, or None if a category is missing.
+
+    The value comes from the schema, not from the parameter's live `value`: the
+    command-history recovery, a favourite or a start can write into a category in
+    memory, and issue #115 showed one mode's category carrying another mode's
+    machMode.
+    """
     commands = getattr(appliance, "commands", None) or {}
     start = commands.get(HPWH_START_COMMAND)
     categories = getattr(start, "categories", None) or {}
@@ -195,7 +201,7 @@ def _mode_categories(appliance) -> dict[str, str] | None:
     for operation, category in HPWH_MODE_CATEGORIES.items():
         command = categories.get(category)
         parameter = getattr(command, "parameters", {}).get("machMode") if command else None
-        value = code(getattr(parameter, "value", None))
+        value = code(getattr(parameter, "schema_value", None))
         if not value:
             return None
         result[operation] = value
@@ -269,7 +275,18 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
 
     @property
     def target_temperature(self) -> float | None:
-        return _number(self._get_attr("tempSel"))
+        """`tempSel` on the schema's grid (whole °C), half a step rounding up.
+
+        Some M7 boilers publish a fractional target (52.2, 59.2, 62.8: issue #115
+        research). Shown as published, every +/- of Home Assistant's card asked for
+        53.2 or 51.2, which `async_set_temperature` refuses. Only the display moves:
+        what is sent is still exactly the whole degree asked for.
+        """
+        target = _number(self._get_attr("tempSel"))
+        if target is None or not math.isfinite(target):
+            return target
+        low, _high, step = self._range()
+        return low + math.floor((target - low) / step + 0.5) * step
 
     @property
     def operation_list(self) -> list[str]:
@@ -302,6 +319,11 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
                 translation_placeholders={"program": operation_mode},
             )
         raise_refusal(mode_block(self._get_attr))
+        if operation_mode == STATE_ECO and code(self._get_attr("machMode")) == modes[STATE_ECO]:
+            # ECO chosen while ECO is active: the app sends no startProgram, it goes on
+            # to the eco time-slot writes (apk2 decomp.txt:4506227-4506231), which are
+            # not offered here. AUTO and ELEC are sent again, as the app does.
+            return
         await self._send(mode_patch(HPWH_MODE_CATEGORIES[operation_mode], modes[operation_mode]))
 
     async def async_set_temperature(self, **kwargs: Any) -> None:

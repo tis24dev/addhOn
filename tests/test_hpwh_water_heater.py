@@ -55,7 +55,8 @@ def _appliance():
         "boostStatus": _range(0, 0, 1),
     })
     categories = {
-        name: types.SimpleNamespace(parameters={"machMode": types.SimpleNamespace(value=code)})
+        name: types.SimpleNamespace(parameters={
+            "machMode": types.SimpleNamespace(value=code, schema_value=code)})
         for name, code in (("auto", "1"), ("eco", "2"), ("elec", "3"), ("vac", "4"))
     }
     start = types.SimpleNamespace(categories=categories, parameters={})
@@ -222,6 +223,50 @@ class WaterHeaterTest(unittest.IsolatedAsyncioTestCase):
         patch = SENT[0]
         self.assertEqual((patch.command_name, dict(patch.values)), ("startProgram", {"machMode": "2"}))
         self.assertEqual(patch.program_name, "")
+
+    async def test_each_mode_sends_the_machmode_its_schema_fixes(self) -> None:
+        # Issue #115: the history recovery wrote ECO's "2" over the first category's
+        # machMode in memory, and heat_pump then sent it. The schema is what names a
+        # mode; the live value is not.
+        appliance = _appliance()
+        appliance.commands["startProgram"].categories["auto"].parameters["machMode"].value = "2"
+        entity = (await _build(experimental=True, appliance=appliance, onOffStatus=1, machMode=3))[0]
+        for operation in ("heat_pump", "eco", "electric"):
+            await entity.async_set_operation_mode(operation)
+        self.assertEqual([dict(p.values) for p in SENT],
+                         [{"machMode": "1"}, {"machMode": "2"}, {"machMode": "3"}])
+
+    async def test_eco_chosen_while_eco_is_active_sends_nothing(self) -> None:
+        # The app sends no startProgram when ECO is chosen in ECO: it goes on to the eco
+        # time-slot writes (apk2 decomp.txt:4506227-4506231), which are not offered here.
+        entity = (await _build(experimental=True, onOffStatus=1, machMode=2))[0]
+        await entity.async_set_operation_mode("eco")
+        self.assertEqual(SENT, [])
+
+    async def test_auto_or_electric_chosen_again_is_still_sent(self) -> None:
+        # Only ECO is skipped: for the other modes the app sends startProgram whatever
+        # the current one (apk2 decomp.txt:4506197-4506226).
+        for operation, mode in (("heat_pump", 1), ("electric", 3)):
+            entity = (await _build(experimental=True, onOffStatus=1, machMode=mode))[0]
+            await entity.async_set_operation_mode(operation)
+            self.assertEqual([dict(p.values) for p in SENT], [{"machMode": str(mode)}])
+
+    async def test_eco_while_eco_still_obeys_the_refusals(self) -> None:
+        entity = (await _build(experimental=True, onOffStatus=0, machMode=2))[0]
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await entity.async_set_operation_mode("eco")
+        self.assertEqual(ctx.exception.translation_key, "hpwh_switch_on_first")
+
+    async def test_a_fractional_target_is_shown_on_the_whole_degree_grid(self) -> None:
+        # Some M7 boilers publish a fractional target (52.2, 59.2, 62.8: issue #115
+        # research). Shown as published, every +/- of Home Assistant's card asked for
+        # 53.2 or 51.2, which `async_set_temperature` refuses.
+        for published, shown in ((52.2, 52.0), (59.5, 60.0), (62.8, 63.0), (40.0, 40.0)):
+            entity = (await _build(experimental=True, onOffStatus=1, tempSel=published))[0]
+            self.assertEqual(entity.target_temperature, shown, published)
+        entity = (await _build(experimental=True, onOffStatus=1, tempSel=52.2))[0]
+        await entity.async_set_temperature(temperature=entity.target_temperature + 1)
+        self.assertEqual([dict(p.values) for p in SENT], [{"tempSel": "53"}])
 
     async def test_off_mode_switches_off(self) -> None:
         entity = (await _build(experimental=True, onOffStatus=1))[0]

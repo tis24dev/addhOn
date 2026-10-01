@@ -473,6 +473,21 @@ class DiagnosticsValuesTest(unittest.TestCase):
         self.assertNotIn("enum", schema)
         self.assertNotIn("values", schema)
 
+    def test_a_fixed_value_moved_off_its_schema_shows_both(self):
+        # Issue #115: the dump showed the vac programme with machMode "2" as its only
+        # `enum`, while its schema fixes "4", and nothing told the two apart.
+        moved = FakeParam(value="2", values=["2"], typology="fixed", schema="4")
+        schema = diagnostics._param_schema(moved)
+        self.assertEqual(("2", "4"), (schema["value"], schema["schema_value"]))
+        for kept in (
+            FakeParam(value="4", values=["4"], typology="fixed"),
+            FakeParam(value=65.0, values=["65.0"], typology="fixed", schema="65"),
+            # Only a fixed value is worth flagging: an enum or a range moves by design.
+            FakeParam(value="1", values=["0", "1"], typology="enum", schema="0"),
+        ):
+            with self.subTest(value=kept.value, typology=kept.typology):
+                self.assertNotIn("schema_value", diagnostics._param_schema(kept))
+
     def test_a_small_range_carries_the_values_it_materialises(self):
         """min/max/step cannot answer why a 0/1 control is missing: param_range
         casts through float(), so "0"/"1" and "0.0"/"1.0" print the same here,
@@ -9579,9 +9594,10 @@ class StatisticsSectionTest(unittest.TestCase):
         _, blocks = _entry_diag()
         keys = list(blocks["AC"])
         at = keys.index("attributes_last_update")
+        # `history_recovery` explains the active category of `commands` (issue #115).
         self.assertEqual(
-            ["statistics", "attributes_overridden", "commands"],
-            keys[at + 1:at + 4],
+            ["statistics", "attributes_overridden", "history_recovery", "commands"],
+            keys[at + 1:at + 5],
         )
 
 
@@ -10003,6 +10019,40 @@ class FavouriteNameMaskingTest(unittest.TestCase):
         self.assertEqual(["Capi nuovi", "Zeta mia", "<favourite 1>"], enum)
 
 
+class HistoryRecoverySectionTest(unittest.TestCase):
+    """`history_recovery`: how the catalog load chose the category it restored.
+
+    Issue #115: `commands.startProgram` showed the vac programme active with ECO's
+    machMode, and the dump could not say whether the history or the schema put it there.
+    """
+
+    def test_printed_just_before_the_commands(self):
+        appliance = OptionAppliance(options={}, additional_data={})
+        appliance.history_recovery = {"startProgram": "machMode", "settings": "default"}
+        block = _option_block(appliance)
+        keys = list(block)
+        self.assertEqual("commands", keys[keys.index("history_recovery") + 1])
+        self.assertEqual(
+            {"startProgram": "machMode", "settings": "default"}, block["history_recovery"]
+        )
+        json.dumps(block)
+
+    def test_an_engine_without_it_prints_null(self):
+        # None, not {}: {} means a load that recovered nothing.
+        class Raising(OptionAppliance):
+            @property
+            def history_recovery(self):
+                raise RuntimeError("boom")
+
+        for appliance in (OptionAppliance(options={}, additional_data={}),
+                          Raising(options={}, additional_data={})):
+            with self.subTest(appliance=type(appliance).__name__):
+                self.assertIsNone(_option_block(appliance)["history_recovery"])
+        empty = OptionAppliance(options={}, additional_data={})
+        empty.history_recovery = {}
+        self.assertEqual({}, _option_block(empty)["history_recovery"])
+
+
 def _history_entry(timestamp=None, accepted=None, name="startProgram", **parameters):
     """One `/history` row in the shape the cloud sends (tests/fixtures/ref_10136)."""
     command = {"commandName": name, "parameters": dict(parameters)}
@@ -10145,6 +10195,144 @@ class CommandHistorySectionTest(unittest.TestCase):
         keys = list(_option_block(_history_appliance([_history_entry()])))
         self.assertEqual(keys.index("command_history") + 1, keys.index("attributes"))
         self.assertLess(keys.index("appliance_options"), keys.index("command_history"))
+
+
+def _slot(accepted=None, executed=None, name="startProgram", **extra):
+    """`attributes.commandHistory` in the shape the shadow carries it."""
+    slot = {"command": {"commandName": name, "timestamp": "2026-01-24T09:33:16.957Z"}}
+    if accepted is not None:
+        slot["timestampAccepted"] = accepted
+    if executed is not None:
+        slot["timestampExecuted"] = executed
+    slot.update(extra)
+    return {"commandHistory": slot}
+
+
+class LastCommandDeliveryTest(unittest.TestCase):
+    """`last_command_delivery`: did the last command the cloud accepted reach the device.
+
+    Measured on a live AC (apk2/analysis/issue115-hw/decisioni/9-prova-ac-mik.md):
+    `timestampExecuted` equal to `timestampAccepted` for the 4 commands that never
+    reached the device, 0.7-1.2 s later for the ones that did.
+    """
+
+    def _section(self, attributes):
+        return _option_block(attributes=attributes)["last_command_delivery"]
+
+    def test_a_command_that_reached_the_device(self):
+        # The #115 slot: the temperature change of 2026-09-29 11:13.
+        section = self._section(
+            _slot("2026-09-29T11:13:11.8Z", "2026-09-29T11:13:12.5Z")
+        )
+        self.assertEqual("delivered", section["verdict"])
+        self.assertEqual(0.7, section["gap_s"])
+        self.assertEqual("2026-09-29T11:13:11.800000+00:00", section["accepted"])
+        self.assertEqual("2026-09-29T11:13:12.500000+00:00", section["executed"])
+
+    def test_identical_instants_mean_it_never_reached_the_device(self):
+        # Probe A on the AC: a sparse setParameters, accepted and "executed" at once.
+        section = self._section(
+            _slot("2026-10-01T09:57:24.4Z", "2026-10-01T09:57:24.4Z")
+        )
+        self.assertEqual("not_delivered", section["verdict"])
+        self.assertEqual(0.0, section["gap_s"])
+
+    def test_instants_at_the_epoch_are_placeholders_not_a_verdict(self):
+        # An anonymised capture (tests/fixtures/ref_10136) sets every instant to the
+        # epoch: two equal placeholders are not a command that never arrived.
+        for executed in ("1970-01-01T00:00:00Z", "2026-10-01T10:00:00.0Z"):
+            with self.subTest(executed=executed):
+                section = self._section(_slot("1970-01-01T00:00:00Z", executed))
+                self.assertEqual("unknown", section["verdict"])
+
+    def test_the_window_of_a_delivered_command(self):
+        accepted = "2026-10-01T10:00:00.0Z"
+        cases = {
+            "2026-10-01T10:00:00.1Z": "unknown",  # probe C restore: 0.1 s, unexplained
+            "2026-10-01T10:00:00.4Z": "unknown",
+            "2026-10-01T10:00:00.5Z": "delivered",
+            "2026-10-01T10:00:02.6Z": "delivered",  # the hood of issue #83
+            "2026-10-01T10:00:10.0Z": "delivered",
+            "2026-10-01T10:00:10.1Z": "unknown",
+            "2026-10-01T10:01:00.0Z": "unknown",
+        }
+        for executed, verdict in cases.items():
+            with self.subTest(executed=executed):
+                self.assertEqual(
+                    verdict, self._section(_slot(accepted, executed))["verdict"]
+                )
+
+    def test_executed_before_accepted_is_two_commands_not_a_verdict(self):
+        # bbosson, issue #106 beta2: a later command moved only `timestampAccepted`.
+        section = self._section(
+            _slot("2026-09-23T09:08:48.9Z", "2026-09-23T07:22:00.0Z")
+        )
+        self.assertEqual("unknown", section["verdict"])
+        self.assertEqual(-6408.9, section["gap_s"])
+
+    def test_the_same_keys_in_every_state(self):
+        class Raising(dict):
+            def get(self, *args, **kwargs):
+                raise RuntimeError("boom")
+
+        sections = {
+            "no slot": diagnostics._last_command_delivery({}),
+            "null slot": diagnostics._last_command_delivery({"commandHistory": None}),
+            "not a mapping": diagnostics._last_command_delivery({"commandHistory": "x"}),
+            "no instants": diagnostics._last_command_delivery(_slot()),
+            "executed only": diagnostics._last_command_delivery(
+                _slot(executed="2026-09-28T10:30:55.7Z")
+            ),
+            "junk instants": diagnostics._last_command_delivery(_slot("junk", True)),
+            "raising attributes": diagnostics._last_command_delivery(Raising()),
+            "raising slot": diagnostics._last_command_delivery(
+                {"commandHistory": Raising(timestampAccepted="x")}
+            ),
+            "not a mapping at all": diagnostics._last_command_delivery(None),
+            "ok": diagnostics._last_command_delivery(
+                _slot("2026-09-29T11:13:11.8Z", "2026-09-29T11:13:12.5Z")
+            ),
+        }
+        keys = {"accepted", "executed", "gap_s", "verdict", "caveat"}
+        for state, section in sections.items():
+            with self.subTest(state=state):
+                self.assertEqual(keys, set(section))
+                json.dumps(section)
+                if state != "ok":
+                    self.assertEqual("unknown", section["verdict"])
+                    self.assertIsNone(section["gap_s"])
+        self.assertEqual(
+            "2026-09-28T10:30:55.700000+00:00", sections["executed only"]["executed"]
+        )
+        self.assertIsNone(sections["executed only"]["accepted"])
+
+    def test_the_caveat_says_the_body_may_be_an_older_command(self):
+        caveat = self._section(_slot())["caveat"]
+        for word in ("commandHistory", "startProgram", "stopProgram", "setParameters"):
+            self.assertIn(word, caveat)
+
+    def test_the_section_sits_directly_above_command_history(self):
+        keys = list(_option_block(attributes=_slot()))
+        self.assertEqual(
+            keys.index("last_command_delivery") + 1, keys.index("command_history")
+        )
+
+    def test_the_whole_dump_carries_it_and_still_no_identity(self):
+        _, blocks = _entry_diag()
+        section = blocks["AC"]["last_command_delivery"]
+        # The fixture's slot has a body and no instants.
+        self.assertEqual("unknown", section["verdict"])
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", json.dumps(blocks["AC"]))
+        # Every appliance gets one, slot or not.
+        self.assertIn("last_command_delivery", blocks["WD"])
+
+    def test_the_instants_survive_redaction_and_serialisation(self):
+        block = _option_block(
+            attributes=_slot("2026-09-29T11:13:11.8Z", "2026-09-29T11:13:12.5Z")
+        )
+        section = json.loads(json.dumps(block))["last_command_delivery"]
+        self.assertEqual("2026-09-29T11:13:11.800000+00:00", section["accepted"])
+        self.assertEqual("2026-09-29T11:13:12.500000+00:00", section["executed"])
 
 
 if __name__ == "__main__":

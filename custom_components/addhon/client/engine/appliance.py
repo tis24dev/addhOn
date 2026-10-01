@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any, Optional
 
+from ...command_diagnostics import observe_shadow_read
 from ..catalog_repository import CommandCatalogRepository
 from ..helpers import parse_cloud_timestamp
 from .appliances import registry as _native_appliances
@@ -68,6 +69,7 @@ class HonAppliance:
         self._zone = zone
         self._additional_data: dict[str, Any] = {}
         self._command_history: list[dict[str, Any]] = []
+        self._history_recovery: dict[str, str] = {}
         self._last_update: Optional[datetime] = None
         self._default_setting = HonParameter("", {}, "")
         self._connection = (
@@ -215,6 +217,14 @@ class HonAppliance:
         return self._command_history
 
     @property
+    def history_recovery(self) -> dict[str, str]:
+        """{command name: how the last catalog load chose the category it restored}.
+
+        See `CommandHydration.history_recovery`. Read by the diagnostics dump only.
+        """
+        return self._history_recovery
+
+    @property
     def zone(self) -> int:
         return self._zone
 
@@ -292,6 +302,7 @@ class HonAppliance:
         self._commands = hydration.commands
         self._additional_data = hydration.additional_data
         self._command_history = hydration.command_history
+        self._history_recovery = hydration.history_recovery
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 
@@ -353,6 +364,14 @@ class HonAppliance:
         self._attributes["available"] = self._connection
         if self._extra:
             self._attributes = self._extra.attributes(self._attributes)
+        # A command the cloud accepted but the device never applied shows up only
+        # here, in the next cloud read (issue #115, O4). Whoever asked for the read
+        # (refresh after the command, poll, fallback) it is judged once, and it only
+        # logs. observe_shadow_read is failure-safe itself; the guard is mqtt.py's.
+        try:
+            observe_shadow_read(self)
+        except Exception:
+            _LOGGER.debug("Delivery check failed", exc_info=True)
 
     async def load_statistics(self) -> None:
         self._statistics = await self.api.load_statistics(self)

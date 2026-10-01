@@ -770,7 +770,26 @@ def _param_schema(param) -> dict:
         enum = param_values(param)
         if enum:
             schema["enum"] = enum
+    # A FIXED parameter whose live value has left what its schema fixes: the enum above
+    # is the live value, so without this the dump showed the move as the schema (issue
+    # #115, the vac programme with ECO's machMode "2" over its own "4"). Only for fixed:
+    # an enum or a range moves by design. Omitted when the two agree, so it reads as a
+    # flag.
+    if schema["typology"] == "fixed":
+        declared = _jsonable(getattr(param, "schema_value", None))
+        if declared is not None and not _same_scalar(schema["value"], declared):
+            schema["schema_value"] = declared
     return schema
+
+
+def _same_scalar(left, right) -> bool:
+    """Two schema scalars spelled differently but equal ("65", 65.0) compare equal."""
+    if str(left).strip() == str(right).strip():
+        return True
+    try:
+        return float(left) == float(right)
+    except (TypeError, ValueError):
+        return False
 
 
 def _model_attributes(appliance) -> dict:
@@ -1172,23 +1191,46 @@ def _history_moment(entry: Mapping) -> datetime | None:
     return None
 
 
+def _history_recovery(appliance) -> dict | None:
+    """{command name: how the last catalog load chose the category it restored}.
+
+    The engine's `HonAppliance.history_recovery`: `program`, `category`,
+    `programName`, `prCode` or `machMode` name the discriminant, `default` means the
+    values went on the default category, `none` that nothing was recovered. Issue
+    #115: `commands` showed a category active and could not say why.
+
+    None for an engine without the property (or one that raises), so that it is not
+    read as {} -- a load that recovered nothing.
+    """
+    try:
+        raw = getattr(appliance, "history_recovery", None)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: history recovery unreadable", exc_info=True)
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+    return {str(name): str(how) for name, how in raw.items()}
+
+
 def _command_history_block(appliance) -> dict:
     """The last commands the cloud recorded for this appliance, from ANY client.
 
     Issue #112 is why this exists. The official app's `startProgram` payload is the
     ground truth for what an option is called and what value it takes, and until now a
-    dump could only show it through `attributes.commandHistory`: ONE slot, overwritten
-    by the next command, and reset to null by the cloud between two of the reporter's
-    dumps. The engine already downloads the `/history` list at every catalog load to
-    recover the last-used programme; this prints it.
+    dump could only show it through `attributes.commandHistory`: ONE slot, its
+    timestamps updated by every command but its body only by a start or a stop (seen
+    live on an air conditioner, 2026-10-01), and reset to null by the cloud between
+    two of the reporter's dumps. The engine already downloads the `/history` list at
+    every catalog load to recover the last-used programme; this prints it.
 
     The list is the one of the last catalog load (setup or reload), not of this
     instant: a command issued since then is absent until the integration reloads.
 
-    Newest first by `command.timestamp` (else `timestampAccepted`), because the order
-    the cloud sends has never been measured; entries without a readable instant follow
-    in the order received. Each entry is printed whole. `_redact`, which runs over the
-    finished block, masks `macAddress`, `transactionId`, `mobileId` and the table keys
+    Newest first by `command.timestamp` (else `timestampAccepted`), the order the cloud
+    itself sends (2 beta7 dumps out of 2; 38 same-phone pairs out of 40 in
+    hon-test-data); entries without a readable instant follow in the order received.
+    Each entry is printed whole. `_redact`, which runs over the finished block, masks
+    `macAddress`, `transactionId`, `mobileId` and the table keys
     `PK`/`SK`/`SK_Secondary`, and the MAC pattern in every string value.
 
     The same four keys in every state, so two dumps of one issue stay diffable.
@@ -1223,6 +1265,83 @@ def _command_history_block(appliance) -> dict:
         "total": len(raw),
         "shown": len(shown),
         "entries": shown,
+    }
+
+
+# The window in which `timestampExecuted - timestampAccepted` of the shadow's
+# `commandHistory` slot reads as "the command reached the device". Measured over every
+# distinct pair in diagnostics/, apk/dump/ and the live AC probe of 2026-10-01
+# (apk2/analysis/issue115-hw/decisioni/9-prova-ac-mik.md): 44 deliveries between 0.6
+# and 2.6 s, 0 s on the sparse setParameters the AC never received. The floor sits
+# between the shortest delivery and the one unexplained 0.1 s of that probe; the
+# ceiling is about four times the longest delivery, so a slow link still reads as
+# delivered while two instants written by two different commands do not.
+_DELIVERED_MIN_GAP_S = 0.5
+_DELIVERED_MAX_GAP_S = 10.0
+
+_LAST_COMMAND_CAVEAT = (
+    "About the last command the cloud accepted, of any kind. The `command` body in"
+    " attributes.commandHistory may belong to an earlier command: the cloud rewrites"
+    " it only on startProgram and stopProgram, while the two instants move with every"
+    " command, setParameters included. Delivered means it reached the device, not"
+    " that the device applied it."
+)
+
+
+def _last_command_delivery(attributes: Mapping) -> dict:
+    """Whether the last command the cloud accepted reached the appliance.
+
+    Read off `attributes.commandHistory`, the shadow's one-slot echo, and only off
+    its two instants. Measured live on an AC (issue #115, D9): for a command the
+    cloud never forwarded, `timestampExecuted` equals `timestampAccepted` (4 of 4);
+    for one that reached the device it follows by 0.7-1.2 s. Reaching the device is
+    not being applied: a sparse `{tempSel, operationName}` arrived in about 1 s and
+    the AC left the setpoint where it was.
+
+    `delivered` for a gap inside `_DELIVERED_MIN_GAP_S`..`_DELIVERED_MAX_GAP_S`,
+    `not_delivered` for a gap of exactly zero, `unknown` for everything else. A
+    NEGATIVE gap is not a delivery problem: a later command moved only
+    `timestampAccepted` (issue #106 beta2, -6408.9 s; three `/history` rows of
+    issue #112), so the two instants belong to two different commands.
+
+    The instants are parsed and re-rendered, never echoed, as in `_conn_event_row`.
+    The same five keys in every state, so two dumps of one issue stay diffable.
+    """
+    accepted = executed = None
+    try:
+        slot = (
+            attributes.get("commandHistory") if isinstance(attributes, Mapping) else None
+        )
+        if isinstance(slot, Mapping):
+            accepted = _as_utc(_parse_cloud_moment(slot.get("timestampAccepted")), True)
+            executed = _as_utc(_parse_cloud_moment(slot.get("timestampExecuted")), True)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: commandHistory unreadable", exc_info=True)
+        accepted = executed = None
+    accepted_text = _stamp_text(accepted)
+    executed_text = _stamp_text(executed)
+    gap = verdict = None
+    if accepted_text is not None and executed_text is not None:
+        try:
+            gap = round((executed - accepted).total_seconds(), 3)
+        except Exception:  # noqa: BLE001 - a foreign datetime subclass
+            gap = None
+    # An anonymised capture writes every instant at the epoch (tests/fixtures/
+    # ref_10136): two equal placeholders say nothing about a delivery.
+    if any(moment is not None and moment.year <= 1970 for moment in (accepted, executed)):
+        gap_read = None
+    else:
+        gap_read = gap
+    if gap_read == 0:
+        verdict = "not_delivered"
+    elif gap_read is not None and _DELIVERED_MIN_GAP_S <= gap_read <= _DELIVERED_MAX_GAP_S:
+        verdict = "delivered"
+    return {
+        "accepted": accepted_text,
+        "executed": executed_text,
+        "gap_s": gap,
+        "verdict": verdict or "unknown",
+        "caveat": _LAST_COMMAND_CAVEAT,
     }
 
 
@@ -3776,6 +3895,10 @@ def _appliance_block(
         # they say on the next line. Omitted for a model with no matrix -- every appliance
         # dumped so far except the one dishwasher -- rather than emitting an empty shape.
         **({"opt_compatibility": opt_compatibility} if opt_compatibility else {}),
+        # Directly above `command_history`, and read off the same `attributes` mapping
+        # printed two keys below: the verdict on the slot's instants, with the warning
+        # that the slot's body may be an older command.
+        "last_command_delivery": _last_command_delivery(attributes),
         # Above `attributes`, whose `commandHistory` is the single-slot echo of the same
         # data: the list says what was sent before the slot was overwritten or nulled.
         "command_history": command_history,
@@ -3807,6 +3930,8 @@ def _appliance_block(
         # and is always present -- `{}` is the finding "no key had two sources".
         "statistics": dict(statistics),
         "attributes_overridden": overrides,
+        # Just before `commands`, whose active category it explains.
+        "history_recovery": _history_recovery(appliance),
         "commands": commands,
         # Directly after `commands`, which prints the ACTIVE program only: this is
         # the same schema read per PROGRAM, and reading the two together is what

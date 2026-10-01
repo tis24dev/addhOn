@@ -5,7 +5,7 @@
 The rules are pure functions over the shadow attributes (only `raise_refusal` has an
 effect: it turns a refusal into the localized `HomeAssistantError`), rebuilt from the
 official app 2.30.7 (`apk2/decomp.txt`; the analysis is
-`apk/analysis/issue113-hw-hpwh-control-model.md`). Issue #113 is the first real
+`apk2/analysis/issue113-hw-hpwh-control-model.md`). Issue #113 is the first real
 device: an HP110M8-9, `series: "m8"`.
 
 The write side lives here too: when the app refuses a mode, temperature or boost
@@ -214,6 +214,10 @@ def schedule_window(
     compared as "HH:MM" STRINGS, as the app does; a "00:00"-"00:00" slot is never
     current or upcoming, which is how the app skips an empty one.
 
+    Differs from the app after the day's last window with the same windows every
+    day (`offPeakPeriodScheme` 1): the app gives up there (null), this returns the
+    first window of tomorrow. See `heat_pump_state` for what that changes.
+
     Returns None for the M7B/M8B/M11 series, whose branches are not rebuilt;
     `heat_pump_state` then answers unknown wherever the schedule would matter.
     """
@@ -248,11 +252,24 @@ def schedule_window(
             if clock < start or clock < end:
                 return start, end
         if scheme == 1:
-            return None
+            # Today's windows are over: the app returns null (decomp.txt:2328010,
+            # 2328062). The next window is tomorrow's first instead, the set one
+            # with the earliest start, as the isM11 branch picks it
+            # (decomp.txt:2328197-2328213). A slot without an end is not a window.
+            windows = [window(2, slot) for slot in (1, 2, 3)]
+            windows = [w for w in windows if w[1] and w[1] != "00:00"]
+            # Its end minute still belongs to the window that ends now: the
+            # comparison above is strict, `heat_pump_state` reads the end as
+            # inside (PR #119 review).
+            ending = [w for w in windows if w[1] == clock]
+            if ending:
+                return ending[0]
+            return min(windows, key=lambda w: w[0], default=None)
         # With scheme 0, once today's opp2 windows are over the app goes on to the
         # opp1 windows, which belong to the OTHER days (decomp.txt:2328007-2328015:
-        # only scheme 1 returns null there). Kept as the app does it: the state
-        # this feeds has to match what the app shows, not what the schedule means.
+        # only scheme 1 returns null there). Kept as the app does it, null at the
+        # end included: tomorrow may take the other set of windows, and no branch
+        # of the app says which one to show.
     for slot in (1, 2):
         start, end = window(1, slot)
         if clock < start or clock < end:
@@ -270,8 +287,15 @@ def heat_pump_state(
 ) -> str | None:
     """`getActiveStatus` for `ApplianceType.HW` (decomp.txt:2328690-2328900).
 
-    `get` reads one shadow attribute by name. Differs from the app in two places:
+    `get` reads one shadow attribute by name. Differs from the app in three places:
 
+    - Eco, from the end of the day's last window to midnight (same windows every
+      day): the app just opened shows WORKING (OFF when switched off), because its
+      window search gives up (decomp.txt:2328062) and no window reads as active
+      (2328426-2328428). Here the next window is tomorrow's first, so the answer
+      is SCHEDULED, switched on or off. That is what the app shows when its screen
+      was opened before the window ended: the m8 dashboard searches the window
+      with the time it was opened at (2325370-2325374, 2325443-2325446).
     - `tempSel < temp` is compared as numbers, where the app compares the two shadow
       strings. Both give the same answer for every two-digit temperature, which is
       the whole settable range (35-75).
