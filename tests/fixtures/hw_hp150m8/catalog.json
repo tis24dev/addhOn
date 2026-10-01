@@ -1,0 +1,147 @@
+{
+    "_comment": "startProgram catalogue of a real Haier HP150M8-9 heat-pump water heater (type HW, series m8), rebuilt into the raw hOn node shape from the addhOn 5.25.0 diagnostics attached to issue #115 (generated 2026-09-29). EXACT from the dump: each programme's machMode and onOffStatus (`program_options.per_program`, read from the schema), tempSel bounds, step, default, typologies and mandatory flags (`commands.startProgram`), and the one history row (`attributes.commandHistory`: the app's mode change to ECO, `{machMode: \"2\"}`, no programName, no prCode). INFERRED: VAC first (the dump prints `vac` as the active programme carrying ECO's machMode \"2\", which is what the 5.25.0 recovery does to the FIRST category; the order of the other three is unknown and kept AUTO, ECO, ELEC), the `PROGRAMS.HW.*` names, and `description`/`protocolType`, as the raw hOn catalogues of the M7 series spell them, because the dump prints neither. `/history` itself is not in a 5.25.0 dump: the row is the shadow's commandHistory slot. Left out: `settings`, the shadow, the device name the user typed, and every identity (id, serial, MAC, transaction id) and timestamp.",
+    "model": "HP150M8-9",
+    "type": "HW",
+    "series": "m8",
+    "source": "https://github.com/tis24dev/addhOn/issues/115 (diagnostics attachment)",
+    "captured": "2026-09-29",
+    "commands": {
+        "applianceModel": {
+            "name": "HP150M8-9",
+            "applianceTypeName": "HW",
+            "attributes": [
+                {
+                    "parName": "series",
+                    "parValue": "m8"
+                }
+            ]
+        },
+        "startProgram": {
+            "PROGRAMS.HW.VAC": {
+                "description": "The command allows to start a program",
+                "protocolType": "MQTT",
+                "parameters": {
+                    "machMode": {
+                        "category": "command",
+                        "typology": "fixed",
+                        "mandatory": 1,
+                        "fixedValue": "4"
+                    },
+                    "onOffStatus": {
+                        "category": "command",
+                        "typology": "fixed",
+                        "mandatory": 1,
+                        "fixedValue": "1"
+                    },
+                    "tempSel": {
+                        "category": "command",
+                        "typology": "range",
+                        "mandatory": 0,
+                        "defaultValue": "65",
+                        "minimumValue": "35",
+                        "maximumValue": "75",
+                        "incrementValue": "1"
+                    }
+                }
+            },
+            "PROGRAMS.HW.AUTO": {
+                "description": "The command allows to start a program",
+                "protocolType": "MQTT",
+                "parameters": {
+                    "machMode": {
+                        "category": "command",
+                        "typology": "fixed",
+                        "mandatory": 1,
+                        "fixedValue": "1"
+                    },
+                    "onOffStatus": {
+                        "category": "command",
+                        "typology": "fixed",
+                        "mandatory": 1,
+                        "fixedValue": "1"
+                    },
+                    "tempSel": {
+                        "category": "command",
+                        "typology": "range",
+                        "mandatory": 0,
+                        "defaultValue": "65",
+                        "minimumValue": "35",
+                        "maximumValue": "75",
+                        "incrementValue": "1"
+                    }
+                }
+            },
+            "PROGRAMS.HW.ECO": {
+                "description": "The command allows to start a program",
+                "protocolType": "MQTT",
+                "parameters": {
+                    "machMode": {
+                        "category": "command",
+                        "typology": "fixed",
+                        "mandatory": 1,
+                        "fixedValue": "2"
+                    },
+                    "onOffStatus": {
+                        "category": "command",
+                        "typology": "fixed",
+                        "mandatory": 1,
+                        "fixedValue": "1"
+                    },
+                    "tempSel": {
+                        "category": "command",
+                        "typology": "range",
+                        "mandatory": 0,
+                        "defaultValue": "65",
+                        "minimumValue": "35",
+                        "maximumValue": "75",
+                        "incrementValue": "1"
+                    }
+                }
+            },
+            "PROGRAMS.HW.ELEC": {
+                "description": "The command allows to start a program",
+                "protocolType": "MQTT",
+                "parameters": {
+                    "machMode": {
+                        "category": "command",
+                        "typology": "fixed",
+                        "mandatory": 1,
+                        "fixedValue": "3"
+                    },
+                    "onOffStatus": {
+                        "category": "command",
+                        "typology": "fixed",
+                        "mandatory": 1,
+                        "fixedValue": "1"
+                    },
+                    "tempSel": {
+                        "category": "command",
+                        "typology": "range",
+                        "mandatory": 0,
+                        "defaultValue": "65",
+                        "minimumValue": "35",
+                        "maximumValue": "75",
+                        "incrementValue": "1"
+                    }
+                }
+            }
+        }
+    },
+    "command_history": [
+        {
+            "command": {
+                "commandName": "startProgram",
+                "applianceType": "HW",
+                "applianceOptions": {},
+                "ancillaryParameters": {},
+                "attributes": {
+                    "channel": "mobileApp",
+                    "origin": "standardProgram"
+                },
+                "parameters": {
+                    "machMode": "2"
+                }
+            }
+        }
+    ]
+}
