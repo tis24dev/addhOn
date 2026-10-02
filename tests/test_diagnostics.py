@@ -8320,6 +8320,87 @@ class ProgramOptionMatrixTest(unittest.TestCase):
 
         self.assertNotIn("rule_targets", matrix["per_program"]["cotton"])
 
+    def _with_rules(self, node):
+        catalogue = self._catalogue()
+        rules = FakeParam(value=None, typology="fixed", schema=None)
+        rules.schema_node = node
+        catalogue["delicate"].parameters["programRules"] = rules
+        return self._matrix(catalogue)["per_program"]["delicate"]
+
+    def test_the_rule_node_shape_is_reported(self) -> None:
+        # Issue #112: `rule_targets` is the engine's reading, and the engine reads
+        # `enumValues` only when the node has no `fixedValue` (commands.py), so a stain map
+        # there was invisible. The node's own keys and both branches' targets say which.
+        row = self._with_rules({
+            "category": "rule", "typology": "fixed", "mandatory": 0,
+            "fixedValue": {
+                "delayStatus": {"nightWashStatus": {"1": {"typology": "fixed", "fixedValue": "0"}}},
+                "dryLevel": {"dryOption": {"0": {"typology": "fixed", "fixedValue": "0"}}},
+            },
+        })
+
+        self.assertEqual(
+            {
+                "keys": ["category", "fixedValue", "mandatory", "typology"],
+                "fixedValue": ["delayStatus", "dryLevel"],
+            },
+            row["rules"],
+        )
+
+    def test_the_stain_rules_the_app_reads_are_reported(self) -> None:
+        # What `checkStainConditions` reads (apk2 decomp.txt:1390611): the name -> code maps
+        # in enumValues.stainType, and temp/addWashDefaultTime keyed by stainType from the
+        # `fixedValue` branch when the node has one.
+        row = self._with_rules({
+            "category": "rule", "typology": "fixed",
+            "fixedValue": {
+                "temp": {"stainType": {"1|2": "40", "3": {"typology": "fixed", "fixedValue": "60"}}},
+                "addWashDefaultTime": {"stainType": {"1|2|3": "10"}},
+            },
+            "enumValues": {
+                "stainType": {"native": {"wine": "1", "grass": "2"}, "extended": {"butter": "27"}},
+                "temp": {"stainType": {"1": "90"}},
+            },
+        })
+
+        self.assertEqual(["stainType", "temp"], row["rules"]["enumValues"])
+        self.assertEqual(
+            {
+                "native": {"grass": "2", "wine": "1"},
+                "extended": {"butter": "27"},
+                "temp": {"1|2": "40", "3": {"fixedValue": "60", "typology": "fixed"}},
+                "addWashDefaultTime": {"1|2|3": "10"},
+            },
+            row["rules"]["stain"],
+        )
+
+    def test_stain_temperatures_come_from_enum_values_without_a_fixed_value(self) -> None:
+        # The app's own branch choice: `'fixedValue' in programRules ? fixedValue : enumValues`.
+        row = self._with_rules({
+            "category": "rule", "typology": "enum",
+            "enumValues": {"temp": {"stainType": {"1": "90"}}},
+        })
+
+        self.assertEqual({"temp": {"1": "90"}}, row["rules"]["stain"])
+
+    def test_no_stain_entry_without_stain_rules(self) -> None:
+        row = self._with_rules({"category": "rule", "fixedValue": {"dryLevel": {}}})
+
+        self.assertNotIn("stain", row["rules"])
+
+    def test_a_long_stain_map_is_cut_and_says_so(self) -> None:
+        native = {f"stain{i:03d}": str(i) for i in range(100)}
+        row = self._with_rules({"category": "rule", "enumValues": {"stainType": {"native": native}}})
+
+        stain = row["rules"]["stain"]
+        self.assertEqual(diagnostics._PROGRAM_RULES_MAX_ENTRIES, len(stain["native"]))
+        self.assertEqual(["native"], stain["truncated"])
+
+    def test_a_program_without_a_rule_node_reports_no_rules(self) -> None:
+        matrix = self._matrix(self._catalogue())
+
+        self.assertNotIn("rules", matrix["per_program"]["delicate"])
+
     def test_a_sentinel_only_parameter_is_not_called_settable(self) -> None:
         # PR #103 review (coderabbitai): the entity gate ignores DRY_LEVEL_SENTINELS, so a
         # dryLevel offering only ("", "0", "11") creates NO control. Reporting it as settable
