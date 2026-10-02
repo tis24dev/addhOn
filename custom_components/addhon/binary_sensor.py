@@ -193,6 +193,13 @@ _WASH_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     HonBinarySensorEntityDescription(
         key="energy_saving", attr_key="energySavingStatus", icon="mdi:leaf",
     ),
+    # Keep Fresh phase (#112). The switch is the setting for the next Start; while a
+    # cycle runs the app reads the shadow's `freshAirStatus` to show the Keep Fresh
+    # phase (apk2 decomp.txt:2612411-2612546). Only some models report it.
+    HonBinarySensorEntityDescription(
+        key="keep_fresh", attr_key="freshAirStatus", icon="mdi:tshirt-crew-outline",
+        device_class=BinarySensorDeviceClass.RUNNING,
+    ),
 )
 _DRY_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     _DOOR_OPEN, _DOOR_LOCK, _CHILD_LOCK,
