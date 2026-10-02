@@ -1665,42 +1665,90 @@ _PROGRAM_MATRIX_MAX_PROGRAMS = 256
 # summarise it. Applied through `_bounded_text`, which masks before it cuts.
 _PROGRAM_MATRIX_VALUE_MAX_CHARS = 64
 
-# The bound on each stain map `_program_rules_digest` prints. The app's stain vocabulary is
-# 35 names (`stainTypeKey` on the HW90-B14387TU1-S of issue #112) and the code range 0..26,
-# so 64 entries cannot cut a real map; past it the map's name goes into `truncated`.
+# The bound on every collection `_program_rules_digest` prints: the node's keys, each
+# branch's targets, each stain map and each map nested in one. The app's stain vocabulary
+# is 35 names (`stainTypeKey` on the HW90-B14387TU1-S of issue #112) and the code range
+# 0..26, so 64 entries cannot cut a real one; past it the cut is named in `truncated`.
 _PROGRAM_RULES_MAX_ENTRIES = 64
+
+# The bound on a KEY of a rule map. Those keys are the stain conditions, codes joined by
+# `|` (`extractTempOrTimeValue` @1391671): all 26 native codes are 68 characters and all
+# 35 codes would be 95, so the 64 of `_PROGRAM_MATRIX_VALUE_MAX_CHARS` cut real ones --
+# and 1..25 (65) shared its 64-character prefix with 1..26, so one rule overwrote the
+# other (PR #120 review). 256 holds every real key whole.
+_RULE_KEY_MAX_CHARS = 256
 
 # The rules keyed by stainType that `checkStainConditions` reads beside the name -> code
 # maps (apk2 decomp.txt:1390611-1390960): the temperature and the added wash time per stain.
 _STAIN_RULE_TARGETS = ("temp", "addWashDefaultTime")
 
 
-def _rule_keys(branch) -> list[str] | None:
-    """The sorted, bounded top-level keys of one rule branch, None if it is not a map."""
+def _rule_text(value, limit: int) -> tuple[str | None, bool]:
+    """`_bounded_text`, plus whether anything was lost: cut short, or not a scalar.
+
+    `None` and `""` are values the schema really holds (`""` is the dryLevel sentinel), so
+    they print as themselves rather than reading as lost.
+    """
+    if value is None or (isinstance(value, str) and not value):
+        return value, False
+    text = _bounded_text(value, limit)
+    if text is None:
+        return None, True
+    full = _scalar_text(value)
+    return text, full is not None and len(full) > limit
+
+
+def _rule_keys(branch) -> tuple[list[str] | None, bool]:
+    """The top-level keys of one rule branch in sorted order, and whether any was cut.
+
+    None when the branch is not a map. At most `_PROGRAM_RULES_MAX_ENTRIES` keys, each
+    bounded; a key cut short, left out, or printing like an earlier one counts as a cut.
+    """
     if not isinstance(branch, Mapping):
-        return None
-    return sorted(
-        text
-        for text in (_bounded_text(key, _PROGRAM_MATRIX_VALUE_MAX_CHARS) for key in branch)
-        if text is not None
-    )
+        return None, False
+    cut = len(branch) > _PROGRAM_RULES_MAX_ENTRIES
+    keys: list[str] = []
+    for key in sorted(branch, key=str)[:_PROGRAM_RULES_MAX_ENTRIES]:
+        text, lost = _rule_text(key, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+        if text is None or text in keys:
+            cut = True
+            continue
+        keys.append(text)
+        cut = cut or lost
+    return keys, cut
 
 
-def _rule_leaf(value):
-    """One rule value as printable data: a bounded scalar, or a flat map of them."""
+def _rule_map(entries: Mapping, value_fn) -> tuple[dict, bool]:
+    """A rule map as printable data, and whether anything was left out.
+
+    At most `_PROGRAM_RULES_MAX_ENTRIES` entries in key order, keys bounded at
+    `_RULE_KEY_MAX_CHARS`. Two keys that print alike keep the FIRST one: the second is a
+    cut, never a silent overwrite. `value_fn` prints each value and says if it lost any.
+    """
+    cut = len(entries) > _PROGRAM_RULES_MAX_ENTRIES
+    printed: dict = {}
+    items = sorted(entries.items(), key=lambda item: str(item[0]))
+    for key, value in items[:_PROGRAM_RULES_MAX_ENTRIES]:
+        text, key_lost = _rule_text(key, _RULE_KEY_MAX_CHARS)
+        shown, value_lost = value_fn(value)
+        if text is None or text in printed or (value_lost and shown is None):
+            cut = True
+            continue
+        printed[text] = shown
+        cut = cut or key_lost or value_lost
+    return printed, cut
+
+
+def _rule_scalar(value) -> tuple[str | None, bool]:
+    """A value inside a leaf map: a bounded scalar only, a deeper map is left out."""
+    return _rule_text(value, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+
+
+def _rule_leaf(value) -> tuple:
+    """One rule value: a bounded scalar, or one flat map of them (see `_rule_map`)."""
     if isinstance(value, Mapping):
-        return {
-            str(key): text
-            for key, text in (
-                (
-                    _bounded_text(k, _PROGRAM_MATRIX_VALUE_MAX_CHARS),
-                    _bounded_text(v, _PROGRAM_MATRIX_VALUE_MAX_CHARS),
-                )
-                for k, v in value.items()
-            )
-            if key is not None and text is not None
-        }
-    return _bounded_text(value, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+        return _rule_map(value, _rule_scalar)
+    return _rule_scalar(value)
 
 
 def _program_rules_digest(parameter) -> dict | None:
@@ -1718,18 +1766,25 @@ def _program_rules_digest(parameter) -> dict | None:
 
     Printed here: the node's keys, both branches' top-level targets, and -- only when there
     is any -- the stain maps and the two stain rules of the branch the app picks. Catalogue
-    vocabulary, every key and value bounded through `_bounded_text`; each map is cut at
-    `_PROGRAM_RULES_MAX_ENTRIES` in sorted order, naming the maps cut in `truncated`.
-    None for a program without the node.
+    vocabulary, every key and value bounded through `_bounded_text`, every collection cut
+    at `_PROGRAM_RULES_MAX_ENTRIES` in sorted order. Nothing is dropped in silence: a cut
+    of the node's keys or of a branch's targets is named in the rule's `truncated`
+    (`keys`, `fixedValue`, `enumValues`), a cut anywhere in a stain map -- itself, a key,
+    or a map nested in it -- in the stain block's `truncated`. None for a program without
+    the node.
     """
     node = getattr(parameter, "schema_node", None)
     if not isinstance(node, Mapping):
         return None
-    digest: dict = {"keys": _rule_keys(node) or []}
+    keys, keys_cut = _rule_keys(node)
+    digest: dict = {"keys": keys or []}
+    rules_truncated: list[str] = ["keys"] if keys_cut else []
     for branch_name in ("fixedValue", "enumValues"):
-        targets = _rule_keys(node.get(branch_name))
+        targets, targets_cut = _rule_keys(node.get(branch_name))
         if targets is not None:
             digest[branch_name] = targets
+            if targets_cut:
+                rules_truncated.append(branch_name)
     maps: dict[str, Mapping] = {}
     enum_values = node.get("enumValues")
     stain = enum_values.get("stainType") if isinstance(enum_values, Mapping) else None
@@ -1747,20 +1802,16 @@ def _program_rules_digest(parameter) -> dict | None:
     stain_digest: dict = {}
     truncated: list[str] = []
     for name, entries in maps.items():
-        items = sorted(entries.items(), key=lambda item: str(item[0]))
-        if len(items) > _PROGRAM_RULES_MAX_ENTRIES:
+        printed, cut = _rule_map(entries, _rule_leaf)
+        if cut:
             truncated.append(name)
-            items = items[:_PROGRAM_RULES_MAX_ENTRIES]
-        printed = {}
-        for key, value in items:
-            text = _bounded_text(key, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
-            if text is not None:
-                printed[text] = _rule_leaf(value)
         stain_digest[name] = printed
     if truncated:
         stain_digest["truncated"] = truncated
     if stain_digest:
         digest["stain"] = stain_digest
+    if rules_truncated:
+        digest["truncated"] = rules_truncated
     return digest
 
 

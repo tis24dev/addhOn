@@ -8396,6 +8396,78 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         self.assertEqual(diagnostics._PROGRAM_RULES_MAX_ENTRIES, len(stain["native"]))
         self.assertEqual(["native"], stain["truncated"])
 
+    def test_long_stain_condition_keys_print_whole_and_apart(self) -> None:
+        # PR #120 review (coderabbitai): keys were cut at 64 characters BEFORE going into
+        # the dict, silently. The list of all 26 stain codes is 68 characters and 1..25 is
+        # 65 with the same 64-character prefix, so one rule overwrote the other.
+        every = "|".join(str(code) for code in range(1, 27))
+        but_last = "|".join(str(code) for code in range(1, 26))
+        row = self._with_rules({
+            "category": "rule",
+            "fixedValue": {"temp": {"stainType": {every: "40", but_last: "30"}}},
+        })
+
+        self.assertEqual({every: "40", but_last: "30"}, row["rules"]["stain"]["temp"])
+        self.assertNotIn("truncated", row["rules"]["stain"])
+
+    def test_a_key_past_the_bound_is_cut_and_says_so(self) -> None:
+        long_key = "1|" * 200
+        row = self._with_rules({
+            "category": "rule",
+            "fixedValue": {"temp": {"stainType": {long_key + "a": "40", long_key + "b": "30"}}},
+        })
+
+        stain = row["rules"]["stain"]
+        self.assertEqual(
+            {long_key[: diagnostics._RULE_KEY_MAX_CHARS]: "40"}, stain["temp"],
+            "two keys that print alike: the first stays, nothing is overwritten",
+        )
+        self.assertEqual(["temp"], stain["truncated"])
+
+    def test_a_leaf_map_is_bounded_sorted_and_says_so(self) -> None:
+        # PR #120 review (greptile, coderabbitai): a nested leaf had no entry bound and
+        # kept the cloud's order.
+        leaf = {f"k{i:03d}": str(i) for i in reversed(range(100))}
+        row = self._with_rules({
+            "category": "rule", "fixedValue": {"temp": {"stainType": {"1": leaf}}},
+        })
+
+        printed = row["rules"]["stain"]["temp"]["1"]
+        self.assertEqual(diagnostics._PROGRAM_RULES_MAX_ENTRIES, len(printed))
+        self.assertEqual(sorted(printed), list(printed))
+        self.assertEqual("k000", next(iter(printed)))
+        self.assertEqual(["temp"], row["rules"]["stain"]["truncated"])
+
+    def test_a_leaf_nested_deeper_is_left_out_and_says_so(self) -> None:
+        row = self._with_rules({
+            "category": "rule",
+            "fixedValue": {"temp": {"stainType": {"1": {"fixedValue": "40", "deep": {"x": "1"}}}}},
+        })
+
+        stain = row["rules"]["stain"]
+        self.assertEqual({"1": {"fixedValue": "40"}}, stain["temp"])
+        self.assertEqual(["temp"], stain["truncated"])
+
+    def test_an_empty_rule_value_is_printed_not_dropped(self) -> None:
+        # `""` is a real schema value (the dryLevel sentinel), not a lost one.
+        row = self._with_rules({
+            "category": "rule",
+            "fixedValue": {"temp": {"stainType": {"1": {"typology": "fixed", "fixedValue": ""}}}},
+        })
+
+        stain = row["rules"]["stain"]
+        self.assertEqual({"1": {"typology": "fixed", "fixedValue": ""}}, stain["temp"])
+        self.assertNotIn("truncated", stain)
+
+    def test_the_node_keys_and_targets_are_bounded_and_say_so(self) -> None:
+        many = {f"target{i:03d}": {} for i in range(100)}
+        row = self._with_rules({"category": "rule", "fixedValue": many, **many})
+
+        rules = row["rules"]
+        self.assertEqual(diagnostics._PROGRAM_RULES_MAX_ENTRIES, len(rules["keys"]))
+        self.assertEqual(diagnostics._PROGRAM_RULES_MAX_ENTRIES, len(rules["fixedValue"]))
+        self.assertEqual(["keys", "fixedValue"], rules["truncated"])
+
     def test_a_program_without_a_rule_node_reports_no_rules(self) -> None:
         matrix = self._matrix(self._catalogue())
 
