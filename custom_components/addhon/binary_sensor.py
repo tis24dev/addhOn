@@ -51,6 +51,8 @@ from .const import (
     WM_ATTR_DRUM_CLEAN,
     WM_ATTR_DRY_CLEAN_NEEDED,
     WM_ATTR_FILTER_CLEAN,
+    WM_ATTR_PROGRAM_PHASE,
+    WM_ATTR_STATUS,
 )
 from .air_purifier import co_alarm, has_problem, is_engaged
 from .debug_utils import redact_id
@@ -154,6 +156,37 @@ _DRY_CLEAN = HonBinarySensorEntityDescription(
     device_class=BinarySensorDeviceClass.PROBLEM,
 )
 
+# Keep Fresh phase (#112). The switch is the setting for the next Start; the app shows
+# the Keep Fresh phase from the shadow's `freshAirStatus`, but only during the
+# end-of-cycle tumbling (see `keep_fresh_phase`). Only some models report it.
+_KEEP_FRESH = HonBinarySensorEntityDescription(
+    key="keep_fresh", attr_key="freshAirStatus", icon="mdi:tshirt-crew-outline",
+    device_class=BinarySensorDeviceClass.RUNNING,
+)
+# `machMode` values the app's phase function answers without reading `prPhase`
+# (`getAppliancePhaseFromParameters`, apk2 decomp.txt:1361041): 0 and 1 are READY in
+# `machModeToWashingPhase` (@1003985-1004011), 3 PAUSE, 5 SCHEDULED, 6 ERROR.
+_PHASE_BLIND_MODES = frozenset({"0", "1", "3", "5", "6"})
+# The end-of-cycle tumbling: TUMBLING_START on the standard table, TUMBLING on HQD.
+_TUMBLING_PHASE = "20"
+
+
+def keep_fresh_phase(fresh_air, phase, mach_mode) -> bool:
+    """True while the Keep Fresh phase runs, as the app's `ULTRA_FRESH` title.
+
+    The app shows it when `Number(freshAirStatus) === 1` and the active phase is
+    TUMBLING_START (dashboard header decomp.txt:2612411-2612546, `ActivityInfoWashing`
+    @3983945-3983990). The flag alone is not enough: a reporter's HQD washer sets it at
+    Start and still reports 1 once idle with the door open. On HQD the app's own test
+    never holds, since there `prPhase` 20 maps to TUMBLING (@1003829-1003905); the same
+    number is read on both tables here. A missing `prPhase` is READY in the app.
+    """
+    if _hpwh_code(fresh_air) != "1":
+        return False
+    if _hpwh_code(mach_mode) in _PHASE_BLIND_MODES:
+        return False
+    return _hpwh_code(phase) == _TUMBLING_PHASE
+
 # Connectivity: UNIVERSAL (every device) and ALWAYS available (it must be able to
 # signal 'disconnected'). Reads the `available` flag (from the engine, from
 # lastConnEvent.category). on = connected.
@@ -193,13 +226,7 @@ _WASH_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     HonBinarySensorEntityDescription(
         key="energy_saving", attr_key="energySavingStatus", icon="mdi:leaf",
     ),
-    # Keep Fresh phase (#112). The switch is the setting for the next Start; while a
-    # cycle runs the app reads the shadow's `freshAirStatus` to show the Keep Fresh
-    # phase (apk2 decomp.txt:2612411-2612546). Only some models report it.
-    HonBinarySensorEntityDescription(
-        key="keep_fresh", attr_key="freshAirStatus", icon="mdi:tshirt-crew-outline",
-        device_class=BinarySensorDeviceClass.RUNNING,
-    ),
+    _KEEP_FRESH,
 )
 _DRY_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     _DOOR_OPEN, _DOOR_LOCK, _CHILD_LOCK,
@@ -627,8 +654,13 @@ async def async_setup_entry(
                     description.key, data.get("name"), redact_id(appliance_id), description.attr_key,
                 )
                 continue
+            # Keep Fresh needs the phase and the machine mode beside its own flag, which
+            # a value_fn never sees -- it only gets the flag (#112).
+            entity_class = (
+                HonKeepFreshBinarySensor if description is _KEEP_FRESH else HonBinarySensor
+            )
             entities.append(
-                HonBinarySensor(
+                entity_class(
                     coordinator,
                     appliance_id,
                     description,
@@ -703,6 +735,21 @@ class HonBinarySensor(HonBaseEntity, BinarySensorEntity):
         if value_fn is not None:
             return value_fn(raw)
         return str(raw) == self.entity_description.on_value
+
+
+class HonKeepFreshBinarySensor(HonBinarySensor):
+    """Keep Fresh phase: the flag read together with the phase and the mode (#112)."""
+
+    @property
+    def is_on(self) -> bool | None:
+        fresh_air = self._get_attr(self.entity_description.attr_key)
+        if fresh_air is None:
+            return None
+        return keep_fresh_phase(
+            fresh_air,
+            self._get_attr(WM_ATTR_PROGRAM_PHASE),
+            self._get_attr(WM_ATTR_STATUS),
+        )
 
 
 class HonConnectivityBinarySensor(HonBinarySensor):
