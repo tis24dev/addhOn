@@ -959,16 +959,23 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
         value instead of falling back to another program's list (#112: Eco 40-60 pins spin
         to 1400 on a real HW80, and the fallback list stopped at 1000 and read `unknown`).
 
+        On a FAVOURITE the value is the one it saved, not the base programme's pin: the
+        favourite is the user's configuration, as ``_prescribed_raw`` reads it and as the
+        app fills it (@3617979). The base pin would read `unknown` beside the saved value
+        and, once picked, replace it (PR #120 review).
+
         ``(None, None)`` otherwise, and also when the pinned value is one of the
         description's sentinels: a sentinel is never offered, so the select would be left
         with no option at all, and the old fallback is kept instead."""
+        favourite = False
         if self._selected_program_code() is not None:
             candidate = self._category_option_param()
+            favourite = getattr(self._selected_category(), "is_favourite", False)
         else:
             candidate = self._active_option_param()
         if candidate is None or is_settable_option(candidate, self._desc.drop):
             return None, None
-        value = getattr(candidate, "schema_value", None)
+        value = None if favourite else getattr(candidate, "schema_value", None)
         if value is None:
             value = getattr(candidate, "value", None)
         value = normalize_code(value)

@@ -1019,6 +1019,25 @@ class PrescribedReadTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(["60"], entity.options)
         self.assertEqual("60", entity.current_option)
 
+    async def test_a_favourite_offers_the_pinned_value_it_saved(self) -> None:
+        # PR #120 review (greptile): a favourite IS the user's configuration, so its saved
+        # value is what the option holds -- `_prescribed_raw` reads it, and the app fills
+        # the highest-precedence slot with it (@3617979). Offering the base programme's
+        # pin instead read `unknown` and, once picked, replaced the saved setting.
+        from custom_components.addhon.client.engine.parameter.fixed import HonParameterFixed
+
+        appliance, categories = _prescribing_appliance()
+        saved = copy_module.copy(categories["delicate"])
+        saved.parameters["favourite"] = HonParameterFixed(
+            "favourite", {"typology": "fixed", "category": "command", "fixedValue": "1"},
+            "parameters",
+        )
+        saved.parameters["temp"].value = "40"
+        categories["FavDelicate"] = saved
+        entity = self._select(appliance, {"temp": "20"}, "temp", pending="FavDelicate")
+        self.assertEqual(["40"], entity.options)
+        self.assertEqual("40", entity.current_option)
+
     async def test_a_settable_programme_gets_its_list_back(self) -> None:
         appliance, _ = _prescribing_appliance()
         entity = self._select(appliance, {"temp": "40"}, "temp", pending="delicate")
