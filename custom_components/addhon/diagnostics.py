@@ -1665,6 +1665,155 @@ _PROGRAM_MATRIX_MAX_PROGRAMS = 256
 # summarise it. Applied through `_bounded_text`, which masks before it cuts.
 _PROGRAM_MATRIX_VALUE_MAX_CHARS = 64
 
+# The bound on every collection `_program_rules_digest` prints: the node's keys, each
+# branch's targets, each stain map and each map nested in one. The app's stain vocabulary
+# is 35 names (`stainTypeKey` on the HW90-B14387TU1-S of issue #112) and the code range
+# 0..26, so 64 entries cannot cut a real one; past it the cut is named in `truncated`.
+_PROGRAM_RULES_MAX_ENTRIES = 64
+
+# The bound on a KEY of a rule map. Those keys are the stain conditions, codes joined by
+# `|` (`extractTempOrTimeValue` @1391671): all 26 native codes are 68 characters and all
+# 35 codes would be 95, so the 64 of `_PROGRAM_MATRIX_VALUE_MAX_CHARS` cut real ones --
+# and 1..25 (65) shared its 64-character prefix with 1..26, so one rule overwrote the
+# other (PR #120 review). 256 holds every real key whole.
+_RULE_KEY_MAX_CHARS = 256
+
+# The rules keyed by stainType that `checkStainConditions` reads beside the name -> code
+# maps (apk2 decomp.txt:1390611-1390960): the temperature and the added wash time per stain.
+_STAIN_RULE_TARGETS = ("temp", "addWashDefaultTime")
+
+
+def _rule_text(value, limit: int) -> tuple[str | None, bool]:
+    """`_bounded_text`, plus whether anything was lost: cut short, or not a scalar.
+
+    `None` and `""` are values the schema really holds (`""` is the dryLevel sentinel), so
+    they print as themselves rather than reading as lost.
+    """
+    if value is None or (isinstance(value, str) and not value):
+        return value, False
+    text = _bounded_text(value, limit)
+    if text is None:
+        return None, True
+    full = _scalar_text(value)
+    return text, full is not None and len(full) > limit
+
+
+def _rule_keys(branch) -> tuple[list[str] | None, bool]:
+    """The top-level keys of one rule branch in sorted order, and whether any was cut.
+
+    None when the branch is not a map. At most `_PROGRAM_RULES_MAX_ENTRIES` keys, each
+    bounded; a key cut short, left out, or printing like an earlier one counts as a cut.
+    """
+    if not isinstance(branch, Mapping):
+        return None, False
+    cut = len(branch) > _PROGRAM_RULES_MAX_ENTRIES
+    keys: list[str] = []
+    for key in sorted(branch, key=str)[:_PROGRAM_RULES_MAX_ENTRIES]:
+        text, lost = _rule_text(key, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+        if text is None or text in keys:
+            cut = True
+            continue
+        keys.append(text)
+        cut = cut or lost
+    return keys, cut
+
+
+def _rule_map(entries: Mapping, value_fn) -> tuple[dict, bool]:
+    """A rule map as printable data, and whether anything was left out.
+
+    At most `_PROGRAM_RULES_MAX_ENTRIES` entries in key order, keys bounded at
+    `_RULE_KEY_MAX_CHARS`. Two keys that print alike keep the FIRST one: the second is a
+    cut, never a silent overwrite. `value_fn` prints each value and says if it lost any.
+    """
+    cut = len(entries) > _PROGRAM_RULES_MAX_ENTRIES
+    printed: dict = {}
+    items = sorted(entries.items(), key=lambda item: str(item[0]))
+    for key, value in items[:_PROGRAM_RULES_MAX_ENTRIES]:
+        text, key_lost = _rule_text(key, _RULE_KEY_MAX_CHARS)
+        shown, value_lost = value_fn(value)
+        if text is None or text in printed or (value_lost and shown is None):
+            cut = True
+            continue
+        printed[text] = shown
+        cut = cut or key_lost or value_lost
+    return printed, cut
+
+
+def _rule_scalar(value) -> tuple[str | None, bool]:
+    """A value inside a leaf map: a bounded scalar only, a deeper map is left out."""
+    return _rule_text(value, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+
+
+def _rule_leaf(value) -> tuple:
+    """One rule value: a bounded scalar, or one flat map of them (see `_rule_map`)."""
+    if isinstance(value, Mapping):
+        return _rule_map(value, _rule_scalar)
+    return _rule_scalar(value)
+
+
+def _program_rules_digest(parameter) -> dict | None:
+    """The `programRules` node of one program, as far as the stain selector reads it (#112).
+
+    `rule_targets` is the ENGINE's reading of the node, and the engine reads `enumValues`
+    only when the node has no `fixedValue` (`HonCommand._create_parameters`), so a stain map
+    kept in `enumValues` beside a `fixedValue` never showed. The hOn app reads both: the
+    stain options are `stainTypeKey` mapped through `{...enumValues.stainType.native,
+    ...extended}` (name -> code), and the temperature and added wash time per stain come
+    from `temp.stainType` / `addWashDefaultTime.stainType` of `fixedValue` when the node has
+    one, else of `enumValues` (`checkStainConditions` @1390611, `getStainsElement`
+    @1391736). Without the map every stain is `Number(undefined)`: the app's own start of
+    `iot_wash_bathrobe` on that washer carried `stainType "NaN"` and `temp "NaN"`.
+
+    Printed here: the node's keys, both branches' top-level targets, and -- only when there
+    is any -- the stain maps and the two stain rules of the branch the app picks. Catalogue
+    vocabulary, every key and value bounded through `_bounded_text`, every collection cut
+    at `_PROGRAM_RULES_MAX_ENTRIES` in sorted order. Nothing is dropped in silence: a cut
+    of the node's keys or of a branch's targets is named in the rule's `truncated`
+    (`keys`, `fixedValue`, `enumValues`), a cut anywhere in a stain map -- itself, a key,
+    or a map nested in it -- in the stain block's `truncated`. None for a program without
+    the node.
+    """
+    node = getattr(parameter, "schema_node", None)
+    if not isinstance(node, Mapping):
+        return None
+    keys, keys_cut = _rule_keys(node)
+    digest: dict = {"keys": keys or []}
+    rules_truncated: list[str] = ["keys"] if keys_cut else []
+    for branch_name in ("fixedValue", "enumValues"):
+        targets, targets_cut = _rule_keys(node.get(branch_name))
+        if targets is not None:
+            digest[branch_name] = targets
+            if targets_cut:
+                rules_truncated.append(branch_name)
+    maps: dict[str, Mapping] = {}
+    enum_values = node.get("enumValues")
+    stain = enum_values.get("stainType") if isinstance(enum_values, Mapping) else None
+    if isinstance(stain, Mapping):
+        for kind in ("native", "extended"):
+            if isinstance(stain.get(kind), Mapping):
+                maps[kind] = stain[kind]
+    branch = node.get("fixedValue") if "fixedValue" in node else node.get("enumValues")
+    if isinstance(branch, Mapping):
+        for target in _STAIN_RULE_TARGETS:
+            rule = branch.get(target)
+            by_stain = rule.get("stainType") if isinstance(rule, Mapping) else None
+            if isinstance(by_stain, Mapping):
+                maps[target] = by_stain
+    stain_digest: dict = {}
+    truncated: list[str] = []
+    for name, entries in maps.items():
+        printed, cut = _rule_map(entries, _rule_leaf)
+        if cut:
+            truncated.append(name)
+        stain_digest[name] = printed
+    if truncated:
+        stain_digest["truncated"] = truncated
+    if stain_digest:
+        digest["stain"] = stain_digest
+    if rules_truncated:
+        digest["truncated"] = rules_truncated
+    return digest
+
 
 def _option_drops() -> dict[str, tuple[str, ...]]:
     """`param name -> sentinel values the entity gate ignores`, from the real tables.
@@ -1882,6 +2031,7 @@ def _program_option_matrix(appliance) -> dict:
         # `hqd_i_refresh`. `getattr` because the command doubles in the tests, and any
         # engine older than the property, have none.
         rule_targets = sorted(getattr(category, "rule_targets", None) or ())
+        rules = _program_rules_digest(params.get("programRules"))
         row: dict = {}
         if settable:
             row["settable"] = settable
@@ -1891,6 +2041,8 @@ def _program_option_matrix(appliance) -> dict:
             row["absent"] = absent
         if rule_targets:
             row["rule_targets"] = rule_targets
+        if rules:
+            row["rules"] = rules
         per_program[str(code)] = row
     return {
         "command": STARTPROGRAM_COMMAND,

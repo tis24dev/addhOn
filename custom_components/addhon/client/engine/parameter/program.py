@@ -142,9 +142,11 @@ class HonParameterProgram(HonParameterEnum):
         fall back to the unambiguous base program. That fallback is today's behaviour, so
         a mismatch is never a regression.
 
-        `position` is the appliance-reported `prPosition`, the tie-breaker the hOn app
-        itself uses (`findCurrentProgramNameFromPrCodeAndPrPosition`, decomp.txt:2705620,
-        which ANDs prCode and prPosition). It is accepted here but deliberately applied
+        `position` is the appliance-reported `prPosition`, the tie-breaker the hOn app's
+        washer dashboard uses in its last fallback (`createCardFromShadows`, 2.27.9
+        decomp.txt:2628490, 2.30.7 apk2 @2586342, which ANDs prCode and prPosition; the
+        similarly named `findCurrentProgramNameFromPrCodeAndPrPosition` @2705620 belongs to
+        the oven, not the washer). It is accepted here but deliberately applied
         under a STRICT-NARROWING rule -- used only when prCode+prPosition select exactly
         ONE category -- so it can only ever turn an ambiguous answer into a precise one,
         never change an already-unambiguous one. That rule also makes it self-limiting in

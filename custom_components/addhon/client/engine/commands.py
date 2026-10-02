@@ -22,6 +22,8 @@ from collections.abc import Mapping
 from copy import copy
 from typing import Any, Optional, Union
 
+from .energy_label import actual_duration, ancillary_values
+from .energy_label import energy_label as label_for_duration
 from .exceptions import ApiError, NoAuthenticationException
 from .parameter.base import HonParameter
 from .parameter.enum import HonParameterEnum
@@ -101,6 +103,10 @@ class HonCommand:
         # The name the user gave a favourite in the app; empty on a schema category.
         # Set by `HonCommandLoader._add_favourites` on its copy (see `favourite_name`).
         self._favourite_name = ""
+        # The category's `remainingTimes` group exactly as the cloud sent it (issue #99,
+        # see `remaining_times`). Kept aside, not instead: `_load_parameters` still files
+        # its sub-nodes as before.
+        self._remaining_times: Any = attributes.get("remainingTimes")
         attributes.pop("description", "")
         attributes.pop("protocolType", "")
         self._load_parameters(attributes)
@@ -169,6 +175,19 @@ class HonCommand:
     @property
     def data(self) -> dict[str, Any]:
         return self._data
+
+    @property
+    def remaining_times(self) -> Any:
+        """The category's raw `remainingTimes` group, None when the catalog has none.
+
+        The table the hOn app sums a washer programme's duration from off the HQD
+        platform (issue #99, see `energy_label.actual_duration`). `_load_parameters`
+        also walks this group, but files each sub-node flat in `data` under its own
+        name (`dirtyLevel`, `spinSpeed`, `prewash`...), where the group is lost and a
+        same-named node of another group would overwrite it; this keeps the group
+        whole. A favourite is a `copy` of its category and shares it.
+        """
+        return self._remaining_times
 
     @property
     def parameters(self) -> dict[str, HonParameter]:
@@ -376,6 +395,48 @@ class HonCommand:
             return "1"
         return str(int(label))
 
+    def _table_energy_label(self, params: Mapping[str, str | float]) -> str | None:
+        """`energyLabel` of a washer start off HQD, or None to send what we always did.
+
+        Issue #99. Outside HQD the app has no `remainingTime` to read: it sums the
+        category's `remainingTimes` table for the values this body carries (apk2
+        decomp.txt:1367613-1368630) and writes the label in both places, as above.
+        The duration sees what the builder passes it: `params` as they go on the
+        wire, the ancillary schema mapped by `mapCommandParameters` (@1362222-1362234),
+        `parameters.temp` and `ancillaryParameters.tempContribution.fixedValue` of
+        the category (@1362207-1362221, @1362680-1362692).
+
+        None when the app would send '0': no table, no duration out of it, a
+        temperature that is not an enum, no contribution, or an unreadable value.
+        Those starts deliberately keep the body they had (the schema's ancillary
+        value and the attributes' "0") instead of switching to the app's '0'.
+        Reference and cases: apk2/analysis/issue99-wd/4-actual-duration-energy-label.md.
+        """
+        ancillary_nodes = {
+            name: parameter.schema_node
+            for name, parameter in self._parameters.items()
+            if parameter.group == "ancillaryParameters"
+        }
+        minutes = actual_duration(
+            getattr(self._appliance, "appliance_type", ""),
+            params,
+            ancillary_values(ancillary_nodes),
+            self._remaining_times,
+        )
+        if minutes is None:
+            return None
+        temp = self._parameters.get("temp")
+        contribution = self._parameters.get("tempContribution")
+        label = label_for_duration(
+            minutes,
+            temp.schema_node if temp is not None and temp.group == "parameters" else None,
+            contribution.schema_node.get("fixedValue")
+            if contribution is not None and contribution.group == "ancillaryParameters"
+            else None,
+            params.get("temp"),
+        )
+        return str(label) if label else None
+
     async def send_specific(self, param_names: list[str]) -> bool:
         params: dict[str, str | float] = {}
         for key, parameter in self._parameters.items():
@@ -435,6 +496,14 @@ class HonCommand:
             # attributes keep "0" and the ancillaries the schema's own value.
             wire_energy_label = self._energy_label(params)
             ancillary["energyLabel"] = wire_energy_label
+        elif energy_label and self._is_washer_start():
+            # Issue #99: off HQD the app works the label out of the remainingTimes
+            # table, again the same in both places. Without a label the body stays
+            # as it was: "0" and the schema's value.
+            label = self._table_energy_label(params)
+            if label is not None:
+                wire_energy_label = label
+                ancillary["energyLabel"] = label
         if self._is_washer_start() and _whole_minutes(params.get("delayTime")) > 0:
             # Issue #112: the app confirms every delayed washer start with
             # ecoDelayStart '0' (seen in each delayed command of the reporters'

@@ -5455,7 +5455,9 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
             # silent_mode, soak_prewash, rinse_iterations, main_wash_time), each three
             # names (the parameter, its startProgram. read, the write) on WM and on WD.
             # 621 with the quick wash and intensive switches (#112): two rows, same shape.
-            621,
+            # 623 with the Keep Fresh phase binary (#112): one read name,
+            # `freshAirStatus`, on WM and on WD.
+            623,
             seen,
             f"the sweep changed to {seen} names; re-measure and update this number "
             f"deliberately, naming what joined or left it",
@@ -8317,6 +8319,159 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         matrix = self._matrix(self._catalogue())
 
         self.assertNotIn("rule_targets", matrix["per_program"]["cotton"])
+
+    def _with_rules(self, node):
+        catalogue = self._catalogue()
+        rules = FakeParam(value=None, typology="fixed", schema=None)
+        rules.schema_node = node
+        catalogue["delicate"].parameters["programRules"] = rules
+        return self._matrix(catalogue)["per_program"]["delicate"]
+
+    def test_the_rule_node_shape_is_reported(self) -> None:
+        # Issue #112: `rule_targets` is the engine's reading, and the engine reads
+        # `enumValues` only when the node has no `fixedValue` (commands.py), so a stain map
+        # there was invisible. The node's own keys and both branches' targets say which.
+        row = self._with_rules({
+            "category": "rule", "typology": "fixed", "mandatory": 0,
+            "fixedValue": {
+                "delayStatus": {"nightWashStatus": {"1": {"typology": "fixed", "fixedValue": "0"}}},
+                "dryLevel": {"dryOption": {"0": {"typology": "fixed", "fixedValue": "0"}}},
+            },
+        })
+
+        self.assertEqual(
+            {
+                "keys": ["category", "fixedValue", "mandatory", "typology"],
+                "fixedValue": ["delayStatus", "dryLevel"],
+            },
+            row["rules"],
+        )
+
+    def test_the_stain_rules_the_app_reads_are_reported(self) -> None:
+        # What `checkStainConditions` reads (apk2 decomp.txt:1390611): the name -> code maps
+        # in enumValues.stainType, and temp/addWashDefaultTime keyed by stainType from the
+        # `fixedValue` branch when the node has one.
+        row = self._with_rules({
+            "category": "rule", "typology": "fixed",
+            "fixedValue": {
+                "temp": {"stainType": {"1|2": "40", "3": {"typology": "fixed", "fixedValue": "60"}}},
+                "addWashDefaultTime": {"stainType": {"1|2|3": "10"}},
+            },
+            "enumValues": {
+                "stainType": {"native": {"wine": "1", "grass": "2"}, "extended": {"butter": "27"}},
+                "temp": {"stainType": {"1": "90"}},
+            },
+        })
+
+        self.assertEqual(["stainType", "temp"], row["rules"]["enumValues"])
+        self.assertEqual(
+            {
+                "native": {"grass": "2", "wine": "1"},
+                "extended": {"butter": "27"},
+                "temp": {"1|2": "40", "3": {"fixedValue": "60", "typology": "fixed"}},
+                "addWashDefaultTime": {"1|2|3": "10"},
+            },
+            row["rules"]["stain"],
+        )
+
+    def test_stain_temperatures_come_from_enum_values_without_a_fixed_value(self) -> None:
+        # The app's own branch choice: `'fixedValue' in programRules ? fixedValue : enumValues`.
+        row = self._with_rules({
+            "category": "rule", "typology": "enum",
+            "enumValues": {"temp": {"stainType": {"1": "90"}}},
+        })
+
+        self.assertEqual({"temp": {"1": "90"}}, row["rules"]["stain"])
+
+    def test_no_stain_entry_without_stain_rules(self) -> None:
+        row = self._with_rules({"category": "rule", "fixedValue": {"dryLevel": {}}})
+
+        self.assertNotIn("stain", row["rules"])
+
+    def test_a_long_stain_map_is_cut_and_says_so(self) -> None:
+        native = {f"stain{i:03d}": str(i) for i in range(100)}
+        row = self._with_rules({"category": "rule", "enumValues": {"stainType": {"native": native}}})
+
+        stain = row["rules"]["stain"]
+        self.assertEqual(diagnostics._PROGRAM_RULES_MAX_ENTRIES, len(stain["native"]))
+        self.assertEqual(["native"], stain["truncated"])
+
+    def test_long_stain_condition_keys_print_whole_and_apart(self) -> None:
+        # PR #120 review (coderabbitai): keys were cut at 64 characters BEFORE going into
+        # the dict, silently. The list of all 26 stain codes is 68 characters and 1..25 is
+        # 65 with the same 64-character prefix, so one rule overwrote the other.
+        every = "|".join(str(code) for code in range(1, 27))
+        but_last = "|".join(str(code) for code in range(1, 26))
+        row = self._with_rules({
+            "category": "rule",
+            "fixedValue": {"temp": {"stainType": {every: "40", but_last: "30"}}},
+        })
+
+        self.assertEqual({every: "40", but_last: "30"}, row["rules"]["stain"]["temp"])
+        self.assertNotIn("truncated", row["rules"]["stain"])
+
+    def test_a_key_past_the_bound_is_cut_and_says_so(self) -> None:
+        long_key = "1|" * 200
+        row = self._with_rules({
+            "category": "rule",
+            "fixedValue": {"temp": {"stainType": {long_key + "a": "40", long_key + "b": "30"}}},
+        })
+
+        stain = row["rules"]["stain"]
+        self.assertEqual(
+            {long_key[: diagnostics._RULE_KEY_MAX_CHARS]: "40"}, stain["temp"],
+            "two keys that print alike: the first stays, nothing is overwritten",
+        )
+        self.assertEqual(["temp"], stain["truncated"])
+
+    def test_a_leaf_map_is_bounded_sorted_and_says_so(self) -> None:
+        # PR #120 review (greptile, coderabbitai): a nested leaf had no entry bound and
+        # kept the cloud's order.
+        leaf = {f"k{i:03d}": str(i) for i in reversed(range(100))}
+        row = self._with_rules({
+            "category": "rule", "fixedValue": {"temp": {"stainType": {"1": leaf}}},
+        })
+
+        printed = row["rules"]["stain"]["temp"]["1"]
+        self.assertEqual(diagnostics._PROGRAM_RULES_MAX_ENTRIES, len(printed))
+        self.assertEqual(sorted(printed), list(printed))
+        self.assertEqual("k000", next(iter(printed)))
+        self.assertEqual(["temp"], row["rules"]["stain"]["truncated"])
+
+    def test_a_leaf_nested_deeper_is_left_out_and_says_so(self) -> None:
+        row = self._with_rules({
+            "category": "rule",
+            "fixedValue": {"temp": {"stainType": {"1": {"fixedValue": "40", "deep": {"x": "1"}}}}},
+        })
+
+        stain = row["rules"]["stain"]
+        self.assertEqual({"1": {"fixedValue": "40"}}, stain["temp"])
+        self.assertEqual(["temp"], stain["truncated"])
+
+    def test_an_empty_rule_value_is_printed_not_dropped(self) -> None:
+        # `""` is a real schema value (the dryLevel sentinel), not a lost one.
+        row = self._with_rules({
+            "category": "rule",
+            "fixedValue": {"temp": {"stainType": {"1": {"typology": "fixed", "fixedValue": ""}}}},
+        })
+
+        stain = row["rules"]["stain"]
+        self.assertEqual({"1": {"typology": "fixed", "fixedValue": ""}}, stain["temp"])
+        self.assertNotIn("truncated", stain)
+
+    def test_the_node_keys_and_targets_are_bounded_and_say_so(self) -> None:
+        many = {f"target{i:03d}": {} for i in range(100)}
+        row = self._with_rules({"category": "rule", "fixedValue": many, **many})
+
+        rules = row["rules"]
+        self.assertEqual(diagnostics._PROGRAM_RULES_MAX_ENTRIES, len(rules["keys"]))
+        self.assertEqual(diagnostics._PROGRAM_RULES_MAX_ENTRIES, len(rules["fixedValue"]))
+        self.assertEqual(["keys", "fixedValue"], rules["truncated"])
+
+    def test_a_program_without_a_rule_node_reports_no_rules(self) -> None:
+        matrix = self._matrix(self._catalogue())
+
+        self.assertNotIn("rules", matrix["per_program"]["delicate"])
 
     def test_a_sentinel_only_parameter_is_not_called_settable(self) -> None:
         # PR #103 review (coderabbitai): the entity gate ignores DRY_LEVEL_SENTINELS, so a

@@ -75,6 +75,7 @@ from .ac_command import async_send_settings, param_allowed_values, settings_para
 from .program_options import (
     HonProgramOptionEntity,
     async_send_program,
+    is_settable_option,
     normalize_code,
     option_choices,
 )
@@ -82,6 +83,7 @@ from .ref_programs import (
     REF_MY_ZONE_PARAM,
     REF_MY_ZONE_ZONE,
     REF_PARAM_TO_FLAG,
+    STARTPROGRAM,
     STOPPROGRAM,
     flag_codes,
     has_replacement_controls,
@@ -133,6 +135,90 @@ def disambiguate_labels(base: dict[str, str]) -> dict[str, str]:
         code: (f"{label} ({code})" if counts[label] > 1 else label)
         for code, label in base.items()
     }
+
+
+# Program list of the washer/dryer/dishwasher select (#71). The hOn app's own list is
+# written last by `filterProgramListEpic` (apk2 decomp.txt:1395015): a favourite, or a
+# program whose `programFamily` holds one of these words (`DashboardDownloadPrograms`
+# @1031170). What it leaves out are the `care` / `guided_voice` variants its garment and
+# guided-wash flows start by name -- and on a real HW80 those are the hidden twin of every
+# translated label that collided (91 programs, 7 collisions in Greek; none once dropped).
+_APP_LISTED_FAMILIES = frozenset({"dashboard", "download", "hidden"})
+# Listed on top of the app: the families its Maintenance screen starts the check-up by
+# (the card @3171144-3171178, the epic @1410345). The app takes HQD_CHECKUP out by key and
+# a `diagnostic`-only check-up out by family, but HA has no Maintenance screen, so this
+# select is the only place left to start one from.
+_MAINTENANCE_FAMILIES = frozenset({"diagnostic", "cleaning"})
+_LISTED_FAMILIES = _APP_LISTED_FAMILIES | _MAINTENANCE_FAMILIES
+
+
+def _family_words(param) -> frozenset[str]:
+    """The words of a `programFamily` parameter, or an empty set.
+
+    The schema says `enumValues: ['hidden', 'maintenance']` with `defaultValue:
+    '[hidden|maintenance]'`, and the engine hands both back through `clean_value`, so a
+    value may arrive as a word or as the joined `hidden_maintenance`. Splitting on both
+    separators reads every shape as the same words (no family word observed contains one).
+    """
+    values = getattr(param, "values", None) if param is not None else None
+    if not isinstance(values, (list, tuple)):
+        return frozenset()
+    return frozenset(
+        word
+        for value in values
+        for word in str(value).strip().strip("[]").lower().replace("|", "_").split("_")
+        if word
+    )
+
+
+def listed_programs(appliance, programs: dict[str, str]) -> dict[str, str]:
+    """`programs` narrowed to the ones the program select lists (#71), order kept.
+
+    Read off `startProgram`'s categories, where the app reads `programFamily`. Listed: a
+    favourite (the engine's `favourite` marker -- the app keeps every favourite), a program
+    whose family names a listed word, and a program with no family at all, because one we
+    cannot classify is not one we hide. If the rule would leave no program but favourites
+    it is not applied: an empty select on a catalogue shape never seen is worse than the
+    full list it replaces.
+
+    The select only: the engine keeps every category, so a hidden program started from the
+    app is still recovered from the history and named by the program-name sensor.
+    """
+    command = get_command(appliance, STARTPROGRAM)
+    categories = getattr(command, "categories", None) if command is not None else None
+    if not isinstance(categories, dict):
+        return programs
+    listed: dict[str, str] = {}
+    dropped: list[str] = []
+    catalogue_listed = 0
+    for code, label in programs.items():
+        params = getattr(categories.get(code), "parameters", None)
+        params = params if isinstance(params, dict) else {}
+        favourite = params.get("favourite")
+        if favourite is not None and str(getattr(favourite, "value", "")) == "1":
+            listed[code] = label
+            continue
+        words = _family_words(params.get("programFamily"))
+        if not words or words & _LISTED_FAMILIES:
+            listed[code] = label
+            catalogue_listed += 1
+        else:
+            dropped.append(code)
+    if not dropped:
+        return programs
+    if not catalogue_listed:
+        _LOGGER.debug(
+            "Select debug: program list filter would keep no program; listing all %d",
+            len(programs),
+        )
+        return programs
+    # Safe to name: a favourite is never dropped, so every code here is a catalogue slug.
+    _LOGGER.debug(
+        "Select debug: %d program(s) left out of the list as the app does: %s",
+        len(dropped),
+        dropped,
+    )
+    return listed
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -524,7 +610,8 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         self._program_map: dict[str, str] = {}
         appliance = self._appliance
         if appliance is not None:
-            self._program_map = self._load_programs(appliance)
+            # Only the programs the app lists (#71); see listed_programs.
+            self._program_map = listed_programs(appliance, self._load_programs(appliance))
 
         # Readable program names (#71). The schema gives no labels -- `_load_programs`
         # can only echo the code back -- so `hqd_autoclean` reached the UI verbatim.
@@ -842,12 +929,16 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
         it): a program change resolves to a different category's parameter and rebuilds,
         while a program that does not narrow this option resolves to the same merged
         parameter and costs one identity check."""
-        param = self._selected_option_param(self._desc.drop)
+        pinned_param, pinned = self._pinned_choice()
+        param = pinned_param if pinned is not None else self._selected_option_param(self._desc.drop)
         if self._maps_built and param is self._maps_param:
             return
         self._maps_param = param
         self._maps_built = True
-        choices = option_choices(param, self._desc.drop) if param is not None else []
+        if pinned is not None:
+            choices = [pinned]
+        else:
+            choices = option_choices(param, self._desc.drop) if param is not None else []
         # raw schema value -> base label (label map, raw value as fallback).
         base_keys = {raw: self._label_map.get(raw, raw) for raw in choices}
         # Collision-aware disambiguation (PR #38 / Greptile P2): when two EXPOSED raw codes
@@ -857,6 +948,40 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
         # `state.<key>`; a suffixed colliding key renders literally (rare-model-only).
         self._raw_to_key = disambiguate_labels(base_keys)
         self._key_to_raw = {key: raw for raw, key in self._raw_to_key.items()}
+
+    def _pinned_choice(self):
+        """``(param, value)`` when the program this control describes PINS the option.
+
+        The program is the selected one, else the active category -- the same pair
+        ``_selected_option_param`` walks. Pinned means present there but not settable
+        (``fixed``, or a single reachable value). The app shows such an option locked at
+        its value (`setVisibility`, apk2 decomp.txt:1394296), so the select offers that one
+        value instead of falling back to another program's list (#112: Eco 40-60 pins spin
+        to 1400 on a real HW80, and the fallback list stopped at 1000 and read `unknown`).
+
+        On a FAVOURITE the value is the one it saved, not the base programme's pin: the
+        favourite is the user's configuration, as ``_prescribed_raw`` reads it and as the
+        app fills it (@3617979). The base pin would read `unknown` beside the saved value
+        and, once picked, replace it (PR #120 review).
+
+        ``(None, None)`` otherwise, and also when the pinned value is one of the
+        description's sentinels: a sentinel is never offered, so the select would be left
+        with no option at all, and the old fallback is kept instead."""
+        favourite = False
+        if self._selected_program_code() is not None:
+            candidate = self._category_option_param()
+            favourite = getattr(self._selected_category(), "is_favourite", False)
+        else:
+            candidate = self._active_option_param()
+        if candidate is None or is_settable_option(candidate, self._desc.drop):
+            return None, None
+        value = None if favourite else getattr(candidate, "schema_value", None)
+        if value is None:
+            value = getattr(candidate, "value", None)
+        value = normalize_code(value)
+        if value is None or value in self._desc.drop:
+            return None, None
+        return candidate, value
 
     def _renderable(self, raw) -> bool:
         # A prescribed code this select does not offer would blank the entity; the device

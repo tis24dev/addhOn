@@ -660,6 +660,68 @@ class IsZeroishTest(unittest.TestCase):
         for value in ("abc", None, [], {}, object()):
             self.assertFalse(_is_zeroish(value), value)
 
+class WashPhaseTest(unittest.IsolatedAsyncioTestCase):
+    """#112: the washer phase follows the app's `getAppliancePhaseFromParameters`.
+
+    On the HQD platform the app reads `prPhaseToWashingPhaseSuperDrum` (apk2
+    decomp.txt:1003829-1003905, chosen by `isPlatformHqd` @1361186), elsewhere
+    `prPhaseToWashingPhase`; and a SKIP_PHASE entry shows the phase of the previous
+    number (@1361214-1361228). Lajahome's HQD washer reported 3, 17 and 18.
+    """
+
+    async def _phase(self, app_type: str, prphase, platform: str | None):
+        from custom_components.addhon import sensor
+        from custom_components.addhon.const import DOMAIN
+
+        model = {"platform": platform} if platform else {}
+        data = {
+            "x-1": {
+                "type": app_type,
+                "name": "Washer",
+                "appliance": types.SimpleNamespace(model_attributes=model),
+                "attributes": {"prPhase": prphase},
+                "settings": {},
+            }
+        }
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
+        added: list = []
+        await sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+        entity = next(e for e in added if e._attr_unique_id == "x-1_program_phase")
+        return entity, entity.native_value
+
+    async def test_hqd_washer_reads_the_hqd_table(self) -> None:
+        for raw, expected in (
+            (3, "spinning"), (13, "weighing"), (17, "rinsing"), (18, "rinsing"),
+            (19, "scheduled"), (20, "tumbling"), (25, "washing"), (26, "heating"),
+            (27, "washing"), (4, "rinsing"),
+        ):
+            with self.subTest(raw=raw):
+                _, value = await self._phase("WM", raw, "HQD")
+                self.assertEqual(expected, value)
+
+    async def test_hqd_washer_dryer_reads_the_hqd_table_too(self) -> None:
+        _, value = await self._phase("WD", 17, "HQD")
+        self.assertEqual("rinsing", value)
+
+    async def test_other_platforms_keep_the_standard_table(self) -> None:
+        for raw, expected in ((20, "rotation_start"), (24, "refresh"), (17, None)):
+            with self.subTest(raw=raw):
+                _, value = await self._phase("WM", raw, None)
+                self.assertEqual(expected, value)
+
+    async def test_a_skipped_phase_shows_the_previous_one(self) -> None:
+        for platform, raw, expected in ((None, 3, "washing"), (None, 8, "drying"), ("HQD", 8, "drying")):
+            with self.subTest(platform=platform, raw=raw):
+                _, value = await self._phase("WM", raw, platform)
+                self.assertEqual(expected, value)
+
+    async def test_options_cover_both_tables_without_phase_skip(self) -> None:
+        entity, _ = await self._phase("WM", 0, "HQD")
+        options = set(entity.entity_description.options)
+        self.assertLessEqual({"scheduled", "tumbling", "heating", "rotation_start"}, options)
+        self.assertNotIn("phase_skip", options)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -83,6 +83,7 @@ from .const import (
     TD_ATTR_CYCLES,
     TUMBLE_DRYER_PHASE_MAP,
     WASHING_PHASE_MAP,
+    WASHING_PHASE_MAP_HQD,
     WH_PHASE_MAP,
     WM_ATTR_CURRENT_ENERGY,
     WM_ATTR_CURRENT_WATER,
@@ -243,11 +244,33 @@ def _as_text(raw) -> str | None:
     return None if raw is None else str(raw)
 
 
-def _phase_wash(raw) -> str | None:
-    """prPhase -> washing-phase ENUM key (None if missing/unknown)."""
+# The app's SKIP_PHASE marker in both washer tables (const.WASHING_PHASE_MAP*).
+_PHASE_SKIP = "phase_skip"
+
+
+def wash_phase(raw, hqd: bool = False) -> str | None:
+    """prPhase -> washing-phase ENUM key, as the app's `getAppliancePhaseFromParameters`.
+
+    `hqd` picks the HQD-platform table (#112). A SKIP_PHASE entry shows the phase of the
+    previous number, one step back and no further, as the app does (apk2
+    decomp.txt:1361214-1361228). None if missing or unknown.
+    """
     if raw is None:
         return None
-    return WASHING_PHASE_MAP.get(str(raw))
+    try:
+        number = int(float(raw))
+    except (TypeError, ValueError):
+        return None
+    table = WASHING_PHASE_MAP_HQD if hqd else WASHING_PHASE_MAP
+    key = table.get(str(number))
+    if key == _PHASE_SKIP:
+        key = table.get(str(number - 1))
+    return None if key == _PHASE_SKIP else key
+
+
+def _phase_wash(raw) -> str | None:
+    """prPhase -> washing-phase ENUM key on the standard table (None if missing/unknown)."""
+    return wash_phase(raw)
 
 
 def _phase_dry(raw) -> str | None:
@@ -371,7 +394,10 @@ _PHASE_WASH = HonSensorEntityDescription(
     icon="mdi:washing-machine",
     attr_key=WM_ATTR_PROGRAM_PHASE,
     device_class=SensorDeviceClass.ENUM,
-    options=sorted(set(WASHING_PHASE_MAP.values())),
+    # Both tables: the platform is per appliance, the options per description.
+    options=sorted(
+        (set(WASHING_PHASE_MAP.values()) | set(WASHING_PHASE_MAP_HQD.values())) - {_PHASE_SKIP}
+    ),
     value_fn=_phase_wash,
 )
 _PHASE_DRY = HonSensorEntityDescription(
@@ -1449,6 +1475,10 @@ async def async_setup_entry(
                 # spotting it needs the appliance's write command -- a value_fn only
                 # ever sees the number itself (#75).
                 entity_class = HonMyZoneTempSensor
+            elif description is _PHASE_WASH:
+                # The table depends on the model's platform, which a value_fn cannot
+                # see (#112).
+                entity_class = HonWashPhaseSensor
             elif app_type == APPLIANCE_AP:
                 entity_class = HonAirPurifierSensor
             else:
@@ -1597,6 +1627,27 @@ class HonProgramNameSensor(HonSensor):
             self._appliance_data.get("type"), raw
         )
         return label or raw
+
+
+class HonWashPhaseSensor(HonSensor):
+    """Washer / washer-dryer phase, read off the table of the model's platform (#112).
+
+    The app picks `prPhaseToWashingPhaseSuperDrum` on the HQD platform and the standard
+    table elsewhere (`getAppliancePhaseFromParameters`, apk2 decomp.txt:1361041), and the
+    platform is a model attribute (`applianceModel.attributes.platform`), which the
+    description's `value_fn` never sees -- it only gets the number.
+    """
+
+    @property
+    def _hqd(self) -> bool:
+        attributes = getattr(self._appliance, "model_attributes", None)
+        if not isinstance(attributes, dict):
+            return False
+        return str(attributes.get("platform") or "").strip().upper() == "HQD"
+
+    @property
+    def native_value(self):
+        return wash_phase(self._get_attr(self.entity_description.attr_key), self._hqd)
 
 
 class HonMyZoneTempSensor(HonSensor):

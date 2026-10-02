@@ -160,14 +160,16 @@
         "state": {
           "ready": "Ready",
           "washing": "Washing",
-          "phase_skip": "Phase skip",
           "rinsing": "Rinsing",
           "drying": "Drying",
           "steam": "Steam",
           "spinning": "Spinning",
           "weighing": "Weighing",
           "rotation_start": "Rotation start",
-          "refresh": "Refresh"
+          "refresh": "Refresh",
+          "scheduled": "Scheduled",
+          "tumbling": "Tumbling",
+          "heating": "Heating"
         }
       },
       "errors": {
@@ -673,6 +675,9 @@
       },
       "eco_express": {
         "name": "Eco express in use"
+      },
+      "keep_fresh": {
+        "name": "Keep fresh"
       },
       "night_wash": {
         "name": "Night wash"

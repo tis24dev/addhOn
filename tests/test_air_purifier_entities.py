@@ -589,6 +589,12 @@ class AirPurifierBinaryTableTest(unittest.TestCase):
                 ("HW", "electric_heating"),
                 ("HW", "boost"),
                 ("HW", "sterilization_running"),
+                # Washer maintenance: `drumCleaning` / `filterCleaning` are the
+                # statistics counter `{tot, count, remaining, percentage}`, not a flag.
+                ("WM", "drum_clean_needed"),
+                ("WM", "filter_clean_needed"),
+                ("WD", "drum_clean_needed"),
+                ("WD", "filter_clean_needed"),
             }
             # The hob's per-zone fault reads through `has_problem` because "no
             # error" has three spellings on that device; the flex-bridge flag has
