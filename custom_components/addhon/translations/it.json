@@ -160,14 +160,16 @@
         "state": {
           "ready": "Pronto",
           "washing": "Lavaggio",
-          "phase_skip": "Salto fase",
           "rinsing": "Risciacquo",
           "drying": "Asciugatura",
           "steam": "Vapore",
           "spinning": "Centrifuga",
           "weighing": "Pesatura",
           "rotation_start": "Avvio rotazione",
-          "refresh": "Rinfresco"
+          "refresh": "Rinfresco",
+          "scheduled": "Partenza programmata",
+          "tumbling": "Rotazione cesto",
+          "heating": "Riscaldamento"
         }
       },
       "errors": {

@@ -389,6 +389,38 @@ WASHING_PHASE_MAP = {
     "20": "rotation_start",
     "24": "refresh",
 }
+# Washers and washer-dryers on the HQD platform (#112). The app reads a table of its own
+# there, `prPhaseToWashingPhaseSuperDrum` (apk2 decomp.txt:1003829-1003905, chosen by
+# `isPlatformHqd` in `getAppliancePhaseFromParameters` @1361186): 3 is a spin, 17-18 are
+# rinses, and 19/20/26 are phases the standard table does not have. "phase_skip" in both
+# tables is the app's SKIP_PHASE, shown as the previous number's phase (sensor.wash_phase).
+WASHING_PHASE_MAP_HQD = {
+    "0": "ready",
+    "1": "washing",
+    "2": "washing",
+    "3": "spinning",
+    "4": "rinsing",
+    "5": "rinsing",
+    "6": "rinsing",
+    "7": "drying",
+    "8": "phase_skip",
+    "9": "steam",
+    "10": "ready",
+    "11": "spinning",
+    "12": "weighing",
+    "13": "weighing",
+    "14": "washing",
+    "15": "washing",
+    "16": "washing",
+    "17": "rinsing",
+    "18": "rinsing",
+    "19": "scheduled",
+    "20": "tumbling",
+    "24": "refresh",
+    "25": "washing",
+    "26": "heating",
+    "27": "washing",
+}
 TUMBLE_DRYER_PHASE_MAP = {
     "0": "ready",
     "1": "heating",
