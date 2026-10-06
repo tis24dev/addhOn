@@ -1203,6 +1203,45 @@ class ClusterBehaviorTest(unittest.TestCase):
         app.sync_params_to_command("settings")
         self.assertEqual(command.settings["tempSel"].value, 18)  # preserved, not clamped to 20
 
+    def test_unsyncable_shadow_value_is_reported_at_info_once(self) -> None:
+        # Issue #115 (phroc's debug log): an HW schema types timingPowerOn as range 0..1
+        # while the shadow reports "00:00", so every poll and every MQTT push logged the
+        # same INFO line -- three a minute on every heat pump water heater. The first sight
+        # of a key/value pair stays INFO; repeats drop to DEBUG; a NEW value is news again.
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        command = NaCommand(
+            "settings",
+            {"parameters": {"timingPowerOn": _range(default="0", lo="0", hi="1", inc="1")}},
+            FakeAppliance(),
+        )
+        app = NaAppliance(FakeApi(), dict(_INFO), zone=0)
+        app._commands = {"settings": command}
+        app._attributes = {
+            "parameters": {"timingPowerOn": HonAttribute({"parNewVal": "00:00"})}
+        }
+        logger = "custom_components.addhon.client.engine.appliance"
+        with self.assertLogs(logger, level="DEBUG") as logs:
+            app.sync_params_to_command("settings")
+            app.sync_params_to_command("settings")
+            app._attributes["parameters"]["timingPowerOn"] = HonAttribute(
+                {"parNewVal": "07:30"}
+            )
+            app.sync_params_to_command("settings")
+        levels = [
+            (record.levelname, record.getMessage().split(" - ")[0])
+            for record in logs.records
+            if "Can't sync" in record.getMessage()
+        ]
+        self.assertEqual(
+            [
+                ("INFO", "Can't sync timingPowerOn from shadow '00:00'"),
+                ("DEBUG", "Can't sync timingPowerOn from shadow '00:00'"),
+                ("INFO", "Can't sync timingPowerOn from shadow '07:30'"),
+            ],
+            levels,
+        )
+
     def test_ac_eco_nested_rule_fires(self) -> None:
         # REAL AC structure (apk/dump/ac_live): ecoMode=1 with machMode fixed=1
         # must constrain tempSel to 26 and the wind-direction (nested extra-condition).

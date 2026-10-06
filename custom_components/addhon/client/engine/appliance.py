@@ -70,6 +70,9 @@ class HonAppliance:
         self._additional_data: dict[str, Any] = {}
         self._command_history: list[dict[str, Any]] = []
         self._history_recovery: dict[str, str] = {}
+        # (key, shadow value) pairs already reported as unsyncable: sync runs on every
+        # poll and every MQTT push, so only the first sight of a pair is worth an INFO.
+        self._unsyncable_seen: set[tuple[str, str]] = set()
         self._last_update: Optional[datetime] = None
         self._default_setting = HonParameter("", {}, "")
         self._connection = (
@@ -476,5 +479,8 @@ class HonAppliance:
                         continue
                     except ValueError:
                         pass
-                _LOGGER.info("Can't sync %s from shadow %r - %s", key, raw, error)
+                pair = (key, raw)
+                level = logging.DEBUG if pair in self._unsyncable_seen else logging.INFO
+                self._unsyncable_seen.add(pair)
+                _LOGGER.log(level, "Can't sync %s from shadow %r - %s", key, raw, error)
                 continue
