@@ -1847,7 +1847,10 @@ def _option_drops() -> dict[str, tuple[str, ...]]:
         ("number", ("_PROGRAM_OPTION_NUMBERS",)),
     ):
         try:
-            imported = importlib.import_module(f".{module}", __package__)
+            # The ABSOLUTE name: HA's event-loop guard lets import_module through only
+            # when its first argument is already a sys.modules key, which a relative
+            # ".select" never is (issue #115, block_async_io._check_import_call_allowed).
+            imported = importlib.import_module(f"{__package__}.{module}")
             tables.extend(getattr(imported, name, ()) for name in names)
         except Exception:  # noqa: BLE001 - a dump must degrade, never raise
             continue

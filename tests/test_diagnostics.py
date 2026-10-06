@@ -8507,6 +8507,30 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         # Only the parameters that really declare sentinels are in the map.
         self.assertNotIn("spinSpeed", drops)
 
+    def test_the_drops_import_names_home_assistant_lets_through(self) -> None:
+        # Issue #115 (phroc's debug log, 2026-10-03): HA flags every importlib.import_module
+        # on the event loop whose FIRST argument is not already in sys.modules
+        # (homeassistant/block_async_io.py, _check_import_call_allowed) and asks users to
+        # file a bug. A relative name such as ".select" is never a sys.modules key, so the
+        # warning fired on every diagnostics download even with the module long loaded.
+        for module in ("select", "switch", "number"):
+            importlib.import_module(f"custom_components.addhon.{module}")
+        seen: list[str] = []
+        real = importlib.import_module
+
+        def spy(name, package=None):
+            seen.append(name)
+            return real(name, package)
+
+        diagnostics.importlib.import_module = spy
+        try:
+            diagnostics._option_drops()
+        finally:
+            diagnostics.importlib.import_module = real
+
+        self.assertTrue(seen)
+        self.assertEqual([], [name for name in seen if name not in sys.modules])
+
     def test_a_runaway_catalogue_is_bounded_and_says_so(self) -> None:
         # PR #103 review (greptile P2). The cap cannot bite on a real appliance (the largest
         # measured catalogue is 154 categories), so the flag appearing at all means the
