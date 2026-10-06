@@ -60,7 +60,10 @@ class _HobAppliance:
         self.api = RecordingApi()
         self.model_attributes = {"series": series, "zone": "4", "power": "15"}
 
-    def sync_command_to_params(self, name: str) -> None:
+    def sync_payload_to_params(self, params) -> None:
+        pass
+
+    def sync_params_to_command(self, name) -> None:
         pass
 
 

@@ -887,6 +887,102 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(2, mode.value)
         self.assertTrue(mode.lock)
 
+    def _ac_settings_app(self, api):
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        app = NaAppliance(api, dict(_INFO), zone=0)
+        settings = NaCommand(
+            "settings",
+            {"parameters": {
+                "tempSel": _range(default="22", lo="16", hi="30", inc="1"),
+                "windSpeed": _range(default="1", lo="0", hi="5", inc="1"),
+            }},
+            app,
+        )
+        app._commands = {"settings": settings}
+        app._attributes = {"parameters": {
+            "tempSel": HonAttribute({"parNewVal": "22"}),
+            "windSpeed": HonAttribute({"parNewVal": "1"}),
+            "tempIndoor": HonAttribute({"parNewVal": "25"}),
+        }}
+        return app, settings
+
+    @staticmethod
+    def _push_unrelated_key(app) -> None:
+        # What mqtt.py does for a push of a key nobody is writing: update it, then
+        # resync the settings command from the shadow.
+        app.attributes["parameters"]["tempIndoor"].update(
+            {"parName": "tempIndoor", "parNewVal": "24"}
+        )
+        app.sync_params_to_command("settings")
+
+    def test_a_push_during_an_accepted_send_does_not_mirror_the_old_values(self) -> None:
+        # PR #121 review (Greptile, commands.py:537): with the mirror after the await,
+        # a push landing while the cloud has not answered resynced the command from
+        # the OLD shadow, and the mirror then copied those old values and shielded
+        # them. The shadow must hold what was sent, and the command must follow it.
+        holder = {}
+
+        class SlowApi(FakeApi):
+            async def send_command(self, *args, **kwargs):
+                ClusterBehaviorTest._push_unrelated_key(holder["app"])
+                return await super().send_command(*args, **kwargs)
+
+        api = SlowApi()
+        app, settings = self._ac_settings_app(api)
+        holder["app"] = app
+        settings.settings["tempSel"].value = "26"
+        self.assertIs(True, _run(settings.send()))
+        self.assertEqual("26", str(api.sent[0][1]["tempSel"]))
+        temp = app.attributes["parameters"]["tempSel"]
+        self.assertEqual(26, temp.value)
+        self.assertTrue(temp.lock)
+        self.assertEqual("26", str(settings.settings["tempSel"].value))
+
+    def test_the_next_send_after_a_push_during_a_send_keeps_the_accepted_value(
+        self,
+    ) -> None:
+        holder = {"calls": 0}
+
+        class SlowApi(FakeApi):
+            async def send_command(self, *args, **kwargs):
+                holder["calls"] += 1
+                if holder["calls"] == 1:
+                    ClusterBehaviorTest._push_unrelated_key(holder["app"])
+                return await super().send_command(*args, **kwargs)
+
+        api = SlowApi()
+        app, settings = self._ac_settings_app(api)
+        holder["app"] = app
+        settings.settings["tempSel"].value = "26"
+        _run(settings.send())
+        # Only the fan changes next, with no push in between: the temperature on the
+        # wire must still be the accepted 26, not the 22 the push had put back.
+        settings.settings["windSpeed"].value = "3"
+        _run(settings.send())
+        self.assertEqual("26", str(api.sent[1][1]["tempSel"]))
+        self.assertEqual("3", str(api.sent[1][1]["windSpeed"]))
+
+    def test_an_accepted_start_program_does_not_resync_the_settings_command(
+        self,
+    ) -> None:
+        # Decision of 2026-10-06: the command is realigned to the shadow only when
+        # the one sent IS `settings` (the only one a push rewrites); any other send
+        # keeps the behaviour it had before decision F2.
+        app, settings = self._ac_settings_app(FakeApi())
+        start = NaCommand(
+            "startProgram",
+            {"parameters": {"tempSel": _range(default="22", lo="16", hi="30", inc="1")}},
+            app,
+        )
+        app._commands["startProgram"] = start
+        settings.settings["windSpeed"].value = "4"  # pending, never sent
+        start.settings["tempSel"].value = "27"
+        self.assertIs(True, _run(start.send()))
+        self.assertEqual(27, app.attributes["parameters"]["tempSel"].value)
+        self.assertEqual("22", str(settings.settings["tempSel"].value))
+        self.assertEqual("4", str(settings.settings["windSpeed"].value))
+
     def _history_app(self, name, api):
         app = NaAppliance(api, dict(_INFO), zone=0)
         command = NaCommand(
@@ -1409,7 +1505,10 @@ class _SendingAppliance(FakeAppliance):
         super().__init__()
         self.api = FakeApi()
 
-    def sync_command_to_params(self, name: str) -> None:
+    def sync_payload_to_params(self, params) -> None:
+        pass
+
+    def sync_params_to_command(self, name) -> None:
         pass
 
 
@@ -1849,7 +1948,7 @@ class _RuleApp:
         self.api = _FailApi()
         self.commands: dict = {}
 
-    def sync_command_to_params(self, name) -> None:
+    def sync_payload_to_params(self, params) -> None:
         pass
 
 
