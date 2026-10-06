@@ -515,8 +515,6 @@ class HonCommand:
             label := self._program_label_to_send(program_label)
         ):
             extra["program_label"] = label
-        if sync_shadow:
-            self.appliance.sync_command_to_params(self.name)
         result = await self.api.send_command(
             self._appliance,
             self._name,
@@ -530,6 +528,13 @@ class HonCommand:
         if not result:
             _LOGGER.error("Command rejected by cloud: %s", self._name)
             raise ApiError("Can't send command")
+        # The optimistic shadow mirror only AFTER the cloud accepted, as the sparse
+        # dispatcher already does (command_dispatch.py). Run before the call, a refused
+        # or failed command still showed as applied for the shield window plus a poll,
+        # then "reverted by itself". The payload is built above either way, so what is
+        # transmitted does not change (decision F2 of 2026-10-06).
+        if sync_shadow:
+            self.appliance.sync_command_to_params(self.name)
         return result
 
     def ancillary_parameters(self) -> dict[str, str | float]:

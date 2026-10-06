@@ -837,6 +837,56 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(app.attributes["parameters"]["mode"].value, "old")
         self.assertEqual(app.attributes["parameters"]["light"].value, "old-light")
 
+    def _full_send_app(self, api):
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        app = NaAppliance(api, dict(_INFO), zone=0)
+        command = NaCommand(
+            "settings",
+            {"parameters": {"mode": _range(default="1", lo="0", hi="3", inc="1")}},
+            app,
+        )
+        app._commands = {"settings": command}
+        app._attributes = {"parameters": {"mode": HonAttribute({"parNewVal": "1"})}}
+        command.settings["mode"].value = "2"
+        return app, command
+
+    def test_a_refused_full_send_leaves_the_shadow_alone(self) -> None:
+        # Decision F2 of 2026-10-06 (from the lucasgiovanny/addhOn fork): the optimistic
+        # mirror used to run BEFORE the cloud call, so a refused command still showed
+        # as applied for the shield window plus a poll, then "reverted by itself".
+        from custom_components.addhon.client.engine.exceptions import ApiError
+
+        class RefusingApi(FakeApi):
+            async def send_command(self, *args, **kwargs):
+                return False
+
+        app, command = self._full_send_app(RefusingApi())
+        with self.assertRaises(ApiError):
+            _run(command.send())
+        mode = app.attributes["parameters"]["mode"]
+        self.assertEqual(1, mode.value)
+        self.assertFalse(mode.lock)
+
+    def test_a_full_send_that_raises_leaves_the_shadow_alone(self) -> None:
+        class DownApi(FakeApi):
+            async def send_command(self, *args, **kwargs):
+                raise TimeoutError("cloud down")
+
+        app, command = self._full_send_app(DownApi())
+        with self.assertRaises(TimeoutError):
+            _run(command.send())
+        mode = app.attributes["parameters"]["mode"]
+        self.assertEqual(1, mode.value)
+        self.assertFalse(mode.lock)
+
+    def test_an_accepted_full_send_mirrors_and_shields_the_shadow(self) -> None:
+        app, command = self._full_send_app(FakeApi())
+        self.assertIs(True, _run(command.send()))
+        mode = app.attributes["parameters"]["mode"]
+        self.assertEqual(2, mode.value)
+        self.assertTrue(mode.lock)
+
     def test_dispatch_rollback_preserves_concurrent_mqtt_update(self) -> None:
         from custom_components.addhon.client.engine.attributes import HonAttribute
 
