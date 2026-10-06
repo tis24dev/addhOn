@@ -266,10 +266,12 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "types": (APPLIANCE_HW,),
         "read": ("compressorHeatingCurrentStatus", *HPWH_VACATION_ATTRS),
     },
+    # Only the compressor is masked during a vacation (the app leaves the electric
+    # heater alone), so the electric heater reads its own flag and nothing else.
     {
         "tag": "binary_sensor.electric_heating",
         "types": (APPLIANCE_HW,),
-        "read": ("electricHeatingCurrentStatus", *HPWH_VACATION_ATTRS),
+        "read": ("electricHeatingCurrentStatus",),
     },
     # The vacation dates: fixed-key entities. Each write (block 5, experimental)
     # sends both dates and the operation name, as the clear button does.

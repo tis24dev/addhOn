@@ -4355,12 +4355,16 @@ class HeatPumpStateCoverageTest(unittest.TestCase):
         self.assertNotIn("write", window)
         vacation = ["machMode", "vacStartDate", "vacEndDate"]
         self.assertEqual(sources["binary_sensor.vacation_active"]["read"], vacation)
-        # The heating sources read off during a vacation, so they read its inputs.
-        for tag, flag in (
-            ("binary_sensor.compressor_heating", "compressorHeatingCurrentStatus"),
-            ("binary_sensor.electric_heating", "electricHeatingCurrentStatus"),
-        ):
-            self.assertEqual(sources[tag]["read"], [flag, *vacation], tag)
+        # Only the compressor reads off during a vacation (the app does not mask the
+        # electric heater), so only its row names the vacation inputs (PR #121 review).
+        self.assertEqual(
+            sources["binary_sensor.compressor_heating"]["read"],
+            ["compressorHeatingCurrentStatus", *vacation],
+        )
+        self.assertEqual(
+            sources["binary_sensor.electric_heating"]["read"],
+            ["electricHeatingCurrentStatus"],
+        )
         # Block 5: each date write sends both dates and the operation name.
         vacation_write = ["vacStartDate", "vacEndDate", "operationName"]
         self.assertEqual(
