@@ -197,12 +197,17 @@ class EcoDaysTest(unittest.TestCase):
     def test_monday_to_friday(self) -> None:
         self.assertEqual(hpwh._hex_to_days("1f"), (1, 5))
 
-    def test_single_days_match_their_padded_byte_only(self) -> None:
+    def test_single_days_match_padded_or_not(self) -> None:
         self.assertEqual(hpwh._hex_to_days("01"), (1, 1))
         self.assertEqual(hpwh._hex_to_days("40"), (0, 0))
-        # The app's own write path can produce "1" for Monday alone; its read path
-        # does not recognise it, and neither does this one.
-        self.assertIsNone(hpwh._hex_to_days("1"))
+        # The app's own write path, and `set_eco_schedule` after it, write "1" for
+        # Monday alone; the app's read path does not recognise it. Here it does
+        # (PR #121 review, decision of 2026-10-06): a deliberate divergence.
+        self.assertEqual(hpwh._hex_to_days("1"), (1, 1))
+        self.assertEqual(hpwh._hex_to_days("2"), (2, 2))
+        self.assertEqual(hpwh._hex_to_days("8"), (4, 4))
+        # Not a single day: a range spelled in one digit is read as before.
+        self.assertEqual(hpwh._hex_to_days("3"), (1, 2))
 
     def test_a_non_contiguous_set_has_no_range(self) -> None:
         self.assertIsNone(hpwh._hex_to_days("05"))  # Monday + Wednesday
@@ -275,6 +280,17 @@ class ScheduleWindowTest(unittest.TestCase):
             opp1EcoStartTime1="07:00", opp1EcoEndTime1="08:00",
         )
         self.assertEqual(_window(attributes, MONDAY), ("07:00", "08:00"))
+
+    def test_the_unpadded_monday_mask_written_by_the_service_is_a_mask_day(self) -> None:
+        # `set_eco_schedule` writes days ["mon"] as "1", like the app (PR #121 review).
+        attributes = _attrs(
+            offPeakPeriodScheme=0,
+            opp1EcoDays="1",
+            opp2EcoStartTime1="04:00", opp2EcoEndTime1="05:00",
+            opp1EcoStartTime1="07:00", opp1EcoEndTime1="08:00",
+        )
+        self.assertEqual(_window(attributes, MONDAY), ("04:00", "05:00"))
+        self.assertEqual(_window(attributes, SATURDAY), ("07:00", "08:00"))
 
     def test_a_zero_day_mask_means_no_schedule(self) -> None:
         attributes = _attrs(opp1EcoDays="0", opp2EcoStartTime1="04:00", opp2EcoEndTime1="05:00")

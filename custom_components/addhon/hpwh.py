@@ -209,14 +209,20 @@ def water_level_percent(raw: object) -> int | None:
 def _hex_to_days(mask: object) -> tuple[int, int] | None:
     """`hexToDays` (decomp.txt:2333056): the contiguous day range a mask encodes.
 
-    A single day is matched on its exact two-character spelling; a range is found by
+    A single day is matched on its two-character spelling; a range is found by
     summing consecutive day bytes from Monday until the sum equals the mask. Anything
-    else (an empty mask, a non-contiguous set, an unpadded single day like "1") yields
-    no range, exactly as in the app.
+    else (an empty mask, a non-contiguous set) yields no range, as in the app.
+
+    One deliberate divergence (PR #121 review, decision of 2026-10-06): a one-digit
+    mask is padded first, so the unpadded single day the app's write path produces,
+    and `set_eco_schedule` after it ("1" for Monday alone), reads as that day. The
+    app's read path does not recognise it and would treat Monday as off the mask.
     """
     text = code(mask)
     if text is None:
         return None
+    if len(text) == 1:
+        text = f"0{text}"
     if text in _ECO_DAY_BYTES:
         day = _JS_DAYS[_ECO_DAY_BYTES.index(text)]
         return day, day
