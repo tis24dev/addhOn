@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 
 from homeassistant.exceptions import HomeAssistantError
@@ -638,3 +639,269 @@ def boost_auto_off_due(get: Callable[[str], object]) -> bool:
 def mapping_getter(attributes: Mapping[str, object]) -> Callable[[str], object]:
     """A `get` for the helpers above over a plain attribute mapping (tests, dumps)."""
     return attributes.get
+
+
+# Energy (issue #115). `HPWHStatistics` reads three `...Year...` series
+# (apk2 decomp.txt:2996565-2996700): the compressor's consumption, the backup
+# element's and the heat produced, each a `;`-separated string of five yearly
+# totals, oldest first, the current year last (`getBottomAxisDate`, @2999824). The
+# app shows the numbers as they are, labelled kWh (@2999131-2999139): no factor
+# here either. Its years tab totals all five slots of compressor + element
+# (`getTotalWh` over `sumConsumptionArrays`, @2996797-2996819), 938 kWh on #115:
+# that total is where every counter below starts.
+#
+# The counters are kept by Home Assistant rather than read. The appliance restarts
+# its current year every January, and its window forgets its oldest year once it is
+# full; to Home Assistant's statistics every drop is either energy counted twice or
+# energy subtracted (doc 5 sections 2 and 6, i.e.
+# `apk2/analysis/issue115-hw/decisioni/5-energia-entita.md`; doc 4 is
+# `4-energia-dati.md` there, the series as the appliances really publish them). A
+# counter that only adds the gains the guard below accepts has no drop to misread.
+HPWH_YEAR_CP = "energyConsumptionYearCp"
+HPWH_YEAR_EC = "energyConsumptionYearEc"
+HPWH_YEAR_HEAT = "accumulatedHeatYear"
+# The appliance's own day ("2026-09-30"): the guard's second witness of a new year.
+HPWH_DATE = "date"
+# Entity key -> the series it adds up. The key is the unique_id suffix: fixed for
+# good. `total_energy` is compressor + element, two counters inside one entity, so
+# that the two series sliding into the new year in different messages never makes
+# the sum drop (doc 5 section 6, S5).
+HPWH_ENERGY_COUNTERS: dict[str, tuple[str, ...]] = {
+    "total_energy": (HPWH_YEAR_CP, HPWH_YEAR_EC),
+    "compressor_energy": (HPWH_YEAR_CP,),
+    "heater_energy": (HPWH_YEAR_EC,),
+    "heat_produced": (HPWH_YEAR_HEAT,),
+}
+# The three, read together: a series of zeros is judged against the other two.
+HPWH_YEAR_SERIES: tuple[str, ...] = (HPWH_YEAR_CP, HPWH_YEAR_EC, HPWH_YEAR_HEAT)
+# Everything the counters read, for the diagnostics' coverage.
+HPWH_ENERGY_ATTRS: tuple[str, ...] = (
+    HPWH_YEAR_CP, HPWH_YEAR_EC, HPWH_YEAR_HEAT, HPWH_DATE
+)
+# Coordinator store (`HonBaseEntity._coordinator_store`) where each counter entity
+# leaves its state for the diagnostics: {appliance_id: {key: {series: record}}}.
+HPWH_ENERGY_STORE = "hpwh_energy_counters"
+_YEAR_SLOTS = 5
+# How long a series of five zeros has to be seen without a break before it may be a
+# seed, in seconds of a monotonic clock: not a count of readings, since the poll
+# re-reads an unchanged shadow every minute. A seed of zeros has no protection: if
+# it was a transient, the real series after it reads as a slide (+142 kWh of
+# element on #115) and moves the reference a year ahead.
+_ZERO_SEED_SECONDS = 3600.0
+
+
+def year_window(raw: object, *, zeros: bool = False) -> tuple[float, ...] | None:
+    """A `...Year...` series as its five yearly totals, or None when it is not one.
+
+    None, never 0, for anything but five finite numbers >= 0 (doc 5 section 7): the
+    app's `cleansData` (decomp.txt:2999907-2999993) pads a short series with '0' and
+    turns garbage into '0', which a chart survives and a counter does not. Five zeros
+    are None too unless `zeros`: read alone, a series cannot tell an empty transient
+    from a backup element that has not run in five years (`year_windows` can).
+    Read as floats: a model publishing decimals would otherwise stay unknown.
+    """
+    if not isinstance(raw, str):
+        return None
+    parts = raw.split(";")
+    if len(parts) != _YEAR_SLOTS:
+        return None
+    try:
+        window = tuple(float(part) for part in parts)
+    except ValueError:
+        return None
+    if not all(math.isfinite(value) and value >= 0 for value in window):
+        return None
+    return window if zeros or any(window) else None
+
+
+def year_windows(get: Callable[[str], object]) -> dict[str, tuple[float, ...] | None]:
+    """The three `...Year...` series of one shadow, each read by `year_window`.
+
+    A series of five zeros is a reading only when one of the other two has a
+    non-zero slot in the same shadow: an element that has not run in five years
+    beside a live compressor. All three at zero together is what an empty transient
+    looks like -- on a live appliance the compressor and the heat are never all zero
+    after its first month (doc 4 section 9.1) -- and stays no reading.
+    """
+    windows = {name: year_window(get(name), zeros=True) for name in HPWH_YEAR_SERIES}
+    live = any(window is not None and any(window) for window in windows.values())
+    return {
+        name: window if window is None or live else None
+        for name, window in windows.items()
+    }
+
+
+def device_year(raw: object) -> int | None:
+    """The year of the appliance's own `date` ("2026-09-30"), or None."""
+    text = code(raw)
+    try:
+        return datetime.strptime(text or "", "%Y-%m-%d").year
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class YearRef:
+    """The last accepted series, and the year its last slot belongs to (if known)."""
+
+    window: tuple[float, ...] | None = None
+    year: int | None = None
+
+
+def year_step(
+    ref: YearRef, window: tuple[float, ...] | None, year: int | None
+) -> tuple[YearRef, float, bool]:
+    """(new reference, kWh gained since `ref`, accepted) for one reading.
+
+    The guard of doc 5 section 7, on DROPS of the current year only:
+    - growth, or no change, of the last slot is gained as it is;
+    - the new-year slide passes: last year's total moved to the second-to-last slot,
+      which every m8 that crossed 2025 -> 2026 shows as an outcome (doc 4 section 6).
+      `>=` admits the old year's last kWh arriving together with it, and those count;
+    - a restart of the last slot in place passes only when the appliance's `date`
+      is in a later year than the reference: there is then no slide to see;
+    - any other drop is refused -- the year at zero for one message, an older value
+      coming back -- and leaves the reference where it was. Home Assistant would
+      read it as a restart and the next real value as energy;
+    - so is a series from before the slide coming back after it (doc 4 section 9.1,
+      last row), though its last slot RISES: +2493 kWh of heat on #115. It is the
+      reference shifted one slot right, its last slot no higher than the
+      reference's last year; or the appliance's `date` is in a year before the
+      reference's. An unchanged series is never refused: the poll re-reads it
+      between a slide and the date that follows.
+    Closed years that do not move are the same year, never a slide: an element
+    whose five years are all zero grows in place.
+    """
+    if window is None:
+        return ref, 0.0, False
+    old = ref.window
+    if old is None:
+        return YearRef(window, year), 0.0, True
+    if window != old and (
+        (window[:4] != old[:4] and window[1:4] == old[:3] and window[4] <= old[3])
+        or (year is not None and ref.year is not None and year < ref.year)
+    ):
+        return ref, 0.0, False
+    if window[:4] != old[:4] and window[:3] == old[1:4] and window[3] >= old[4]:
+        # Slid. The new year is at least one after the reference's, even when the
+        # series slides before the appliance's date turns (doc 5 section 6, S5).
+        nxt = None if ref.year is None else ref.year + 1
+        years = [y for y in (year, nxt) if y is not None]
+        gained = (window[3] - old[4]) + window[4]
+        return YearRef(window, max(years) if years else None), gained, True
+    if window[4] >= old[4]:
+        # Same year. The reference keeps its own year: a `date` that turns before
+        # the series restarts must still be able to explain that restart.
+        same = ref.year if ref.year is not None else year
+        return YearRef(window, same), window[4] - old[4], True
+    if year is not None and ref.year is not None and year > ref.year:
+        return YearRef(window, year), window[4], True
+    return ref, 0.0, False
+
+
+@dataclass(frozen=True)
+class Lifetime:
+    """One energy counter: kWh since the five-year window of its first reading began.
+
+    `seed` is the five-year total at the first reading, `total` the seed plus every
+    accepted gain since. Past the window's fifth year the total is more than the
+    app's, which forgets its oldest year: a total, no longer parity with the app.
+    `holding` says the last readable series was refused, so the counter is below
+    what the appliance says; `refused` is the last series refused and `refusals`
+    how many times a refusal began. `zero_since` is when five zeros were first seen
+    before the seed (monotonic seconds); it is not part of the restore record, so a
+    restart starts the hour over.
+    """
+
+    total: float | None = None
+    seed: float | None = None
+    ref: YearRef = field(default_factory=YearRef)
+    holding: bool = False
+    refused: tuple[float, ...] | None = None
+    refusals: int = 0
+    zero_since: float | None = None
+
+
+def lifetime_step(
+    state: Lifetime, window: tuple[float, ...] | None, year: int | None, *, now: float
+) -> Lifetime:
+    """`state` after one reading of its series, taken at `now` (monotonic seconds).
+
+    An unreadable series changes nothing. The first readable one is the seed: the
+    sum of its five slots, the app's own total -- and Home Assistant counts nothing
+    for it, since its statistics take a sensor's first value as the zero point. Five
+    zeros are a seed only once seen for an hour since the first of them: until then
+    they are no reading, a series that is not zero in between seeds at once, and an
+    unreadable one neither stops nor restarts the hour. A
+    refused series counts as a new refusal only when the counter was not already
+    holding that same series: the poll re-reads an unchanged shadow every minute.
+    """
+    if window is None:
+        return state
+    if state.total is None:
+        if not any(window):
+            since = now if state.zero_since is None else state.zero_since
+            if now - since < _ZERO_SEED_SECONDS:
+                return replace(state, zero_since=since)
+        total = float(sum(window))
+        return Lifetime(total, total, YearRef(window, year))
+    ref, gained, accepted = year_step(state.ref, window, year)
+    if accepted:
+        return replace(state, total=state.total + gained, ref=ref, holding=False)
+    if state.holding and window == state.refused:
+        return state
+    return replace(state, holding=True, refused=window, refusals=state.refusals + 1)
+
+
+def lifetime_as_dict(state: Lifetime) -> dict | None:
+    """`state` as JSON: the restore record and the diagnostics row. None if unseeded."""
+    if state.total is None or state.ref.window is None:
+        return None
+    return {
+        "seed": state.seed,
+        "total": state.total,
+        "reference": list(state.ref.window),
+        "year": state.ref.year,
+        "holding": state.holding,
+        "refused": None if state.refused is None else list(state.refused),
+        "refusals": state.refusals,
+    }
+
+
+def _stored_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) and value >= 0 else None
+
+
+def _stored_window(value: object) -> tuple[float, ...] | None:
+    if not isinstance(value, list) or any(_stored_number(v) is None for v in value):
+        return None
+    # Five zeros pass: `year_windows` may have accepted them as a reading.
+    return year_window(";".join(repr(float(v)) for v in value), zeros=True)
+
+
+def lifetime_from_dict(data: object) -> Lifetime:
+    """A counter from `lifetime_as_dict`'s record, or a new one when it cannot be read.
+
+    Validated rather than trusted: a damaged or foreign record starts the counter
+    over, from the five-year total of the next reading, as on its first run. The
+    optional fields fall back one by one.
+    """
+    if not isinstance(data, Mapping):
+        return Lifetime()
+    total, seed = _stored_number(data.get("total")), _stored_number(data.get("seed"))
+    window = _stored_window(data.get("reference"))
+    if total is None or seed is None or window is None:
+        return Lifetime()
+    year = data.get("year")
+    refusals = data.get("refusals")
+    holding = data.get("holding")
+    return Lifetime(
+        total,
+        seed,
+        YearRef(window, year if type(year) is int else None),
+        holding if isinstance(holding, bool) else False,
+        _stored_window(data.get("refused")),
+        refusals if type(refusals) is int and refusals >= 0 else 0,
+    )

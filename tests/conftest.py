@@ -516,6 +516,47 @@ def _install_percentage_util_stub() -> None:
     )
 
 
+def _install_restore_state_stub() -> None:
+    """Install `homeassistant.helpers.restore_state`, where the heat-pump water
+    heater's energy counters keep their state between two starts (#115).
+
+    `async_get_last_extra_data` answers None, which is what Home Assistant answers
+    for an entity it has nothing stored for: the first start after the entity is
+    created, or a start more than seven days after it was last seen. A test that
+    needs a previous run patches it on the entity.
+
+    `async_added_to_hass` stands in for `Entity`'s own no-op, which the real
+    `super()` chain ends on; `CoordinatorEntity` here does not carry one.
+    """
+    helpers = _ensure_module("homeassistant.helpers")
+    restore_state = _ensure_module("homeassistant.helpers.restore_state")
+    helpers.restore_state = restore_state
+
+    class ExtraStoredData:
+        """Mirror of the real abstract base: `as_dict` must be JSON-serializable."""
+
+        def as_dict(self) -> dict:
+            raise NotImplementedError
+
+    class RestoreEntity:
+        """Mirror of the restore mixin surface the counters use."""
+
+        async def async_added_to_hass(self) -> None:
+            return None
+
+        async def async_get_last_extra_data(self):
+            return None
+
+        @property
+        def extra_restore_state_data(self):
+            return None
+
+    restore_state.ExtraStoredData = getattr(
+        restore_state, "ExtraStoredData", ExtraStoredData
+    )
+    restore_state.RestoreEntity = getattr(restore_state, "RestoreEntity", RestoreEntity)
+
+
 def _ensure_yarl() -> None:
     """The CI test env installs only pytest (no yarl). config_flow now imports the
     transport auth (which does `from yarl import URL`), so importing config_flow -- and
@@ -635,6 +676,7 @@ _install_homeassistant_error()
 _install_shared_entity_stubs()
 _install_entity_platform_stubs()
 _install_percentage_util_stub()
+_install_restore_state_stub()
 _install_selector_stubs()
 _install_service_helper_stubs()
 _ensure_yarl()

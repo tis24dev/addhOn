@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import logging
 import math
+import time
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -37,6 +38,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
 from .base_entity import (
     HonAccountCoordinatorEntity,
@@ -112,15 +114,24 @@ from .air_purifier import (
 )
 from .debug_utils import redact_id
 from .hpwh import (
+    HPWH_DATE,
+    HPWH_ENERGY_COUNTERS,
+    HPWH_ENERGY_STORE,
     HPWH_MODE_MAP,
     HPWH_STATES,
+    Lifetime,
     appliance_series,
+    device_year,
     eco_window_attributes,
     eco_window_text,
     heat_pump_state,
+    lifetime_as_dict,
+    lifetime_from_dict,
+    lifetime_step,
     mode_key,
     sterilization_time,
     water_level_percent,
+    year_windows,
 )
 from .hon_commands import (
     find_settings_param,
@@ -1232,6 +1243,20 @@ _HEAT_PUMP_WATER_HEATER: tuple[HonSensorEntityDescription, ...] = (
     ),
 )
 
+# Its energy (#115): key, whether it is a consumption (the ENERGY device class, the
+# one the Energy dashboard takes) rather than the heat produced, and whether it is
+# enabled by default. The series each key adds up are `hpwh.HPWH_ENERGY_COUNTERS`.
+# Counters, not readings: each needs its own past, which no description row can
+# hold, so they are HonHeatPumpEnergySensor, created in async_setup_entry. The app
+# never shows the compressor or the element alone, only their sum (doc 5 section 3), so
+# those two ship disabled.
+_HPWH_ENERGY: tuple[tuple[str, bool, bool], ...] = (
+    ("total_energy", True, True),
+    ("compressor_energy", True, False),
+    ("heater_energy", True, False),
+    ("heat_produced", False, True),
+)
+
 # Robot vacuum (RVC): battery, state, time, power, areas, errors.
 _VACUUM: tuple[HonSensorEntityDescription, ...] = (
     HonSensorEntityDescription(
@@ -1546,6 +1571,22 @@ async def async_setup_entry(
         ):
             entities.append(HonHeatPumpEcoWindowSensor(coordinator, appliance_id))
             created.append(HonHeatPumpEcoWindowSensor.KEY)
+        # Its energy counters, each only where the shadow carries every series it
+        # adds up. Plain readings like the others above, not behind the
+        # experimental option.
+        if app_type == APPLIANCE_HW:
+            for key, consumption, enabled in _HPWH_ENERGY:
+                if all(name in attributes for name in HPWH_ENERGY_COUNTERS[key]):
+                    entities.append(
+                        HonHeatPumpEnergySensor(
+                            coordinator,
+                            appliance_id,
+                            key,
+                            consumption=consumption,
+                            enabled=enabled,
+                        )
+                    )
+                    created.append(key)
         _LOGGER.debug(
             "Sensor debug: '%s' (type=%s, id=%s) -> %d/%d sensors %s",
             data.get("name", "Haier"),
@@ -2009,6 +2050,139 @@ class HonHeatPumpEcoWindowSensor(HonBaseEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         return eco_window_attributes(self._get_attr)
+
+
+class _EnergyCountersData(ExtraStoredData):
+    """The counters of one energy entity, {series: record}, kept for the next start."""
+
+    def __init__(self, records: dict[str, dict]) -> None:
+        self.records = records
+
+    def as_dict(self) -> dict[str, dict]:
+        return self.records
+
+
+def _slots(window: tuple[float, ...] | None) -> str:
+    return "" if window is None else ";".join(f"{value:g}" for value in window)
+
+
+class HonHeatPumpEnergySensor(HonBaseEntity, SensorEntity, RestoreEntity):
+    """kWh of a heat-pump water heater, counted here and never decreasing (#115).
+
+    One `hpwh.Lifetime` per series of `hpwh.HPWH_ENERGY_COUNTERS[key]`, summed. Each
+    starts from its series' five-year total, the app's own figure, and then adds
+    only the gains `hpwh.year_step` accepts: neither the yearly restart nor the
+    window forgetting its oldest year is a drop Home Assistant could misread, and a
+    drop the appliance cannot explain, or a series from before the new year coming
+    back, is held, never counted. Unknown until every series has been read once --
+    a series of five zeros for an hour without a break -- and an unreadable series
+    later keeps the last total.
+
+    TOTAL, not TOTAL_INCREASING: if a defect here ever made the sum fall, TOTAL takes
+    the difference off once, where TOTAL_INCREASING would count the next value in
+    full (doc 5 section 8.6). The counters survive a restart through Home Assistant's
+    restore data, which it keeps seven days for an entity that does not come back;
+    without it each counter starts over from the five-year total of its next
+    reading. The state is also left in the coordinator for the diagnostics.
+    """
+
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        key: str,
+        *,
+        consumption: bool,
+        enabled: bool,
+    ) -> None:
+        super().__init__(coordinator, appliance_id)
+        self._key = key
+        self._counted = HPWH_ENERGY_COUNTERS[key]
+        self._counters = {name: Lifetime() for name in self._counted}
+        self._attr_unique_id = f"{appliance_id}_{key}"
+        self._attr_translation_key = key
+        # Heat is not a consumption: without the device class the Energy dashboard
+        # does not take it for one without a warning (doc 5 section 2.2).
+        self._attr_device_class = SensorDeviceClass.ENERGY if consumption else None
+        if not consumption:
+            self._attr_icon = "mdi:heat-wave"
+        if not enabled:
+            self._attr_entity_registry_enabled_default = False
+
+    async def async_added_to_hass(self) -> None:
+        # The previous run first, so that no reading -- not even one a coordinator
+        # update might deliver while the entity is being added -- is judged without it.
+        last = await self.async_get_last_extra_data()
+        records = last.as_dict() if last is not None else None
+        if isinstance(records, dict):
+            self._counters = {
+                name: lifetime_from_dict(records.get(name)) for name in self._counted
+            }
+        _LOGGER.debug(
+            "Sensor debug: appliance %s %s restored %s",
+            redact_id(self._appliance_id),
+            self._key,
+            {name: state.total for name, state in self._counters.items()},
+        )
+        await super().async_added_to_hass()
+        self._advance()
+
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData | None:
+        records = self._records()
+        return _EnergyCountersData(records) if records else None
+
+    def _handle_coordinator_update(self) -> None:
+        self._advance()
+        super()._handle_coordinator_update()
+
+    @staticmethod
+    def _monotonic() -> float:
+        # The clock an hour of zeros is measured with before it may be a seed.
+        return time.monotonic()
+
+    def _records(self) -> dict[str, dict]:
+        return {
+            name: record
+            for name, state in self._counters.items()
+            if (record := lifetime_as_dict(state)) is not None
+        }
+
+    def _advance(self) -> None:
+        year = device_year(self._get_attr(HPWH_DATE))
+        # All three series, even for a counter of one: five zeros are a reading only
+        # beside a sibling that is not zero.
+        windows = year_windows(self._get_attr)
+        now = self._monotonic()
+        for name in self._counted:
+            before = self._counters[name]
+            after = lifetime_step(before, windows[name], year, now=now)
+            self._counters[name] = after
+            if after.refusals != before.refusals:
+                # INFO, once per refusal: from now on this entity counts less than the
+                # appliance says, and that has to be legible without debug.
+                _LOGGER.info(
+                    "Sensor debug: appliance %s reports %s=%s, a drop from %s that is "
+                    "not the new-year slide: %s holds at %g kWh (issue #115)",
+                    redact_id(self._appliance_id),
+                    name,
+                    _slots(after.refused),
+                    _slots(after.ref.window),
+                    self._key,
+                    after.total,
+                )
+        store = self._coordinator_store(HPWH_ENERGY_STORE)
+        store.setdefault(self._appliance_id, {})[self._key] = self._records()
+
+    @property
+    def native_value(self) -> float | None:
+        totals = [state.total for state in self._counters.values()]
+        if any(total is None for total in totals):
+            return None
+        return sum(totals)
 
 
 class HonDebugStatusSensor(HonAccountEntity, SensorEntity):

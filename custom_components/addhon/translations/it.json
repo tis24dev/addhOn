@@ -628,6 +628,15 @@
       },
       "sterilization_time": {
         "name": "Ora della sterilizzazione"
+      },
+      "compressor_energy": {
+        "name": "Energia compressore"
+      },
+      "heater_energy": {
+        "name": "Energia resistenza elettrica"
+      },
+      "heat_produced": {
+        "name": "Calore prodotto"
       }
     },
     "binary_sensor": {

@@ -973,5 +973,828 @@ class HeatPumpScheduleEntitiesTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("hw-1_heat_pump_state", keys)
 
 
+# --- Energy counters (issue #115) -------------------------------------------------
+# The three `...Year...` series and the appliance date, as the two reporters' m8
+# appliances really published them (#113 once, #115 on three days).
+ENERGY = REPO_ROOT / "tests" / "fixtures" / "hw_energy" / "series.json"
+CP, EC, HEAT = "energyConsumptionYearCp", "energyConsumptionYearEc", "accumulatedHeatYear"
+# Entity key -> the series it counts.
+ENERGY_KEYS = {
+    "total_energy": (CP, EC),
+    "compressor_energy": (CP,),
+    "heater_energy": (EC,),
+    "heat_produced": (HEAT,),
+}
+
+
+def _snapshot(name: str) -> dict:
+    return dict(json.loads(ENERGY.read_text(encoding="utf-8"))["snapshots"][name]["attributes"])
+
+
+def _ha_counted(states) -> float:
+    """kWh Home Assistant's long-term statistics add up for a TOTAL sensor.
+
+    The rule of `sensor/recorder.py` for `state_class: total` without `last_reset`,
+    identical in 2024.12.0 and 2026.9.4: a state that is not a number is skipped,
+    the first number is the zero point, and every later number adds its difference
+    to the previous one, negative included.
+    """
+    total, previous = 0.0, None
+    for state in states:
+        if isinstance(state, bool) or not isinstance(state, (int, float)):
+            continue
+        if previous is not None:
+            total += state - previous
+        previous = state
+    return total
+
+
+class YearWindowTest(unittest.TestCase):
+    """A `...Year...` series: five yearly totals, oldest first, current year last."""
+
+    def test_the_reporters_series(self) -> None:
+        for name, expected in (
+            ("113_2026-09-27", {CP: (0, 0, 0, 47, 72), EC: (0, 0, 0, 1, 15),
+                                HEAT: (0, 0, 0, 338, 440)}),
+            ("115_2026-09-29", {CP: (0, 0, 0, 215, 581), EC: (0, 0, 0, 100, 42),
+                                HEAT: (0, 0, 0, 818, 2496)}),
+            ("115_2026-10-03", {CP: (0, 0, 0, 215, 586), EC: (0, 0, 0, 100, 42),
+                                HEAT: (0, 0, 0, 818, 2519)}),
+        ):
+            attributes = _snapshot(name)
+            for series, window in expected.items():
+                self.assertEqual(hpwh.year_window(attributes[series]), window, (name, series))
+
+    def test_anything_but_five_finite_non_negative_numbers_is_none(self) -> None:
+        # None, never 0: a 0 published to a counter is a restart of the meter.
+        for raw in (
+            None, "", "0;0;0;215", "0;0;0;215;581;0", "0;0;0;215;581;",
+            "0;0;0;215;x", "0;0;0;215;-1", "0;0;0;215;nan", "0;0;0;215;inf",
+            "0;0;0;215;5,5", "0,0,0,215,581", 581, 0, ["0", "0", "0", "215", "581"],
+        ):
+            self.assertIsNone(hpwh.year_window(raw), raw)
+
+    def test_the_whole_series_at_zero_is_not_a_reading(self) -> None:
+        # Doc 5 §7: the strict reader drops it, so a transient 0;0;0;0;0 never
+        # reaches a counter (scenario S2).
+        self.assertIsNone(hpwh.year_window("0;0;0;0;0"))
+
+    def test_decimals_are_kept(self) -> None:
+        self.assertEqual(hpwh.year_window("0;0;0;1.5;2.25"), (0.0, 0.0, 0.0, 1.5, 2.25))
+
+
+class YearWindowsTest(unittest.TestCase):
+    """The three series of one shadow, read together: when five zeros are a reading."""
+
+    @staticmethod
+    def _read(**series) -> dict:
+        return hpwh.year_windows(mapping_getter(series))
+
+    def test_five_zeros_are_a_reading_when_a_sibling_is_not_zero(self) -> None:
+        # A backup element that has not run in five years: a real zero.
+        windows = self._read(
+            energyConsumptionYearCp="0;0;0;215;581", energyConsumptionYearEc="0;0;0;0;0",
+            accumulatedHeatYear="0;0;0;818;2496",
+        )
+        self.assertEqual(
+            windows,
+            {CP: (0, 0, 0, 215, 581), EC: (0.0,) * 5, HEAT: (0, 0, 0, 818, 2496)},
+        )
+
+    def test_all_three_at_zero_together_is_no_reading(self) -> None:
+        zeros = "0;0;0;0;0"
+        windows = self._read(
+            energyConsumptionYearCp=zeros, energyConsumptionYearEc=zeros,
+            accumulatedHeatYear=zeros,
+        )
+        self.assertEqual(windows, {CP: None, EC: None, HEAT: None})
+
+    def test_only_a_readable_sibling_with_a_non_zero_slot_counts(self) -> None:
+        for siblings in (
+            {},
+            {"energyConsumptionYearCp": "0;0;0;215"},
+            {"energyConsumptionYearCp": "0;0;0;0;0", "accumulatedHeatYear": "garbage"},
+        ):
+            windows = self._read(energyConsumptionYearEc="0;0;0;0;0", **siblings)
+            self.assertIsNone(windows[EC], siblings)
+        windows = self._read(
+            energyConsumptionYearEc="0;0;0;0;0", accumulatedHeatYear="0;0;0;0;1"
+        )
+        self.assertEqual(windows[EC], (0.0,) * 5)
+
+    def test_the_series_alone_still_reads_five_zeros_as_nothing(self) -> None:
+        self.assertIsNone(hpwh.year_window("0;0;0;0;0"))
+        self.assertEqual(hpwh.year_window("0;0;0;0;0", zeros=True), (0.0,) * 5)
+        self.assertIsNone(hpwh.year_window("0;0;0;0", zeros=True))
+
+
+class DeviceYearTest(unittest.TestCase):
+    def test_the_year_of_the_appliance_date(self) -> None:
+        self.assertEqual(hpwh.device_year("2026-09-30"), 2026)
+        self.assertEqual(hpwh.device_year(" 2027-01-01 "), 2027)
+
+    def test_anything_but_a_calendar_date_is_none(self) -> None:
+        for raw in (None, "", "0000-00-00", "2026-13-01", "2026", "garbage", 2026):
+            self.assertIsNone(hpwh.device_year(raw), raw)
+
+
+class YearStepTest(unittest.TestCase):
+    """The guard: which reading may move a counter, and by how much."""
+
+    REF = hpwh.YearRef((0.0, 0.0, 0.0, 818.0, 2496.0), 2026)  # #115's heat, 2026-09-29
+
+    def _step(self, raw: str, year: int | None = 2026, ref=None):
+        return hpwh.year_step(self.REF if ref is None else ref, hpwh.year_window(raw), year)
+
+    def test_the_first_reading_is_the_reference_and_gains_nothing(self) -> None:
+        ref, gained, accepted = hpwh.year_step(
+            hpwh.YearRef(), hpwh.year_window("0;0;0;818;2496"), 2026
+        )
+        self.assertEqual((ref, gained, accepted), (self.REF, 0.0, True))
+
+    def test_growth_and_no_change(self) -> None:
+        ref, gained, accepted = self._step("0;0;0;818;2499")
+        self.assertEqual((ref.window[-1], ref.year, gained, accepted), (2499.0, 2026, 3.0, True))
+        self.assertEqual(self._step("0;0;0;818;2496"), (self.REF, 0.0, True))
+
+    def test_the_new_year_slide(self) -> None:
+        # What all three m8 that crossed 2025 -> 2026 show as an outcome.
+        ref, gained, accepted = self._step("0;0;818;2496;0")
+        self.assertEqual((ref.year, gained, accepted), (2027, 0.0, True))
+        # The old year's last kWh may arrive together with the slide.
+        ref, gained, accepted = self._step("0;0;818;2497;2")
+        self.assertEqual((gained, accepted), (3.0, True))
+
+    def test_a_slide_before_the_date_still_moves_the_reference_year(self) -> None:
+        # Doc 5 §6, S5: the series slides while the appliance date is still December.
+        ref, _gained, _accepted = self._step("0;0;818;2496;0", year=2026)
+        self.assertEqual(ref.year, 2027)
+        ref, _gained, _accepted = self._step("0;0;818;2496;0", year=None)
+        self.assertEqual(ref.year, 2027)
+
+    def test_a_restart_in_place_needs_a_later_appliance_year(self) -> None:
+        # S6: no slide, the current year restarts from 0 together with `date`.
+        ref, gained, accepted = self._step("0;0;0;818;4", year=2027)
+        self.assertEqual((ref.window[-1], ref.year, gained, accepted), (4.0, 2027, 4.0, True))
+        # S6b: the same drop one message before `date` changes is held.
+        self.assertEqual(self._step("0;0;0;818;0", year=2026), (self.REF, 0.0, False))
+        self.assertEqual(self._step("0;0;0;818;0", year=None), (self.REF, 0.0, False))
+
+    def test_every_other_drop_is_refused(self) -> None:
+        for raw in (
+            "0;0;0;818;0",     # S3: the current year alone at zero for one message
+            "0;0;0;818;2490",  # an older value coming back
+            "0;0;818;2495;0",  # a slide whose old year lost a kWh
+            "0;818;2496;0;0",  # two years at once
+        ):
+            self.assertEqual(self._step(raw), (self.REF, 0.0, False), raw)
+
+    def test_an_unreadable_series_leaves_the_reference(self) -> None:
+        self.assertEqual(hpwh.year_step(self.REF, None, 2027), (self.REF, 0.0, False))
+
+    def test_an_unknown_reference_year_is_filled_in(self) -> None:
+        ref = hpwh.YearRef(self.REF.window, None)
+        new, gained, accepted = hpwh.year_step(ref, hpwh.year_window("0;0;0;818;2497"), 2026)
+        self.assertEqual((new.year, gained, accepted), (2026, 1.0, True))
+
+    AFTER = hpwh.YearRef((0.0, 0.0, 818.0, 2496.0, 3.0), 2027)  # #115's heat, slid
+
+    def test_a_series_from_before_the_slide_is_refused(self) -> None:
+        # A pre-new-year series coming back after the slide is a RISE of the last
+        # slot, and was worth +2493 kWh of heat on #115. Its shape gives it away: the
+        # reference moved one slot to the right, the last slot no higher than the
+        # reference's last year. With the appliance date, without it, or with the
+        # date of before the new year coming back with it.
+        for year in (2027, None, 2026):
+            self.assertEqual(
+                self._step("0;0;0;818;2496", year=year, ref=self.AFTER),
+                (self.AFTER, 0.0, False),
+                year,
+            )
+        # An older state of the same year, too.
+        self.assertEqual(
+            self._step("0;0;0;818;2490", year=2027, ref=self.AFTER), (self.AFTER, 0.0, False)
+        )
+
+    def test_a_date_before_the_reference_year_refuses_any_change(self) -> None:
+        # Not the shape above, but the appliance says it is still last year.
+        self.assertEqual(
+            self._step("0;0;818;2496;5", year=2026, ref=self.AFTER), (self.AFTER, 0.0, False)
+        )
+        # The same series once the date has turned is growth.
+        ref, gained, accepted = self._step("0;0;818;2496;5", year=2027, ref=self.AFTER)
+        self.assertEqual((ref.window[-1], gained, accepted), (5.0, 2.0, True))
+        # An unchanged series is no change, whatever the date: the poll re-reads it
+        # between a slide and the date that follows it.
+        self.assertEqual(
+            self._step("0;0;818;2496;3", year=2026, ref=self.AFTER), (self.AFTER, 0.0, True)
+        )
+
+    def test_the_slide_and_the_growth_after_it_are_not_taken_for_it(self) -> None:
+        ref, gained, accepted = self._step("0;0;818;2496;0", year=2027)
+        self.assertEqual((ref.year, gained, accepted), (2027, 0.0, True))
+        ref, gained, accepted = hpwh.year_step(ref, hpwh.year_window("0;0;818;2496;7"), 2027)
+        self.assertEqual((ref.window[-1], gained, accepted), (7.0, 7.0, True))
+        # A first-year appliance: its closed years are all zero, like the reference
+        # shifted right, but growth leaves them as they are.
+        first = hpwh.YearRef((0.0, 0.0, 0.0, 0.0, 5.0), 2026)
+        _ref, gained, accepted = hpwh.year_step(first, hpwh.year_window("0;0;0;0;6"), 2026)
+        self.assertEqual((gained, accepted), (1.0, True))
+
+    def test_a_reference_of_zeros_grows_in_place(self) -> None:
+        # An element that never ran: the first kWh is this year's, not a slide.
+        zeros = hpwh.YearRef((0.0,) * 5, 2026)
+        ref, gained, accepted = hpwh.year_step(zeros, hpwh.year_window("0;0;0;0;1"), 2026)
+        self.assertEqual((ref.year, gained, accepted), (2026, 1.0, True))
+        zero = hpwh.year_window("0;0;0;0;0", zeros=True)
+        self.assertEqual(hpwh.year_step(zeros, zero, 2026), (zeros, 0.0, True))
+
+
+class LifetimeTest(unittest.TestCase):
+    """One counter: seeded with the app's five-year total, then accepted gains only."""
+
+    def test_the_seed_is_the_five_year_total(self) -> None:
+        # The app's years tab: `getTotalWh` over all five slots (decomp.txt:2996797-2996819).
+        state = hpwh.lifetime_step(
+            hpwh.Lifetime(), hpwh.year_window("0;0;0;215;581"), 2026, now=0.0
+        )
+        self.assertEqual((state.seed, state.total), (796.0, 796.0))
+        self.assertEqual(state.ref, hpwh.YearRef((0.0, 0.0, 0.0, 215.0, 581.0), 2026))
+
+    def test_nothing_before_a_readable_series(self) -> None:
+        state = hpwh.lifetime_step(hpwh.Lifetime(), None, 2026, now=0.0)
+        self.assertEqual(state, hpwh.Lifetime())
+        self.assertIsNone(hpwh.lifetime_as_dict(state))
+
+    def test_gains_add_up_and_a_drop_is_held(self) -> None:
+        state = hpwh.Lifetime()
+        for raw in ("0;0;0;215;581", "0;0;0;215;585", "0;0;0;215;0", "0;0;0;215;0",
+                    "0;0;0;215;586"):
+            state = hpwh.lifetime_step(state, hpwh.year_window(raw), 2026, now=0.0)
+        self.assertEqual(state.total, 801.0)
+        self.assertFalse(state.holding)
+        # The drop is remembered, counted once though it was read twice.
+        self.assertEqual(state.refused, (0.0, 0.0, 0.0, 215.0, 0.0))
+        self.assertEqual(state.refusals, 1)
+
+    def test_the_same_drop_coming_back_is_counted_again(self) -> None:
+        state = hpwh.Lifetime()
+        for raw in ("0;0;0;215;581", "0;0;0;215;0", "0;0;0;215;581", "0;0;0;215;0"):
+            state = hpwh.lifetime_step(state, hpwh.year_window(raw), 2026, now=0.0)
+        self.assertEqual((state.total, state.holding, state.refusals), (796.0, True, 2))
+
+    ZEROS = (0.0,) * 5
+    REAL = (0.0, 0.0, 0.0, 100.0, 42.0)  # #115's element
+
+    HOUR = 3600.0
+
+    def _run(self, *readings) -> "hpwh.Lifetime":
+        """`readings` are (window, monotonic seconds) pairs."""
+        state = hpwh.Lifetime()
+        for window, now in readings:
+            state = hpwh.lifetime_step(state, window, 2026, now=now)
+        return state
+
+    def test_five_zeros_seed_only_after_an_hour_without_a_break(self) -> None:
+        zeros, t0 = self.ZEROS, 500.0
+        self.assertIsNone(self._run((zeros, t0)).total)
+        self.assertIsNone(self._run((zeros, t0), (zeros, t0 + 59 * 60)).total)
+        state = self._run((zeros, t0), (zeros, t0 + 1800), (zeros, t0 + self.HOUR))
+        self.assertEqual((state.seed, state.total, state.ref.window), (0.0, 0.0, zeros))
+        # The hour is measured from the first zero, not counted in readings: a poll
+        # every ten seconds for 59 minutes is still no seed.
+        many = [(zeros, t0 + 10 * i) for i in range(355)]
+        self.assertIsNone(self._run(*many).total)
+
+    def test_a_single_zero_before_the_real_series_is_no_seed(self) -> None:
+        state = self._run((self.ZEROS, 0.0), (self.REAL, 60.0))
+        self.assertEqual((state.seed, state.total, state.refusals), (142.0, 142.0, 0))
+
+    def test_zero_for_half_an_hour_then_the_real_series(self) -> None:
+        state = self._run((self.ZEROS, 0.0), (self.ZEROS, 1800.0), (self.REAL, 1860.0))
+        self.assertEqual((state.seed, state.total, state.refusals), (142.0, 142.0, 0))
+
+    def test_a_series_that_is_not_zero_in_between_seeds_at_once(self) -> None:
+        # The real series is the seed, and the zero after it, an hour after the
+        # first one, is a refused drop: the clock does not run past a seed.
+        state = self._run(
+            (self.ZEROS, 0.0), (self.ZEROS, 1800.0), (self.REAL, 1860.0),
+            (self.ZEROS, self.HOUR + 100),
+        )
+        self.assertEqual((state.seed, state.total, state.refusals), (142.0, 142.0, 1))
+
+    def test_an_unreadable_series_neither_counts_nor_resets(self) -> None:
+        zeros = self.ZEROS
+        self.assertIsNone(self._run((zeros, 0.0), (None, 1800.0), (zeros, 3599.0)).total)
+        self.assertEqual(
+            self._run((zeros, 0.0), (None, 1800.0), (zeros, self.HOUR)).total, 0.0
+        )
+
+    def test_after_the_seed_five_zeros_are_judged_at_once(self) -> None:
+        # The rule is for the seed only: once seeded, the counter grows from zeros
+        # at the first reading, as before.
+        state = self._run(
+            (self.ZEROS, 0.0), (self.ZEROS, self.HOUR), ((0.0, 0.0, 0.0, 0.0, 1.0), 3601.0)
+        )
+        self.assertEqual(state.total, 1.0)
+
+    def test_the_timer_is_not_part_of_the_restore_record(self) -> None:
+        self.assertIsNone(hpwh.lifetime_as_dict(self._run((self.ZEROS, 0.0))))
+        seeded = self._run((self.ZEROS, 0.0), (self.ZEROS, self.HOUR))
+        record = hpwh.lifetime_as_dict(seeded)
+        self.assertNotIn("zero_since", record)
+        self.assertIsNone(hpwh.lifetime_from_dict(record).zero_since)
+
+    def test_the_restore_record_round_trips(self) -> None:
+        state = hpwh.Lifetime()
+        for raw in ("0;0;0;215;581", "0;0;0;215;585", "0;0;0;215;0"):
+            state = hpwh.lifetime_step(state, hpwh.year_window(raw), 2026, now=0.0)
+        record = hpwh.lifetime_as_dict(state)
+        self.assertEqual(
+            record,
+            {"seed": 796.0, "total": 800.0, "reference": [0.0, 0.0, 0.0, 215.0, 585.0],
+             "year": 2026, "holding": True, "refused": [0.0, 0.0, 0.0, 215.0, 0.0],
+             "refusals": 1},
+        )
+        json.dumps(record)
+        self.assertEqual(hpwh.lifetime_from_dict(record), state)
+
+    def test_a_damaged_record_starts_over(self) -> None:
+        good = {"seed": 796.0, "total": 800.0, "reference": [0, 0, 0, 215, 585], "year": 2026}
+        self.assertEqual(hpwh.lifetime_from_dict(good).total, 800.0)
+        for bad in (
+            None, [], {}, {**good, "total": -1}, {**good, "total": "800"},
+            {**good, "total": True}, {**good, "total": float("nan")},
+            {**good, "seed": None}, {**good, "reference": "0;0;0;215;585"},
+            {**good, "reference": [0, 0, 0, 585]}, {**good, "reference": [0, 0, 0, -1, 5]},
+        ):
+            self.assertEqual(hpwh.lifetime_from_dict(bad), hpwh.Lifetime(), bad)
+        # Five zeros are a reference `year_windows` may have accepted: kept.
+        zeros = hpwh.lifetime_from_dict({**good, "seed": 0, "total": 3, "reference": [0] * 5})
+        self.assertEqual((zeros.total, zeros.ref.window), (3.0, (0.0,) * 5))
+        # The optional fields fall back one by one.
+        fallback = hpwh.lifetime_from_dict(
+            {**good, "year": "2026", "holding": "yes", "refused": [1], "refusals": -2}
+        )
+        self.assertEqual(
+            (fallback.ref.year, fallback.holding, fallback.refused, fallback.refusals),
+            (None, False, None, 0),
+        )
+
+    def test_the_tables(self) -> None:
+        self.assertEqual(hpwh.HPWH_ENERGY_COUNTERS, ENERGY_KEYS)
+        self.assertEqual(hpwh.HPWH_ENERGY_ATTRS, (CP, EC, HEAT, "date"))
+
+
+class _StoredData:
+    """What Home Assistant hands back from a previous run (`RestoredExtraData`)."""
+
+    def __init__(self, data) -> None:
+        self._data = data
+
+    def as_dict(self):
+        return self._data
+
+
+def _energy_data(attributes: dict) -> dict:
+    appliance = types.SimpleNamespace(model_attributes={"series": "m8"})
+    return {
+        "hw-1": {
+            "type": "HW",
+            "name": "Termo",
+            "attributes": dict(attributes),
+            "settings": {},
+            "appliance": appliance,
+        }
+    }
+
+
+class HeatPumpEnergyEntitiesTest(unittest.IsolatedAsyncioTestCase):
+    """The four energy counters of the heat-pump water heater (#115)."""
+
+    async def _energy(
+        self, attributes: dict | None = None, *, stored: dict | None = None,
+        experimental: bool = False,
+    ) -> dict:
+        from custom_components.addhon import sensor
+        from custom_components.addhon.const import CONF_ENABLE_EXPERIMENTAL, DOMAIN
+
+        data = _energy_data(_snapshot("115_2026-09-29") if attributes is None else attributes)
+        coordinator = _Coordinator(data)
+        hass = _Hass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
+        entry = _Entry()
+        entry.options = {CONF_ENABLE_EXPERIMENTAL: experimental}
+        added: list = []
+        await sensor.async_setup_entry(hass, entry, added.extend)
+        entities = {
+            key: e
+            for e in added
+            if (key := str(getattr(e, "_attr_unique_id", "")).removeprefix("hw-1_"))
+            in ENERGY_KEYS
+        }
+        for key, entity in entities.items():
+            previous = None if stored is None else stored.get(key)
+
+            async def _last(previous=previous):
+                return None if previous is None else _StoredData(previous)
+
+            with mock.patch.object(entity, "async_get_last_extra_data", _last):
+                await entity.async_added_to_hass()
+        return entities
+
+    @staticmethod
+    def _push(entity, **attributes) -> object:
+        """One coordinator update carrying `attributes`; None removes one."""
+        current = entity.coordinator.data["hw-1"]["attributes"]
+        for name, value in attributes.items():
+            if value is None:
+                current.pop(name, None)
+            else:
+                current[name] = value
+        entity._handle_coordinator_update()
+        return entity.native_value
+
+    @staticmethod
+    def _values(entities: dict) -> dict:
+        return {key: entity.native_value for key, entity in entities.items()}
+
+    async def test_the_values_on_the_reporters_appliances_at_first_start(self) -> None:
+        # The seed is the app's five-year total: 938 kWh on #115 is the `total` of
+        # the app's years tab (Cp + Ec, decomp.txt:2996797-2996819).
+        for name, expected in (
+            ("113_2026-09-27", {"total_energy": 135.0, "compressor_energy": 119.0,
+                                "heater_energy": 16.0, "heat_produced": 778.0}),
+            ("115_2026-09-29", {"total_energy": 938.0, "compressor_energy": 796.0,
+                                "heater_energy": 142.0, "heat_produced": 3314.0}),
+            ("115_2026-10-02", {"total_energy": 942.0, "compressor_energy": 800.0,
+                                "heater_energy": 142.0, "heat_produced": 3334.0}),
+            ("115_2026-10-03", {"total_energy": 943.0, "compressor_energy": 801.0,
+                                "heater_energy": 142.0, "heat_produced": 3337.0}),
+        ):
+            self.assertEqual(self._values(await self._energy(_snapshot(name))), expected, name)
+
+    async def test_the_reporters_days_one_after_the_other(self) -> None:
+        entities = await self._energy(_snapshot("115_2026-09-29"))
+        for name, expected in (
+            ("115_2026-10-02", {"total_energy": 942.0, "compressor_energy": 800.0,
+                                "heater_energy": 142.0, "heat_produced": 3334.0}),
+            ("115_2026-10-03", {"total_energy": 943.0, "compressor_energy": 801.0,
+                                "heater_energy": 142.0, "heat_produced": 3337.0}),
+        ):
+            for entity in entities.values():
+                self._push(entity, **_snapshot(name))
+            self.assertEqual(self._values(entities), expected, name)
+
+    async def test_what_each_entity_declares(self) -> None:
+        from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+
+        entities = await self._energy()
+        self.assertEqual(set(entities), set(ENERGY_KEYS))
+        for key, entity in entities.items():
+            self.assertEqual(entity._attr_unique_id, f"hw-1_{key}")
+            self.assertEqual(entity._attr_translation_key, key)
+            self.assertEqual(entity._attr_native_unit_of_measurement, "kWh", key)
+            self.assertEqual(entity._attr_state_class, SensorStateClass.TOTAL, key)
+            self.assertEqual(entity._counted, ENERGY_KEYS[key])
+        for key in ("total_energy", "compressor_energy", "heater_energy"):
+            self.assertEqual(entities[key]._attr_device_class, SensorDeviceClass.ENERGY, key)
+        # Heat is not a consumption: no device class.
+        self.assertIsNone(entities["heat_produced"]._attr_device_class)
+        enabled = {
+            key: getattr(entity, "_attr_entity_registry_enabled_default", True)
+            for key, entity in entities.items()
+        }
+        self.assertEqual(
+            enabled,
+            {"total_energy": True, "compressor_energy": False, "heater_energy": False,
+             "heat_produced": True},
+        )
+
+    async def test_not_behind_the_experimental_option(self) -> None:
+        self.assertEqual(set(await self._energy(experimental=False)), set(ENERGY_KEYS))
+        self.assertEqual(set(await self._energy(experimental=True)), set(ENERGY_KEYS))
+
+    async def test_an_entity_exists_only_with_every_series_it_counts(self) -> None:
+        attributes = _snapshot("115_2026-09-29")
+        attributes.pop(EC)
+        self.assertEqual(set(await self._energy(attributes)), {"compressor_energy", "heat_produced"})
+        # The date is not required: the guard only loses its second test.
+        attributes = _snapshot("115_2026-09-29")
+        attributes.pop("date")
+        self.assertEqual(set(await self._energy(attributes)), set(ENERGY_KEYS))
+
+    async def test_another_type_gets_none(self) -> None:
+        from custom_components.addhon import sensor
+        from custom_components.addhon.const import DOMAIN
+
+        data = _energy_data(_snapshot("115_2026-09-29"))
+        data["hw-1"]["type"] = "WH"
+        coordinator = _Coordinator(data)
+        hass = _Hass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
+        added: list = []
+        await sensor.async_setup_entry(hass, _Entry(), added.extend)
+        self.assertFalse(
+            [e for e in added if isinstance(e, sensor.HonHeatPumpEnergySensor)]
+        )
+
+    async def test_unknown_until_every_series_is_readable(self) -> None:
+        attributes = _snapshot("115_2026-09-29")
+        attributes[EC] = "0;0;0;100"
+        entities = await self._energy(attributes)
+        self.assertIsNone(entities["total_energy"].native_value)
+        self.assertIsNone(entities["heater_energy"].native_value)
+        self.assertEqual(entities["compressor_energy"].native_value, 796.0)
+        # The first readable series seeds its counter, and the sum appears.
+        total = entities["total_energy"]
+        self.assertEqual(self._push(total, energyConsumptionYearEc="0;0;0;100;42"), 938.0)
+
+    @staticmethod
+    def _clock(clock: list):
+        """Patch the counters' monotonic clock to read `clock[0]`, in seconds."""
+        from custom_components.addhon import sensor
+
+        return mock.patch.object(
+            sensor.HonHeatPumpEnergySensor, "_monotonic", staticmethod(lambda: clock[0])
+        )
+
+    async def test_a_series_of_zeros_counts_when_a_sibling_is_not_zero(self) -> None:
+        # A stable zero: the seed once it has been seen for an hour without a break.
+        attributes = _snapshot("115_2026-09-29")
+        attributes[EC] = "0;0;0;0;0"
+        clock = [1000.0]
+        with self._clock(clock):
+            entities = await self._energy(attributes)
+            heater, total = entities["heater_energy"], entities["total_energy"]
+            self.assertEqual((heater.native_value, total.native_value), (None, None))
+            clock[0] += 59 * 60
+            self.assertEqual((self._push(heater), self._push(total)), (None, None))
+            clock[0] += 60
+            self.assertEqual((self._push(heater), self._push(total)), (0.0, 796.0))
+            # Its first kWh is counted.
+            self.assertEqual(self._push(total, energyConsumptionYearEc="0;0;0;0;1"), 797.0)
+
+    async def test_a_zero_for_half_an_hour_then_the_real_series(self) -> None:
+        # A transient at the first start without restore data: no seed at zero, so
+        # no phantom; the seed is the real series.
+        attributes = _snapshot("115_2026-09-29")
+        attributes[EC] = "0;0;0;0;0"
+        clock = [0.0]
+        with self._clock(clock):
+            entities = await self._energy(attributes)
+            published = {key: [entity.native_value] for key, entity in entities.items()}
+            clock[0] = 1800.0
+            for entity in entities.values():
+                published[entity._key].append(self._push(entity))
+            clock[0] = 1860.0
+            for entity in entities.values():
+                self._push(entity, energyConsumptionYearEc="0;0;0;100;42")
+                published[entity._key].append(entity.native_value)
+        self.assertEqual(published["heater_energy"], [None, None, 142.0])
+        self.assertEqual(published["total_energy"], [None, None, 938.0])
+        for key, states in published.items():
+            self.assertEqual(_ha_counted(states), 0, key)
+        self.assertEqual(entities["heater_energy"]._counters[EC].seed, 142.0)
+
+    async def test_a_real_series_in_between_seeds_at_once(self) -> None:
+        attributes = _snapshot("115_2026-09-29")
+        attributes[EC] = "0;0;0;0;0"
+        clock = [0.0]
+        with self._clock(clock):
+            heater = (await self._energy(attributes))["heater_energy"]
+            clock[0] = 1800.0
+            self.assertIsNone(self._push(heater))
+            clock[0] = 1860.0
+            self.assertEqual(
+                self._push(heater, energyConsumptionYearEc="0;0;0;100;42"), 142.0
+            )
+            clock[0] = 3700.0
+            self.assertEqual(self._push(heater, energyConsumptionYearEc="0;0;0;0;0"), 142.0)
+        self.assertEqual(heater._counters[EC].refusals, 1)
+
+    async def test_all_three_at_zero_is_no_reading(self) -> None:
+        zeros = "0;0;0;0;0"
+        attributes = {"date": "2026-09-30", CP: zeros, EC: zeros, HEAT: zeros}
+        self.assertEqual(
+            self._values(await self._energy(attributes)), dict.fromkeys(ENERGY_KEYS)
+        )
+
+    async def test_a_transient_at_zero_after_the_seed_moves_nothing(self) -> None:
+        entities = await self._energy()
+        zeros = "0;0;0;0;0"
+        # All three at once: no reading, no refusal.
+        for entity in entities.values():
+            self._push(entity, **{CP: zeros, EC: zeros, HEAT: zeros})
+        self.assertEqual(
+            self._values(entities),
+            {"total_energy": 938.0, "compressor_energy": 796.0, "heater_energy": 142.0,
+             "heat_produced": 3314.0},
+        )
+        self.assertEqual(entities["heat_produced"]._counters[HEAT].refusals, 0)
+        # One alone, beside live siblings: a reading, and a drop the guard refuses.
+        heater = entities["heater_energy"]
+        self._push(heater, **{CP: "0;0;0;215;581", EC: "0;0;0;100;42",
+                              HEAT: "0;0;0;818;2496"})
+        self.assertEqual(self._push(heater, energyConsumptionYearEc=zeros), 142.0)
+        self.assertEqual(heater._counters[EC].refusals, 1)
+        self.assertEqual(self._push(heater, energyConsumptionYearEc="0;0;0;100;42"), 142.0)
+
+    async def test_the_series_from_before_the_slide_is_refused(self) -> None:
+        # #115's heat at the year's end, slid, and the old series coming back: with
+        # the new date, without any date, and with the old date coming back too.
+        for date in ("2027-01-01", None, "2026-12-31"):
+            start = _snapshot("115_2026-09-29")
+            start["date"] = "2026-12-31"
+            heat = (await self._energy(start))["heat_produced"]
+            self.assertEqual(
+                self._push(heat, date="2027-01-01", accumulatedHeatYear="0;0;818;2496;3"),
+                3317.0,
+            )
+            # `date=None` takes the attribute out of the shadow.
+            self.assertEqual(
+                self._push(heat, date=date, accumulatedHeatYear="0;0;0;818;2496"),
+                3317.0,
+                date,
+            )
+            self.assertEqual(heat._counters[HEAT].refusals, 1, date)
+            # Real growth after it is counted from the slid series.
+            self.assertEqual(
+                self._push(heat, date="2027-01-02", accumulatedHeatYear="0;0;818;2496;5"),
+                3319.0,
+                date,
+            )
+
+    async def test_a_drop_is_held_and_said_once(self) -> None:
+        heat = (await self._energy())["heat_produced"]
+        with self.assertLogs("custom_components.addhon.sensor", level="INFO") as logs:
+            self.assertEqual(self._push(heat, accumulatedHeatYear="0;0;0;818;0"), 3314.0)
+            self.assertEqual(self._push(heat, accumulatedHeatYear="0;0;0;818;0"), 3314.0)
+        self.assertEqual(len(logs.records), 1, logs.output)
+        self.assertIn("accumulatedHeatYear", logs.output[0])
+        self.assertEqual(self._push(heat, accumulatedHeatYear="0;0;0;818;2497"), 3315.0)
+
+    async def test_an_unreadable_series_keeps_the_counter(self) -> None:
+        heater = (await self._energy())["heater_energy"]
+        self.assertEqual(self._push(heater, energyConsumptionYearEc="0;0;0;100"), 142.0)
+        self.assertEqual(self._push(heater, energyConsumptionYearEc=None), 142.0)
+        # The reference survived the gap: a drop right after it is still refused.
+        self.assertEqual(self._push(heater, energyConsumptionYearEc="0;0;0;100;0"), 142.0)
+        self.assertEqual(self._push(heater, energyConsumptionYearEc="0;0;0;100;43"), 143.0)
+
+    async def test_a_previous_run_is_continued(self) -> None:
+        stored = {"heat_produced": {HEAT: {
+            "seed": 3314.0, "total": 3320.0, "reference": [0, 0, 0, 818, 2502], "year": 2026,
+        }}}
+        attributes = _snapshot("115_2026-09-29")
+        attributes[HEAT] = "0;0;0;818;2505"
+        heat = (await self._energy(attributes, stored=stored))["heat_produced"]
+        self.assertEqual(heat.native_value, 3323.0)
+
+    async def test_a_previous_run_survives_a_drop_at_start(self) -> None:
+        stored = {"heat_produced": {HEAT: {
+            "seed": 3314.0, "total": 3314.0, "reference": [0, 0, 0, 818, 2496], "year": 2026,
+        }}}
+        attributes = _snapshot("115_2026-09-29")
+        attributes[HEAT] = "0;0;0;818;0"
+        heat = (await self._energy(attributes, stored=stored))["heat_produced"]
+        self.assertEqual(heat.native_value, 3314.0)
+
+    async def test_without_a_previous_run_the_first_reading_is_the_seed(self) -> None:
+        # The one window the guard cannot see (doc 5 §6, restart without restore
+        # data): a transient at the very first reading becomes the seed, and the
+        # real value after it is counted as a gain.
+        attributes = _snapshot("115_2026-09-29")
+        attributes[HEAT] = "0;0;0;818;0"
+        heat = (await self._energy(attributes))["heat_produced"]
+        self.assertEqual(heat.native_value, 818.0)
+        self.assertEqual(self._push(heat, accumulatedHeatYear="0;0;0;818;2496"), 3314.0)
+
+    async def test_a_damaged_previous_run_starts_over(self) -> None:
+        stored = {"heat_produced": {HEAT: {"total": "garbage"}}, "total_energy": "garbage"}
+        entities = await self._energy(stored=stored)
+        self.assertEqual(entities["heat_produced"].native_value, 3314.0)
+        self.assertEqual(entities["total_energy"].native_value, 938.0)
+
+    async def test_what_is_stored_for_the_next_start(self) -> None:
+        total = (await self._energy())["total_energy"]
+        self._push(total, energyConsumptionYearCp="0;0;0;215;0")
+        record = total.extra_restore_state_data.as_dict()
+        self.assertEqual(set(record), {CP, EC})
+        self.assertEqual(
+            record[CP],
+            {"seed": 796.0, "total": 796.0, "reference": [0.0, 0.0, 0.0, 215.0, 581.0],
+             "year": 2026, "holding": True, "refused": [0.0, 0.0, 0.0, 215.0, 0.0],
+             "refusals": 1},
+        )
+        json.dumps(record)
+
+    async def test_nothing_is_stored_before_a_readable_series(self) -> None:
+        attributes = _snapshot("115_2026-09-29")
+        attributes[HEAT] = "0;0;0"
+        heat = (await self._energy(attributes))["heat_produced"]
+        self.assertIsNone(heat.native_value)
+        self.assertIsNone(heat.extra_restore_state_data)
+
+    async def test_the_counters_are_left_for_the_diagnostics(self) -> None:
+        entities = await self._energy()
+        self._push(entities["heat_produced"], accumulatedHeatYear="0;0;0;818;0")
+        store = entities["heat_produced"].coordinator.hpwh_energy_counters["hw-1"]
+        self.assertEqual(set(store), set(ENERGY_KEYS))
+        self.assertEqual(set(store["total_energy"]), {CP, EC})
+        heat = store["heat_produced"][HEAT]
+        self.assertEqual((heat["seed"], heat["total"], heat["holding"]), (3314.0, 3314.0, True))
+
+    async def _scenario(self, key: str, start: dict, messages) -> tuple[list, float]:
+        """Publish `messages` to `key`; return the states and what HA counts."""
+        entity = (await self._energy(start))[key]
+        published = [entity.native_value]
+        for message in messages:
+            published.append(self._push(entity, **message))
+        numbers = [s for s in published if isinstance(s, float)]
+        self.assertEqual(numbers, sorted(numbers), published)  # never decreasing
+        return published, _ha_counted(published)
+
+    async def test_doc5_scenarios_count_only_what_the_appliance_used(self) -> None:
+        # Doc 5 §6, with year-end values (Cp 790, Ec 60, heat 3300). Each case:
+        # the series messages, and the kWh really used across them.
+        december = {"date": "2026-12-31", CP: "0;0;0;215;790", EC: "0;0;0;100;60",
+                    HEAT: "0;0;0;818;3300"}
+        sixth = {"date": "2026-12-31", CP: "700;760;800;780;790", EC: "50;40;30;20;60",
+                 HEAT: "3000;3100;3200;3250;3300"}
+        cases = (
+            ("S2 all three at zero, then back", "total_energy", december,
+             [{CP: "0;0;0;0;0", EC: "0;0;0;0;0", HEAT: "0;0;0;0;0"},
+              {CP: "0;0;0;215;790", EC: "0;0;0;100;60", HEAT: "0;0;0;818;3300"},
+              {CP: "0;0;0;215;791"}], 1),
+            ("S2 heat alone at zero, then back", "heat_produced", december,
+             [{HEAT: "0;0;0;0;0"}, {HEAT: "0;0;0;818;3300"}, {HEAT: "0;0;0;818;3301"}], 1),
+            ("S3 current year at zero", "total_energy", december,
+             [{CP: "0;0;0;215;0"}, {EC: "0;0;0;100;0"}, {CP: "0;0;0;215;790"},
+              {EC: "0;0;0;100;60"}, {CP: "0;0;0;215;791"}], 1),
+            ("S4 new year, one message", "total_energy", december,
+             [{"date": "2027-01-01", CP: "0;0;215;790;0", EC: "0;0;100;60;0"},
+              {CP: "0;0;215;790;2"}], 2),
+            ("S5 Cp, then Ec, then date", "total_energy", december,
+             [{CP: "0;0;215;790;0"}, {EC: "0;0;100;60;0"}, {"date": "2027-01-01"},
+              {CP: "0;0;215;790;1"}, {EC: "0;0;100;60;1"}], 2),
+            ("S5 heat slides with the old date", "heat_produced", december,
+             [{HEAT: "0;0;818;3301;0"}, {"date": "2027-01-01"}, {HEAT: "0;0;818;3301;4"}], 5),
+            ("S6 restart in place with date", "total_energy", december,
+             [{"date": "2027-01-01", CP: "0;0;0;215;0", EC: "0;0;0;100;0"},
+              {CP: "0;0;0;215;2"}], 2),
+            ("S6b restart in place, date after", "total_energy", december,
+             [{CP: "0;0;0;215;0", EC: "0;0;0;100;0"}, {"date": "2027-01-01"},
+              {CP: "0;0;0;215;3"}], 3),
+            ("S7 sixth year", "total_energy", sixth,
+             [{"date": "2027-01-01", CP: "760;800;780;790;0", EC: "40;30;20;60;0"},
+              {CP: "760;800;780;790;4"}], 4),
+            ("S9 series stuck", "total_energy", december,
+             [{"date": "2027-01-02"}, {"date": "2027-01-03"}], 0),
+        )
+        for name, key, start, messages, used in cases:
+            with self.subTest(name), self.assertNoLogs(level="WARNING"):
+                _published, counted = await self._scenario(key, dict(start), messages)
+                self.assertEqual(counted, used)
+
+    async def test_doc5_s8_a_correction_down_is_held_not_counted(self) -> None:
+        # S8: the backup element's year corrected from 50 to 42. The counter holds
+        # and counts again only above 50: the correction is never energy, and of the
+        # 11 kWh used after it (42 -> 53) the 8 that bring the year back to 50 are
+        # not counted -- the price of the guard, as in doc 5 §6.
+        start = {"date": "2026-11-01", CP: "0;0;0;215;500", EC: "0;0;0;100;50",
+                 HEAT: "0;0;0;818;2000"}
+        published, counted = await self._scenario(
+            "heater_energy", start,
+            [{EC: "0;0;0;100;42"}, {EC: "0;0;0;100;49"}, {EC: "0;0;0;100;53"}],
+        )
+        self.assertEqual(published, [150.0, 150.0, 150.0, 153.0])
+        self.assertEqual(counted, 3)
+
+    async def test_ha_never_counts_a_drop_where_the_raw_slot_would(self) -> None:
+        heat = (await self._energy())["heat_produced"]
+        messages = ("0;0;0;818;2497", "0;0;0;818;0", "0;0;0;818;2497", "0;0;0;0;0",
+                    "0;0;0;818;2499", "0;0;0;818;2490", "0;0;0;818;2500",
+                    "0;0;818;2500;0", "0;0;818;2500;3", "0;0;818", "0;0;818;2500;5")
+        published = [heat.native_value]
+        raw_last = [2496.0]
+        for raw in messages:
+            # The new year arrives with the slide.
+            extra = {"date": "2027-01-01"} if raw == "0;0;818;2500;0" else {}
+            published.append(self._push(heat, accumulatedHeatYear=raw, **extra))
+            window = hpwh.year_window(raw)
+            raw_last.append(None if window is None else window[-1])
+        self.assertEqual(_ha_counted(published), 9)
+        # The last slot read as it is, on a TOTAL_INCREASING sensor, is worth a
+        # whole year of phantom kWh over the same messages (the reset rule of
+        # `sensor/recorder.py`: under 90 % of the previous value, count it all).
+        phantom, previous = 0.0, None
+        for state in raw_last:
+            if state is None:
+                continue
+            if previous is not None:
+                phantom += state if state < 0.9 * previous else state - previous
+            previous = state
+        self.assertGreater(phantom - 9, 2400)
+
+
 if __name__ == "__main__":
     unittest.main()

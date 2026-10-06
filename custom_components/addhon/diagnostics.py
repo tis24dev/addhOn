@@ -105,7 +105,18 @@ from .const import (
 )
 from .debug_utils import _MAC_RE, redact_id
 from .hon_commands import SETTINGS_COMMANDS, param_range, param_values
-from .hpwh import HPWH_ECO_WINDOW_ATTRS, HPWH_STATE_ATTRS, HPWH_VACATION_ATTRS
+from .hpwh import (
+    HPWH_DATE,
+    HPWH_ECO_WINDOW_ATTRS,
+    HPWH_ENERGY_ATTRS,
+    HPWH_ENERGY_COUNTERS,
+    HPWH_ENERGY_STORE,
+    HPWH_STATE_ATTRS,
+    HPWH_VACATION_ATTRS,
+    HPWH_YEAR_SERIES,
+    lifetime_as_dict,
+    lifetime_from_dict,
+)
 from .ref_programs import favourite_names, program_categories
 
 _LOGGER = logging.getLogger(__name__)
@@ -260,6 +271,22 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
     # The vacation dates: fixed-key entities, read-only until they get their write.
     {"tag": "date.vacation_start", "types": (APPLIANCE_HW,), "read": ("vacStartDate",)},
     {"tag": "date.vacation_end", "types": (APPLIANCE_HW,), "read": ("vacEndDate",)},
+    # Its energy counters (#115): each adds up its `...Year...` series, reads the
+    # other two to tell a real zero from an empty transient, and the appliance's
+    # `date` as the guard's second witness of a new year. Rows for the HW only: on a
+    # washer `sensor.total_energy` is a description row of its own.
+    *(
+        {
+            "tag": f"sensor.{key}",
+            "types": (APPLIANCE_HW,),
+            "read": (
+                *series,
+                *(name for name in HPWH_YEAR_SERIES if name not in series),
+                HPWH_DATE,
+            ),
+        }
+        for key, series in HPWH_ENERGY_COUNTERS.items()
+    ),
     {
         "tag": "water_heater.heat_pump_water_heater",
         "types": (APPLIANCE_HW,),
@@ -2790,6 +2817,8 @@ def _mapped_sets(
         mapped_attrs |= set(HPWH_STATE_ATTRS)
         mapped_attrs |= set(HPWH_ECO_WINDOW_ATTRS)
         mapped_attrs |= set(HPWH_VACATION_ATTRS)
+        # And the energy counters, custom classes too: their three series and the date.
+        mapped_attrs |= set(HPWH_ENERGY_ATTRS)
         mapped_params |= {"onOffStatus", "tempSel", "boostStatus", "machMode"}
     if app_type == APPLIANCE_HO:
         # Same shape as the AP block below, same reason. The hood's five parameters
@@ -4031,6 +4060,7 @@ def _appliance_block(
     data: Mapping,
     entities: Mapping | None = None,
     now: datetime | None = None,
+    energy_counters: Mapping | None = None,
 ) -> dict:
     """Build the (redacted) diagnostics block for a single appliance.
 
@@ -4048,6 +4078,10 @@ def _appliance_block(
     only the first arguments keep working and still get a dated block, and it
     is normalised on the first line of the body: see the comment there for why
     nothing downstream may be handed a naive datetime.
+
+    `energy_counters` is what this appliance's HW energy counters left on the
+    coordinator (`hpwh.HPWH_ENERGY_STORE`), trailing and None by default for the
+    same reasons as `now`; it is read only for a heat-pump water heater.
     """
     appliance = data.get("appliance")
     app_type = data.get("type")
@@ -4248,6 +4282,15 @@ def _appliance_block(
         # type, the other what Home Assistant actually holds. Reading them together
         # is the whole point, and a disagreement between them IS the finding.
         "entities": entity_section,
+        # Right after what HA holds, because it is more of it: the state of each
+        # energy counter of a heat-pump water heater (#115), which no entity state
+        # shows -- the seed, the series the guard compares with, the total, and
+        # whether a drop is being held. HW only; `{}` when no counter runs.
+        **(
+            {"energy_counters": _energy_counters(energy_counters)}
+            if app_type == APPLIANCE_HW
+            else {}
+        ),
         "future_capabilities": future,
     }
     # Favourites LAST, over the finished and already redacted block: their names are
@@ -4930,6 +4973,39 @@ def _published_state(state_get, entity_id: str) -> dict | None:
 def _coordinator(hass: HomeAssistant, entry: ConfigEntry):
     entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
     return entry_data.get("coordinator")
+
+
+def _energy_store(coordinator, appliance_id: str) -> Mapping | None:
+    """What the HW energy counters of one appliance left on the coordinator."""
+    store = getattr(coordinator, HPWH_ENERGY_STORE, None)
+    counters = store.get(appliance_id) if isinstance(store, Mapping) else None
+    return counters if isinstance(counters, Mapping) else None
+
+
+def _energy_counters(counters: Mapping | None) -> dict:
+    """The `energy_counters` section: {key: {series: record}}, rebuilt, not echoed.
+
+    Every record goes back through `hpwh.lifetime_from_dict`, the reader the restore
+    data passes through, and only the keys and series of `HPWH_ENERGY_COUNTERS`
+    survive: whatever else sits in the store, this prints numbers, five-slot lists, a
+    year and a flag under names this module chose.
+    """
+    section: dict = {}
+    if not isinstance(counters, Mapping):
+        return section
+    for key, series in HPWH_ENERGY_COUNTERS.items():
+        records = counters.get(key)
+        if not isinstance(records, Mapping):
+            continue
+        rows = {
+            name: row
+            for name in series
+            if (row := lifetime_as_dict(lifetime_from_dict(records.get(name))))
+            is not None
+        }
+        if rows:
+            section[key] = rows
+    return section
 
 
 # A setup phase as the client records it: flat ("authenticate", "mfa_challenge") or
@@ -5625,7 +5701,11 @@ async def async_get_config_entry_diagnostics(
             await _refresh_command_history(hass, entry, data.get("appliance"))
             appliances.append(
                 _appliance_block(
-                    appliance_id, data, inventory.get(appliance_id), now=now
+                    appliance_id,
+                    data,
+                    inventory.get(appliance_id),
+                    now=now,
+                    energy_counters=_energy_store(coordinator, appliance_id),
                 )
             )
 
@@ -5771,6 +5851,10 @@ async def async_get_device_diagnostics(
     return {
         "generated_at": _stamp_text(now),
         "appliance": _appliance_block(
-            appliance_id, data, inventory.get(appliance_id), now=now
+            appliance_id,
+            data,
+            inventory.get(appliance_id),
+            now=now,
+            energy_counters=_energy_store(coordinator, appliance_id),
         ),
     }

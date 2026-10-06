@@ -229,6 +229,8 @@ def _collect_code_keys() -> dict[str, set[str]]:
     used["sensor"].add(sensor.HonMeanWaterConsumption._attr_translation_key)
     used["sensor"].add(sensor.HonHeatPumpStateSensor._attr_translation_key)
     used["sensor"].add(sensor.HonHeatPumpEcoWindowSensor._attr_translation_key)
+    # The heat-pump water heater's energy counters: fixed keys from one table.
+    used["sensor"].update(key for key, _consumption, _enabled in sensor._HPWH_ENERGY)
     used["sensor"].update(
         f"remaining_time_zone{zone}" for zone in sensor._HOB_ZONES
     )

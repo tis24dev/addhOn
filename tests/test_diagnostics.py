@@ -4361,6 +4361,117 @@ class HeatPumpStateCoverageTest(unittest.TestCase):
             self.assertIn(name, params)
 
 
+class HeatPumpEnergyCoverageTest(unittest.TestCase):
+    """The HW energy counters (#115) read the three `...Year...` series and `date`."""
+
+    CP, EC, HEAT = "energyConsumptionYearCp", "energyConsumptionYearEc", "accumulatedHeatYear"
+    # Its own series first, then the siblings it reads to tell a real zero from an
+    # empty transient, then the date.
+    SOURCES = {
+        "sensor.total_energy": [CP, EC, HEAT, "date"],
+        "sensor.compressor_energy": [CP, EC, HEAT, "date"],
+        "sensor.heater_energy": [EC, CP, HEAT, "date"],
+        "sensor.heat_produced": [HEAT, CP, EC, "date"],
+    }
+    # Published by the same appliances and read by no entity: they stay unmapped.
+    DAY_AND_MONTH = (
+        "energyConsumptionDayCp", "energyConsumptionDayEc", "accumulatedHeatDay",
+        "energyConsumptionMonthCp", "energyConsumptionMonthEc", "accumulatedHeatMonth",
+    )
+
+    def test_what_they_read_is_mapped_and_the_rest_is_not(self) -> None:
+        mapped_attrs, _params, _sources, _ = diagnostics._mapped_sets("HW")
+        for name in (self.CP, self.EC, self.HEAT, "date"):
+            self.assertIn(name, mapped_attrs, name)
+        for name in self.DAY_AND_MONTH:
+            self.assertNotIn(name, mapped_attrs, name)
+
+    def test_each_source_row_names_the_series_and_the_date(self) -> None:
+        _attrs, _params, sources, _ = diagnostics._mapped_sets("HW")
+        for tag, read in self.SOURCES.items():
+            self.assertEqual(sources[tag], {"read": read}, tag)
+
+    def test_another_type_did_not_inherit_them(self) -> None:
+        mapped_attrs, _params, sources, _ = diagnostics._mapped_sets("WH")
+        self.assertNotIn(self.CP, mapped_attrs)
+        self.assertNotIn("sensor.heat_produced", sources)
+        # The washer's own `total_energy` keeps its own row.
+        _attrs, _params, sources, _ = diagnostics._mapped_sets("WM")
+        self.assertNotIn(self.CP, sources["sensor.total_energy"]["read"])
+
+
+class HeatPumpEnergySectionTest(unittest.TestCase):
+    """`energy_counters`: what each energy counter of a HW holds (#115)."""
+
+    CP, EC = "energyConsumptionYearCp", "energyConsumptionYearEc"
+    RECORD = {
+        "seed": 796.0, "total": 800.0, "reference": [0.0, 0.0, 0.0, 215.0, 585.0],
+        "year": 2026, "holding": True, "refused": [0.0, 0.0, 0.0, 215.0, 0.0],
+        "refusals": 1,
+    }
+    HELD_NOTHING = {
+        "seed": 142.0, "total": 142.0, "reference": [0.0, 0.0, 0.0, 100.0, 42.0],
+        "year": 2026, "holding": False, "refused": None, "refusals": 0,
+    }
+
+    @staticmethod
+    def _data(app_type: str = "HW") -> dict:
+        return {
+            "appliance": FakeAppliance(commands={}),
+            "type": app_type,
+            "attributes": {},
+            "statistics": {},
+        }
+
+    def _block(self, counters, app_type: str = "HW") -> dict:
+        return diagnostics._appliance_block("hw-1", self._data(app_type), energy_counters=counters)
+
+    def test_each_counter_as_it_stands_after_the_entities(self) -> None:
+        block = self._block({"total_energy": {self.CP: self.RECORD, self.EC: self.HELD_NOTHING}})
+        self.assertEqual(
+            block["energy_counters"],
+            {"total_energy": {self.CP: self.RECORD, self.EC: self.HELD_NOTHING}},
+        )
+        keys = list(block)
+        self.assertEqual(keys.index("entities") + 1, keys.index("energy_counters"))
+        json.dumps(block)
+
+    def test_empty_when_no_counter_runs(self) -> None:
+        # `{}` is the finding: no counter entity is running for this appliance.
+        self.assertEqual(self._block(None)["energy_counters"], {})
+        self.assertEqual(self._block({})["energy_counters"], {})
+
+    def test_absent_for_another_type(self) -> None:
+        block = self._block({"total_energy": {self.CP: self.RECORD}}, app_type="WM")
+        self.assertNotIn("energy_counters", block)
+
+    def test_only_known_counters_and_readable_records(self) -> None:
+        block = self._block({
+            "total_energy": {self.CP: self.RECORD, "accumulatedHeatYear": self.RECORD,
+                             self.EC: {"total": "garbage"}},
+            "heat_produced": "garbage",
+            "user@example.com": {self.CP: self.RECORD},
+        })
+        self.assertEqual(block["energy_counters"], {"total_energy": {self.CP: self.RECORD}})
+
+    def test_the_dumps_read_the_coordinator_store(self) -> None:
+        coordinator = FakeCoordinator({"hw-1": self._data()})
+        coordinator.hpwh_energy_counters = {
+            "hw-1": {"heater_energy": {self.EC: self.HELD_NOTHING}},
+            "other": {"heater_energy": {self.EC: self.RECORD}},
+        }
+        expected = {"heater_energy": {self.EC: self.HELD_NOTHING}}
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(FakeHass(coordinator), FakeEntry())
+        )
+        self.assertEqual(result["appliances"][0]["energy_counters"], expected)
+        device = FakeDevice({(DOMAIN, "hw-1")})
+        result = _run(
+            diagnostics.async_get_device_diagnostics(FakeHass(coordinator), FakeEntry(), device)
+        )
+        self.assertEqual(result["appliance"]["energy_counters"], expected)
+
+
 class CoverageExpectedAbsentTest(unittest.TestCase):
     """The mirror axis: what this code maps and the device does not have."""
 
