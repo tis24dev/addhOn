@@ -684,6 +684,37 @@ class CatalogOptionsSiblingTest(unittest.TestCase):
         self.assertIn("options", normalised.payload.get("applianceModel", {}))
 
 
+class CommandPayloadCensusTest(unittest.TestCase):
+    """Each top-level key of the commands payload, and what became of it.
+
+    Taken from the lucasgiovanny/addhOn fork (v6.2.0, decision F5 of 2026-10-06): a dict
+    that is neither a command nor a set of categories used to be dropped in silence, so
+    a dump could not tell "the appliance offers nothing else" from "we failed to parse
+    what it offers".
+    """
+
+    def test_every_top_level_key_is_accounted_for(self) -> None:
+        appliance = ApplianceDouble()
+        request = _request(appliance)
+        payload = {
+            **_program_catalog(),
+            "dictionaryId": "abc123",
+            "mystery": {"notACommand": {"alsoNot": "x"}},
+        }
+        repo = CommandCatalogRepository(None, "it", clock=lambda: 1_700_000_000)
+        hydration = _run(
+            HonCommandLoader(TypedApi(_fetch(payload, request)), appliance, repo).load_commands()
+        )
+        self.assertEqual(
+            {
+                "settings": "command",
+                "startProgram": "command",
+                "dictionaryId": "additional_data",
+                "mystery": "unparsed",
+            },
+            hydration.command_payload,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

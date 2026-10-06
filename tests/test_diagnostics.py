@@ -10658,5 +10658,39 @@ class LastCommandDeliveryTest(unittest.TestCase):
         self.assertEqual("2026-09-29T11:13:12.500000+00:00", section["executed"])
 
 
+class CommandPayloadSectionTest(unittest.TestCase):
+    """`command_payload`: each top-level key of the commands payload and its fate.
+
+    From the lucasgiovanny/addhOn fork (decision F5 of 2026-10-06): an entry that is
+    neither a command nor categories used to vanish without a trace.
+    """
+
+    def _block(self, census):
+        appliance = OptionAppliance(options={}, additional_data={})
+        if census is not _UNSET:
+            appliance.command_payload = census
+        return _option_block(appliance)
+
+    def test_the_census_is_printed_as_the_engine_recorded_it(self):
+        census = {"settings": "command", "dictionaryId": "additional_data", "x": "unparsed"}
+        self.assertEqual(census, self._block(census)["command_payload"])
+
+    def test_an_engine_without_the_census_prints_null_not_an_empty_map(self):
+        self.assertIsNone(self._block(_UNSET)["command_payload"])
+
+    def test_it_sits_between_the_catalog_options_and_the_delivery_verdict(self):
+        keys = list(self._block({"settings": "command"}))
+        self.assertEqual(
+            keys.index("command_payload") + 1, keys.index("last_command_delivery")
+        )
+        self.assertLess(keys.index("appliance_options"), keys.index("command_payload"))
+
+    def test_a_runaway_payload_is_bounded_and_says_so(self):
+        cap = diagnostics._COMMAND_PAYLOAD_MAX_ROWS
+        block = self._block({f"k{i:04d}": "unparsed" for i in range(cap + 3)})
+        self.assertEqual(cap, len(block["command_payload"]))
+        self.assertTrue(block["command_payload_truncated"])
+
+
 if __name__ == "__main__":
     unittest.main()

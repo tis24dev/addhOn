@@ -1212,6 +1212,45 @@ def _history_recovery(appliance) -> dict | None:
     return {str(name): str(how) for name, how in raw.items()}
 
 
+# A runaway guard, as `_STAMP_MAX_ROWS` is: the commands payload of every appliance
+# dumped so far has a handful of top-level keys (settings, startProgram, stopProgram and
+# a few scalars), so this cap does not fire on any of them.
+_COMMAND_PAYLOAD_MAX_ROWS = 100
+
+
+def _command_payload(appliance) -> tuple[dict[str, str | None] | None, bool]:
+    """{top-level key of the commands payload: "command" | "additional_data" |
+    "unparsed"}, and whether the cap dropped rows.
+
+    From the lucasgiovanny/addhOn fork (decision F5 of 2026-10-06): a dict that is
+    neither a command nor a set of categories used to be dropped by the loader without
+    a trace, so a dump could not tell "the appliance offers nothing else" from "it
+    offers something this integration does not parse". Keys are cloud-chosen, so they
+    are bounded (masked first, then cut) like every other cloud string here.
+
+    None for an engine without the census (or one that raises), so it is not read as {}
+    -- a payload with no keys at all.
+    """
+    try:
+        raw = getattr(appliance, "command_payload", None)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: command payload census unreadable", exc_info=True)
+        return None, False
+    if not isinstance(raw, Mapping):
+        return None, False
+    rows: dict[str, str | None] = {}
+    truncated = False
+    for name, fate in raw.items():
+        if len(rows) >= _COMMAND_PAYLOAD_MAX_ROWS:
+            truncated = True
+            break
+        key = _bounded_text(name, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+        if key is None:
+            continue
+        rows[key] = _bounded_text(fate, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+    return rows, truncated
+
+
 def _command_history_block(appliance) -> dict:
     """The last commands the cloud recorded for this appliance, from ANY client.
 
@@ -4033,6 +4072,7 @@ def _appliance_block(
     # mapping the block prints.
     appliance_options = _appliance_options(appliance, attributes)
     command_history = _command_history_block(appliance)
+    command_payload, command_payload_truncated = _command_payload(appliance)
     # Built LAST of the four, and out of the other three rather than out of the appliance:
     # it is a join, and handing it the finished sections is what makes it structurally
     # incapable of disagreeing with them.
@@ -4116,6 +4156,10 @@ def _appliance_block(
         # Directly above `command_history`, and read off the same `attributes` mapping
         # printed two keys below: the verdict on the slot's instants, with the warning
         # that the slot's body may be an older command.
+        # The commands payload's own census, beside the catalog's options above: each
+        # top-level key and whether it became a command, extra data or nothing at all.
+        "command_payload": command_payload,
+        **({"command_payload_truncated": True} if command_payload_truncated else {}),
         "last_command_delivery": _last_command_delivery(attributes),
         # Above `attributes`, whose `commandHistory` is the single-slot echo of the same
         # data: the list says what was sent before the slot was overwritten or nulled.

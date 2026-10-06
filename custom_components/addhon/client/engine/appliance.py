@@ -76,6 +76,7 @@ class HonAppliance:
         # was 42 h old in a dump and silently missed the starts it was opened to show.
         self._command_history_at: Optional[datetime] = None
         self._command_history_refresh: Optional[str] = None
+        self._command_payload: dict[str, str] = {}
         self._history_recovery: dict[str, str] = {}
         # (key, shadow value) pairs already reported as unsyncable: sync runs on every
         # poll and every MQTT push, so only the first sight of a pair is worth an INFO.
@@ -218,6 +219,12 @@ class HonAppliance:
         return self._additional_data
 
     @property
+    def command_payload(self) -> dict[str, str]:
+        """{top-level key of the commands payload: what became of it}; see
+        `CommandHydration.command_payload`. Read by the diagnostics dump only."""
+        return self._command_payload
+
+    @property
     def command_history(self) -> list[dict[str, Any]]:
         """The cloud's `/history` list from the last catalog load, verbatim.
 
@@ -348,6 +355,7 @@ class HonAppliance:
         if hydration.history_outcome in ("ok", "empty"):
             self._command_history_at = datetime.now(timezone.utc)
         self._history_recovery = hydration.history_recovery
+        self._command_payload = hydration.command_payload
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 

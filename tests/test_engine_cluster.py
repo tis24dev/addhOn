@@ -1783,5 +1783,79 @@ class ProtocolConformanceTest(unittest.TestCase):
                 self.assertIsInstance(param, interfaces.Parameter)
 
 
+
+class ProgramNameRecoveryTest(unittest.TestCase):
+    """Recovery from the command's `programName` when the payload names no category.
+
+    A category-split startProgram can carry its programme BY the category, with no
+    `program` parameter in the payload; the recovery must then select the category
+    named by `programName`, or the schema's FIRST category stays active and the next
+    write re-labels the appliance with a programme it is not running. A `program`
+    parameter, where present, still wins. From the lucasgiovanny/addhOn fork (decision
+    F5 of 2026-10-06); its HW premise -- app history entries carrying
+    {machMode, onOffStatus, tempSel} next to programName -- did NOT hold on the dumps
+    checked (apk2/analysis/fork-lucasgiovanny-v6.2.0/1-scritture-water-heater.md §6),
+    so the cases here use the fridge catalogue.
+    """
+
+    def _recovered(self, history):
+        return _build(NaAppliance, DictApi(_RICH_COMMANDS, history=history))
+
+    @staticmethod
+    def _entry(program_name, parameters=None):
+        return [
+            {
+                "command": {
+                    "commandName": "startProgram",
+                    "programName": program_name,
+                    "parameters": parameters or {"tempSel": "63"},
+                }
+            }
+        ]
+
+    def test_program_name_selects_the_category(self) -> None:
+        app = self._recovered(self._entry("PROGRAMS.REF.SUPER_FREEZE"))
+        self.assertEqual(
+            "PROGRAMS.REF.SUPER_FREEZE", app.commands["startProgram"].category
+        )
+
+    def test_it_differs_from_the_default_category(self) -> None:
+        # The regression guard: without the fallback the default (first) category
+        # survives untouched.
+        default = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        self.assertNotEqual(
+            default.commands["startProgram"].category,
+            self._recovered(self._entry("PROGRAMS.REF.SUPER_FREEZE"))
+            .commands["startProgram"]
+            .category,
+        )
+
+    def test_a_program_parameter_still_wins(self) -> None:
+        # The payload is the stronger signal where it exists; programName is the fallback.
+        history = self._entry(
+            "PROGRAMS.REF.SUPER_FREEZE", {"program": "PROGRAMS.REF.SUPER_COOL"}
+        )
+        app = self._recovered(history)
+        self.assertEqual(
+            "PROGRAMS.REF.SUPER_COOL", app.commands["startProgram"].category
+        )
+
+    def test_an_unknown_program_name_keeps_the_default(self) -> None:
+        default = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        self.assertEqual(
+            default.commands["startProgram"].category,
+            self._recovered(self._entry("PROGRAMS.REF.GONE"))
+            .commands["startProgram"]
+            .category,
+        )
+
+    def test_no_program_name_at_all_keeps_the_default(self) -> None:
+        default = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        self.assertEqual(
+            default.commands["startProgram"].category,
+            self._recovered(self._entry(None)).commands["startProgram"].category,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

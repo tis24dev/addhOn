@@ -511,5 +511,74 @@ class ExceptionKeyParityTest(unittest.TestCase):
         self.assertEqual(en, it)
 
 
+
+def _services_yaml() -> dict[str, set[str]]:
+    """services.yaml as {service: {field, ...}}, parsed by indentation.
+
+    Deliberately not via PyYAML: it is not a test dependency of this suite, and the file
+    is machine-written by this repo in one fixed shape (two-space indent, `fields:` under
+    the service, field names one level below). The sanity assertions in the test guard
+    the parser itself -- a shape change breaks them loudly rather than silently returning
+    an empty mapping that would make the parity check vacuous.
+    """
+    services: dict[str, set[str]] = {}
+    current: str | None = None
+    in_fields = False
+    for line in (COMPONENT / "services.yaml").read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if indent == 0 and stripped.endswith(":"):
+            current = stripped[:-1]
+            services[current] = set()
+            in_fields = False
+        elif indent == 2 and stripped == "fields:":
+            in_fields = True
+        elif indent == 4 and in_fields and stripped.endswith(":") and current:
+            services[current].add(stripped[:-1])
+    return services
+
+
+class ServiceTranslationParityTest(unittest.TestCase):
+    """Every service and every field declared in services.yaml must be named in the UI.
+
+    From the lucasgiovanny/addhOn fork (decision F5 of 2026-10-06).
+
+    Without this the Developer Tools form shows raw keys and no descriptions -- which is
+    exactly what happened when the two diagnostic write services shipped, and there is no
+    other test that would have caught it.
+    """
+
+    def setUp(self) -> None:
+        self.services = _services_yaml()
+
+    def test_the_parser_reads_the_file(self) -> None:
+        self.assertIn("refresh", self.services)
+        self.assertEqual(self.services["set_log_level"], {"level"})
+        self.assertEqual(self.services["refresh"], set())
+
+    def test_every_service_is_named_in_every_language(self) -> None:
+        for lang in LANGS:
+            translated = _load(lang).get("services", {})
+            with self.subTest(lang=lang):
+                self.assertEqual(set(translated), set(self.services))
+                for name, body in translated.items():
+                    self.assertTrue(body.get("name"), f"{lang}: {name} has no name")
+                    self.assertTrue(
+                        body.get("description"), f"{lang}: {name} has no description"
+                    )
+
+    def test_every_field_is_named_in_every_language(self) -> None:
+        for lang in LANGS:
+            translated = _load(lang).get("services", {})
+            for name, fields in self.services.items():
+                with self.subTest(lang=lang, service=name):
+                    self.assertEqual(
+                        set(translated.get(name, {}).get("fields", {})),
+                        fields,
+                        f"{lang}: {name} field translations do not match services.yaml",
+                    )
+
 if __name__ == "__main__":
     unittest.main()
