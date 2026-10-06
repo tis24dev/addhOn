@@ -645,6 +645,17 @@ class PartialTranslationTest(unittest.TestCase):
                 self.assertIsInstance(value, str, f"{lang}: {path}")
                 self.assertTrue(value.strip(), f"{lang}: {path} is empty")
 
+    def test_the_light_dirt_level_is_not_the_lamp(self) -> None:
+        # PR #121 review (CodeRabbit): English "Light" here is a soil level, not a
+        # lamp; the inherited "Luz" said lamp. Decided on 2026-10-06.
+        partials = self._partials()
+        for lang, word in (("pt", "Ligeiro"), ("pt-BR", "Leve")):
+            self.assertEqual(
+                partials[lang]["entity"]["select"]["dirty_level"]["state"]["little"],
+                word,
+                lang,
+            )
+
     def test_placeholders_match_english(self) -> None:
         english = _leaf_strings(_load("en"))
         for lang, data in self._partials().items():

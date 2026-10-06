@@ -1100,7 +1100,7 @@
       "dirty_level": {
         "name": "Nível de sujeira",
         "state": {
-          "little": "Luz",
+          "little": "Leve",
           "normal": "Normal",
           "very": "Pesado"
         }

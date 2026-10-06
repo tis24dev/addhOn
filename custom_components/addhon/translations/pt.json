@@ -1100,7 +1100,7 @@
       "dirty_level": {
         "name": "Nível de sujidade",
         "state": {
-          "little": "Luz",
+          "little": "Ligeiro",
           "normal": "Normal",
           "very": "Pesado"
         }
