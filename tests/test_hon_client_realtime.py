@@ -174,6 +174,32 @@ class CommandCatalogRepositoryOwnershipTest(unittest.TestCase):
         self.assertIs(hon_threads[-1], client._hon_thread)
         self.assertNotIn(caller_thread, calls)
 
+    def test_the_history_re_read_runs_on_the_dedicated_hon_thread(self) -> None:
+        # Issues #112/#115: the dump re-reads `/history`; the GET must use the client's
+        # own loop and session, never Home Assistant's.
+        client = HonClient(email="e@x", password="p")
+        caller_thread = threading.current_thread()
+        seen: list[threading.Thread] = []
+
+        class _Appliance:
+            async def refresh_command_history(self) -> None:
+                seen.append(threading.current_thread())
+
+        def run_on_hon_loop(coro, timeout=None):
+            result: list[object] = []
+            hon_thread = threading.Thread(
+                target=lambda: result.append(asyncio.run(coro)), name="history-owner"
+            )
+            hon_thread.start()
+            hon_thread.join()
+            return result[0]
+
+        client._run_on_hon_loop = run_on_hon_loop  # type: ignore[assignment]
+        client.refresh_command_history_sync(_Appliance())
+
+        self.assertEqual(1, len(seen))
+        self.assertIsNot(caller_thread, seen[0])
+
 
 class AuthDiagnosticClientTest(unittest.TestCase):
     def test_constructor_creates_enabled_trace(self) -> None:

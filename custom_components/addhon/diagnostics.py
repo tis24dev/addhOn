@@ -1223,8 +1223,12 @@ def _command_history_block(appliance) -> dict:
     two of the reporter's dumps. The engine already downloads the `/history` list at
     every catalog load to recover the last-used programme; this prints it.
 
-    The list is the one of the last catalog load (setup or reload), not of this
-    instant: a command issued since then is absent until the integration reloads.
+    The list is read at catalog load (setup or reload) and read AGAIN when the dump is
+    requested (`refresh_command_history`, issues #112/#115: a setup-time list was 42 h
+    old in a dump and missed the two starts it was opened to show). `at` is HA's UTC
+    instant of the last successful read, `refresh` the outcome of the re-read for this
+    dump ("ok", "pending" if it did not finish, an exception class name, or None when
+    no re-read ran); a failed re-read keeps the older list, and `at` says how old.
 
     Newest first by `command.timestamp` (else `timestampAccepted`), the order the cloud
     itself sends (2 beta7 dumps out of 2; 38 same-phone pairs out of 40 in
@@ -1233,19 +1237,35 @@ def _command_history_block(appliance) -> dict:
     `macAddress`, `transactionId`, `mobileId` and the table keys
     `PK`/`SK`/`SK_Secondary`, and the MAC pattern in every string value.
 
-    The same four keys in every state, so two dumps of one issue stay diffable.
+    The same six keys in every state, so two dumps of one issue stay diffable.
     """
+    try:
+        at = _stamp_text(getattr(appliance, "command_history_at", None))
+        refresh = _scalar_text(getattr(appliance, "command_history_refresh", None))
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        at = refresh = None
     try:
         raw = getattr(appliance, "command_history", _NO_OPTION_SURFACE)
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
         _LOGGER.debug("Diagnostics debug: command history unreadable", exc_info=True)
         raw = None
+
+    def _section(state: str, total, entries: list) -> dict:
+        return {
+            "state": state,
+            "total": total,
+            "shown": len(entries),
+            "at": at,
+            "refresh": refresh,
+            "entries": entries,
+        }
+
     if raw is _NO_OPTION_SURFACE:
         # An engine without the property: a statement about THIS integration, not
         # about what the cloud sent.
-        return {"state": "unavailable", "total": None, "shown": 0, "entries": []}
+        return _section("unavailable", None, [])
     if not isinstance(raw, list):
-        return {"state": "unreadable", "total": None, "shown": 0, "entries": []}
+        return _section("unreadable", None, [])
     dated: list[tuple[datetime, int, Mapping]] = []
     undated: list[Mapping] = []
     for index, entry in enumerate(raw):
@@ -1260,12 +1280,7 @@ def _command_history_block(appliance) -> dict:
     dated.sort(key=lambda item: (item[0], -item[1]), reverse=True)
     shown = [entry for _, _, entry in dated] + undated
     shown = shown[:_COMMAND_HISTORY_SHOWN]
-    return {
-        "state": "ok" if shown else "empty",
-        "total": len(raw),
-        "shown": len(shown),
-        "entries": shown,
-    }
+    return _section("ok" if shown else "empty", len(raw), shown)
 
 
 # The window in which `timestampExecuted - timestampAccepted` of the shadow's
@@ -5214,6 +5229,27 @@ def _catalog_state(state: str, rows: list[dict] | None = None) -> dict:
     return {"state": state, "rows": rows if rows is not None else []}
 
 
+async def _refresh_command_history(hass: HomeAssistant, entry: ConfigEntry, appliance) -> None:
+    """Have the client read `/history` again before the block prints it (#112, #115).
+
+    The list was read only at catalog load, so a dump could be a day or two behind the
+    very commands it was asked for. The client runs the GET on its own loop through the
+    executor (`HonClient.refresh_command_history_sync`); the engine records the outcome
+    and the instant, which `_command_history_block` prints. Everything here is guarded:
+    no client, no appliance, a watchdog expiry -- the dump is built anyway, with the
+    older list and its age.
+    """
+    if appliance is None:
+        return
+    try:
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+        refresh = getattr(entry_data.get("client"), "refresh_command_history_sync", None)
+        if callable(refresh):
+            await hass.async_add_executor_job(refresh, appliance)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: command history re-read failed", exc_info=True)
+
+
 async def _command_catalog(hass: HomeAssistant, entry: ConfigEntry) -> dict:
     """Read and independently sanitize the native catalog census.
 
@@ -5511,6 +5547,7 @@ async def async_get_config_entry_diagnostics(
     appliances: list[dict] = []
     for appliance_id, data in coord_data.items():
         if isinstance(data, Mapping):
+            await _refresh_command_history(hass, entry, data.get("appliance"))
             appliances.append(
                 _appliance_block(
                     appliance_id, data, inventory.get(appliance_id), now=now
@@ -5646,6 +5683,7 @@ async def async_get_device_diagnostics(
     data = coord_data.get(appliance_id)
     if not isinstance(data, Mapping):
         return {"generated_at": _stamp_text(now)}
+    await _refresh_command_history(hass, entry, data.get("appliance"))
     # The inventory is built over EVERY appliance id, not just this one: attribution
     # is by unique_id prefix and those prefixes nest, so hiding the siblings would
     # let a longer id's rows fall into this block.

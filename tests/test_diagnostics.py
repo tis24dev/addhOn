@@ -936,6 +936,61 @@ class EntryOptionsWhitelistGuardTest(unittest.TestCase):
         )
 
 
+class CommandHistoryRefreshTest(unittest.TestCase):
+    """The dump asks the client to read `/history` again first (issues #112, #115)."""
+
+    class _Client:
+        def __init__(self, fail=False):
+            self.calls: list = []
+            self.fail = fail
+
+        def refresh_command_history_sync(self, appliance):
+            self.calls.append(appliance)
+            if self.fail:
+                raise TimeoutError("watchdog")
+            appliance.command_history = [
+                {"command": {"commandName": "startProgram", "timestamp": "2026-10-04T07:31:55Z"}}
+            ]
+            appliance.command_history_refresh = "ok"
+
+    def _hass(self, client):
+        class _Hass(FakeHass):
+            async def async_add_executor_job(self, fn, *args):
+                return fn(*args)
+
+        hass = _Hass(_build_coordinator())
+        hass.data[DOMAIN]["e1"]["client"] = client
+        return hass
+
+    def test_a_device_dump_re_reads_the_list_of_its_appliance(self):
+        client = self._Client()
+        device = FakeDevice(identifiers={(DOMAIN, WD_ID)})
+        result = _run(
+            diagnostics.async_get_device_diagnostics(self._hass(client), FakeEntry(), device)
+        )
+        self.assertEqual(1, len(client.calls))
+        section = result["appliance"]["command_history"]
+        self.assertEqual("ok", section["refresh"])
+        self.assertEqual(
+            "2026-10-04T07:31:55Z", section["entries"][0]["command"]["timestamp"]
+        )
+
+    def test_an_entry_dump_re_reads_every_appliance_once(self):
+        client = self._Client()
+        _run(diagnostics.async_get_config_entry_diagnostics(self._hass(client), FakeEntry()))
+        self.assertEqual(2, len(client.calls))
+        self.assertEqual(2, len({id(appliance) for appliance in client.calls}))
+
+    def test_a_failing_re_read_still_yields_the_dump(self):
+        client = self._Client(fail=True)
+        device = FakeDevice(identifiers={(DOMAIN, WD_ID)})
+        result = _run(
+            diagnostics.async_get_device_diagnostics(self._hass(client), FakeEntry(), device)
+        )
+        self.assertEqual(1, len(client.calls))
+        self.assertEqual("WD", result["appliance"]["type"])
+
+
 class DiagnosticsDeviceTest(unittest.TestCase):
     def test_device_diagnostics_returns_single_matching_appliance(self):
         coord = _build_coordinator()
@@ -10346,10 +10401,28 @@ class CommandHistorySectionTest(unittest.TestCase):
         for state, section in sections.items():
             with self.subTest(state=state):
                 self.assertEqual(state, section["state"])
-                self.assertEqual({"state", "total", "shown", "entries"}, set(section))
+                self.assertEqual(
+                    ["state", "total", "shown", "at", "refresh", "entries"],
+                    list(section),
+                )
         self.assertEqual(
             "unreadable", self._section(_history_appliance("not a list"))["state"]
         )
+
+    def test_the_list_says_when_it_was_read_and_how_the_re_read_went(self):
+        # Issues #112/#115: a list read at setup was 42 h old in Lajahome's dump and
+        # missed the two starts it was opened to show; nothing in the section said so.
+        appliance = _history_appliance([_history_entry()])
+        appliance.command_history_at = datetime(2026, 10, 2, 16, 5, 32, tzinfo=timezone.utc)
+        appliance.command_history_refresh = "TimeoutError"
+        section = self._section(appliance)
+        self.assertEqual("2026-10-02T16:05:32+00:00", section["at"])
+        self.assertEqual("TimeoutError", section["refresh"])
+
+    def test_an_engine_without_the_instant_prints_nulls(self):
+        section = self._section(_history_appliance([_history_entry()]))
+        self.assertIsNone(section["at"])
+        self.assertIsNone(section["refresh"])
 
     def test_newest_first_whatever_order_the_cloud_sends(self):
         history = [

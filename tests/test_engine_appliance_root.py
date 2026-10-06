@@ -405,5 +405,63 @@ class RootGoldenTest(unittest.TestCase):
         self.assertEqual(NaRoot.__module__, "custom_components.addhon.client.engine.appliance")
 
 
+class CommandHistoryFreshnessTest(unittest.TestCase):
+    """How old the `/history` list is, and the re-read the dump asks for (#112, #115).
+
+    The list used to be read only at catalog load: Lajahome's beta10 dump showed one
+    42 h old with two of her starts missing, phroc's the same five rows as the day
+    before. The engine now says WHEN it read the list and can read it again.
+    """
+
+    _NEW = [{"command": {"commandName": "startProgram", "timestamp": "2026-10-04T07:31:55.265Z"}}]
+
+    def _loaded(self, api=None):
+        app = NaRoot(api or FakeApi(), json.loads(json.dumps(_INFO)), zone=0)
+        _run(app.load_commands())
+        return app
+
+    def test_a_catalog_load_says_when_it_read_the_list(self) -> None:
+        app = self._loaded()
+        self.assertEqual(2, len(app.command_history))
+        self.assertIsNotNone(app.command_history_at)
+        self.assertEqual(0, app.command_history_at.utcoffset().total_seconds())
+        self.assertIsNone(app.command_history_refresh)
+
+    def test_a_load_whose_history_call_raised_claims_no_reading(self) -> None:
+        class NoHistory(FakeApi):
+            async def load_command_history(self, a):
+                raise TimeoutError
+
+        self.assertIsNone(self._loaded(NoHistory()).command_history_at)
+
+    def test_a_re_read_replaces_the_list_and_its_instant(self) -> None:
+        new = self._NEW
+
+        class Fresh(FakeApi):
+            async def load_command_history(self, a):
+                return new
+
+        app = self._loaded()
+        app.api.__class__ = Fresh
+        before = app.command_history_at
+        _run(app.refresh_command_history())
+        self.assertEqual(new, app.command_history)
+        self.assertGreaterEqual(app.command_history_at, before)
+        self.assertEqual("ok", app.command_history_refresh)
+
+    def test_a_failed_re_read_keeps_the_list_and_names_the_failure(self) -> None:
+        class Down(FakeApi):
+            async def load_command_history(self, a):
+                raise TimeoutError
+
+        app = self._loaded()
+        listed, at = list(app.command_history), app.command_history_at
+        app.api.__class__ = Down
+        _run(app.refresh_command_history())
+        self.assertEqual(listed, app.command_history)
+        self.assertEqual(at, app.command_history_at)
+        self.assertEqual("TimeoutError", app.command_history_refresh)
+
+
 if __name__ == "__main__":
     unittest.main()
