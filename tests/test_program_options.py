@@ -2169,5 +2169,71 @@ class KeepFreshHiddenAtStartTest(unittest.TestCase):
         self.assertIn("permanentPressStatus", options)
 
 
+
+class ForgetChoicesAfterAFollowedStartTest(unittest.TestCase):
+    """Issue #112, decision D2 of 2026-10-06: a start made elsewhere drops the
+    programme and options chosen in Home Assistant and not started, as a reload does.
+    """
+
+    @staticmethod
+    def _poll(coordinator, followed):
+        from custom_components.addhon.program_options import (
+            forget_choices_after_followed_starts,
+        )
+
+        data = {
+            key: {"appliance": types.SimpleNamespace(followed_starts=count)}
+            for key, count in followed.items()
+        }
+        forget_choices_after_followed_starts(coordinator, data)
+
+    @staticmethod
+    def _coordinator():
+        from custom_components.addhon.const import (
+            PROGRAM_PENDING_OPTIONS,
+            PROGRAM_PENDING_STORE,
+        )
+
+        coordinator = types.SimpleNamespace()
+        setattr(coordinator, PROGRAM_PENDING_STORE, {"wm": "iot_wash_dark", "dw": "eco"})
+        setattr(coordinator, PROGRAM_PENDING_OPTIONS, {"wm": {"temp": "60"}, "dw": {"x": "1"}})
+        return coordinator, PROGRAM_PENDING_STORE, PROGRAM_PENDING_OPTIONS
+
+    def test_the_choices_of_the_appliance_that_followed_a_start_are_dropped(self) -> None:
+        coordinator, programs, options = self._coordinator()
+        self._poll(coordinator, {"wm": 0, "dw": 0})
+        self._poll(coordinator, {"wm": 1, "dw": 0})
+        self.assertEqual({"dw": "eco"}, getattr(coordinator, programs))
+        self.assertEqual({"dw": {"x": "1"}}, getattr(coordinator, options))
+
+    def test_the_first_poll_only_takes_note(self) -> None:
+        # The count after setup describes the setup itself, not a start to follow.
+        coordinator, programs, options = self._coordinator()
+        self._poll(coordinator, {"wm": 3, "dw": 0})
+        self.assertEqual({"wm": "iot_wash_dark", "dw": "eco"}, getattr(coordinator, programs))
+        self.assertEqual(2, len(getattr(coordinator, options)))
+
+    def test_a_steady_count_keeps_the_choices(self) -> None:
+        coordinator, programs, _ = self._coordinator()
+        self._poll(coordinator, {"wm": 1, "dw": 0})
+        self._poll(coordinator, {"wm": 1, "dw": 0})
+        self.assertEqual({"wm": "iot_wash_dark", "dw": "eco"}, getattr(coordinator, programs))
+
+    def test_an_appliance_without_the_count_is_left_alone(self) -> None:
+        from custom_components.addhon.program_options import (
+            forget_choices_after_followed_starts,
+        )
+
+        coordinator, programs, _ = self._coordinator()
+        forget_choices_after_followed_starts(coordinator, {"wm": {"appliance": object()}})
+        forget_choices_after_followed_starts(coordinator, {"wm": {}, "dw": None})
+        self.assertEqual({"wm": "iot_wash_dark", "dw": "eco"}, getattr(coordinator, programs))
+
+    def test_a_coordinator_with_no_choices_yet_is_fine(self) -> None:
+        coordinator = types.SimpleNamespace()
+        self._poll(coordinator, {"wm": 0})
+        self._poll(coordinator, {"wm": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

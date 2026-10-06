@@ -74,6 +74,43 @@ def startprogram_command(appliance):
     return get_command(appliance, STARTPROGRAM_COMMAND)
 
 
+# Coordinator attribute: {appliance id: the engine's `followed_starts` seen last poll}.
+_FOLLOWED_STARTS_SEEN = "addhon_followed_starts_seen"
+
+
+def forget_choices_after_followed_starts(coordinator, data) -> None:
+    """Drop the programme and options chosen in HA once a start made elsewhere is followed.
+
+    Issue #112, decision D2 of 2026-10-06: when the engine follows a cycle started from
+    the app, another phone or the panel (``HonAppliance.followed_starts`` moves), the
+    programme select and the option entities show that start, as after a reload. A
+    choice buffered in Home Assistant and never started would otherwise hide it, and
+    a reload drops it anyway. The first poll only takes note of the count.
+    """
+    seen = getattr(coordinator, _FOLLOWED_STARTS_SEEN, None)
+    if not isinstance(seen, dict):
+        seen = {}
+        setattr(coordinator, _FOLLOWED_STARTS_SEEN, seen)
+    for appliance_id, entry in (data or {}).items():
+        appliance = entry.get("appliance") if isinstance(entry, dict) else None
+        count = getattr(appliance, "followed_starts", None)
+        if not isinstance(count, int):
+            continue
+        previous = seen.get(appliance_id)
+        seen[appliance_id] = count
+        if previous is None or previous == count:
+            continue
+        for name in (PROGRAM_PENDING_STORE, PROGRAM_PENDING_OPTIONS):
+            store = getattr(coordinator, name, None)
+            if isinstance(store, dict) and store.pop(appliance_id, None) is not None:
+                _LOGGER.debug(
+                    "Program options: a start made elsewhere was followed for %s; "
+                    "dropped the %s chosen in HA",
+                    redact_id(appliance_id),
+                    name,
+                )
+
+
 async def async_send_program(hass, client, appliance, program_code: str) -> None:
     """Apply ``program_code`` to the ``startProgram`` command and send it, SWAP-AWARE.
 
