@@ -535,6 +535,11 @@ class HonCommand:
         # transmitted does not change (decision F2 of 2026-10-06).
         if sync_shadow:
             self.appliance.sync_command_to_params(self.name)
+        if self._name in ("startProgram", "stopProgram"):
+            # The `/history` list a dump prints should already hold this command.
+            schedule = getattr(self.appliance, "schedule_history_refresh", None)
+            if callable(schedule):
+                schedule()
         return result
 
     def ancillary_parameters(self) -> dict[str, str | float]:

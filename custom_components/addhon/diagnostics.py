@@ -1262,12 +1262,13 @@ def _command_history_block(appliance) -> dict:
     two of the reporter's dumps. The engine already downloads the `/history` list at
     every catalog load to recover the last-used programme; this prints it.
 
-    The list is read at catalog load (setup or reload) and read AGAIN when the dump is
-    requested (`refresh_command_history`, issues #112/#115: a setup-time list was 42 h
-    old in a dump and missed the two starts it was opened to show). `at` is HA's UTC
-    instant of the last successful read, `refresh` the outcome of the re-read for this
-    dump ("ok", "pending" if it did not finish, an exception class name, or None when
-    no re-read ran); a failed re-read keeps the older list, and `at` says how old.
+    The list is read at catalog load (setup or reload), ten seconds after the cloud
+    accepts a startProgram or stopProgram, and AGAIN when the dump is requested
+    (`refresh_command_history`, issues #112/#115: a setup-time list was 42 h old in a
+    dump and missed the two starts it was opened to show). `at` is HA's UTC instant of
+    the last successful read, `refresh` the outcome of the last re-read ("ok",
+    "pending" if it did not finish, an exception class name, or None when none ran); a
+    failed re-read keeps the older list, and `at` says how old.
 
     Newest first by `command.timestamp` (else `timestampAccepted`), the order the cloud
     itself sends (2 beta7 dumps out of 2; 38 same-phone pairs out of 40 in
