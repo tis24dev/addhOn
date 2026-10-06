@@ -384,8 +384,13 @@ class HonAppliance:
         self._commands = hydration.commands
         self._additional_data = hydration.additional_data
         self._command_history = hydration.command_history
-        if hydration.history_outcome in ("ok", "empty"):
-            self._command_history_at = datetime.now(timezone.utc)
+        # A failed history leaves the list empty: an earlier load's instant would
+        # date a list it never read (PR #121 review).
+        self._command_history_at = (
+            datetime.now(timezone.utc)
+            if hydration.history_outcome in ("ok", "empty")
+            else None
+        )
         self._history_recovery = hydration.history_recovery
         self._command_payload = hydration.command_payload
         self._appliance_model = hydration.appliance_model

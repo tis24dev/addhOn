@@ -434,6 +434,25 @@ class CommandHistoryFreshnessTest(unittest.TestCase):
 
         self.assertIsNone(self._loaded(NoHistory()).command_history_at)
 
+    def test_a_reload_whose_history_call_raised_drops_the_old_instant(self) -> None:
+        # PR #121 review (CodeRabbit): a later catalog load with a failed history
+        # empties the list; the instant of the previous load no longer describes it.
+        class Flaky(FakeApi):
+            down = False
+
+            async def load_command_history(self, a):
+                if self.down:
+                    raise TimeoutError
+                return await super().load_command_history(a)
+
+        api = Flaky()
+        app = self._loaded(api)
+        self.assertIsNotNone(app.command_history_at)
+        api.down = True
+        _run(app.load_commands())
+        self.assertEqual([], app.command_history)
+        self.assertIsNone(app.command_history_at)
+
     def test_a_re_read_replaces_the_list_and_its_instant(self) -> None:
         new = self._NEW
 
