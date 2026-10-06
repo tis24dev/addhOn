@@ -3662,6 +3662,53 @@ def _attribute_timestamps(
     )
 
 
+def _attribute_received(attributes: Mapping) -> tuple[dict[str, dict | None], bool]:
+    """When HA was handed each value it holds, and by which road: the map and the cap flag.
+
+    The half `attributes_last_update` cannot carry. The cloud stamps a value only on
+    the REST shadow; an MQTT delta changes the value and leaves the stamp where it was,
+    so a stamp can be hours older than the value beside it. Measured on issue #115
+    (phroc, 2026-10-03): temp went 55 -> 54 by MQTT at 14:05:00Z and the dump printed
+    54 beside an 11:45:54Z stamp. `HonAttribute.received_at` / `received_via` record,
+    in HA's own UTC clock, the moment the cloud delivered the value held NOW and
+    whether that was a REST row or an MQTT delta; a poll repeating the value, our own
+    shielded write and a row the lock rejected do not move it
+    (`client/engine/attributes.py`).
+
+    One row per value that exposes the `received_at` surface, `{"at", "via"}`, or
+    None when no cloud row has ever been taken; in `attributes`' own enumeration
+    order, which is the order `attributes_last_update` follows, so the two maps read
+    side by side. Capped at `_STAMP_MAX_ROWS` for the reason that cap exists; the flag
+    means dropped rows. Top level only: the nested `parameters` walk of
+    `_attribute_timestamps` is inert insurance (its docstring), and this map is new
+    enough to have no older dump to stay comparable with.
+    """
+    rows: dict[str, dict | None] = {}
+    truncated = False
+    try:
+        names = list(attributes)
+    except Exception:  # pragma: no cover - a Mapping that cannot list its keys
+        _LOGGER.debug("Diagnostics debug: attribute names unreadable", exc_info=True)
+        return rows, truncated
+    for name in names:
+        try:
+            value = attributes[name]
+            at = getattr(value, "received_at", _NO_LAST_UPDATE)
+            via = getattr(value, "received_via", None)
+        except Exception:
+            # One bad key costs one row, never the section (same rule as the stamps).
+            continue
+        if at is _NO_LAST_UPDATE:
+            continue
+        if len(rows) >= _STAMP_MAX_ROWS:
+            truncated = True
+            continue
+        rows[str(name)] = (
+            None if at is None else {"at": _stamp_text(at), "via": _scalar_text(via)}
+        )
+    return rows, truncated
+
+
 def _attribute_values(attributes: Mapping) -> Mapping:
     """The attribute mapping the block uses, minus the sub-map that repeats it.
 
@@ -3926,6 +3973,7 @@ def _appliance_block(
     # pass so that anything reporting freshness from it can never disagree with
     # the map the reader is looking at, even after the row cap has fired.
     stamps, stamps_truncated, newest_stamp = _attribute_timestamps(attributes)
+    received, received_truncated = _attribute_received(attributes)
     # De-duplicated ONCE, above every consumer, and only after the instants
     # have been read. The ordering is kept for the reason it was written -- the
     # sub-map is the instants' fallback source -- even though that fallback is
@@ -4076,6 +4124,10 @@ def _appliance_block(
         # true and immediately after the map, so it still reads as part of it.
         "attributes_last_update": stamps,
         **({"attributes_last_update_truncated": True} if stamps_truncated else {}),
+        # The other half of "when did this value move": HA's own instant and road
+        # (rest/mqtt), which an MQTT delta advances and the cloud stamp does not.
+        "attributes_received": received,
+        **({"attributes_received_truncated": True} if received_truncated else {}),
         # The two sections that say where the values in `attributes` came from, after
         # the map and its instants so the adjacency pinned above stays intact.
         # `statistics` is the payload of `/commands/v1/statistics` merged with
@@ -4170,9 +4222,11 @@ def _freshness(
         the object. "Derived only from the values printed above it, so a reader can
         check it by hand" is false exactly there, and no amount of patching makes it
         true from inside this module.
-      * whether an MQTT delta advances a parameter's `lastUpdate` is genuinely
-        unresolved, so "the shadow has not moved, therefore nothing under
+      * an MQTT delta does NOT advance a parameter's `lastUpdate` (issue #115,
+        phroc 2026-10-03: temp 55 -> 54 by MQTT at 14:05:00Z, stamp left at
+        11:45:54Z), so "the shadow has not moved, therefore nothing under
         `attributes` is live" is an inference this code is not entitled to draw.
+        `attributes_received` carries the instant and road HA saw instead.
     A field that is right most of the time and confidently wrong on the one failure
     it was built for is worse than no field at all.
 

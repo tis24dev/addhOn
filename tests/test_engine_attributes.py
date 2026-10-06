@@ -114,5 +114,54 @@ class NativeAttributeBehaviorTest(unittest.TestCase):
         self.assertTrue(a.lock)
 
 
+class ReceivedValueTest(unittest.TestCase):
+    """When HA was handed the value it now holds, and by which road (issue #115).
+
+    The cloud's `lastUpdate` comes only with the REST shadow: an MQTT delta changes the
+    value and leaves the stamp behind (phroc, 2026-10-03: temp 55 -> 54 by MQTT at
+    14:05:00Z, stamp still 11:45:54Z). The received mark answers what the stamp cannot.
+    """
+
+    def _aged(self, a: NaAttr) -> datetime:
+        # Push the mark into the past so "unchanged" cannot pass by clock resolution.
+        a._received_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        return a._received_at
+
+    def test_a_rest_load_marks_the_value_received_by_rest(self) -> None:
+        a = NaAttr({"parNewVal": "55", "lastUpdate": "2026-10-03T11:45:54+00:00"})
+        self.assertEqual("rest", a.received_via)
+        self.assertIsNotNone(a.received_at)
+        self.assertEqual(timedelta(0), a.received_at.utcoffset())
+
+    def test_a_poll_repeating_the_value_does_not_move_the_mark(self) -> None:
+        a = NaAttr({"parNewVal": "55", "lastUpdate": "2026-10-03T11:45:54+00:00"})
+        before = self._aged(a)
+        a.update({"parNewVal": "55", "lastUpdate": "2026-10-03T11:45:54+00:00"})
+        self.assertEqual(before, a.received_at)
+        self.assertEqual("rest", a.received_via)
+
+    def test_an_mqtt_delta_moves_the_mark_and_not_the_cloud_stamp(self) -> None:
+        a = NaAttr({"parNewVal": "55", "lastUpdate": "2026-10-03T11:45:54+00:00"})
+        before = self._aged(a)
+        a.update({"parName": "temp", "parNewVal": "54"})
+        self.assertEqual("mqtt", a.received_via)
+        self.assertGreater(a.received_at, before)
+        self.assertEqual(datetime(2026, 10, 3, 11, 45, 54, tzinfo=timezone.utc), a.last_update)
+
+    def test_our_own_shielded_write_is_not_a_reception(self) -> None:
+        a = NaAttr({"parNewVal": "0", "lastUpdate": "2026-09-18T15:26:19+00:00"})
+        before = self._aged(a)
+        a.update("1", shield=True)
+        self.assertEqual(before, a.received_at)
+        self.assertEqual("rest", a.received_via)
+
+    def test_an_update_the_lock_rejects_is_not_a_reception(self) -> None:
+        a = NaAttr({"parNewVal": "0", "lastUpdate": "2026-09-18T15:26:19+00:00"})
+        a.update("1", shield=True)
+        before = self._aged(a)
+        self.assertFalse(a.update({"parNewVal": "7"}))
+        self.assertEqual(before, a.received_at)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6180,10 +6180,14 @@ class AttributeTimestampTest(unittest.TestCase):
         self.assertEqual(
             keys.index("attributes") + 1, keys.index("attributes_last_update")
         )
-        # Followed by the sections that say where those values came from; the full
-        # sequence down to `commands` is pinned in StatisticsSectionTest.
+        # Then HA's own reception instants (issue #115), then the sections that say
+        # where those values came from; the full sequence down to `commands` is pinned
+        # in StatisticsSectionTest.
         self.assertEqual(
-            keys.index("attributes_last_update") + 1, keys.index("statistics")
+            keys.index("attributes_last_update") + 1, keys.index("attributes_received")
+        )
+        self.assertEqual(
+            keys.index("attributes_received") + 1, keys.index("statistics")
         )
 
     def test_every_shadow_parameter_gets_a_row(self):
@@ -6317,6 +6321,66 @@ class AttributeTimestampTest(unittest.TestCase):
         self.assertEqual(22.5, blocks["AC"]["attributes"]["tempIndoor"])
         self.assertEqual("1", blocks["AC"]["attributes"]["machMode"])
         self.assertEqual(6, blocks["AC"]["coverage"]["attributes_total"])
+
+
+class AttributeReceivedTest(unittest.TestCase):
+    """When HA was handed each value it holds, and by which road (issue #115).
+
+    The cloud stamp beside it does not follow an MQTT delta: phroc's 2026-10-03 dump
+    printed temp 54 against an 11:45:54Z stamp, though the 54 had arrived by MQTT at
+    14:05:00Z. This map is the half the stamp cannot carry.
+    """
+
+    @staticmethod
+    def _attr(value, stamp, via=None, at=None):
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        attribute = HonAttribute({"parNewVal": value, "lastUpdate": stamp})
+        if via == "mqtt":
+            attribute.update({"parName": "x", "parNewVal": value + "0"})
+        if at is not None:
+            attribute._received_at = at
+        return attribute
+
+    def test_the_map_sits_right_after_the_cloud_instants(self):
+        _, blocks = _entry_diag()
+        keys = list(blocks["AC"])
+        self.assertEqual(
+            keys.index("attributes_last_update") + 1, keys.index("attributes_received")
+        )
+
+    def test_each_value_says_when_and_by_which_road_it_arrived(self):
+        delta = datetime(2026, 10, 3, 14, 5, 0, tzinfo=timezone.utc)
+        loaded = datetime(2026, 10, 3, 13, 56, 15, tzinfo=timezone.utc)
+        block = _stamp_block({
+            "temp": self._attr("5", "2026-10-03T11:45:54+00:00", "mqtt", delta),
+            "tempSel": self._attr("60", "2026-10-02T20:55:41+00:00", None, loaded),
+            "plain": 7,
+        })
+        self.assertEqual(
+            {
+                "temp": {"at": "2026-10-03T14:05:00+00:00", "via": "mqtt"},
+                "tempSel": {"at": "2026-10-03T13:56:15+00:00", "via": "rest"},
+            },
+            block["attributes_received"],
+        )
+        # The cloud's own stamp is left exactly as it was.
+        self.assertEqual(
+            "2026-10-03T11:45:54+00:00", block["attributes_last_update"]["temp"]
+        )
+
+    def test_the_cap_drops_rows_and_says_so_adjacently(self):
+        stamp = "2026-10-03T11:45:54+00:00"
+        block = _stamp_block(
+            {"p%03d" % i: self._attr(str(i), stamp) for i in range(250)}
+        )
+        self.assertEqual(200, len(block["attributes_received"]))
+        self.assertTrue(block["attributes_received_truncated"])
+        keys = list(block)
+        self.assertEqual(
+            keys.index("attributes_received") + 1,
+            keys.index("attributes_received_truncated"),
+        )
 
 
 class AttributeTimestampTruncationTest(unittest.TestCase):
@@ -9773,10 +9837,17 @@ class StatisticsSectionTest(unittest.TestCase):
         _, blocks = _entry_diag()
         keys = list(blocks["AC"])
         at = keys.index("attributes_last_update")
-        # `history_recovery` explains the active category of `commands` (issue #115).
+        # `history_recovery` explains the active category of `commands` (issue #115);
+        # `attributes_received` is the second half of the instants (issue #115 too).
         self.assertEqual(
-            ["statistics", "attributes_overridden", "history_recovery", "commands"],
-            keys[at + 1:at + 5],
+            [
+                "attributes_received",
+                "statistics",
+                "attributes_overridden",
+                "history_recovery",
+                "commands",
+            ],
+            keys[at + 1:at + 6],
         )
 
 
