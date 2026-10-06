@@ -140,8 +140,8 @@ def _install_shared_entity_stubs() -> None:
 
 
 def _install_entity_platform_stubs() -> None:
-    """Shared entity-platform stubs: `binary_sensor`, `fan`, `light`, `number`,
-    `select`, `sensor` and `switch`.
+    """Shared entity-platform stubs: `binary_sensor`, `date`, `fan`, `light`,
+    `number`, `select`, `sensor` and `switch`.
 
     Installed here rather than per test module: each of these is imported by
     several test modules, and a partial per-file stub winning the first-wins
@@ -381,6 +381,7 @@ def _install_entity_platform_stubs() -> None:
         icon: str | None = None
         device_class: object | None = None
         entity_category: object | None = None
+        entity_registry_enabled_default: bool = True
 
     class BinarySensorDeviceClass:
         CONNECTIVITY = "connectivity"
@@ -400,6 +401,12 @@ def _install_entity_platform_stubs() -> None:
     binary_sensor.BinarySensorDeviceClass = getattr(
         binary_sensor, "BinarySensorDeviceClass", BinarySensorDeviceClass
     )
+
+    # The heat-pump water heater's vacation dates (#113): fixed-key entities, so only
+    # the entity base is needed.
+    date = _ensure_module("homeassistant.components.date")
+    components.date = date
+    date.DateEntity = getattr(date, "DateEntity", type("DateEntity", (), {}))
 
     number = _ensure_module("homeassistant.components.number")
     components.number = number

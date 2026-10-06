@@ -114,8 +114,12 @@ from .debug_utils import redact_id
 from .hpwh import (
     HPWH_MODE_MAP,
     HPWH_STATES,
+    appliance_series,
+    eco_window_attributes,
+    eco_window_text,
     heat_pump_state,
     mode_key,
+    sterilization_time,
     water_level_percent,
 )
 from .hon_commands import (
@@ -1217,6 +1221,15 @@ _HEAT_PUMP_WATER_HEATER: tuple[HonSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         gated=True,
     ),
+    # The anti-legionella start time. The app writes it unpadded ("15:0"), so it is
+    # padded to "HH:MM" by `hpwh.sterilization_time`.
+    HonSensorEntityDescription(
+        key="sterilization_time",
+        attr_key="sterilizationTime",
+        icon="mdi:clock-outline",
+        value_fn=sterilization_time,
+        gated=True,
+    ),
 )
 
 # Robot vacuum (RVC): battery, state, time, power, areas, errors.
@@ -1524,6 +1537,15 @@ async def async_setup_entry(
         ):
             entities.append(HonHeatPumpStateSensor(coordinator, appliance_id))
             created.append(HonHeatPumpStateSensor.KEY)
+        # Its eco window: the same window search, over the windows of both groups.
+        # Gated on the two attributes that decide which group counts.
+        if (
+            app_type == APPLIANCE_HW
+            and "offPeakPeriodScheme" in attributes
+            and "opp1EcoDays" in attributes
+        ):
+            entities.append(HonHeatPumpEcoWindowSensor(coordinator, appliance_id))
+            created.append(HonHeatPumpEcoWindowSensor.KEY)
         _LOGGER.debug(
             "Sensor debug: '%s' (type=%s, id=%s) -> %d/%d sensors %s",
             data.get("name", "Haier"),
@@ -1952,6 +1974,41 @@ class HonHeatPumpStateSensor(HonBaseEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         return heat_pump_state(self._get_attr, self._now(), self._series)
+
+
+class HonHeatPumpEcoWindowSensor(HonBaseEntity, SensorEntity):
+    """The current or next eco window of a heat-pump water heater (HW, #113).
+
+    DERIVED like `HonHeatPumpStateSensor`, from the same `hpwh.schedule_window`, so
+    the window shown here is the one the state is computed with; read at each
+    coordinator update for the same reason. The attributes carry the whole
+    schedule: every set window of both groups, the scheme and the days.
+    """
+
+    KEY = "eco_window"
+    _attr_translation_key = KEY
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator, appliance_id: str) -> None:
+        super().__init__(coordinator, appliance_id)
+        self._attr_unique_id = f"{appliance_id}_{self.KEY}"
+
+    @staticmethod
+    def _now():
+        # Local time, lazily imported: see HonHeatPumpStateSensor._now.
+        from homeassistant.util import dt as dt_util
+
+        return dt_util.now()
+
+    @property
+    def native_value(self) -> str | None:
+        return eco_window_text(
+            self._get_attr, self._now(), appliance_series(self._appliance)
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        return eco_window_attributes(self._get_attr)
 
 
 class HonDebugStatusSensor(HonAccountEntity, SensorEntity):

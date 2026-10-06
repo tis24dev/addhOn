@@ -589,6 +589,8 @@ class AirPurifierBinaryTableTest(unittest.TestCase):
                 ("HW", "electric_heating"),
                 ("HW", "boost"),
                 ("HW", "sterilization_running"),
+                # Unknown to the app: on at anything but "0", like the sources.
+                ("HW", "defrost"),
                 # Washer maintenance: `drumCleaning` / `filterCleaning` are the
                 # statistics counter `{tot, count, remaining, percentage}`, not a flag.
                 ("WM", "drum_clean_needed"),

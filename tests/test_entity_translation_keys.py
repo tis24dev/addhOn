@@ -214,7 +214,7 @@ def _tk(description) -> str:
 
 def _collect_code_keys() -> dict[str, set[str]]:
     from custom_components.addhon import (
-        binary_sensor, fan, number, ref_programs, select, sensor, switch,
+        binary_sensor, date, fan, number, ref_programs, select, sensor, switch,
         water_heater,
     )
 
@@ -228,6 +228,7 @@ def _collect_code_keys() -> dict[str, set[str]]:
     # register the key it publishes here.
     used["sensor"].add(sensor.HonMeanWaterConsumption._attr_translation_key)
     used["sensor"].add(sensor.HonHeatPumpStateSensor._attr_translation_key)
+    used["sensor"].add(sensor.HonHeatPumpEcoWindowSensor._attr_translation_key)
     used["sensor"].update(
         f"remaining_time_zone{zone}" for zone in sensor._HOB_ZONES
     )
@@ -299,6 +300,8 @@ def _collect_code_keys() -> dict[str, set[str]]:
         fan.HonHoodFan._attr_translation_key,
     }
     used["water_heater"] = {water_heater.HonHeatPumpWaterHeater._attr_translation_key}
+    # The heat-pump water heater's vacation dates: fixed keys from one closed tuple.
+    used["date"] = {key for key, _shadow_key, _icon in date._VACATION_DATES}
     return used
 
 

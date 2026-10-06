@@ -754,8 +754,14 @@ class RefModeBinarySensorTest(unittest.IsolatedAsyncioTestCase):
         # would hide on every appliance of the type, including the ones with no switch.
         from custom_components.addhon import binary_sensor
 
+        # Disabled on EVERY appliance of its type by design, not per device: the
+        # heat-pump water heater's defrost flag is a reading the app does not know.
+        disabled_by_design = {("HW", "defrost")}
         for app_type, descs in binary_sensor.BINARY_SENSORS.items():
             for desc in descs:
+                if (app_type, desc.key) in disabled_by_design:
+                    self.assertFalse(desc.entity_registry_enabled_default)
+                    continue
                 self.assertTrue(
                     getattr(desc, "entity_registry_enabled_default", True),
                     f"{app_type}.{desc.key}",

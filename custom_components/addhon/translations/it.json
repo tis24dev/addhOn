@@ -622,6 +622,12 @@
           "cheese": "Formaggi",
           "fruit_and_veg": "Frutta e verdura"
         }
+      },
+      "eco_window": {
+        "name": "Fascia eco"
+      },
+      "sterilization_time": {
+        "name": "Ora della sterilizzazione"
       }
     },
     "binary_sensor": {
@@ -849,6 +855,12 @@
       },
       "combi_mode_zone6": {
         "name": "Zona 6 unita"
+      },
+      "vacation_active": {
+        "name": "Modalità vacanza"
+      },
+      "defrost": {
+        "name": "Sbrinamento"
       }
     },
     "switch": {
@@ -1238,6 +1250,14 @@
           "off": "Spento"
         }
       }
+    },
+    "date": {
+      "vacation_start": {
+        "name": "Inizio vacanza"
+      },
+      "vacation_end": {
+        "name": "Fine vacanza"
+      }
     }
   },
   "exceptions": {
@@ -1303,6 +1323,9 @@
     },
     "speed_not_supported": {
       "message": "Questo purificatore funziona a modalità discrete e non ha una velocità della ventola. Imposta una modalità preimpostata invece di una percentuale."
+    },
+    "vacation_dates_read_only": {
+      "message": "Per ora le date della vacanza sono in sola lettura."
     }
   },
   "issues": {

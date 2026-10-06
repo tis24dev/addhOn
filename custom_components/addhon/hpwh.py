@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import date, datetime
 
 from homeassistant.exceptions import HomeAssistantError
 
@@ -78,6 +78,11 @@ def appliance_series(appliance) -> object:
     return attributes.get("series") if isinstance(attributes, Mapping) else None
 
 
+def series_key(series: object) -> str | None:
+    """`series` stripped and lower-cased, the spelling `_OTHER_SERIES` is written in."""
+    return str(series).strip().lower() if series else None
+
+
 # The phases `heat_pump_state` can answer, in the app's order
 # (`EnumHeatPumpWaterHeaterPhase`, decomp.txt:2329986-2330012). NOTCONNECTED is not
 # among them: a disconnected appliance makes the entity unavailable instead.
@@ -120,6 +125,25 @@ HPWH_STATE_ATTRS: tuple[str, ...] = (
     "opp1EcoDays",
     *_WINDOW_KEYS,
 )
+
+# Every attribute the eco-window sensor reads: `schedule_window` for its state,
+# `eco_window_attributes` for the rest. Feeds the diagnostics like the tuple above.
+HPWH_ECO_WINDOW_ATTRS: tuple[str, ...] = (
+    "offPeakPeriodScheme",
+    "opp1EcoDays",
+    *_WINDOW_KEYS,
+)
+
+# Every attribute `vacation_active` reads, for the same diagnostics.
+HPWH_VACATION_ATTRS: tuple[str, ...] = ("machMode", "vacStartDate", "vacEndDate")
+
+# The days of `opp1EcoDays`, one bit each from Monday (0x01) to Sunday (0x40), in
+# Home Assistant's own spelling (`homeassistant.const.WEEKDAYS`, the `weekday` of a
+# time condition), so an automation can compare them as they are.
+_ECO_DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# A window edge that does not set a window: the app's empty slot is "00:00"-"00:00".
+_EMPTY_EDGES = ("", "00:00")
+_WINDOW_DASH = "\u2013"
 
 
 def code(raw: object) -> str | None:
@@ -282,6 +306,87 @@ def schedule_window(
     return None
 
 
+def eco_window_text(
+    get: Callable[[str], object], now: datetime, series: object
+) -> str | None:
+    """The window `schedule_window` finds, as "HH:MM" en dash "HH:MM", or None.
+
+    The same current-or-next window `heat_pump_state` works with, so the two
+    sensors cannot disagree; None wherever that search gives up, the M7B/M8B/M11
+    series included. The edges are the shadow strings as published.
+    """
+    window = schedule_window(get, now, series_key(series))
+    if window is None or not window[0] or not window[1]:
+        return None
+    return f"{window[0]}{_WINDOW_DASH}{window[1]}"
+
+
+def eco_days(mask: object) -> list[str] | None:
+    """`opp1EcoDays` as the days it sets, Monday first; None when it is no mask.
+
+    Read bit by bit (`opp1EcoDaysValues`, decomp.txt:2333044-2333050), not through
+    `_hex_to_days`: this lists what the appliance stores, where `hexToDays` answers
+    only for a contiguous range spelled the way the app's read path expects.
+    """
+    text = code(mask)
+    if not text:
+        return None
+    try:
+        value = int(text, 16)
+    except ValueError:
+        return None
+    if not 0 <= value <= 0x7F:
+        return None
+    return [name for bit, name in enumerate(_ECO_DAY_NAMES) if value & (1 << bit)]
+
+
+def eco_window_attributes(get: Callable[[str], object]) -> dict[str, object]:
+    """The whole eco schedule, as the eco-window sensor publishes it beside its state.
+
+    Both groups, slot 1 to 3, skipping the empty "00:00"-"00:00" slots; the scheme
+    (`offPeakPeriodScheme`: 1 = the opp2 windows every day, 0 = opp2 on the days of
+    `opp1EcoDays` and opp1 on the others, see `schedule_window`) as its code; the
+    days decoded by `eco_days`. Raw readings, whatever the series.
+    """
+
+    def windows(period: int) -> list[str]:
+        found = []
+        for slot in (1, 2, 3):
+            start = code(get(f"opp{period}EcoStartTime{slot}")) or ""
+            end = code(get(f"opp{period}EcoEndTime{slot}")) or ""
+            if start in _EMPTY_EDGES and end in _EMPTY_EDGES:
+                continue
+            found.append(f"{start}{_WINDOW_DASH}{end}")
+        return found
+
+    return {
+        "opp1_windows": windows(1),
+        "opp2_windows": windows(2),
+        "off_peak_period_scheme": code(get("offPeakPeriodScheme")) or None,
+        "opp1_eco_days": eco_days(get("opp1EcoDays")),
+    }
+
+
+def sterilization_time(raw: object) -> str | None:
+    """`sterilizationTime` as "HH:MM"; the app writes it unpadded ("15:0").
+
+    Built as `String(hours + ':' + minutes)` (apk2 decomp.txt:4592323-4592332), so
+    both halves are padded here. Anything that is not an hour and a minute is None.
+    "00:00" stays as it is: on the #113 appliance it may also mean never set, and
+    nothing in the shadow tells the two apart.
+    """
+    text = code(raw)
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return None
+    hours, minutes = int(parts[0]), int(parts[1])
+    if hours > 23 or minutes > 59:
+        return None
+    return f"{hours:02d}:{minutes:02d}"
+
+
 def heat_pump_state(
     get: Callable[[str], object], now: datetime, series: str | None
 ) -> str | None:
@@ -371,6 +476,33 @@ def is_vacation_active(get: Callable[[str], object]) -> bool:
         (code(get(name)) or "") not in _VAC_CLEARED
         for name in ("vacStartDate", "vacEndDate")
     )
+
+
+def vacation_active(get: Callable[[str], object], series: object) -> bool:
+    """`isVacModeActive` with both of its branches (apk2 decomp.txt:2334140-2334188).
+
+    On the M7B/M8B/M11 series (`isM11` / `isM7M8B` set) the app reads `machMode` 4
+    alone: their vacation runs on `vacModeDays`, not on the two dates. Elsewhere it is
+    `is_vacation_active`. `series` is read like `controls_supported` reads it.
+    """
+    if series_key(series) in _OTHER_SERIES:
+        return code(get("machMode")) == "4"
+    return is_vacation_active(get)
+
+
+def vacation_date(raw: object) -> date | None:
+    """`vacStartDate` / `vacEndDate` as a date; None when cleared or not a date.
+
+    The app clears them to '' or '2000-01-01' (`isVacModeActive`); the #113
+    appliance publishes "0000-00-00", which is no calendar date either.
+    """
+    text = code(raw)
+    if not text or text in _VAC_CLEARED:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 def _sterilizing(get: Callable[[str], object]) -> bool:

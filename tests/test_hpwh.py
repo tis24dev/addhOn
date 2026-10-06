@@ -65,6 +65,9 @@ def _install_package_stubs() -> None:
         binary_mod, "BinarySensorEntity", type("BinarySensorEntity", (), {})
     )
     components.binary_sensor = binary_mod
+    date_mod = _mod("homeassistant.components.date")
+    date_mod.DateEntity = getattr(date_mod, "DateEntity", type("DateEntity", (), {}))
+    components.date = date_mod
     const = _mod("homeassistant.const")
     const.UnitOfEnergy = getattr(
         const, "UnitOfEnergy", type("UnitOfEnergy", (), {"KILO_WATT_HOUR": "kWh"})
@@ -490,6 +493,147 @@ class ControlRulesTest(unittest.TestCase):
             self.assertTrue(hpwh.controls_supported(series), series)
 
 
+# The schedule and vacation values the #115 HP150M8-9 really published (addhOn
+# 5.25.0 diagnostics, 2026-09-29): one window 00:15-23:45 every day, dates cleared.
+_ISSUE115 = {
+    "machMode": 2,
+    "offPeakPeriodScheme": 1,
+    "opp1EcoDays": "7F",
+    "opp2EcoStartTime1": "00:15",
+    "opp2EcoEndTime1": "23:45",
+    "vacStartDate": "2000-01-01",
+    "vacEndDate": "2000-01-01",
+    "sterilizationTime": "15:00",
+}
+
+
+class VacationTest(unittest.TestCase):
+    """`isVacModeActive` (apk2 decomp.txt:2334140-2334188), both branches."""
+
+    def _active(self, series: str | None = "m8", **overrides) -> bool:
+        return hpwh.vacation_active(mapping_getter(_attrs(**overrides)), series)
+
+    def test_plain_series_need_the_mode_and_both_dates(self) -> None:
+        dates = {"vacStartDate": "2026-10-10", "vacEndDate": "2026-10-20"}
+        self.assertTrue(self._active(machMode=4, **dates))
+        self.assertTrue(self._active(machMode="4", **dates))
+        self.assertFalse(self._active(machMode=1, **dates))
+
+    def test_plain_series_read_cleared_dates_as_no_vacation(self) -> None:
+        for cleared in ("2000-01-01", ""):
+            with self.subTest(cleared=cleared):
+                self.assertFalse(
+                    self._active(machMode=4, vacStartDate=cleared, vacEndDate="2026-10-20")
+                )
+                self.assertFalse(
+                    self._active(machMode=4, vacStartDate="2026-10-10", vacEndDate=cleared)
+                )
+
+    def test_the_113_placeholder_is_not_a_cleared_date_for_the_app(self) -> None:
+        # The #113 HP110M8-9 publishes "0000-00-00". The app compares with '' and
+        # '2000-01-01' only, so with machMode 4 it reads as a vacation under way.
+        self.assertTrue(self._active(machMode=4))
+        self.assertFalse(self._active(machMode=1))
+
+    def test_the_other_series_read_the_mode_alone(self) -> None:
+        for series in ("m7b", "M8B", " m11 "):
+            with self.subTest(series=series):
+                self.assertTrue(
+                    self._active(series, machMode=4, vacStartDate="2000-01-01",
+                                 vacEndDate="2000-01-01")
+                )
+                self.assertFalse(self._active(series, machMode=1))
+
+    def test_an_unknown_or_missing_series_takes_the_plain_branch(self) -> None:
+        cleared = {"vacStartDate": "2000-01-01", "vacEndDate": "2000-01-01"}
+        self.assertFalse(self._active(None, machMode=4, **cleared))
+        self.assertFalse(self._active("x9", machMode=4, **cleared))
+
+
+class VacationDateTest(unittest.TestCase):
+    """`vacStartDate` / `vacEndDate` as calendar dates."""
+
+    def test_a_set_date(self) -> None:
+        from datetime import date
+
+        self.assertEqual(hpwh.vacation_date("2026-10-10"), date(2026, 10, 10))
+
+    def test_cleared_missing_and_unparsable_dates_are_none(self) -> None:
+        for raw in ("2000-01-01", "", None, "0000-00-00", "2026-02-30", "10/10/2026", 0):
+            self.assertIsNone(hpwh.vacation_date(raw), raw)
+
+
+class SterilizationTimeTest(unittest.TestCase):
+    """`sterilizationTime`: the app writes it without leading zeros ("15:0")."""
+
+    def test_padded_as_hh_mm(self) -> None:
+        for raw, text in (("15:0", "15:00"), ("2:0", "02:00"), ("7:30", "07:30"),
+                          ("15:00", "15:00"), ("00:00", "00:00")):
+            self.assertEqual(hpwh.sterilization_time(raw), text, raw)
+
+    def test_missing_or_not_a_time_is_none(self) -> None:
+        for raw in (None, "", "abc", "24:00", "12:60", "12", "1:2:3", 15):
+            self.assertIsNone(hpwh.sterilization_time(raw), raw)
+
+
+class EcoWindowTest(unittest.TestCase):
+    """The eco-window sensor: `schedule_window` as text, the raw schedule as attributes."""
+
+    def test_the_115_window_is_current_at_night(self) -> None:
+        get = mapping_getter(_attrs(**_ISSUE115))
+        self.assertEqual(hpwh.eco_window_text(get, _at(3, 0), "m8"), "00:15\u201323:45")
+
+    def test_no_window_set_is_none(self) -> None:
+        self.assertIsNone(hpwh.eco_window_text(mapping_getter(_attrs()), MONDAY, "m8"))
+
+    def test_the_other_series_are_unknown(self) -> None:
+        get = mapping_getter(_attrs(**_ISSUE115))
+        self.assertIsNone(hpwh.eco_window_text(get, _at(3, 0), "m8b"))
+
+    def test_the_attributes_of_the_115_schedule(self) -> None:
+        self.assertEqual(
+            hpwh.eco_window_attributes(mapping_getter(_attrs(**_ISSUE115))),
+            {
+                "opp1_windows": [],
+                "opp2_windows": ["00:15\u201323:45"],
+                "off_peak_period_scheme": "1",
+                "opp1_eco_days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+            },
+        )
+
+    def test_every_non_empty_slot_of_both_groups_in_order(self) -> None:
+        attributes = _attrs(
+            offPeakPeriodScheme=0,
+            opp1EcoDays="1F",
+            opp1EcoStartTime1="06:00", opp1EcoEndTime1="08:00",
+            opp1EcoStartTime3="00:00", opp1EcoEndTime3="05:00",
+            opp2EcoStartTime2="22:00", opp2EcoEndTime2="23:30",
+        )
+        result = hpwh.eco_window_attributes(mapping_getter(attributes))
+        self.assertEqual(result["opp1_windows"], ["06:00\u201308:00", "00:00\u201305:00"])
+        self.assertEqual(result["opp2_windows"], ["22:00\u201323:30"])
+        self.assertEqual(result["off_peak_period_scheme"], "0")
+        self.assertEqual(result["opp1_eco_days"], ["mon", "tue", "wed", "thu", "fri"])
+
+    def test_the_day_mask_is_read_bit_by_bit(self) -> None:
+        for mask, days in (("60", ["sat", "sun"]), ("01", ["mon"]), ("1", ["mon"]),
+                           ("05", ["mon", "wed"]), ("00", [])):
+            self.assertEqual(hpwh.eco_days(mask), days, mask)
+
+    def test_an_unreadable_day_mask_is_none(self) -> None:
+        for mask in (None, "", "zz", "80", "FF"):
+            self.assertIsNone(hpwh.eco_days(mask), mask)
+
+    def test_the_diagnostics_tuples_name_what_the_helpers_read(self) -> None:
+        self.assertEqual(
+            set(hpwh.HPWH_ECO_WINDOW_ATTRS),
+            {"offPeakPeriodScheme", "opp1EcoDays", *hpwh._WINDOW_KEYS},
+        )
+        self.assertEqual(
+            hpwh.HPWH_VACATION_ATTRS, ("machMode", "vacStartDate", "vacEndDate")
+        )
+
+
 class _Coordinator:
     def __init__(self, data: dict) -> None:
         self.data = data
@@ -509,9 +653,11 @@ class _Entry:
         self.options: dict = {}
 
 
-def _data() -> dict:
+def _data(series: str | None = None) -> dict:
     fixture = _fixture()
-    appliance = types.SimpleNamespace(model_attributes={"series": fixture["series"]})
+    appliance = types.SimpleNamespace(
+        model_attributes={"series": series or fixture["series"]}
+    )
     return {
         "hw-1": {
             "type": fixture["type"],
@@ -523,10 +669,10 @@ def _data() -> dict:
     }
 
 
-async def _build(platform) -> list:
+async def _build(platform, data: dict | None = None) -> list:
     from custom_components.addhon.const import DOMAIN
 
-    coordinator = _Coordinator(_data())
+    coordinator = _Coordinator(data if data is not None else _data())
     hass = _Hass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
     added: list = []
     await platform.async_setup_entry(hass, _Entry(), added.extend)
@@ -541,6 +687,8 @@ class HeatPumpEntitiesTest(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(
             sensor.HonHeatPumpStateSensor, "_now", staticmethod(lambda: MONDAY)
+        ), mock.patch.object(
+            sensor.HonHeatPumpEcoWindowSensor, "_now", staticmethod(lambda: MONDAY)
         ):
             entities = {e._attr_unique_id: e for e in await _build(sensor)}
             values = {key: entity.native_value for key, entity in entities.items()}
@@ -552,7 +700,10 @@ class HeatPumpEntitiesTest(unittest.IsolatedAsyncioTestCase):
                 "hw-1_hot_water_available": 83,
                 "hw-1_heat_pump_mode": "auto",
                 "hw-1_errors": "0",
+                "hw-1_sterilization_time": "00:00",
                 "hw-1_heat_pump_state": "off",
+                # Every window of the #113 appliance is "00:00"-"00:00".
+                "hw-1_eco_window": None,
             },
         )
 
@@ -578,6 +729,8 @@ class HeatPumpEntitiesTest(unittest.IsolatedAsyncioTestCase):
                 "hw-1_electric_heating": False,
                 "hw-1_boost": False,
                 "hw-1_sterilization_running": False,
+                "hw-1_vacation_active": False,
+                "hw-1_defrost": False,
             },
         )
 
@@ -616,6 +769,208 @@ class HeatPumpEntitiesTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("hw-1_hot_water_available", keys)
         self.assertNotIn("hw-1_heat_pump_state", keys)
         self.assertIn("hw-1_water_temp", keys)
+
+
+def _vacation(data: dict, **overrides) -> dict:
+    data["hw-1"]["attributes"].update(
+        {"machMode": 4, "vacStartDate": "2026-10-10", "vacEndDate": "2026-10-20"}
+    )
+    data["hw-1"]["attributes"].update(overrides)
+    return data
+
+
+class HeatPumpVacationEntitiesTest(unittest.IsolatedAsyncioTestCase):
+    """The vacation binary, the source mask and the two vacation dates."""
+
+    async def _binaries(self, data: dict) -> dict:
+        from custom_components.addhon import binary_sensor
+
+        return {e._attr_unique_id: e for e in await _build(binary_sensor, data)}
+
+    async def test_the_vacation_binary_follows_the_app_rule(self) -> None:
+        entities = await self._binaries(_vacation(_data()))
+        self.assertTrue(entities["hw-1_vacation_active"].is_on)
+        cleared = await self._binaries(
+            _vacation(_data(), vacStartDate="2000-01-01", vacEndDate="2000-01-01")
+        )
+        self.assertFalse(cleared["hw-1_vacation_active"].is_on)
+
+    async def test_the_vacation_binary_reads_the_mode_alone_on_the_other_series(self) -> None:
+        data = _vacation(_data("M8B"), vacStartDate="2000-01-01", vacEndDate="2000-01-01")
+        entities = await self._binaries(data)
+        self.assertTrue(entities["hw-1_vacation_active"].is_on)
+
+    async def test_the_vacation_binary_has_no_device_class_and_is_enabled(self) -> None:
+        from custom_components.addhon import binary_sensor
+
+        entity = (await self._binaries(_data()))["hw-1_vacation_active"]
+        self.assertIsNone(entity.entity_description.device_class)
+        self.assertTrue(
+            getattr(entity.entity_description, "entity_registry_enabled_default", True)
+        )
+        self.assertIsInstance(entity, binary_sensor.HonHeatPumpVacationBinarySensor)
+
+    async def test_no_vacation_binary_without_the_mode(self) -> None:
+        data = _data()
+        data["hw-1"]["attributes"].pop("machMode")
+        self.assertNotIn("hw-1_vacation_active", await self._binaries(data))
+
+    async def test_the_compressor_reads_off_during_a_vacation(self) -> None:
+        # `getEnergySources` (decomp.txt:2331127-2331182): the vacation masks the
+        # compressor only; the electric row tests the disconnection alone, so the
+        # resistance keeps following its own flag (user decision, 2026-10-06).
+        data = _vacation(
+            _data(), compressorHeatingCurrentStatus=1, electricHeatingCurrentStatus=1
+        )
+        entities = await self._binaries(data)
+        self.assertFalse(entities["hw-1_compressor_heating"].is_on)
+        self.assertTrue(entities["hw-1_electric_heating"].is_on)
+        # Outside a vacation the same flags read as running.
+        data["hw-1"]["attributes"]["machMode"] = 2
+        self.assertTrue(entities["hw-1_compressor_heating"].is_on)
+        self.assertTrue(entities["hw-1_electric_heating"].is_on)
+
+    async def test_the_sources_follow_the_series_rule_too(self) -> None:
+        data = _vacation(
+            _data("m11"), compressorHeatingCurrentStatus=1,
+            vacStartDate="2000-01-01", vacEndDate="2000-01-01",
+        )
+        entities = await self._binaries(data)
+        self.assertFalse(entities["hw-1_compressor_heating"].is_on)
+
+    async def test_a_missing_source_flag_stays_unknown_in_a_vacation(self) -> None:
+        entities = await self._binaries(_vacation(_data()))
+        compressor = entities["hw-1_compressor_heating"]
+        compressor.coordinator.data["hw-1"]["attributes"].pop(
+            "compressorHeatingCurrentStatus"
+        )
+        self.assertIsNone(compressor.is_on)
+
+    async def test_a_disconnected_appliance_hides_the_sources(self) -> None:
+        # The app's other mask (`applianceDisconnected`) is the entity's own
+        # availability: the base entity goes unavailable, so no second rule here.
+        data = _data()
+        data["hw-1"]["attributes"].update(
+            {"available": False, "compressorHeatingCurrentStatus": 1}
+        )
+        entities = await self._binaries(data)
+        self.assertFalse(entities["hw-1_compressor_heating"].available)
+        self.assertFalse(entities["hw-1_electric_heating"].available)
+
+    async def test_the_vacation_dates(self) -> None:
+        from datetime import date as calendar_date
+
+        from custom_components.addhon import date
+
+        data = _data()
+        data["hw-1"]["attributes"].update(
+            {"vacStartDate": "2026-10-10", "vacEndDate": "2000-01-01"}
+        )
+        entities = {e._attr_unique_id: e for e in await _build(date, data)}
+        self.assertEqual(set(entities), {"hw-1_vacation_start", "hw-1_vacation_end"})
+        self.assertEqual(
+            entities["hw-1_vacation_start"].native_value, calendar_date(2026, 10, 10)
+        )
+        self.assertIsNone(entities["hw-1_vacation_end"].native_value)
+        self.assertEqual(entities["hw-1_vacation_start"]._attr_translation_key, "vacation_start")
+        self.assertEqual(entities["hw-1_vacation_end"]._attr_translation_key, "vacation_end")
+
+    async def test_the_113_placeholder_dates_read_as_unknown(self) -> None:
+        from custom_components.addhon import date
+
+        entities = await _build(date)
+        self.assertEqual(len(entities), 2)
+        for entity in entities:
+            self.assertIsNone(entity.native_value, entity._attr_unique_id)
+
+    async def test_the_dates_are_read_only_for_now(self) -> None:
+        from datetime import date as calendar_date
+
+        from homeassistant.exceptions import HomeAssistantError
+
+        from custom_components.addhon import date
+        from custom_components.addhon.const import DOMAIN
+
+        entity = (await _build(date))[0]
+        with self.assertRaises(HomeAssistantError) as raised:
+            await entity.async_set_value(calendar_date(2026, 10, 10))
+        self.assertEqual(raised.exception.translation_domain, DOMAIN)
+        self.assertEqual(raised.exception.translation_key, "vacation_dates_read_only")
+
+    async def test_no_date_without_its_attribute_nor_on_another_type(self) -> None:
+        from custom_components.addhon import date
+
+        data = _data()
+        data["hw-1"]["attributes"].pop("vacEndDate")
+        keys = {e._attr_unique_id for e in await _build(date, data)}
+        self.assertEqual(keys, {"hw-1_vacation_start"})
+        other = _data()
+        other["hw-1"]["type"] = "WH"
+        self.assertEqual(await _build(date, other), [])
+
+
+class HeatPumpScheduleEntitiesTest(unittest.IsolatedAsyncioTestCase):
+    """The defrost binary, the sterilization time and the eco window."""
+
+    async def test_defrost_is_a_disabled_running_binary(self) -> None:
+        from custom_components.addhon import binary_sensor
+
+        entities = {e._attr_unique_id: e for e in await _build(binary_sensor)}
+        defrost = entities["hw-1_defrost"]
+        description = defrost.entity_description
+        self.assertEqual(description.attr_key, "autoDefrostStatus")
+        self.assertEqual(description.device_class, binary_sensor.BinarySensorDeviceClass.RUNNING)
+        self.assertFalse(description.entity_registry_enabled_default)
+        self.assertFalse(defrost.is_on)
+        defrost.coordinator.data["hw-1"]["attributes"]["autoDefrostStatus"] = 1.0
+        self.assertTrue(defrost.is_on)
+
+    async def test_the_sterilization_time_is_padded(self) -> None:
+        from custom_components.addhon import sensor
+
+        data = _data()
+        data["hw-1"]["attributes"]["sterilizationTime"] = "15:0"
+        entities = {e._attr_unique_id: e for e in await _build(sensor, data)}
+        self.assertEqual(entities["hw-1_sterilization_time"].native_value, "15:00")
+
+    async def test_the_eco_window_of_the_115_appliance(self) -> None:
+        from custom_components.addhon import sensor
+
+        data = _data()
+        data["hw-1"]["attributes"].update(_ISSUE115)
+        entities = {e._attr_unique_id: e for e in await _build(sensor, data)}
+        window = entities["hw-1_eco_window"]
+        with mock.patch.object(
+            sensor.HonHeatPumpEcoWindowSensor, "_now", staticmethod(lambda: _at(3, 0))
+        ):
+            self.assertEqual(window.native_value, "00:15\u201323:45")
+        self.assertEqual(window.extra_state_attributes["opp2_windows"], ["00:15\u201323:45"])
+        self.assertEqual(window._attr_translation_key, "eco_window")
+
+    async def test_the_eco_window_takes_the_series_of_the_appliance(self) -> None:
+        from custom_components.addhon import sensor
+
+        data = _data("M11")
+        data["hw-1"]["attributes"].update(_ISSUE115)
+        entities = {e._attr_unique_id: e for e in await _build(sensor, data)}
+        with mock.patch.object(
+            sensor.HonHeatPumpEcoWindowSensor, "_now", staticmethod(lambda: _at(3, 0))
+        ):
+            self.assertIsNone(entities["hw-1_eco_window"].native_value)
+
+    def test_the_date_platform_is_set_up(self) -> None:
+        from custom_components.addhon.const import PLATFORMS
+
+        self.assertIn("date", PLATFORMS)
+
+    async def test_no_eco_window_without_the_schedule(self) -> None:
+        from custom_components.addhon import sensor
+
+        data = _data()
+        data["hw-1"]["attributes"].pop("opp1EcoDays")
+        keys = {e._attr_unique_id for e in await _build(sensor, data)}
+        self.assertNotIn("hw-1_eco_window", keys)
+        self.assertIn("hw-1_heat_pump_state", keys)
 
 
 if __name__ == "__main__":

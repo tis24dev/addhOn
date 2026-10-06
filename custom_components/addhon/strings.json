@@ -622,6 +622,12 @@
           "cheese": "Cheese",
           "fruit_and_veg": "Fruit and vegetables"
         }
+      },
+      "eco_window": {
+        "name": "Eco window"
+      },
+      "sterilization_time": {
+        "name": "Sterilization time"
       }
     },
     "binary_sensor": {
@@ -849,6 +855,12 @@
       },
       "combi_mode_zone6": {
         "name": "Zone 6 bridged"
+      },
+      "vacation_active": {
+        "name": "Vacation mode"
+      },
+      "defrost": {
+        "name": "Defrost"
       }
     },
     "switch": {
@@ -1238,6 +1250,14 @@
           "off": "Off"
         }
       }
+    },
+    "date": {
+      "vacation_start": {
+        "name": "Vacation start"
+      },
+      "vacation_end": {
+        "name": "Vacation end"
+      }
     }
   },
   "exceptions": {
@@ -1269,7 +1289,7 @@
       "message": "The water heater does not accept commands right now: check errors and remote control on its panel."
     },
     "hpwh_vacation_active": {
-      "message": "Not available while holiday mode is on."
+      "message": "Not available while vacation mode is on."
     },
     "invalid_setpoint": {
       "message": "Value {value} is not allowed (allowed: {allowed})."
@@ -1303,6 +1323,9 @@
     },
     "speed_not_supported": {
       "message": "This purifier runs in discrete modes and has no fan speed. Set a preset mode instead of a percentage."
+    },
+    "vacation_dates_read_only": {
+      "message": "The vacation dates are read-only for now."
     }
   },
   "issues": {

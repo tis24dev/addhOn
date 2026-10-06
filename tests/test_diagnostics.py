@@ -4305,6 +4305,10 @@ class HeatPumpStateCoverageTest(unittest.TestCase):
         "opp1EcoDays", "opp1EcoStartTime1", "opp2EcoEndTime3",
         "compressorHeatingCurrentStatus", "electricHeatingCurrentStatus",
         "boostStatus",
+        # Block 3: the vacation binary and dates, defrost, sterilization time and
+        # the eco-window sensor.
+        "vacStartDate", "vacEndDate", "autoDefrostStatus", "sterilizationTime",
+        "opp1EcoStartTime2", "opp2EcoStartTime3",
     )
 
     def test_every_attribute_it_reads_is_mapped(self) -> None:
@@ -4323,6 +4327,30 @@ class HeatPumpStateCoverageTest(unittest.TestCase):
         mapped_attrs, _params, sources, _ = diagnostics._mapped_sets("WH")
         self.assertNotIn("opp1EcoDays", mapped_attrs)
         self.assertNotIn("sensor.heat_pump_state", sources)
+        self.assertNotIn("vacStartDate", mapped_attrs)
+        self.assertNotIn("date.vacation_start", sources)
+        self.assertNotIn("sensor.eco_window", sources)
+
+    def test_the_derived_readings_name_every_attribute_they_read(self) -> None:
+        _attrs, _params, sources, _ = diagnostics._mapped_sets("HW")
+        window = sources["sensor.eco_window"]
+        self.assertIn("offPeakPeriodScheme", window["read"])
+        self.assertIn("opp1EcoEndTime3", window["read"])
+        self.assertNotIn("write", window)
+        vacation = ["machMode", "vacStartDate", "vacEndDate"]
+        self.assertEqual(sources["binary_sensor.vacation_active"]["read"], vacation)
+        # The heating sources read off during a vacation, so they read its inputs.
+        for tag, flag in (
+            ("binary_sensor.compressor_heating", "compressorHeatingCurrentStatus"),
+            ("binary_sensor.electric_heating", "electricHeatingCurrentStatus"),
+        ):
+            self.assertEqual(sources[tag]["read"], [flag, *vacation], tag)
+        self.assertEqual(sources["date.vacation_start"], {"read": ["vacStartDate"]})
+        self.assertEqual(sources["date.vacation_end"], {"read": ["vacEndDate"]})
+        self.assertEqual(sources["binary_sensor.defrost"]["read"], ["autoDefrostStatus"])
+        self.assertEqual(
+            sources["sensor.sterilization_time"]["read"], ["sterilizationTime"]
+        )
 
     def test_the_controls_name_what_they_write(self) -> None:
         _attrs, params, sources, _ = diagnostics._mapped_sets("HW")
@@ -5654,7 +5682,7 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         # reader can never see, and a row whose domain is not a real platform
         # would never join with `by_domain`.
         domains = {"sensor", "binary_sensor", "number", "select", "switch",
-                   "button", "climate", "fan", "water_heater"}
+                   "button", "climate", "fan", "water_heater", "date"}
         for entry in diagnostics._CUSTOM_ENTITY_SOURCES:
             domain, _dot, suffix = entry["tag"].partition(".")
             self.assertIn(domain, domains, entry["tag"])

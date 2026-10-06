@@ -105,7 +105,7 @@ from .const import (
 )
 from .debug_utils import _MAC_RE, redact_id
 from .hon_commands import SETTINGS_COMMANDS, param_range, param_values
-from .hpwh import HPWH_STATE_ATTRS
+from .hpwh import HPWH_ECO_WINDOW_ATTRS, HPWH_STATE_ATTRS, HPWH_VACATION_ATTRS
 from .ref_programs import favourite_names, program_categories
 
 _LOGGER = logging.getLogger(__name__)
@@ -234,6 +234,32 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "types": (APPLIANCE_HW,),
         "read": HPWH_STATE_ATTRS,
     },
+    # Its eco window and the vacation rule are derived the same way (`hpwh.py`). The
+    # two heating sources read off during a vacation, so their rows, which the walk
+    # writes from the flag alone, are replaced by the flag plus the vacation inputs.
+    {
+        "tag": "sensor.eco_window",
+        "types": (APPLIANCE_HW,),
+        "read": HPWH_ECO_WINDOW_ATTRS,
+    },
+    {
+        "tag": "binary_sensor.vacation_active",
+        "types": (APPLIANCE_HW,),
+        "read": HPWH_VACATION_ATTRS,
+    },
+    {
+        "tag": "binary_sensor.compressor_heating",
+        "types": (APPLIANCE_HW,),
+        "read": ("compressorHeatingCurrentStatus", *HPWH_VACATION_ATTRS),
+    },
+    {
+        "tag": "binary_sensor.electric_heating",
+        "types": (APPLIANCE_HW,),
+        "read": ("electricHeatingCurrentStatus", *HPWH_VACATION_ATTRS),
+    },
+    # The vacation dates: fixed-key entities, read-only until they get their write.
+    {"tag": "date.vacation_start", "types": (APPLIANCE_HW,), "read": ("vacStartDate",)},
+    {"tag": "date.vacation_end", "types": (APPLIANCE_HW,), "read": ("vacEndDate",)},
     {
         "tag": "water_heater.heat_pump_water_heater",
         "types": (APPLIANCE_HW,),
@@ -2759,7 +2785,11 @@ def _mapped_sets(
     if app_type == APPLIANCE_HW:
         # The state sensor is a custom class with no description row, so the walk
         # above cannot see the eco windows, the scheme and the day mask it reads.
+        # Nor what the eco-window sensor, the vacation rule (binary and source mask)
+        # and the two vacation dates read beyond their `attr_key`.
         mapped_attrs |= set(HPWH_STATE_ATTRS)
+        mapped_attrs |= set(HPWH_ECO_WINDOW_ATTRS)
+        mapped_attrs |= set(HPWH_VACATION_ATTRS)
         mapped_params |= {"onOffStatus", "tempSel", "boostStatus", "machMode"}
     if app_type == APPLIANCE_HO:
         # Same shape as the AP block below, same reason. The hood's five parameters

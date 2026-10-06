@@ -29,6 +29,10 @@
         "opp2EcoStartTime2": "00:00",
         "opp2EcoEndTime2": "00:00",
         "opp2EcoStartTime3": "00:00",
-        "opp2EcoEndTime3": "00:00"
+        "opp2EcoEndTime3": "00:00",
+        "vacStartDate": "0000-00-00",
+        "vacEndDate": "0000-00-00",
+        "autoDefrostStatus": 0,
+        "sterilizationTime": "00:00"
     }
 }
