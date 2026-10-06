@@ -170,12 +170,19 @@ class HonParameterProgram(HonParameterEnum):
         # whichever the schema happens to list first would hijack the name and could
         # report a downloaded program that was never started. Falling through to `ids`
         # then yields the base program, which is what shipped before.
-        # It must also agree on prPosition when the appliance reports it (see below).
+        # It must also agree on prPosition when the appliance reports it (see below),
+        # unless `/history` named it: the dishwasher's shadow reports a prPosition its
+        # catalog does not declare (2 dumps out of 2), and the guard then hid every
+        # programme recovered on a shared code (issue #112, decision D5).
         if (
             active is not None
             and getattr(active, "selected_explicitly", False)
             and self._category_code(active) == code
-            and (position is None or self._category_position(active) == position)
+            and (
+                position is None
+                or getattr(active, "recovered_from_history", False)
+                or self._category_position(active) == position
+            )
         ):
             return str(self._value)
         if position is not None:

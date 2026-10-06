@@ -1351,8 +1351,9 @@ def _command_history_block(appliance) -> dict:
     two of the reporter's dumps. The engine already downloads the `/history` list at
     every catalog load to recover the last-used programme; this prints it.
 
-    The list is read at catalog load (setup or reload), ten seconds after the cloud
-    accepts a startProgram or stopProgram, and AGAIN when the dump is requested
+    The list is read at catalog load (setup or reload), when a new cycle of a washer,
+    washer-dryer, dryer or dishwasher shows up in the context, and AGAIN when the dump
+    is requested
     (`refresh_command_history`, issues #112/#115: a setup-time list was 42 h old in a
     dump and missed the two starts it was opened to show). `at` is HA's UTC instant of
     the last successful read, `refresh` the outcome of the last re-read ("ok",

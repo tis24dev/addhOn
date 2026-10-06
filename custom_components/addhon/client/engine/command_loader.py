@@ -57,6 +57,34 @@ _LOGGER = logging.getLogger(__name__)
 _RECOVERED_AS = {"delayTime": "0"}
 
 
+def start_identity(history: Any) -> Optional[str]:
+    """Identity of the newest `startProgram` in a `/history` list, or None.
+
+    The newest is the first, as for the recovery (`_get_last_command_index`). The
+    identity is the command's `transactionId` and `timestamp`, which the body carries
+    unchanged into `/history` and into the context's `commandHistory` slot: equality,
+    not ordering, so a phone clock that runs fast or slow cannot misorder two starts.
+    """
+    if not isinstance(history, list):
+        return None
+    for entry in history:
+        command = entry.get("command") if isinstance(entry, dict) else None
+        if isinstance(command, dict) and command.get("commandName") == "startProgram":
+            return command_identity(command)
+    return None
+
+
+def command_identity(command: Any) -> Optional[str]:
+    """`transactionId|timestamp` of one command body, or None without either."""
+    if not isinstance(command, dict):
+        return None
+    transaction = command.get("transactionId")
+    timestamp = command.get("timestamp")
+    if transaction is None and timestamp is None:
+        return None
+    return f"{transaction or ''}|{timestamp or ''}"
+
+
 def _normalized_pr_code(value: Any) -> str:
     """`prCode` as comparable text: "205", 205 and "205.0" are the same programme."""
     text = str(value).strip()
@@ -734,26 +762,54 @@ class HonCommandLoader:
             # "deliberately selected" mark has to be applied here too -- otherwise a
             # recovered program would be indistinguishable from the schema default.
             selected.mark_selected_explicitly()
+            # Only the category recovered last carries the history's mark: a runtime
+            # recovery (a cycle started elsewhere) moves it off the previous one.
+            for other in command.categories.values():
+                if other is not selected:
+                    other.mark_recovered(False)
+            selected.mark_recovered()
             self._commands[name] = selected
         return self._commands[name]
 
     def _recover_last_command_states(self) -> None:
         for name, command in self.commands.items():
-            if (last_index := self._get_last_command_index(name)) is None:
+            self._recover_command_state(name, command)
+
+    def _recover_command_state(self, name: str, command: HonCommand) -> None:
+        if (last_index := self._get_last_command_index(name)) is None:
+            return
+        last_command = self._command_history[last_index].get("command", {})
+        raw_parameters = last_command.get("parameters", {})
+        parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
+        target = self._set_last_category(
+            command, name, parameters, last_command.get("programName")
+        )
+        if target is None:
+            return
+        for key, data in target.settings.items():
+            if parameters.get(key) is None:
                 continue
-            last_command = self._command_history[last_index].get("command", {})
-            raw_parameters = last_command.get("parameters", {})
-            parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
-            target = self._set_last_category(
-                command, name, parameters, last_command.get("programName")
-            )
-            if target is None:
-                continue
-            for key, data in target.settings.items():
-                if parameters.get(key) is None:
-                    continue
-                with suppress(ValueError):
-                    data.value = _RECOVERED_AS.get(key, parameters.get(key))
+            with suppress(ValueError):
+                data.value = _RECOVERED_AS.get(key, parameters.get(key))
+
+    def recover_start(
+        self, commands: dict[str, HonCommand], history: list[dict[str, Any]]
+    ) -> Optional[str]:
+        """Point `commands["startProgram"]` at the last start `history` lists.
+
+        For a cycle started elsewhere while Home Assistant runs (issue #112): the same
+        recovery as a catalog load, on the appliance's own dict, for the start alone --
+        the other commands' last values have nothing to do with a new cycle (decision
+        of 2026-10-06). Returns how the category was chosen, as `history_recovery`
+        records it, or None when there is no start to recover.
+        """
+        self._commands = commands
+        self._command_history = history
+        self._history_recovery = {}
+        if (command := commands.get("startProgram")) is None:
+            return None
+        self._recover_command_state("startProgram", command)
+        return self._history_recovery.get("startProgram")
 
     def _add_favourites(self) -> None:
         for favourite in self._favourites:

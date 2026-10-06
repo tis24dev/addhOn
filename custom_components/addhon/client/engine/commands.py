@@ -100,6 +100,10 @@ class HonCommand:
         # and `mark_selected_explicitly`). Declared here rather than created on first
         # write so the state is explicit and `__copy__` can reset it.
         self._selected_explicitly = False
+        # Set only on the category the last history recovery chose, at load or when a
+        # cycle started elsewhere is followed (see `mark_recovered`); cleared on the
+        # others by the next recovery.
+        self._recovered_from_history = False
         # The name the user gave a favourite in the app; empty on a schema category.
         # Set by `HonCommandLoader._add_favourites` on its copy (see `favourite_name`).
         self._favourite_name = ""
@@ -134,6 +138,7 @@ class HonCommand:
         # invariant. Isolating it here matches what this method already does for
         # `_parameters`, the triggers and the rule sets.
         new._selected_explicitly = False
+        new._recovered_from_history = False
         # A shallow-copied parameter still SHARES its `_triggers` table with the base, and
         # every rule callback in it closes over THIS command -- so setting a value on the
         # copy would fire rules that mutate the base's parameters (the exact corruption the
@@ -541,11 +546,6 @@ class HonCommand:
             self.appliance.sync_payload_to_params(params)
             if self._name == "settings":
                 self.appliance.sync_params_to_command("settings")
-        if self._name in ("startProgram", "stopProgram"):
-            # The `/history` list a dump prints should already hold this command.
-            schedule = getattr(self.appliance, "schedule_history_refresh", None)
-            if callable(schedule):
-                schedule()
         return result
 
     def ancillary_parameters(self) -> dict[str, str | float]:
@@ -642,6 +642,21 @@ class HonCommand:
     def selected_explicitly(self) -> bool:
         """True if this category was chosen, rather than left active by default."""
         return self._selected_explicitly
+
+    def mark_recovered(self, recovered: bool = True) -> None:
+        """Flag this category as the one the last history recovery chose.
+
+        `/history` named it as the programme the appliance was last started with, so
+        `HonParameterProgram.name_for_code` trusts it even when the shadow reports a
+        prPosition the catalog does not declare (issue #112, decision D5: the
+        dishwasher's shadow disagrees with its catalog in 2 dumps out of 2).
+        """
+        self._recovered_from_history = recovered
+
+    @property
+    def recovered_from_history(self) -> bool:
+        """True on the category the last history recovery chose."""
+        return self._recovered_from_history
 
     @property
     def setting_keys(self) -> list[str]:

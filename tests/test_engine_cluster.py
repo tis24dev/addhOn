@@ -983,66 +983,6 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual("22", str(settings.settings["tempSel"].value))
         self.assertEqual("4", str(settings.settings["windSpeed"].value))
 
-    def _history_app(self, name, api):
-        app = NaAppliance(api, dict(_INFO), zone=0)
-        command = NaCommand(
-            name,
-            {"parameters": {"mode": _range(default="1", lo="0", hi="3", inc="1")}},
-            app,
-        )
-        app._commands = {name: command}
-        app._HISTORY_REFRESH_DELAY = 0
-        return app, command
-
-    @staticmethod
-    def _send_then_settle(*sends):
-        async def go():
-            for send in sends:
-                await send()
-            await asyncio.sleep(0.05)
-
-        return _run(go())
-
-    def test_an_accepted_start_re_reads_the_history_in_the_background(self) -> None:
-        # Decision d of 2026-10-06 (issues #112, #115): ten seconds after the cloud
-        # accepts a startProgram or a stopProgram, the list is read again.
-        for name in ("startProgram", "stopProgram"):
-            with self.subTest(command=name):
-                app, command = self._history_app(name, FakeApi())
-                self._send_then_settle(command.send)
-                self.assertEqual("ok", app.command_history_refresh)
-                self.assertEqual(2, len(app.command_history))
-
-    def test_other_commands_do_not_re_read_it(self) -> None:
-        app, command = self._history_app("settings", FakeApi())
-        self._send_then_settle(command.send)
-        self.assertIsNone(app.command_history_refresh)
-
-    def test_a_refused_start_does_not_re_read_it(self) -> None:
-        from custom_components.addhon.client.engine.exceptions import ApiError
-
-        class RefusingApi(FakeApi):
-            async def send_command(self, *args, **kwargs):
-                return False
-
-        app, command = self._history_app("startProgram", RefusingApi())
-        with self.assertRaises(ApiError):
-            self._send_then_settle(command.send)
-        self.assertIsNone(app.command_history_refresh)
-
-    def test_two_quick_starts_cost_one_read(self) -> None:
-        class CountingApi(FakeApi):
-            reads = 0
-
-            async def load_command_history(self, a):
-                CountingApi.reads += 1
-                return await super().load_command_history(a)
-
-        app, command = self._history_app("startProgram", CountingApi())
-        app._HISTORY_REFRESH_DELAY = 0.02
-        self._send_then_settle(command.send, command.send)
-        self.assertEqual(1, CountingApi.reads)
-
     def test_dispatch_rollback_preserves_concurrent_mqtt_update(self) -> None:
         from custom_components.addhon.client.engine.attributes import HonAttribute
 
