@@ -584,5 +584,79 @@ class ServiceTranslationParityTest(unittest.TestCase):
                         f"{lang}: {name} field translations do not match services.yaml",
                     )
 
+
+def _leaf_strings(node, prefix: str = "") -> dict[str, object]:
+    """{dotted path: value} for every non-object value under `node`."""
+    leaves: dict[str, object] = {}
+    for key, value in node.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            leaves.update(_leaf_strings(value, path))
+        else:
+            leaves[path] = value
+    return leaves
+
+
+_PLACEHOLDER = re.compile(r"\{[^{}]*\}")
+
+
+class PartialTranslationTest(unittest.TestCase):
+    """Languages outside LANGS are partial by design (decision F4 of 2026-10-06).
+
+    Home Assistant loads en.json first and lays the user's language over it key by
+    key (homeassistant/helpers/translation.py), so a key missing here is shown in
+    English. Nothing obliges these files to follow a new key: the parity tests above
+    stay on LANGS. What is checked is only that what IS written is sound -- a key
+    English no longer has is dead text, and a placeholder the code does not pass
+    reaches the user as a raw `{name}`.
+    """
+
+    # Anti-vacuity: with no file to read, every check below would pass doing nothing.
+    EXPECTED = ("pt", "pt-BR")
+
+    def _partials(self) -> dict[str, dict]:
+        files = {
+            path.stem: path
+            for path in sorted(TRANSLATIONS.glob("*.json"))
+            if path.stem not in LANGS
+        }
+        for lang in self.EXPECTED:
+            self.assertIn(lang, files, f"translations/{lang}.json is missing")
+        # Decoded as plain utf-8: json.loads refuses a leading BOM on its own.
+        return {
+            lang: json.loads(path.read_text(encoding="utf-8"))
+            for lang, path in files.items()
+        }
+
+    def test_each_file_is_a_json_object(self) -> None:
+        for lang, data in self._partials().items():
+            self.assertIsInstance(data, dict, lang)
+            self.assertTrue(data, f"{lang}.json is empty")
+
+    def test_no_key_outside_english(self) -> None:
+        english = _leaf_strings(_load("en"))
+        for lang, data in self._partials().items():
+            extra = sorted(set(_leaf_strings(data)) - set(english))
+            self.assertEqual([], extra, f"{lang}: keys en.json does not have")
+
+    def test_every_value_is_a_non_empty_string(self) -> None:
+        for lang, data in self._partials().items():
+            for path, value in _leaf_strings(data).items():
+                self.assertIsInstance(value, str, f"{lang}: {path}")
+                self.assertTrue(value.strip(), f"{lang}: {path} is empty")
+
+    def test_placeholders_match_english(self) -> None:
+        english = _leaf_strings(_load("en"))
+        for lang, data in self._partials().items():
+            for path, value in _leaf_strings(data).items():
+                if not isinstance(value, str) or not isinstance(english.get(path), str):
+                    continue  # reported by the two tests above
+                self.assertEqual(
+                    sorted(set(_PLACEHOLDER.findall(english[path]))),
+                    sorted(set(_PLACEHOLDER.findall(value))),
+                    f"{lang}: {path}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
