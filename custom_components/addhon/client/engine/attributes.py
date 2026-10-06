@@ -83,6 +83,9 @@ class HonAttribute:
             return False
         if shield:
             self._lock_timestamp = datetime.now(timezone.utc)
+            # Our write changes the value held: whatever the cloud sends next, even
+            # the value it last sent, is a reception (PR #121 review).
+            self._received_value = None
         if isinstance(data, str):
             self.value = data
             return True

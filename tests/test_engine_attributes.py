@@ -155,6 +155,21 @@ class ReceivedValueTest(unittest.TestCase):
         self.assertEqual(before, a.received_at)
         self.assertEqual("rest", a.received_via)
 
+    def test_the_cloud_putting_back_the_value_before_our_write_is_a_reception(
+        self,
+    ) -> None:
+        # PR #121 review (CodeRabbit): last received "0", our shielded write "1", the
+        # cloud then restores "0". The value held changed, so the mark has to follow,
+        # even though "0" equals the last value received before the write.
+        a = NaAttr({"parNewVal": "0", "lastUpdate": "2026-10-03T11:45:54+00:00"})
+        before = self._aged(a)
+        a.update("1", shield=True)
+        a._lock_timestamp = datetime(2000, 1, 1, tzinfo=timezone.utc)  # shield over
+        self.assertTrue(a.update({"parName": "x", "parNewVal": "0"}))
+        self.assertEqual(0, a.value)
+        self.assertGreater(a.received_at, before)
+        self.assertEqual("mqtt", a.received_via)
+
     def test_an_update_the_lock_rejects_is_not_a_reception(self) -> None:
         a = NaAttr({"parNewVal": "0", "lastUpdate": "2026-09-18T15:26:19+00:00"})
         a.update("1", shield=True)
