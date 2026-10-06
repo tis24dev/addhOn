@@ -249,6 +249,75 @@ def test_only_the_keys_that_change_are_compared(caplog) -> None:
     assert "boostStatus" not in warnings[0]
 
 
+@pytest.mark.parametrize(
+    ("key", "sent", "published"),
+    [
+        # The app writes the sterilization hour unpadded (apk2 decomp.txt:4592323-
+        # 4592332); #115 publishes "15:00".
+        ("sterilizationTime", "15:0", "15:00"),
+        ("sterilizationTime", "3:30", "03:30"),
+        # It writes the eco day mask in lower case (4505245); #113 and #115 publish "7F".
+        ("opp1EcoDays", "1f", "1F"),
+    ],
+)
+def test_the_appliances_own_spelling_is_the_value_sent(caplog, key, sent, published) -> None:
+    appliance = _Appliance(**{key: "0:0" if key == "sterilizationTime" else "7F"})
+    _arm(appliance, {key: sent})
+    appliance.cloud_read("2026-10-01T10:17:48.4Z", "2026-10-01T10:17:49.1Z",
+                         **{key: published})
+
+    diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 47)
+
+    assert _warnings(caplog) == []
+
+
+def test_a_spelling_already_there_arms_nothing(caplog) -> None:
+    appliance = _Appliance(sterilizationTime="15:00", opp1EcoDays="1F")
+    _arm(appliance, {"sterilizationTime": "15:0", "opp1EcoDays": "1f"})
+    appliance.cloud_read("2026-10-01T10:07:58.9Z", "2026-10-01T10:07:59.0Z",
+                         sterilizationTime="3:00", opp1EcoDays="7F")
+
+    diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 47)
+
+    assert _warnings(caplog) == []
+
+
+def test_an_mqtt_push_in_the_appliances_spelling_closes_the_check(caplog) -> None:
+    appliance = _Appliance(sterilizationTime="0:0")
+    _arm(appliance, {"sterilizationTime": "15:0"})
+
+    diagnostics.observe_mqtt_update(appliance, {"sterilizationTime": "15:00"},
+                                    timestamp=_SENT_AT + 2)
+    appliance.cloud_read("2026-10-01T10:18:01.3Z", "2026-10-01T10:18:01.3Z",
+                         sterilizationTime="4:00")
+    diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 47)
+
+    assert _warnings(caplog) == []
+
+
+@pytest.mark.parametrize(
+    ("key", "sent", "published"),
+    [
+        ("sterilizationTime", "15:0", "15:30"),
+        ("sterilizationTime", "15:0", "5:00"),
+        ("opp1EcoDays", "1f", "7F"),
+        # Only a clock and a hex mask are respelled: other text stays exact.
+        ("operationName", "grSetEcoTime", "GRSETECOTIME"),
+    ],
+)
+def test_another_value_still_warns(caplog, key, sent, published) -> None:
+    appliance = _Appliance(**{key: "x"})
+    _arm(appliance, {key: sent})
+    appliance.cloud_read("2026-10-01T10:18:51.0Z", "2026-10-01T10:18:52.0Z",
+                         **{key: published})
+
+    diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 47)
+
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert f"{key} is {published}, {sent} was sent" in warnings[0]
+
+
 def test_a_newer_send_replaces_the_check(caplog) -> None:
     """The slot only ever shows the latest command: an older check is dropped."""
     appliance = _Appliance(tempSel="65")

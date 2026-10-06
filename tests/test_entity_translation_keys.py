@@ -173,6 +173,9 @@ def _install_stubs() -> None:
     button_mod.ButtonEntity = getattr(
         button_mod, "ButtonEntity", type("ButtonEntity", (), {})
     )
+    # The heat-pump water heater's sterilization time (block 5): entity base only.
+    time_mod = _mod("homeassistant.components.time")
+    time_mod.TimeEntity = getattr(time_mod, "TimeEntity", type("TimeEntity", (), {}))
 
     const.ATTR_TEMPERATURE = getattr(const, "ATTR_TEMPERATURE", "temperature")
 
@@ -214,8 +217,8 @@ def _tk(description) -> str:
 
 def _collect_code_keys() -> dict[str, set[str]]:
     from custom_components.addhon import (
-        binary_sensor, fan, number, ref_programs, select, sensor, switch,
-        water_heater,
+        binary_sensor, button, date, fan, number, ref_programs, select, sensor, switch,
+        time, water_heater,
     )
 
     used: dict[str, set[str]] = {}
@@ -228,6 +231,9 @@ def _collect_code_keys() -> dict[str, set[str]]:
     # register the key it publishes here.
     used["sensor"].add(sensor.HonMeanWaterConsumption._attr_translation_key)
     used["sensor"].add(sensor.HonHeatPumpStateSensor._attr_translation_key)
+    used["sensor"].add(sensor.HonHeatPumpEcoWindowSensor._attr_translation_key)
+    # The heat-pump water heater's energy counters: fixed keys from one table.
+    used["sensor"].update(key for key, _consumption, _enabled in sensor._HPWH_ENERGY)
     used["sensor"].update(
         f"remaining_time_zone{zone}" for zone in sensor._HOB_ZONES
     )
@@ -251,6 +257,8 @@ def _collect_code_keys() -> dict[str, set[str]]:
         # The AP timing numbers are built outside the NUMBERS table (they dispatch
         # rather than send), so they have to register themselves here.
         | {_tk(d) for d in number._AP_TIMING_NUMBERS}
+        # So are the heat-pump water heater's sterilization numbers (block 5).
+        | {_tk(d) for d in number._HPWH_STERILIZATION_NUMBERS}
     )
     # HonSettingsSwitch names from description.key (AC toggles + wine-cooler light); the
     # pause + debug switches use fixed keys; the program-option switches (#35) come from
@@ -264,8 +272,10 @@ def _collect_code_keys() -> dict[str, set[str]]:
         # direction's ON and a sparse stopProgram for its OFF.
         | {d.key for d in switch._REF_MODE_SWITCHES}
         | {"pause", "debug_logging", "mqtt_realtime_debug"}
-        # The heat-pump water heater boost (#113): a fixed-key class.
+        # The heat-pump water heater boost (#113) and its sterilization schedule
+        # (block 5): fixed-key classes.
         | {switch.HonHeatPumpBoostSwitch._attr_translation_key}
+        | {switch.HonHeatPumpSterilizationSwitch._attr_translation_key}
         # The cooker hood's power switch is a fixed-key class, not a table row: it
         # writes `onOffStatus`, which the hood's settings command does not declare,
         # and it needs one command per direction.
@@ -291,6 +301,8 @@ def _collect_code_keys() -> dict[str, set[str]]:
     # here, which is the whole job of this test.
     used["button"] = {
         "start_program", "stop_program", "force_refresh", "reset_debug",
+        # The heat-pump water heater's vacation clear (block 5): a fixed-key class.
+        button.HonHeatPumpVacationClearButton._attr_translation_key,
     } | {f"ref_preset_{code}" for code in ref_programs.REF_DOWNLOAD_PRESETS}
     # The fans are fixed-key entities, not description tables: each one has to
     # register itself here or the platform's key set silently loses it.
@@ -299,6 +311,10 @@ def _collect_code_keys() -> dict[str, set[str]]:
         fan.HonHoodFan._attr_translation_key,
     }
     used["water_heater"] = {water_heater.HonHeatPumpWaterHeater._attr_translation_key}
+    # The heat-pump water heater's vacation dates: fixed keys from one closed tuple.
+    used["date"] = {key for key, _shadow_key, _icon in date._VACATION_DATES}
+    # Its sterilization time, which replaced the block-3 sensor: one fixed-key class.
+    used["time"] = {time.HonHeatPumpSterilizationTime._attr_translation_key}
     return used
 
 

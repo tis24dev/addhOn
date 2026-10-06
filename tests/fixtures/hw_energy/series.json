@@ -1,0 +1,70 @@
+{
+    "_comment": "The three yearly energy series and the appliance date that two real Haier heat-pump water heaters (type HW, series m8) reported, copied from the addhOn diagnostics attached to issues #113 and #115. Values kept exactly as the dumps print them; `last_update` is the cloud instant of each value (`attributes_last_update`). Only these four attributes; no identity.",
+    "source": "https://github.com/tis24dev/addhOn/issues/113 and /issues/115 (diagnostics attachments)",
+    "snapshots": {
+        "113_2026-09-27": {
+            "model": "HP110M8-9",
+            "dump": "addhOn 5.25.0, generated 2026-09-27",
+            "attributes": {
+                "date": "2026-09-27",
+                "energyConsumptionYearCp": "0;0;0;47;72",
+                "energyConsumptionYearEc": "0;0;0;1;15",
+                "accumulatedHeatYear": "0;0;0;338;440"
+            },
+            "last_update": {
+                "date": "2026-09-26T22:25:03+00:00",
+                "energyConsumptionYearCp": "2026-09-20T15:18:22+00:00",
+                "energyConsumptionYearEc": "2026-09-20T15:18:22+00:00",
+                "accumulatedHeatYear": "2026-09-20T15:18:22+00:00"
+            }
+        },
+        "115_2026-09-29": {
+            "model": "HP150M8-9",
+            "dump": "addhOn 5.25.0, generated 2026-09-29",
+            "attributes": {
+                "date": "2026-09-30",
+                "energyConsumptionYearCp": "0;0;0;215;581",
+                "energyConsumptionYearEc": "0;0;0;100;42",
+                "accumulatedHeatYear": "0;0;0;818;2496"
+            },
+            "last_update": {
+                "date": "2026-09-29T21:54:53+00:00",
+                "energyConsumptionYearCp": "2026-09-29T16:28:02+00:00",
+                "energyConsumptionYearEc": "2026-06-25T19:37:39+00:00",
+                "accumulatedHeatYear": "2026-09-29T16:05:20+00:00"
+            }
+        },
+        "115_2026-10-02": {
+            "model": "HP150M8-9",
+            "dump": "addhOn 5.26.0-beta9, generated 2026-10-02",
+            "attributes": {
+                "date": "2026-10-02",
+                "energyConsumptionYearCp": "0;0;0;215;585",
+                "energyConsumptionYearEc": "0;0;0;100;42",
+                "accumulatedHeatYear": "0;0;0;818;2516"
+            },
+            "last_update": {
+                "date": "2026-10-01T22:32:57+00:00",
+                "energyConsumptionYearCp": "2026-10-02T08:21:01+00:00",
+                "energyConsumptionYearEc": "2026-06-25T19:37:39+00:00",
+                "accumulatedHeatYear": "2026-10-02T20:49:49+00:00"
+            }
+        },
+        "115_2026-10-03": {
+            "model": "HP150M8-9",
+            "dump": "addhOn 5.26.0-beta9 (debug), generated 2026-10-03",
+            "attributes": {
+                "date": "2026-10-03",
+                "energyConsumptionYearCp": "0;0;0;215;586",
+                "energyConsumptionYearEc": "0;0;0;100;42",
+                "accumulatedHeatYear": "0;0;0;818;2519"
+            },
+            "last_update": {
+                "date": "2026-10-02T22:23:04+00:00",
+                "energyConsumptionYearCp": "2026-10-03T09:56:21+00:00",
+                "energyConsumptionYearEc": "2026-10-03T09:56:21+00:00",
+                "accumulatedHeatYear": "2026-10-03T09:56:21+00:00"
+            }
+        }
+    }
+}

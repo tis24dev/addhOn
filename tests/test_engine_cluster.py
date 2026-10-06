@@ -837,6 +837,212 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(app.attributes["parameters"]["mode"].value, "old")
         self.assertEqual(app.attributes["parameters"]["light"].value, "old-light")
 
+    def _full_send_app(self, api):
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        app = NaAppliance(api, dict(_INFO), zone=0)
+        command = NaCommand(
+            "settings",
+            {"parameters": {"mode": _range(default="1", lo="0", hi="3", inc="1")}},
+            app,
+        )
+        app._commands = {"settings": command}
+        app._attributes = {"parameters": {"mode": HonAttribute({"parNewVal": "1"})}}
+        command.settings["mode"].value = "2"
+        return app, command
+
+    def test_a_refused_full_send_leaves_the_shadow_alone(self) -> None:
+        # Decision F2 of 2026-10-06 (from the lucasgiovanny/addhOn fork): the optimistic
+        # mirror used to run BEFORE the cloud call, so a refused command still showed
+        # as applied for the shield window plus a poll, then "reverted by itself".
+        from custom_components.addhon.client.engine.exceptions import ApiError
+
+        class RefusingApi(FakeApi):
+            async def send_command(self, *args, **kwargs):
+                return False
+
+        app, command = self._full_send_app(RefusingApi())
+        with self.assertRaises(ApiError):
+            _run(command.send())
+        mode = app.attributes["parameters"]["mode"]
+        self.assertEqual(1, mode.value)
+        self.assertFalse(mode.lock)
+
+    def test_a_full_send_that_raises_leaves_the_shadow_alone(self) -> None:
+        class DownApi(FakeApi):
+            async def send_command(self, *args, **kwargs):
+                raise TimeoutError("cloud down")
+
+        app, command = self._full_send_app(DownApi())
+        with self.assertRaises(TimeoutError):
+            _run(command.send())
+        mode = app.attributes["parameters"]["mode"]
+        self.assertEqual(1, mode.value)
+        self.assertFalse(mode.lock)
+
+    def test_an_accepted_full_send_mirrors_and_shields_the_shadow(self) -> None:
+        app, command = self._full_send_app(FakeApi())
+        self.assertIs(True, _run(command.send()))
+        mode = app.attributes["parameters"]["mode"]
+        self.assertEqual(2, mode.value)
+        self.assertTrue(mode.lock)
+
+    def _ac_settings_app(self, api):
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        app = NaAppliance(api, dict(_INFO), zone=0)
+        settings = NaCommand(
+            "settings",
+            {"parameters": {
+                "tempSel": _range(default="22", lo="16", hi="30", inc="1"),
+                "windSpeed": _range(default="1", lo="0", hi="5", inc="1"),
+            }},
+            app,
+        )
+        app._commands = {"settings": settings}
+        app._attributes = {"parameters": {
+            "tempSel": HonAttribute({"parNewVal": "22"}),
+            "windSpeed": HonAttribute({"parNewVal": "1"}),
+            "tempIndoor": HonAttribute({"parNewVal": "25"}),
+        }}
+        return app, settings
+
+    @staticmethod
+    def _push_unrelated_key(app) -> None:
+        # What mqtt.py does for a push of a key nobody is writing: update it, then
+        # resync the settings command from the shadow.
+        app.attributes["parameters"]["tempIndoor"].update(
+            {"parName": "tempIndoor", "parNewVal": "24"}
+        )
+        app.sync_params_to_command("settings")
+
+    def test_a_push_during_an_accepted_send_does_not_mirror_the_old_values(self) -> None:
+        # PR #121 review (Greptile, commands.py:537): with the mirror after the await,
+        # a push landing while the cloud has not answered resynced the command from
+        # the OLD shadow, and the mirror then copied those old values and shielded
+        # them. The shadow must hold what was sent, and the command must follow it.
+        holder = {}
+
+        class SlowApi(FakeApi):
+            async def send_command(self, *args, **kwargs):
+                ClusterBehaviorTest._push_unrelated_key(holder["app"])
+                return await super().send_command(*args, **kwargs)
+
+        api = SlowApi()
+        app, settings = self._ac_settings_app(api)
+        holder["app"] = app
+        settings.settings["tempSel"].value = "26"
+        self.assertIs(True, _run(settings.send()))
+        self.assertEqual("26", str(api.sent[0][1]["tempSel"]))
+        temp = app.attributes["parameters"]["tempSel"]
+        self.assertEqual(26, temp.value)
+        self.assertTrue(temp.lock)
+        self.assertEqual("26", str(settings.settings["tempSel"].value))
+
+    def test_the_next_send_after_a_push_during_a_send_keeps_the_accepted_value(
+        self,
+    ) -> None:
+        holder = {"calls": 0}
+
+        class SlowApi(FakeApi):
+            async def send_command(self, *args, **kwargs):
+                holder["calls"] += 1
+                if holder["calls"] == 1:
+                    ClusterBehaviorTest._push_unrelated_key(holder["app"])
+                return await super().send_command(*args, **kwargs)
+
+        api = SlowApi()
+        app, settings = self._ac_settings_app(api)
+        holder["app"] = app
+        settings.settings["tempSel"].value = "26"
+        _run(settings.send())
+        # Only the fan changes next, with no push in between: the temperature on the
+        # wire must still be the accepted 26, not the 22 the push had put back.
+        settings.settings["windSpeed"].value = "3"
+        _run(settings.send())
+        self.assertEqual("26", str(api.sent[1][1]["tempSel"]))
+        self.assertEqual("3", str(api.sent[1][1]["windSpeed"]))
+
+    def test_an_accepted_start_program_does_not_resync_the_settings_command(
+        self,
+    ) -> None:
+        # Decision of 2026-10-06: the command is realigned to the shadow only when
+        # the one sent IS `settings` (the only one a push rewrites); any other send
+        # keeps the behaviour it had before decision F2.
+        app, settings = self._ac_settings_app(FakeApi())
+        start = NaCommand(
+            "startProgram",
+            {"parameters": {"tempSel": _range(default="22", lo="16", hi="30", inc="1")}},
+            app,
+        )
+        app._commands["startProgram"] = start
+        settings.settings["windSpeed"].value = "4"  # pending, never sent
+        start.settings["tempSel"].value = "27"
+        self.assertIs(True, _run(start.send()))
+        self.assertEqual(27, app.attributes["parameters"]["tempSel"].value)
+        self.assertEqual("22", str(settings.settings["tempSel"].value))
+        self.assertEqual("4", str(settings.settings["windSpeed"].value))
+
+    def _history_app(self, name, api):
+        app = NaAppliance(api, dict(_INFO), zone=0)
+        command = NaCommand(
+            name,
+            {"parameters": {"mode": _range(default="1", lo="0", hi="3", inc="1")}},
+            app,
+        )
+        app._commands = {name: command}
+        app._HISTORY_REFRESH_DELAY = 0
+        return app, command
+
+    @staticmethod
+    def _send_then_settle(*sends):
+        async def go():
+            for send in sends:
+                await send()
+            await asyncio.sleep(0.05)
+
+        return _run(go())
+
+    def test_an_accepted_start_re_reads_the_history_in_the_background(self) -> None:
+        # Decision d of 2026-10-06 (issues #112, #115): ten seconds after the cloud
+        # accepts a startProgram or a stopProgram, the list is read again.
+        for name in ("startProgram", "stopProgram"):
+            with self.subTest(command=name):
+                app, command = self._history_app(name, FakeApi())
+                self._send_then_settle(command.send)
+                self.assertEqual("ok", app.command_history_refresh)
+                self.assertEqual(2, len(app.command_history))
+
+    def test_other_commands_do_not_re_read_it(self) -> None:
+        app, command = self._history_app("settings", FakeApi())
+        self._send_then_settle(command.send)
+        self.assertIsNone(app.command_history_refresh)
+
+    def test_a_refused_start_does_not_re_read_it(self) -> None:
+        from custom_components.addhon.client.engine.exceptions import ApiError
+
+        class RefusingApi(FakeApi):
+            async def send_command(self, *args, **kwargs):
+                return False
+
+        app, command = self._history_app("startProgram", RefusingApi())
+        with self.assertRaises(ApiError):
+            self._send_then_settle(command.send)
+        self.assertIsNone(app.command_history_refresh)
+
+    def test_two_quick_starts_cost_one_read(self) -> None:
+        class CountingApi(FakeApi):
+            reads = 0
+
+            async def load_command_history(self, a):
+                CountingApi.reads += 1
+                return await super().load_command_history(a)
+
+        app, command = self._history_app("startProgram", CountingApi())
+        app._HISTORY_REFRESH_DELAY = 0.02
+        self._send_then_settle(command.send, command.send)
+        self.assertEqual(1, CountingApi.reads)
+
     def test_dispatch_rollback_preserves_concurrent_mqtt_update(self) -> None:
         from custom_components.addhon.client.engine.attributes import HonAttribute
 
@@ -1203,6 +1409,45 @@ class ClusterBehaviorTest(unittest.TestCase):
         app.sync_params_to_command("settings")
         self.assertEqual(command.settings["tempSel"].value, 18)  # preserved, not clamped to 20
 
+    def test_unsyncable_shadow_value_is_reported_at_info_once(self) -> None:
+        # Issue #115 (phroc's debug log): an HW schema types timingPowerOn as range 0..1
+        # while the shadow reports "00:00", so every poll and every MQTT push logged the
+        # same INFO line -- three a minute on every heat pump water heater. The first sight
+        # of a key/value pair stays INFO; repeats drop to DEBUG; a NEW value is news again.
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        command = NaCommand(
+            "settings",
+            {"parameters": {"timingPowerOn": _range(default="0", lo="0", hi="1", inc="1")}},
+            FakeAppliance(),
+        )
+        app = NaAppliance(FakeApi(), dict(_INFO), zone=0)
+        app._commands = {"settings": command}
+        app._attributes = {
+            "parameters": {"timingPowerOn": HonAttribute({"parNewVal": "00:00"})}
+        }
+        logger = "custom_components.addhon.client.engine.appliance"
+        with self.assertLogs(logger, level="DEBUG") as logs:
+            app.sync_params_to_command("settings")
+            app.sync_params_to_command("settings")
+            app._attributes["parameters"]["timingPowerOn"] = HonAttribute(
+                {"parNewVal": "07:30"}
+            )
+            app.sync_params_to_command("settings")
+        levels = [
+            (record.levelname, record.getMessage().split(" - ")[0])
+            for record in logs.records
+            if "Can't sync" in record.getMessage()
+        ]
+        self.assertEqual(
+            [
+                ("INFO", "Can't sync timingPowerOn from shadow '00:00'"),
+                ("DEBUG", "Can't sync timingPowerOn from shadow '00:00'"),
+                ("INFO", "Can't sync timingPowerOn from shadow '07:30'"),
+            ],
+            levels,
+        )
+
     def test_ac_eco_nested_rule_fires(self) -> None:
         # REAL AC structure (apk/dump/ac_live): ecoMode=1 with machMode fixed=1
         # must constrain tempSel to 26 and the wind-direction (nested extra-condition).
@@ -1260,7 +1505,10 @@ class _SendingAppliance(FakeAppliance):
         super().__init__()
         self.api = FakeApi()
 
-    def sync_command_to_params(self, name: str) -> None:
+    def sync_payload_to_params(self, params) -> None:
+        pass
+
+    def sync_params_to_command(self, name) -> None:
         pass
 
 
@@ -1700,7 +1948,7 @@ class _RuleApp:
         self.api = _FailApi()
         self.commands: dict = {}
 
-    def sync_command_to_params(self, name) -> None:
+    def sync_payload_to_params(self, params) -> None:
         pass
 
 
@@ -1742,6 +1990,80 @@ class ProtocolConformanceTest(unittest.TestCase):
             self.assertIsInstance(command, interfaces.Command)
             for param in command.parameters.values():
                 self.assertIsInstance(param, interfaces.Parameter)
+
+
+
+class ProgramNameRecoveryTest(unittest.TestCase):
+    """Recovery from the command's `programName` when the payload names no category.
+
+    A category-split startProgram can carry its programme BY the category, with no
+    `program` parameter in the payload; the recovery must then select the category
+    named by `programName`, or the schema's FIRST category stays active and the next
+    write re-labels the appliance with a programme it is not running. A `program`
+    parameter, where present, still wins. From the lucasgiovanny/addhOn fork (decision
+    F5 of 2026-10-06); its HW premise -- app history entries carrying
+    {machMode, onOffStatus, tempSel} next to programName -- did NOT hold on the dumps
+    checked (apk2/analysis/fork-lucasgiovanny-v6.2.0/1-scritture-water-heater.md §6),
+    so the cases here use the fridge catalogue.
+    """
+
+    def _recovered(self, history):
+        return _build(NaAppliance, DictApi(_RICH_COMMANDS, history=history))
+
+    @staticmethod
+    def _entry(program_name, parameters=None):
+        return [
+            {
+                "command": {
+                    "commandName": "startProgram",
+                    "programName": program_name,
+                    "parameters": parameters or {"tempSel": "63"},
+                }
+            }
+        ]
+
+    def test_program_name_selects_the_category(self) -> None:
+        app = self._recovered(self._entry("PROGRAMS.REF.SUPER_FREEZE"))
+        self.assertEqual(
+            "PROGRAMS.REF.SUPER_FREEZE", app.commands["startProgram"].category
+        )
+
+    def test_it_differs_from_the_default_category(self) -> None:
+        # The regression guard: without the fallback the default (first) category
+        # survives untouched.
+        default = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        self.assertNotEqual(
+            default.commands["startProgram"].category,
+            self._recovered(self._entry("PROGRAMS.REF.SUPER_FREEZE"))
+            .commands["startProgram"]
+            .category,
+        )
+
+    def test_a_program_parameter_still_wins(self) -> None:
+        # The payload is the stronger signal where it exists; programName is the fallback.
+        history = self._entry(
+            "PROGRAMS.REF.SUPER_FREEZE", {"program": "PROGRAMS.REF.SUPER_COOL"}
+        )
+        app = self._recovered(history)
+        self.assertEqual(
+            "PROGRAMS.REF.SUPER_COOL", app.commands["startProgram"].category
+        )
+
+    def test_an_unknown_program_name_keeps_the_default(self) -> None:
+        default = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        self.assertEqual(
+            default.commands["startProgram"].category,
+            self._recovered(self._entry("PROGRAMS.REF.GONE"))
+            .commands["startProgram"]
+            .category,
+        )
+
+    def test_no_program_name_at_all_keeps_the_default(self) -> None:
+        default = _build(NaAppliance, DictApi(_RICH_COMMANDS))
+        self.assertEqual(
+            default.commands["startProgram"].category,
+            self._recovered(self._entry(None)).commands["startProgram"].category,
+        )
 
 
 if __name__ == "__main__":

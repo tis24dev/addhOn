@@ -1567,7 +1567,10 @@ class _WasherAppliance:
         self.commands: dict = {}
         self.model_attributes = {} if platform is None else {"platform": platform}
 
-    def sync_command_to_params(self, name) -> None:
+    def sync_payload_to_params(self, params) -> None:
+        pass
+
+    def sync_params_to_command(self, name) -> None:
         pass
 
 

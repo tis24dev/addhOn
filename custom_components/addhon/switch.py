@@ -48,12 +48,18 @@ from .const import (
 from .debug_utils import redact_id
 from .hon_commands import command_param
 from .hpwh import (
+    HPWH_SCHEDULE_LOCK_STORE,
+    HPWH_STERILIZATION_KEYS,
     appliance_series,
     boost_block,
     boost_patch,
     code as hpwh_code,
     controls_supported,
     raise_refusal,
+    schedule_lock,
+    schedule_writes_supported,
+    settings_parameters,
+    sterilization_write,
 )
 from .hood import (
     HOOD_DELAY_STATUS_PARAM,
@@ -645,6 +651,10 @@ def _appliance_switches(
         series = appliance_series(appliance)
         if experimental and "boostStatus" in parameters and controls_supported(series):
             found.append(HonHeatPumpBoostSwitch(coordinator, appliance_id, client))
+        # Its sterilization schedule (block 5): experimental, plain m7/m8 only, with
+        # the four keys the app always sends together.
+        if experimental and schedule_writes_supported(appliance, HPWH_STERILIZATION_KEYS):
+            found.append(HonHeatPumpSterilizationSwitch(coordinator, appliance_id, client))
     else:
         _LOGGER.debug("Switch debug: appliance id=%s ignored, type=%s", redact_id(appliance_id), app_type)
     return found
@@ -729,6 +739,46 @@ class HonHeatPumpBoostSwitch(HonBaseEntity, SwitchEntity):
         await async_dispatch_patch(
             self.hass, self._hon_client, self._appliance, boost_patch(on)
         )
+        await self._async_request_command_refresh()
+
+
+class HonHeatPumpSterilizationSwitch(HonBaseEntity, SwitchEntity):
+    """The anti-legionella schedule of the heat-pump water heater (block 5).
+
+    `sterilizationStatus`, sent with the other three sterilization keys from the
+    shadow, as the app always sends them (apk2 decomp.txt:4592313-4592337). The
+    cycle running now is the `sterilization_running` binary, not this.
+    """
+
+    _attr_translation_key = "sterilization_schedule"
+    _attr_icon = "mdi:bacteria-outline"
+
+    def __init__(self, coordinator, appliance_id: str, client=None) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._attr_unique_id = f"{appliance_id}_sterilization_schedule"
+
+    @property
+    def is_on(self) -> bool | None:
+        value = hpwh_code(self._get_attr("sterilizationStatus"))
+        return None if value is None else value == "1"
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._set("1")
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._set("0")
+
+    async def _set(self, status: str) -> None:
+        async with schedule_lock(
+            self._coordinator_store(HPWH_SCHEDULE_LOCK_STORE), self._appliance_id
+        ):
+            patch = sterilization_write(
+                self._get_attr,
+                settings_parameters(self._appliance),
+                "sterilizationStatus",
+                status,
+            )
+            await async_dispatch_patch(self.hass, self._hon_client, self._appliance, patch)
         await self._async_request_command_refresh()
 
 

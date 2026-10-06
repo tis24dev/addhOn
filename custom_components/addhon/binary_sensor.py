@@ -56,6 +56,7 @@ from .const import (
 )
 from .air_purifier import co_alarm, has_problem, is_engaged
 from .debug_utils import redact_id
+from .hpwh import appliance_series, vacation_active
 from .hpwh import code as _hpwh_code
 from .ref_programs import REF_FLAG_TO_PARAM, flag_codes
 
@@ -536,21 +537,39 @@ def _hpwh_is_one(raw) -> bool | None:
     return None if value is None else value == "1"
 
 
+_HPWH_COMPRESSOR = HonBinarySensorEntityDescription(
+    key="compressor_heating",
+    icon="mdi:heat-pump",
+    attr_key="compressorHeatingCurrentStatus",
+    device_class=BinarySensorDeviceClass.RUNNING,
+    value_fn=_hpwh_not_zero,
+)
+_HPWH_ELECTRIC = HonBinarySensorEntityDescription(
+    key="electric_heating",
+    icon="mdi:heating-coil",
+    attr_key="electricHeatingCurrentStatus",
+    device_class=BinarySensorDeviceClass.RUNNING,
+    value_fn=_hpwh_not_zero,
+)
+# The sources that read off while a vacation is under way. In `getEnergySources` the
+# compressor row is `!isVacModeActive && !applianceDisconnected && flag !== '0'`
+# (decomp.txt:2331127-2331158, arguments @4492587); the electric row tests the
+# disconnection only (2331161-2331182), so the resistance keeps its own flag, as in
+# the app. The disconnection needs no rule of its own: a disconnected appliance makes
+# the entity unavailable (`HonBaseEntity.available`).
+_HPWH_VACATION_MASKED = (_HPWH_COMPRESSOR,)
+# Vacation as the app decides it (`hpwh.vacation_active`), from the mode and the two
+# dates; built on `machMode`, the one attribute both of its branches read. No device
+# class: none of Home Assistant's says "away".
+_HPWH_VACATION = HonBinarySensorEntityDescription(
+    key="vacation_active",
+    icon="mdi:beach",
+    attr_key="machMode",
+)
+
 _HEAT_PUMP_WATER_HEATER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
-    HonBinarySensorEntityDescription(
-        key="compressor_heating",
-        icon="mdi:heat-pump",
-        attr_key="compressorHeatingCurrentStatus",
-        device_class=BinarySensorDeviceClass.RUNNING,
-        value_fn=_hpwh_not_zero,
-    ),
-    HonBinarySensorEntityDescription(
-        key="electric_heating",
-        icon="mdi:heating-coil",
-        attr_key="electricHeatingCurrentStatus",
-        device_class=BinarySensorDeviceClass.RUNNING,
-        value_fn=_hpwh_not_zero,
-    ),
+    _HPWH_COMPRESSOR,
+    _HPWH_ELECTRIC,
     HonBinarySensorEntityDescription(
         key="boost",
         icon="mdi:rocket-launch",
@@ -563,6 +582,19 @@ _HEAT_PUMP_WATER_HEATER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
         attr_key="sterilizationCurrentStatus",
         device_class=BinarySensorDeviceClass.RUNNING,
         value_fn=_hpwh_is_one,
+    ),
+    _HPWH_VACATION,
+    # `autoDefrostStatus` has 0 occurrences in the app (2.27.9 and 2.30.7), so no
+    # comparison to copy: on at anything but "0", like the two heating flags, because
+    # an unknown non-zero code is more likely a defrost variant than an idle state.
+    # Disabled by default for the same lack of evidence; seen to change on #115 only.
+    HonBinarySensorEntityDescription(
+        key="defrost",
+        icon="mdi:snowflake-melt",
+        attr_key="autoDefrostStatus",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        value_fn=_hpwh_not_zero,
+        entity_registry_enabled_default=False,
     ),
 )
 
@@ -656,9 +688,15 @@ async def async_setup_entry(
                 continue
             # Keep Fresh needs the phase and the machine mode beside its own flag, which
             # a value_fn never sees -- it only gets the flag (#112).
-            entity_class = (
-                HonKeepFreshBinarySensor if description is _KEEP_FRESH else HonBinarySensor
-            )
+            if description is _KEEP_FRESH:
+                entity_class = HonKeepFreshBinarySensor
+            elif description is _HPWH_VACATION:
+                # Reads the dates beside the mode, and the appliance's series (#113).
+                entity_class = HonHeatPumpVacationBinarySensor
+            elif description in _HPWH_VACATION_MASKED:
+                entity_class = HonHeatPumpSourceBinarySensor
+            else:
+                entity_class = HonBinarySensor
             entities.append(
                 entity_class(
                     coordinator,
@@ -750,6 +788,29 @@ class HonKeepFreshBinarySensor(HonBinarySensor):
             self._get_attr(WM_ATTR_PROGRAM_PHASE),
             self._get_attr(WM_ATTR_STATUS),
         )
+
+
+class HonHeatPumpVacationBinarySensor(HonBinarySensor):
+    """Heat-pump water heater vacation, by the app's rule for the appliance's series."""
+
+    @property
+    def is_on(self) -> bool | None:
+        if self._get_attr(self.entity_description.attr_key) is None:
+            return None
+        return vacation_active(self._get_attr, appliance_series(self._appliance))
+
+
+class HonHeatPumpSourceBinarySensor(HonBinarySensor):
+    """A heating source of the heat-pump water heater: off during a vacation."""
+
+    @property
+    def is_on(self) -> bool | None:
+        running = super().is_on
+        if running is None:
+            return None
+        if vacation_active(self._get_attr, appliance_series(self._appliance)):
+            return False
+        return running
 
 
 class HonConnectivityBinarySensor(HonBinarySensor):

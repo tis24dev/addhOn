@@ -511,5 +511,163 @@ class ExceptionKeyParityTest(unittest.TestCase):
         self.assertEqual(en, it)
 
 
+
+def _services_yaml() -> dict[str, set[str]]:
+    """services.yaml as {service: {field, ...}}, parsed by indentation.
+
+    Deliberately not via PyYAML: it is not a test dependency of this suite, and the file
+    is machine-written by this repo in one fixed shape (two-space indent, `fields:` under
+    the service, field names one level below). The sanity assertions in the test guard
+    the parser itself -- a shape change breaks them loudly rather than silently returning
+    an empty mapping that would make the parity check vacuous.
+    """
+    services: dict[str, set[str]] = {}
+    current: str | None = None
+    in_fields = False
+    for line in (COMPONENT / "services.yaml").read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if indent == 0 and stripped.endswith(":"):
+            current = stripped[:-1]
+            services[current] = set()
+            in_fields = False
+        elif indent == 2 and stripped == "fields:":
+            in_fields = True
+        elif indent == 4 and in_fields and stripped.endswith(":") and current:
+            services[current].add(stripped[:-1])
+    return services
+
+
+class ServiceTranslationParityTest(unittest.TestCase):
+    """Every service and every field declared in services.yaml must be named in the UI.
+
+    From the lucasgiovanny/addhOn fork (decision F5 of 2026-10-06).
+
+    Without this the Developer Tools form shows raw keys and no descriptions -- which is
+    exactly what happened when the two diagnostic write services shipped, and there is no
+    other test that would have caught it.
+    """
+
+    def setUp(self) -> None:
+        self.services = _services_yaml()
+
+    def test_the_parser_reads_the_file(self) -> None:
+        self.assertIn("refresh", self.services)
+        self.assertEqual(self.services["set_log_level"], {"level"})
+        self.assertEqual(self.services["refresh"], set())
+        # An entity service: its `target` block is not a field.
+        self.assertEqual(
+            self.services["set_eco_schedule"], {"scheme", "days", "windows", "other_windows"}
+        )
+
+    def test_every_service_is_named_in_every_language(self) -> None:
+        for lang in LANGS:
+            translated = _load(lang).get("services", {})
+            with self.subTest(lang=lang):
+                self.assertEqual(set(translated), set(self.services))
+                for name, body in translated.items():
+                    self.assertTrue(body.get("name"), f"{lang}: {name} has no name")
+                    self.assertTrue(
+                        body.get("description"), f"{lang}: {name} has no description"
+                    )
+
+    def test_every_field_is_named_in_every_language(self) -> None:
+        for lang in LANGS:
+            translated = _load(lang).get("services", {})
+            for name, fields in self.services.items():
+                with self.subTest(lang=lang, service=name):
+                    self.assertEqual(
+                        set(translated.get(name, {}).get("fields", {})),
+                        fields,
+                        f"{lang}: {name} field translations do not match services.yaml",
+                    )
+
+
+def _leaf_strings(node, prefix: str = "") -> dict[str, object]:
+    """{dotted path: value} for every non-object value under `node`."""
+    leaves: dict[str, object] = {}
+    for key, value in node.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            leaves.update(_leaf_strings(value, path))
+        else:
+            leaves[path] = value
+    return leaves
+
+
+_PLACEHOLDER = re.compile(r"\{[^{}]*\}")
+
+
+class PartialTranslationTest(unittest.TestCase):
+    """Languages outside LANGS are partial by design (decision F4 of 2026-10-06).
+
+    Home Assistant loads en.json first and lays the user's language over it key by
+    key (homeassistant/helpers/translation.py), so a key missing here is shown in
+    English. Nothing obliges these files to follow a new key: the parity tests above
+    stay on LANGS. What is checked is only that what IS written is sound -- a key
+    English no longer has is dead text, and a placeholder the code does not pass
+    reaches the user as a raw `{name}`.
+    """
+
+    # Anti-vacuity: with no file to read, every check below would pass doing nothing.
+    EXPECTED = ("pt", "pt-BR")
+
+    def _partials(self) -> dict[str, dict]:
+        files = {
+            path.stem: path
+            for path in sorted(TRANSLATIONS.glob("*.json"))
+            if path.stem not in LANGS
+        }
+        for lang in self.EXPECTED:
+            self.assertIn(lang, files, f"translations/{lang}.json is missing")
+        # Decoded as plain utf-8: json.loads refuses a leading BOM on its own.
+        return {
+            lang: json.loads(path.read_text(encoding="utf-8"))
+            for lang, path in files.items()
+        }
+
+    def test_each_file_is_a_json_object(self) -> None:
+        for lang, data in self._partials().items():
+            self.assertIsInstance(data, dict, lang)
+            self.assertTrue(data, f"{lang}.json is empty")
+
+    def test_no_key_outside_english(self) -> None:
+        english = _leaf_strings(_load("en"))
+        for lang, data in self._partials().items():
+            extra = sorted(set(_leaf_strings(data)) - set(english))
+            self.assertEqual([], extra, f"{lang}: keys en.json does not have")
+
+    def test_every_value_is_a_non_empty_string(self) -> None:
+        for lang, data in self._partials().items():
+            for path, value in _leaf_strings(data).items():
+                self.assertIsInstance(value, str, f"{lang}: {path}")
+                self.assertTrue(value.strip(), f"{lang}: {path} is empty")
+
+    def test_the_light_dirt_level_is_not_the_lamp(self) -> None:
+        # PR #121 review (CodeRabbit): English "Light" here is a soil level, not a
+        # lamp; the inherited "Luz" said lamp. Decided on 2026-10-06.
+        partials = self._partials()
+        for lang, word in (("pt", "Ligeiro"), ("pt-BR", "Leve")):
+            self.assertEqual(
+                partials[lang]["entity"]["select"]["dirty_level"]["state"]["little"],
+                word,
+                lang,
+            )
+
+    def test_placeholders_match_english(self) -> None:
+        english = _leaf_strings(_load("en"))
+        for lang, data in self._partials().items():
+            for path, value in _leaf_strings(data).items():
+                if not isinstance(value, str) or not isinstance(english.get(path), str):
+                    continue  # reported by the two tests above
+                self.assertEqual(
+                    sorted(set(_PLACEHOLDER.findall(english[path]))),
+                    sorted(set(_PLACEHOLDER.findall(value))),
+                    f"{lang}: {path}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

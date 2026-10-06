@@ -37,6 +37,10 @@ class CommandHydration:
     # `default` (the values went on the default category) or `none` (nothing was
     # recovered). Issue #115: without it a dump cannot say why a category is active.
     history_recovery: dict[str, str] = field(default_factory=dict)
+    # Top-level key of the commands payload -> "command", "additional_data" or
+    # "unparsed": whether the appliance advertises something this integration never
+    # parses (from the lucasgiovanny/addhOn fork, decision F5 of 2026-10-06).
+    command_payload: dict[str, str] = field(default_factory=dict)
 
 
 class CommandCatalogUnavailable(HonCodedError):

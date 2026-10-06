@@ -109,6 +109,28 @@
           "description": "Livello di log da applicare al canale MQTT realtime hOn."
         }
       }
+    },
+    "set_eco_schedule": {
+      "name": "Imposta fasce eco",
+      "description": "Scaldacqua a pompa di calore: scrive le fasce eco come l'app hOn (lo schema, poi i giorni, poi le fasce; schema e giorni invariati non vengono rimandati), un passo alla volta, ognuno confermato dall'apparecchio prima del successivo, circa 15 secondi per passo. Solo in modalità Eco, con l'opzione sperimentale attiva, sulle serie m7 e m8.",
+      "fields": {
+        "scheme": {
+          "name": "Schema",
+          "description": "same: le stesse fasce ogni giorno. different: le fasce qui sotto nei giorni scelti, le altre fasce negli altri giorni."
+        },
+        "days": {
+          "name": "Giorni",
+          "description": "Solo con different: i giorni consecutivi, da lunedì a domenica, che usano le fasce qui sotto."
+        },
+        "windows": {
+          "name": "Fasce",
+          "description": "Fino a 3 fasce scritte HH:MM-HH:MM, minuti 00, 15, 30 o 45. Ogni giorno con same, nei giorni scelti con different. Vuoto: nessuna fascia."
+        },
+        "other_windows": {
+          "name": "Altre fasce",
+          "description": "Solo con different: fino a 3 fasce per gli altri giorni."
+        }
+      }
     }
   },
   "device": {
@@ -622,6 +644,18 @@
           "cheese": "Formaggi",
           "fruit_and_veg": "Frutta e verdura"
         }
+      },
+      "eco_window": {
+        "name": "Fascia eco"
+      },
+      "compressor_energy": {
+        "name": "Energia compressore"
+      },
+      "heater_energy": {
+        "name": "Energia resistenza elettrica"
+      },
+      "heat_produced": {
+        "name": "Calore prodotto"
       }
     },
     "binary_sensor": {
@@ -849,11 +883,20 @@
       },
       "combi_mode_zone6": {
         "name": "Zona 6 unita"
+      },
+      "vacation_active": {
+        "name": "Modalità vacanza"
+      },
+      "defrost": {
+        "name": "Sbrinamento"
       }
     },
     "switch": {
       "boost": {
         "name": "Boost"
+      },
+      "sterilization_schedule": {
+        "name": "Sterilizzazione programmata"
       },
       "sleep": {
         "name": "Modalità Notte"
@@ -1042,6 +1085,12 @@
       },
       "delay_off_time": {
         "name": "Ritardo di spegnimento"
+      },
+      "sterilization_interval": {
+        "name": "Intervallo della sterilizzazione"
+      },
+      "sterilization_temperature": {
+        "name": "Temperatura della sterilizzazione"
       }
     },
     "select": {
@@ -1218,6 +1267,9 @@
       },
       "reset_debug": {
         "name": "Reset debug"
+      },
+      "vacation_clear": {
+        "name": "Annulla vacanza"
       }
     },
     "fan": {
@@ -1237,6 +1289,19 @@
           "electric": "Elettrica",
           "off": "Spento"
         }
+      }
+    },
+    "date": {
+      "vacation_start": {
+        "name": "Inizio vacanza"
+      },
+      "vacation_end": {
+        "name": "Fine vacanza"
+      }
+    },
+    "time": {
+      "sterilization_time": {
+        "name": "Ora della sterilizzazione"
       }
     }
   },
@@ -1303,6 +1368,39 @@
     },
     "speed_not_supported": {
       "message": "Questo purificatore funziona a modalità discrete e non ha una velocità della ventola. Imposta una modalità preimpostata invece di una percentuale."
+    },
+    "vacation_dates_read_only": {
+      "message": "Le date della vacanza si possono cambiare solo con l'opzione sperimentale attiva."
+    },
+    "sterilization_time_read_only": {
+      "message": "L'ora della sterilizzazione si può cambiare solo con l'opzione sperimentale attiva."
+    },
+    "hpwh_write_not_supported": {
+      "message": "Questo scaldacqua non accetta questa impostazione da Home Assistant: la sua serie o lo schema dei suoi comandi non è supportato."
+    },
+    "hpwh_vacation_dates_order": {
+      "message": "La vacanza deve finire dopo il giorno in cui inizia."
+    },
+    "hpwh_sterilization_unreadable": {
+      "message": "Le impostazioni attuali della sterilizzazione non si leggono, quindi non si possono rimandare invariate: riprova dopo il prossimo aggiornamento."
+    },
+    "hpwh_eco_first": {
+      "message": "Passa prima alla modalità Eco."
+    },
+    "hpwh_eco_days_invalid": {
+      "message": "Con fasce diverse per giorno scegli uno o più giorni consecutivi, da lunedì a domenica."
+    },
+    "hpwh_eco_different_only": {
+      "message": "Giorni e altre fasce valgono solo con lo schema different."
+    },
+    "hpwh_eco_window_invalid": {
+      "message": "La fascia {window} non è valida: scrivi HH:MM-HH:MM, minuti 00, 15, 30 o 45, con la fine dopo l'inizio e senza sovrapporsi a un'altra fascia."
+    },
+    "hpwh_eco_too_many_windows": {
+      "message": "Al massimo 3 fasce per gruppo."
+    },
+    "hpwh_eco_step_not_applied": {
+      "message": "Lo scaldacqua non ha applicato il passo {step} di {steps} delle fasce eco; i passi successivi non sono stati inviati."
     }
   },
   "issues": {

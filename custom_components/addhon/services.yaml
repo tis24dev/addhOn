@@ -27,3 +27,41 @@ set_mqtt_log_level:
             - "info"
             - "warning"
             - "error"
+
+set_eco_schedule:
+  target:
+    entity:
+      integration: addhon
+      domain: water_heater
+  fields:
+    scheme:
+      required: true
+      example: same
+      selector:
+        select:
+          options:
+            - "same"
+            - "different"
+    days:
+      example: '["mon", "tue", "wed", "thu", "fri"]'
+      selector:
+        select:
+          multiple: true
+          options:
+            - "mon"
+            - "tue"
+            - "wed"
+            - "thu"
+            - "fri"
+            - "sat"
+            - "sun"
+    windows:
+      example: '["06:00-08:00", "22:00-23:45"]'
+      selector:
+        text:
+          multiple: true
+    other_windows:
+      example: '["00:15-23:45"]'
+      selector:
+        text:
+          multiple: true

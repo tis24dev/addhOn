@@ -105,7 +105,21 @@ from .const import (
 )
 from .debug_utils import _MAC_RE, redact_id
 from .hon_commands import SETTINGS_COMMANDS, param_range, param_values
-from .hpwh import HPWH_STATE_ATTRS
+from .hpwh import (
+    HPWH_DATE,
+    HPWH_ECO_SCHEDULE_KEYS,
+    HPWH_ECO_WINDOW_ATTRS,
+    HPWH_ENERGY_ATTRS,
+    HPWH_ENERGY_COUNTERS,
+    HPWH_ENERGY_STORE,
+    HPWH_STATE_ATTRS,
+    HPWH_STERILIZATION_KEYS,
+    HPWH_VACATION_ATTRS,
+    HPWH_VACATION_KEYS,
+    HPWH_YEAR_SERIES,
+    lifetime_as_dict,
+    lifetime_from_dict,
+)
 from .ref_programs import favourite_names, program_categories
 
 _LOGGER = logging.getLogger(__name__)
@@ -234,11 +248,86 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "types": (APPLIANCE_HW,),
         "read": HPWH_STATE_ATTRS,
     },
+    # Its eco window and the vacation rule are derived the same way (`hpwh.py`). The
+    # two heating sources read off during a vacation, so their rows, which the walk
+    # writes from the flag alone, are replaced by the flag plus the vacation inputs.
+    {
+        "tag": "sensor.eco_window",
+        "types": (APPLIANCE_HW,),
+        "read": HPWH_ECO_WINDOW_ATTRS,
+    },
+    {
+        "tag": "binary_sensor.vacation_active",
+        "types": (APPLIANCE_HW,),
+        "read": HPWH_VACATION_ATTRS,
+    },
+    {
+        "tag": "binary_sensor.compressor_heating",
+        "types": (APPLIANCE_HW,),
+        "read": ("compressorHeatingCurrentStatus", *HPWH_VACATION_ATTRS),
+    },
+    # Only the compressor is masked during a vacation (the app leaves the electric
+    # heater alone), so the electric heater reads its own flag and nothing else.
+    {
+        "tag": "binary_sensor.electric_heating",
+        "types": (APPLIANCE_HW,),
+        "read": ("electricHeatingCurrentStatus",),
+    },
+    # The vacation dates: fixed-key entities. Each write (block 5, experimental)
+    # sends both dates and the operation name, as the clear button does.
+    {
+        "tag": "date.vacation_start",
+        "types": (APPLIANCE_HW,),
+        "read": ("vacStartDate",),
+        "write": HPWH_VACATION_KEYS,
+    },
+    {
+        "tag": "date.vacation_end",
+        "types": (APPLIANCE_HW,),
+        "read": ("vacEndDate",),
+        "write": HPWH_VACATION_KEYS,
+    },
+    {"tag": "button.vacation_clear", "types": (APPLIANCE_HW,), "write": HPWH_VACATION_KEYS},
+    # The sterilization settings (block 5): each entity reads its own key and every
+    # write sends all four. The `time` entity replaced the block-3 sensor.
+    *(
+        {
+            "tag": tag,
+            "types": (APPLIANCE_HW,),
+            "read": (key,),
+            "write": HPWH_STERILIZATION_KEYS,
+        }
+        for tag, key in (
+            ("time.sterilization_time", "sterilizationTime"),
+            ("switch.sterilization_schedule", "sterilizationStatus"),
+            ("number.sterilization_interval", "sterilizationInterval"),
+            ("number.sterilization_temperature", "sterilizationTempSel"),
+        )
+    ),
+    # Its energy counters (#115): each adds up its `...Year...` series, reads the
+    # other two to tell a real zero from an empty transient, and the appliance's
+    # `date` as the guard's second witness of a new year. Rows for the HW only: on a
+    # washer `sensor.total_energy` is a description row of its own.
+    *(
+        {
+            "tag": f"sensor.{key}",
+            "types": (APPLIANCE_HW,),
+            "read": (
+                *series,
+                *(name for name in HPWH_YEAR_SERIES if name not in series),
+                HPWH_DATE,
+            ),
+        }
+        for key, series in HPWH_ENERGY_COUNTERS.items()
+    ),
+    # Its `set_eco_schedule` service (block 5) writes the eco windows as well.
     {
         "tag": "water_heater.heat_pump_water_heater",
         "types": (APPLIANCE_HW,),
         "read": ("temp", "tempSel", "onOffStatus", "machMode", "boostStatus"),
-        "write": ("onOffStatus", "tempSel", "boostStatus", "machMode"),
+        "write": (
+            "onOffStatus", "tempSel", "boostStatus", "machMode", *HPWH_ECO_SCHEDULE_KEYS
+        ),
     },
     {
         "tag": "switch.boost_switch",
@@ -1212,6 +1301,45 @@ def _history_recovery(appliance) -> dict | None:
     return {str(name): str(how) for name, how in raw.items()}
 
 
+# A runaway guard, as `_STAMP_MAX_ROWS` is: the commands payload of every appliance
+# dumped so far has a handful of top-level keys (settings, startProgram, stopProgram and
+# a few scalars), so this cap does not fire on any of them.
+_COMMAND_PAYLOAD_MAX_ROWS = 100
+
+
+def _command_payload(appliance) -> tuple[dict[str, str | None] | None, bool]:
+    """{top-level key of the commands payload: "command" | "additional_data" |
+    "unparsed"}, and whether the cap dropped rows.
+
+    From the lucasgiovanny/addhOn fork (decision F5 of 2026-10-06): a dict that is
+    neither a command nor a set of categories used to be dropped by the loader without
+    a trace, so a dump could not tell "the appliance offers nothing else" from "it
+    offers something this integration does not parse". Keys are cloud-chosen, so they
+    are bounded (masked first, then cut) like every other cloud string here.
+
+    None for an engine without the census (or one that raises), so it is not read as {}
+    -- a payload with no keys at all.
+    """
+    try:
+        raw = getattr(appliance, "command_payload", None)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: command payload census unreadable", exc_info=True)
+        return None, False
+    if not isinstance(raw, Mapping):
+        return None, False
+    rows: dict[str, str | None] = {}
+    truncated = False
+    for name, fate in raw.items():
+        if len(rows) >= _COMMAND_PAYLOAD_MAX_ROWS:
+            truncated = True
+            break
+        key = _bounded_text(name, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+        if key is None:
+            continue
+        rows[key] = _bounded_text(fate, _PROGRAM_MATRIX_VALUE_MAX_CHARS)
+    return rows, truncated
+
+
 def _command_history_block(appliance) -> dict:
     """The last commands the cloud recorded for this appliance, from ANY client.
 
@@ -1223,8 +1351,13 @@ def _command_history_block(appliance) -> dict:
     two of the reporter's dumps. The engine already downloads the `/history` list at
     every catalog load to recover the last-used programme; this prints it.
 
-    The list is the one of the last catalog load (setup or reload), not of this
-    instant: a command issued since then is absent until the integration reloads.
+    The list is read at catalog load (setup or reload), ten seconds after the cloud
+    accepts a startProgram or stopProgram, and AGAIN when the dump is requested
+    (`refresh_command_history`, issues #112/#115: a setup-time list was 42 h old in a
+    dump and missed the two starts it was opened to show). `at` is HA's UTC instant of
+    the last successful read, `refresh` the outcome of the last re-read ("ok",
+    "pending" if it did not finish, an exception class name, or None when none ran); a
+    failed re-read keeps the older list, and `at` says how old.
 
     Newest first by `command.timestamp` (else `timestampAccepted`), the order the cloud
     itself sends (2 beta7 dumps out of 2; 38 same-phone pairs out of 40 in
@@ -1233,19 +1366,35 @@ def _command_history_block(appliance) -> dict:
     `macAddress`, `transactionId`, `mobileId` and the table keys
     `PK`/`SK`/`SK_Secondary`, and the MAC pattern in every string value.
 
-    The same four keys in every state, so two dumps of one issue stay diffable.
+    The same six keys in every state, so two dumps of one issue stay diffable.
     """
+    try:
+        at = _stamp_text(getattr(appliance, "command_history_at", None))
+        refresh = _scalar_text(getattr(appliance, "command_history_refresh", None))
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        at = refresh = None
     try:
         raw = getattr(appliance, "command_history", _NO_OPTION_SURFACE)
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
         _LOGGER.debug("Diagnostics debug: command history unreadable", exc_info=True)
         raw = None
+
+    def _section(state: str, total, entries: list) -> dict:
+        return {
+            "state": state,
+            "total": total,
+            "shown": len(entries),
+            "at": at,
+            "refresh": refresh,
+            "entries": entries,
+        }
+
     if raw is _NO_OPTION_SURFACE:
         # An engine without the property: a statement about THIS integration, not
         # about what the cloud sent.
-        return {"state": "unavailable", "total": None, "shown": 0, "entries": []}
+        return _section("unavailable", None, [])
     if not isinstance(raw, list):
-        return {"state": "unreadable", "total": None, "shown": 0, "entries": []}
+        return _section("unreadable", None, [])
     dated: list[tuple[datetime, int, Mapping]] = []
     undated: list[Mapping] = []
     for index, entry in enumerate(raw):
@@ -1260,12 +1409,7 @@ def _command_history_block(appliance) -> dict:
     dated.sort(key=lambda item: (item[0], -item[1]), reverse=True)
     shown = [entry for _, _, entry in dated] + undated
     shown = shown[:_COMMAND_HISTORY_SHOWN]
-    return {
-        "state": "ok" if shown else "empty",
-        "total": len(raw),
-        "shown": len(shown),
-        "entries": shown,
-    }
+    return _section("ok" if shown else "empty", len(raw), shown)
 
 
 # The window in which `timestampExecuted - timestampAccepted` of the shadow's
@@ -1847,7 +1991,10 @@ def _option_drops() -> dict[str, tuple[str, ...]]:
         ("number", ("_PROGRAM_OPTION_NUMBERS",)),
     ):
         try:
-            imported = importlib.import_module(f".{module}", __package__)
+            # The ABSOLUTE name: HA's event-loop guard lets import_module through only
+            # when its first argument is already a sys.modules key, which a relative
+            # ".select" never is (issue #115, block_async_io._check_import_call_allowed).
+            imported = importlib.import_module(f"{__package__}.{module}")
             tables.extend(getattr(imported, name, ()) for name in names)
         except Exception:  # noqa: BLE001 - a dump must degrade, never raise
             continue
@@ -2701,8 +2848,20 @@ def _mapped_sets(
     if app_type == APPLIANCE_HW:
         # The state sensor is a custom class with no description row, so the walk
         # above cannot see the eco windows, the scheme and the day mask it reads.
+        # Nor what the eco-window sensor, the vacation rule (binary and source mask)
+        # and the two vacation dates read beyond their `attr_key`.
         mapped_attrs |= set(HPWH_STATE_ATTRS)
+        mapped_attrs |= set(HPWH_ECO_WINDOW_ATTRS)
+        mapped_attrs |= set(HPWH_VACATION_ATTRS)
+        # And the energy counters, custom classes too: their three series and the date.
+        mapped_attrs |= set(HPWH_ENERGY_ATTRS)
         mapped_params |= {"onOffStatus", "tempSel", "boostStatus", "machMode"}
+        # Block 5: the sterilization entities read their four keys, and the scheduling
+        # writes (vacation, sterilization, eco windows) name these parameters.
+        mapped_attrs |= set(HPWH_STERILIZATION_KEYS)
+        mapped_params |= set(HPWH_VACATION_KEYS)
+        mapped_params |= set(HPWH_STERILIZATION_KEYS)
+        mapped_params |= set(HPWH_ECO_SCHEDULE_KEYS)
     if app_type == APPLIANCE_HO:
         # Same shape as the AP block below, same reason. The hood's five parameters
         # are each read as state AND written as a command field, but only two of the
@@ -3659,6 +3818,53 @@ def _attribute_timestamps(
     )
 
 
+def _attribute_received(attributes: Mapping) -> tuple[dict[str, dict | None], bool]:
+    """When HA was handed each value it holds, and by which road: the map and the cap flag.
+
+    The half `attributes_last_update` cannot carry. The cloud stamps a value only on
+    the REST shadow; an MQTT delta changes the value and leaves the stamp where it was,
+    so a stamp can be hours older than the value beside it. Measured on issue #115
+    (phroc, 2026-10-03): temp went 55 -> 54 by MQTT at 14:05:00Z and the dump printed
+    54 beside an 11:45:54Z stamp. `HonAttribute.received_at` / `received_via` record,
+    in HA's own UTC clock, the moment the cloud delivered the value held NOW and
+    whether that was a REST row or an MQTT delta; a poll repeating the value, our own
+    shielded write and a row the lock rejected do not move it
+    (`client/engine/attributes.py`).
+
+    One row per value that exposes the `received_at` surface, `{"at", "via"}`, or
+    None when no cloud row has ever been taken; in `attributes`' own enumeration
+    order, which is the order `attributes_last_update` follows, so the two maps read
+    side by side. Capped at `_STAMP_MAX_ROWS` for the reason that cap exists; the flag
+    means dropped rows. Top level only: the nested `parameters` walk of
+    `_attribute_timestamps` is inert insurance (its docstring), and this map is new
+    enough to have no older dump to stay comparable with.
+    """
+    rows: dict[str, dict | None] = {}
+    truncated = False
+    try:
+        names = list(attributes)
+    except Exception:  # pragma: no cover - a Mapping that cannot list its keys
+        _LOGGER.debug("Diagnostics debug: attribute names unreadable", exc_info=True)
+        return rows, truncated
+    for name in names:
+        try:
+            value = attributes[name]
+            at = getattr(value, "received_at", _NO_LAST_UPDATE)
+            via = getattr(value, "received_via", None)
+        except Exception:
+            # One bad key costs one row, never the section (same rule as the stamps).
+            continue
+        if at is _NO_LAST_UPDATE:
+            continue
+        if len(rows) >= _STAMP_MAX_ROWS:
+            truncated = True
+            continue
+        rows[str(name)] = (
+            None if at is None else {"at": _stamp_text(at), "via": _scalar_text(via)}
+        )
+    return rows, truncated
+
+
 def _attribute_values(attributes: Mapping) -> Mapping:
     """The attribute mapping the block uses, minus the sub-map that repeats it.
 
@@ -3896,6 +4102,7 @@ def _appliance_block(
     data: Mapping,
     entities: Mapping | None = None,
     now: datetime | None = None,
+    energy_counters: Mapping | None = None,
 ) -> dict:
     """Build the (redacted) diagnostics block for a single appliance.
 
@@ -3913,6 +4120,10 @@ def _appliance_block(
     only the first arguments keep working and still get a dated block, and it
     is normalised on the first line of the body: see the comment there for why
     nothing downstream may be handed a naive datetime.
+
+    `energy_counters` is what this appliance's HW energy counters left on the
+    coordinator (`hpwh.HPWH_ENERGY_STORE`), trailing and None by default for the
+    same reasons as `now`; it is read only for a heat-pump water heater.
     """
     appliance = data.get("appliance")
     app_type = data.get("type")
@@ -3923,6 +4134,7 @@ def _appliance_block(
     # pass so that anything reporting freshness from it can never disagree with
     # the map the reader is looking at, even after the row cap has fired.
     stamps, stamps_truncated, newest_stamp = _attribute_timestamps(attributes)
+    received, received_truncated = _attribute_received(attributes)
     # De-duplicated ONCE, above every consumer, and only after the instants
     # have been read. The ordering is kept for the reason it was written -- the
     # sub-map is the instants' fallback source -- even though that fallback is
@@ -3967,6 +4179,7 @@ def _appliance_block(
     # mapping the block prints.
     appliance_options = _appliance_options(appliance, attributes)
     command_history = _command_history_block(appliance)
+    command_payload, command_payload_truncated = _command_payload(appliance)
     # Built LAST of the four, and out of the other three rather than out of the appliance:
     # it is a join, and handing it the finished sections is what makes it structurally
     # incapable of disagreeing with them.
@@ -4050,6 +4263,10 @@ def _appliance_block(
         # Directly above `command_history`, and read off the same `attributes` mapping
         # printed two keys below: the verdict on the slot's instants, with the warning
         # that the slot's body may be an older command.
+        # The commands payload's own census, beside the catalog's options above: each
+        # top-level key and whether it became a command, extra data or nothing at all.
+        "command_payload": command_payload,
+        **({"command_payload_truncated": True} if command_payload_truncated else {}),
         "last_command_delivery": _last_command_delivery(attributes),
         # Above `attributes`, whose `commandHistory` is the single-slot echo of the same
         # data: the list says what was sent before the slot was overwritten or nulled.
@@ -4073,6 +4290,10 @@ def _appliance_block(
         # true and immediately after the map, so it still reads as part of it.
         "attributes_last_update": stamps,
         **({"attributes_last_update_truncated": True} if stamps_truncated else {}),
+        # The other half of "when did this value move": HA's own instant and road
+        # (rest/mqtt), which an MQTT delta advances and the cloud stamp does not.
+        "attributes_received": received,
+        **({"attributes_received_truncated": True} if received_truncated else {}),
         # The two sections that say where the values in `attributes` came from, after
         # the map and its instants so the adjacency pinned above stays intact.
         # `statistics` is the payload of `/commands/v1/statistics` merged with
@@ -4103,6 +4324,15 @@ def _appliance_block(
         # type, the other what Home Assistant actually holds. Reading them together
         # is the whole point, and a disagreement between them IS the finding.
         "entities": entity_section,
+        # Right after what HA holds, because it is more of it: the state of each
+        # energy counter of a heat-pump water heater (#115), which no entity state
+        # shows -- the seed, the series the guard compares with, the total, and
+        # whether a drop is being held. HW only; `{}` when no counter runs.
+        **(
+            {"energy_counters": _energy_counters(energy_counters)}
+            if app_type == APPLIANCE_HW
+            else {}
+        ),
         "future_capabilities": future,
     }
     # Favourites LAST, over the finished and already redacted block: their names are
@@ -4167,9 +4397,11 @@ def _freshness(
         the object. "Derived only from the values printed above it, so a reader can
         check it by hand" is false exactly there, and no amount of patching makes it
         true from inside this module.
-      * whether an MQTT delta advances a parameter's `lastUpdate` is genuinely
-        unresolved, so "the shadow has not moved, therefore nothing under
+      * an MQTT delta does NOT advance a parameter's `lastUpdate` (issue #115,
+        phroc 2026-10-03: temp 55 -> 54 by MQTT at 14:05:00Z, stamp left at
+        11:45:54Z), so "the shadow has not moved, therefore nothing under
         `attributes` is live" is an inference this code is not entitled to draw.
+        `attributes_received` carries the instant and road HA saw instead.
     A field that is right most of the time and confidently wrong on the one failure
     it was built for is worse than no field at all.
 
@@ -4785,6 +5017,39 @@ def _coordinator(hass: HomeAssistant, entry: ConfigEntry):
     return entry_data.get("coordinator")
 
 
+def _energy_store(coordinator, appliance_id: str) -> Mapping | None:
+    """What the HW energy counters of one appliance left on the coordinator."""
+    store = getattr(coordinator, HPWH_ENERGY_STORE, None)
+    counters = store.get(appliance_id) if isinstance(store, Mapping) else None
+    return counters if isinstance(counters, Mapping) else None
+
+
+def _energy_counters(counters: Mapping | None) -> dict:
+    """The `energy_counters` section: {key: {series: record}}, rebuilt, not echoed.
+
+    Every record goes back through `hpwh.lifetime_from_dict`, the reader the restore
+    data passes through, and only the keys and series of `HPWH_ENERGY_COUNTERS`
+    survive: whatever else sits in the store, this prints numbers, five-slot lists, a
+    year and a flag under names this module chose.
+    """
+    section: dict = {}
+    if not isinstance(counters, Mapping):
+        return section
+    for key, series in HPWH_ENERGY_COUNTERS.items():
+        records = counters.get(key)
+        if not isinstance(records, Mapping):
+            continue
+        rows = {
+            name: row
+            for name in series
+            if (row := lifetime_as_dict(lifetime_from_dict(records.get(name))))
+            is not None
+        }
+        if rows:
+            section[key] = rows
+    return section
+
+
 # A setup phase as the client records it: flat ("authenticate", "mfa_challenge") or
 # hierarchical ("load_appliances/auth"). Shape-validated rather than enumerated, because
 # the vocabulary is assembled at raise time from the segment a phase() context was opened
@@ -5157,6 +5422,27 @@ def _catalog_state(state: str, rows: list[dict] | None = None) -> dict:
     return {"state": state, "rows": rows if rows is not None else []}
 
 
+async def _refresh_command_history(hass: HomeAssistant, entry: ConfigEntry, appliance) -> None:
+    """Have the client read `/history` again before the block prints it (#112, #115).
+
+    The list was read only at catalog load, so a dump could be a day or two behind the
+    very commands it was asked for. The client runs the GET on its own loop through the
+    executor (`HonClient.refresh_command_history_sync`); the engine records the outcome
+    and the instant, which `_command_history_block` prints. Everything here is guarded:
+    no client, no appliance, a watchdog expiry -- the dump is built anyway, with the
+    older list and its age.
+    """
+    if appliance is None:
+        return
+    try:
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+        refresh = getattr(entry_data.get("client"), "refresh_command_history_sync", None)
+        if callable(refresh):
+            await hass.async_add_executor_job(refresh, appliance)
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: command history re-read failed", exc_info=True)
+
+
 async def _command_catalog(hass: HomeAssistant, entry: ConfigEntry) -> dict:
     """Read and independently sanitize the native catalog census.
 
@@ -5454,9 +5740,14 @@ async def async_get_config_entry_diagnostics(
     appliances: list[dict] = []
     for appliance_id, data in coord_data.items():
         if isinstance(data, Mapping):
+            await _refresh_command_history(hass, entry, data.get("appliance"))
             appliances.append(
                 _appliance_block(
-                    appliance_id, data, inventory.get(appliance_id), now=now
+                    appliance_id,
+                    data,
+                    inventory.get(appliance_id),
+                    now=now,
+                    energy_counters=_energy_store(coordinator, appliance_id),
                 )
             )
 
@@ -5589,6 +5880,7 @@ async def async_get_device_diagnostics(
     data = coord_data.get(appliance_id)
     if not isinstance(data, Mapping):
         return {"generated_at": _stamp_text(now)}
+    await _refresh_command_history(hass, entry, data.get("appliance"))
     # The inventory is built over EVERY appliance id, not just this one: attribution
     # is by unique_id prefix and those prefixes nest, so hiding the siblings would
     # let a longer id's rows fall into this block.
@@ -5601,6 +5893,10 @@ async def async_get_device_diagnostics(
     return {
         "generated_at": _stamp_text(now),
         "appliance": _appliance_block(
-            appliance_id, data, inventory.get(appliance_id), now=now
+            appliance_id,
+            data,
+            inventory.get(appliance_id),
+            now=now,
+            energy_counters=_energy_store(coordinator, appliance_id),
         ),
     }

@@ -936,6 +936,61 @@ class EntryOptionsWhitelistGuardTest(unittest.TestCase):
         )
 
 
+class CommandHistoryRefreshTest(unittest.TestCase):
+    """The dump asks the client to read `/history` again first (issues #112, #115)."""
+
+    class _Client:
+        def __init__(self, fail=False):
+            self.calls: list = []
+            self.fail = fail
+
+        def refresh_command_history_sync(self, appliance):
+            self.calls.append(appliance)
+            if self.fail:
+                raise TimeoutError("watchdog")
+            appliance.command_history = [
+                {"command": {"commandName": "startProgram", "timestamp": "2026-10-04T07:31:55Z"}}
+            ]
+            appliance.command_history_refresh = "ok"
+
+    def _hass(self, client):
+        class _Hass(FakeHass):
+            async def async_add_executor_job(self, fn, *args):
+                return fn(*args)
+
+        hass = _Hass(_build_coordinator())
+        hass.data[DOMAIN]["e1"]["client"] = client
+        return hass
+
+    def test_a_device_dump_re_reads_the_list_of_its_appliance(self):
+        client = self._Client()
+        device = FakeDevice(identifiers={(DOMAIN, WD_ID)})
+        result = _run(
+            diagnostics.async_get_device_diagnostics(self._hass(client), FakeEntry(), device)
+        )
+        self.assertEqual(1, len(client.calls))
+        section = result["appliance"]["command_history"]
+        self.assertEqual("ok", section["refresh"])
+        self.assertEqual(
+            "2026-10-04T07:31:55Z", section["entries"][0]["command"]["timestamp"]
+        )
+
+    def test_an_entry_dump_re_reads_every_appliance_once(self):
+        client = self._Client()
+        _run(diagnostics.async_get_config_entry_diagnostics(self._hass(client), FakeEntry()))
+        self.assertEqual(2, len(client.calls))
+        self.assertEqual(2, len({id(appliance) for appliance in client.calls}))
+
+    def test_a_failing_re_read_still_yields_the_dump(self):
+        client = self._Client(fail=True)
+        device = FakeDevice(identifiers={(DOMAIN, WD_ID)})
+        result = _run(
+            diagnostics.async_get_device_diagnostics(self._hass(client), FakeEntry(), device)
+        )
+        self.assertEqual(1, len(client.calls))
+        self.assertEqual("WD", result["appliance"]["type"])
+
+
 class DiagnosticsDeviceTest(unittest.TestCase):
     def test_device_diagnostics_returns_single_matching_appliance(self):
         coord = _build_coordinator()
@@ -4240,6 +4295,20 @@ class HobDerivedCoverageTest(unittest.TestCase):
         self.assertNotIn("sensor.remaining_time_zone1", sources)
 
 
+# Block 5's writes, as `hpwh.py` sends them (sterilization: always all four keys;
+# eco windows: the scheme, the day mask, the twelve windows, the operation name).
+STERILIZATION = (
+    "sterilizationStatus", "sterilizationInterval", "sterilizationTime",
+    "sterilizationTempSel",
+)
+ECO_SCHEDULE = (
+    "offPeakPeriodScheme", "opp1EcoDays",
+    *(f"opp{period}Eco{edge}Time{slot}"
+      for period in (1, 2) for slot in (1, 2, 3) for edge in ("Start", "End")),
+    "operationName",
+)
+
+
 class HeatPumpStateCoverageTest(unittest.TestCase):
     """The HW state sensor (#113) reads attributes no description table names."""
 
@@ -4250,6 +4319,12 @@ class HeatPumpStateCoverageTest(unittest.TestCase):
         "opp1EcoDays", "opp1EcoStartTime1", "opp2EcoEndTime3",
         "compressorHeatingCurrentStatus", "electricHeatingCurrentStatus",
         "boostStatus",
+        # Block 3: the vacation binary and dates, defrost, sterilization time and
+        # the eco-window sensor.
+        "vacStartDate", "vacEndDate", "autoDefrostStatus", "sterilizationTime",
+        "opp1EcoStartTime2", "opp2EcoStartTime3",
+        # Block 5: the sterilization switch and numbers read the other three keys.
+        "sterilizationStatus", "sterilizationInterval", "sterilizationTempSel",
     )
 
     def test_every_attribute_it_reads_is_mapped(self) -> None:
@@ -4268,14 +4343,177 @@ class HeatPumpStateCoverageTest(unittest.TestCase):
         mapped_attrs, _params, sources, _ = diagnostics._mapped_sets("WH")
         self.assertNotIn("opp1EcoDays", mapped_attrs)
         self.assertNotIn("sensor.heat_pump_state", sources)
+        self.assertNotIn("vacStartDate", mapped_attrs)
+        self.assertNotIn("date.vacation_start", sources)
+        self.assertNotIn("sensor.eco_window", sources)
+
+    def test_the_derived_readings_name_every_attribute_they_read(self) -> None:
+        _attrs, _params, sources, _ = diagnostics._mapped_sets("HW")
+        window = sources["sensor.eco_window"]
+        self.assertIn("offPeakPeriodScheme", window["read"])
+        self.assertIn("opp1EcoEndTime3", window["read"])
+        self.assertNotIn("write", window)
+        vacation = ["machMode", "vacStartDate", "vacEndDate"]
+        self.assertEqual(sources["binary_sensor.vacation_active"]["read"], vacation)
+        # Only the compressor reads off during a vacation (the app does not mask the
+        # electric heater), so only its row names the vacation inputs (PR #121 review).
+        self.assertEqual(
+            sources["binary_sensor.compressor_heating"]["read"],
+            ["compressorHeatingCurrentStatus", *vacation],
+        )
+        self.assertEqual(
+            sources["binary_sensor.electric_heating"]["read"],
+            ["electricHeatingCurrentStatus"],
+        )
+        # Block 5: each date write sends both dates and the operation name.
+        vacation_write = ["vacStartDate", "vacEndDate", "operationName"]
+        self.assertEqual(
+            sources["date.vacation_start"], {"read": ["vacStartDate"], "write": vacation_write}
+        )
+        self.assertEqual(
+            sources["date.vacation_end"], {"read": ["vacEndDate"], "write": vacation_write}
+        )
+        self.assertEqual(sources["binary_sensor.defrost"]["read"], ["autoDefrostStatus"])
+        # The `time` entity replaced the block-3 sensor; it writes all four keys.
+        self.assertNotIn("sensor.sterilization_time", sources)
+        self.assertEqual(
+            sources["time.sterilization_time"],
+            {"read": ["sterilizationTime"], "write": list(STERILIZATION)},
+        )
 
     def test_the_controls_name_what_they_write(self) -> None:
         _attrs, params, sources, _ = diagnostics._mapped_sets("HW")
         heater = sources["water_heater.heat_pump_water_heater"]
-        self.assertEqual(set(heater["write"]), {"onOffStatus", "tempSel", "boostStatus", "machMode"})
+        # Block 5: the eco windows go out through its `set_eco_schedule` service.
+        self.assertEqual(
+            set(heater["write"]),
+            {"onOffStatus", "tempSel", "boostStatus", "machMode", *ECO_SCHEDULE},
+        )
         self.assertEqual(sources["switch.boost_switch"]["write"], ["boostStatus"])
-        for name in ("onOffStatus", "tempSel", "boostStatus", "machMode"):
+        self.assertEqual(
+            sources["button.vacation_clear"],
+            {"write": ["vacStartDate", "vacEndDate", "operationName"]},
+        )
+        for tag, read in (
+            ("switch.sterilization_schedule", "sterilizationStatus"),
+            ("number.sterilization_interval", "sterilizationInterval"),
+            ("number.sterilization_temperature", "sterilizationTempSel"),
+        ):
+            self.assertEqual(sources[tag], {"read": [read], "write": list(STERILIZATION)}, tag)
+        for name in ("onOffStatus", "tempSel", "boostStatus", "machMode", *STERILIZATION,
+                     "vacStartDate", "vacEndDate", "operationName", *ECO_SCHEDULE):
             self.assertIn(name, params)
+
+
+class HeatPumpEnergyCoverageTest(unittest.TestCase):
+    """The HW energy counters (#115) read the three `...Year...` series and `date`."""
+
+    CP, EC, HEAT = "energyConsumptionYearCp", "energyConsumptionYearEc", "accumulatedHeatYear"
+    # Its own series first, then the siblings it reads to tell a real zero from an
+    # empty transient, then the date.
+    SOURCES = {
+        "sensor.total_energy": [CP, EC, HEAT, "date"],
+        "sensor.compressor_energy": [CP, EC, HEAT, "date"],
+        "sensor.heater_energy": [EC, CP, HEAT, "date"],
+        "sensor.heat_produced": [HEAT, CP, EC, "date"],
+    }
+    # Published by the same appliances and read by no entity: they stay unmapped.
+    DAY_AND_MONTH = (
+        "energyConsumptionDayCp", "energyConsumptionDayEc", "accumulatedHeatDay",
+        "energyConsumptionMonthCp", "energyConsumptionMonthEc", "accumulatedHeatMonth",
+    )
+
+    def test_what_they_read_is_mapped_and_the_rest_is_not(self) -> None:
+        mapped_attrs, _params, _sources, _ = diagnostics._mapped_sets("HW")
+        for name in (self.CP, self.EC, self.HEAT, "date"):
+            self.assertIn(name, mapped_attrs, name)
+        for name in self.DAY_AND_MONTH:
+            self.assertNotIn(name, mapped_attrs, name)
+
+    def test_each_source_row_names_the_series_and_the_date(self) -> None:
+        _attrs, _params, sources, _ = diagnostics._mapped_sets("HW")
+        for tag, read in self.SOURCES.items():
+            self.assertEqual(sources[tag], {"read": read}, tag)
+
+    def test_another_type_did_not_inherit_them(self) -> None:
+        mapped_attrs, _params, sources, _ = diagnostics._mapped_sets("WH")
+        self.assertNotIn(self.CP, mapped_attrs)
+        self.assertNotIn("sensor.heat_produced", sources)
+        # The washer's own `total_energy` keeps its own row.
+        _attrs, _params, sources, _ = diagnostics._mapped_sets("WM")
+        self.assertNotIn(self.CP, sources["sensor.total_energy"]["read"])
+
+
+class HeatPumpEnergySectionTest(unittest.TestCase):
+    """`energy_counters`: what each energy counter of a HW holds (#115)."""
+
+    CP, EC = "energyConsumptionYearCp", "energyConsumptionYearEc"
+    RECORD = {
+        "seed": 796.0, "total": 800.0, "reference": [0.0, 0.0, 0.0, 215.0, 585.0],
+        "year": 2026, "holding": True, "refused": [0.0, 0.0, 0.0, 215.0, 0.0],
+        "refusals": 1,
+    }
+    HELD_NOTHING = {
+        "seed": 142.0, "total": 142.0, "reference": [0.0, 0.0, 0.0, 100.0, 42.0],
+        "year": 2026, "holding": False, "refused": None, "refusals": 0,
+    }
+
+    @staticmethod
+    def _data(app_type: str = "HW") -> dict:
+        return {
+            "appliance": FakeAppliance(commands={}),
+            "type": app_type,
+            "attributes": {},
+            "statistics": {},
+        }
+
+    def _block(self, counters, app_type: str = "HW") -> dict:
+        return diagnostics._appliance_block("hw-1", self._data(app_type), energy_counters=counters)
+
+    def test_each_counter_as_it_stands_after_the_entities(self) -> None:
+        block = self._block({"total_energy": {self.CP: self.RECORD, self.EC: self.HELD_NOTHING}})
+        self.assertEqual(
+            block["energy_counters"],
+            {"total_energy": {self.CP: self.RECORD, self.EC: self.HELD_NOTHING}},
+        )
+        keys = list(block)
+        self.assertEqual(keys.index("entities") + 1, keys.index("energy_counters"))
+        json.dumps(block)
+
+    def test_empty_when_no_counter_runs(self) -> None:
+        # `{}` is the finding: no counter entity is running for this appliance.
+        self.assertEqual(self._block(None)["energy_counters"], {})
+        self.assertEqual(self._block({})["energy_counters"], {})
+
+    def test_absent_for_another_type(self) -> None:
+        block = self._block({"total_energy": {self.CP: self.RECORD}}, app_type="WM")
+        self.assertNotIn("energy_counters", block)
+
+    def test_only_known_counters_and_readable_records(self) -> None:
+        block = self._block({
+            "total_energy": {self.CP: self.RECORD, "accumulatedHeatYear": self.RECORD,
+                             self.EC: {"total": "garbage"}},
+            "heat_produced": "garbage",
+            "user@example.com": {self.CP: self.RECORD},
+        })
+        self.assertEqual(block["energy_counters"], {"total_energy": {self.CP: self.RECORD}})
+
+    def test_the_dumps_read_the_coordinator_store(self) -> None:
+        coordinator = FakeCoordinator({"hw-1": self._data()})
+        coordinator.hpwh_energy_counters = {
+            "hw-1": {"heater_energy": {self.EC: self.HELD_NOTHING}},
+            "other": {"heater_energy": {self.EC: self.RECORD}},
+        }
+        expected = {"heater_energy": {self.EC: self.HELD_NOTHING}}
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(FakeHass(coordinator), FakeEntry())
+        )
+        self.assertEqual(result["appliances"][0]["energy_counters"], expected)
+        device = FakeDevice({(DOMAIN, "hw-1")})
+        result = _run(
+            diagnostics.async_get_device_diagnostics(FakeHass(coordinator), FakeEntry(), device)
+        )
+        self.assertEqual(result["appliance"]["energy_counters"], expected)
 
 
 class CoverageExpectedAbsentTest(unittest.TestCase):
@@ -5599,7 +5837,7 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         # reader can never see, and a row whose domain is not a real platform
         # would never join with `by_domain`.
         domains = {"sensor", "binary_sensor", "number", "select", "switch",
-                   "button", "climate", "fan", "water_heater"}
+                   "button", "climate", "fan", "water_heater", "date", "time"}
         for entry in diagnostics._CUSTOM_ENTITY_SOURCES:
             domain, _dot, suffix = entry["tag"].partition(".")
             self.assertIn(domain, domains, entry["tag"])
@@ -5656,6 +5894,16 @@ _TABLES_OUTSIDE_COVERAGE: dict[str, str] = {
         "already carry a per-switch `switch.<key>` row in `_CUSTOM_ENTITY_SOURCES` "
         "naming each one as both read and write; walking the table would emit the same "
         "four names a second time under a tag the custom rows already own.",
+    # The heat-pump water heater's two sterilization numbers (block 5). Same shape:
+    # each WRITE sends all four sterilization keys, which no `param` field can say,
+    # so `_CUSTOM_ENTITY_SOURCES` carries `number.sterilization_interval` and
+    # `number.sterilization_temperature` with their own key read and the four written,
+    # and the HW branch of `_mapped_sets` maps the four on both axes.
+    "number._HPWH_STERILIZATION_NUMBERS":
+        "Its two keys are mapped on both axes by the HW branch of `_mapped_sets` "
+        "(`HPWH_STERILIZATION_KEYS`), and each number has a `number.<key>` row in "
+        "`_CUSTOM_ENTITY_SOURCES` naming its own key read and all four written; a "
+        "walked row would name one written key where four go out.",
 }
 
 # Planted into a clone of every table at once, then looked for in the tags
@@ -6180,10 +6428,14 @@ class AttributeTimestampTest(unittest.TestCase):
         self.assertEqual(
             keys.index("attributes") + 1, keys.index("attributes_last_update")
         )
-        # Followed by the sections that say where those values came from; the full
-        # sequence down to `commands` is pinned in StatisticsSectionTest.
+        # Then HA's own reception instants (issue #115), then the sections that say
+        # where those values came from; the full sequence down to `commands` is pinned
+        # in StatisticsSectionTest.
         self.assertEqual(
-            keys.index("attributes_last_update") + 1, keys.index("statistics")
+            keys.index("attributes_last_update") + 1, keys.index("attributes_received")
+        )
+        self.assertEqual(
+            keys.index("attributes_received") + 1, keys.index("statistics")
         )
 
     def test_every_shadow_parameter_gets_a_row(self):
@@ -6317,6 +6569,66 @@ class AttributeTimestampTest(unittest.TestCase):
         self.assertEqual(22.5, blocks["AC"]["attributes"]["tempIndoor"])
         self.assertEqual("1", blocks["AC"]["attributes"]["machMode"])
         self.assertEqual(6, blocks["AC"]["coverage"]["attributes_total"])
+
+
+class AttributeReceivedTest(unittest.TestCase):
+    """When HA was handed each value it holds, and by which road (issue #115).
+
+    The cloud stamp beside it does not follow an MQTT delta: phroc's 2026-10-03 dump
+    printed temp 54 against an 11:45:54Z stamp, though the 54 had arrived by MQTT at
+    14:05:00Z. This map is the half the stamp cannot carry.
+    """
+
+    @staticmethod
+    def _attr(value, stamp, via=None, at=None):
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        attribute = HonAttribute({"parNewVal": value, "lastUpdate": stamp})
+        if via == "mqtt":
+            attribute.update({"parName": "x", "parNewVal": value + "0"})
+        if at is not None:
+            attribute._received_at = at
+        return attribute
+
+    def test_the_map_sits_right_after_the_cloud_instants(self):
+        _, blocks = _entry_diag()
+        keys = list(blocks["AC"])
+        self.assertEqual(
+            keys.index("attributes_last_update") + 1, keys.index("attributes_received")
+        )
+
+    def test_each_value_says_when_and_by_which_road_it_arrived(self):
+        delta = datetime(2026, 10, 3, 14, 5, 0, tzinfo=timezone.utc)
+        loaded = datetime(2026, 10, 3, 13, 56, 15, tzinfo=timezone.utc)
+        block = _stamp_block({
+            "temp": self._attr("5", "2026-10-03T11:45:54+00:00", "mqtt", delta),
+            "tempSel": self._attr("60", "2026-10-02T20:55:41+00:00", None, loaded),
+            "plain": 7,
+        })
+        self.assertEqual(
+            {
+                "temp": {"at": "2026-10-03T14:05:00+00:00", "via": "mqtt"},
+                "tempSel": {"at": "2026-10-03T13:56:15+00:00", "via": "rest"},
+            },
+            block["attributes_received"],
+        )
+        # The cloud's own stamp is left exactly as it was.
+        self.assertEqual(
+            "2026-10-03T11:45:54+00:00", block["attributes_last_update"]["temp"]
+        )
+
+    def test_the_cap_drops_rows_and_says_so_adjacently(self):
+        stamp = "2026-10-03T11:45:54+00:00"
+        block = _stamp_block(
+            {"p%03d" % i: self._attr(str(i), stamp) for i in range(250)}
+        )
+        self.assertEqual(200, len(block["attributes_received"]))
+        self.assertTrue(block["attributes_received_truncated"])
+        keys = list(block)
+        self.assertEqual(
+            keys.index("attributes_received") + 1,
+            keys.index("attributes_received_truncated"),
+        )
 
 
 class AttributeTimestampTruncationTest(unittest.TestCase):
@@ -8507,6 +8819,30 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         # Only the parameters that really declare sentinels are in the map.
         self.assertNotIn("spinSpeed", drops)
 
+    def test_the_drops_import_names_home_assistant_lets_through(self) -> None:
+        # Issue #115 (phroc's debug log, 2026-10-03): HA flags every importlib.import_module
+        # on the event loop whose FIRST argument is not already in sys.modules
+        # (homeassistant/block_async_io.py, _check_import_call_allowed) and asks users to
+        # file a bug. A relative name such as ".select" is never a sys.modules key, so the
+        # warning fired on every diagnostics download even with the module long loaded.
+        for module in ("select", "switch", "number"):
+            importlib.import_module(f"custom_components.addhon.{module}")
+        seen: list[str] = []
+        real = importlib.import_module
+
+        def spy(name, package=None):
+            seen.append(name)
+            return real(name, package)
+
+        diagnostics.importlib.import_module = spy
+        try:
+            diagnostics._option_drops()
+        finally:
+            diagnostics.importlib.import_module = real
+
+        self.assertTrue(seen)
+        self.assertEqual([], [name for name in seen if name not in sys.modules])
+
     def test_a_runaway_catalogue_is_bounded_and_says_so(self) -> None:
         # PR #103 review (greptile P2). The cap cannot bite on a real appliance (the largest
         # measured catalogue is 154 categories), so the flag appearing at all means the
@@ -9749,10 +10085,17 @@ class StatisticsSectionTest(unittest.TestCase):
         _, blocks = _entry_diag()
         keys = list(blocks["AC"])
         at = keys.index("attributes_last_update")
-        # `history_recovery` explains the active category of `commands` (issue #115).
+        # `history_recovery` explains the active category of `commands` (issue #115);
+        # `attributes_received` is the second half of the instants (issue #115 too).
         self.assertEqual(
-            ["statistics", "attributes_overridden", "history_recovery", "commands"],
-            keys[at + 1:at + 5],
+            [
+                "attributes_received",
+                "statistics",
+                "attributes_overridden",
+                "history_recovery",
+                "commands",
+            ],
+            keys[at + 1:at + 6],
         )
 
 
@@ -10251,10 +10594,28 @@ class CommandHistorySectionTest(unittest.TestCase):
         for state, section in sections.items():
             with self.subTest(state=state):
                 self.assertEqual(state, section["state"])
-                self.assertEqual({"state", "total", "shown", "entries"}, set(section))
+                self.assertEqual(
+                    ["state", "total", "shown", "at", "refresh", "entries"],
+                    list(section),
+                )
         self.assertEqual(
             "unreadable", self._section(_history_appliance("not a list"))["state"]
         )
+
+    def test_the_list_says_when_it_was_read_and_how_the_re_read_went(self):
+        # Issues #112/#115: a list read at setup was 42 h old in Lajahome's dump and
+        # missed the two starts it was opened to show; nothing in the section said so.
+        appliance = _history_appliance([_history_entry()])
+        appliance.command_history_at = datetime(2026, 10, 2, 16, 5, 32, tzinfo=timezone.utc)
+        appliance.command_history_refresh = "TimeoutError"
+        section = self._section(appliance)
+        self.assertEqual("2026-10-02T16:05:32+00:00", section["at"])
+        self.assertEqual("TimeoutError", section["refresh"])
+
+    def test_an_engine_without_the_instant_prints_nulls(self):
+        section = self._section(_history_appliance([_history_entry()]))
+        self.assertIsNone(section["at"])
+        self.assertIsNone(section["refresh"])
 
     def test_newest_first_whatever_order_the_cloud_sends(self):
         history = [
@@ -10488,6 +10849,40 @@ class LastCommandDeliveryTest(unittest.TestCase):
         section = json.loads(json.dumps(block))["last_command_delivery"]
         self.assertEqual("2026-09-29T11:13:11.800000+00:00", section["accepted"])
         self.assertEqual("2026-09-29T11:13:12.500000+00:00", section["executed"])
+
+
+class CommandPayloadSectionTest(unittest.TestCase):
+    """`command_payload`: each top-level key of the commands payload and its fate.
+
+    From the lucasgiovanny/addhOn fork (decision F5 of 2026-10-06): an entry that is
+    neither a command nor categories used to vanish without a trace.
+    """
+
+    def _block(self, census):
+        appliance = OptionAppliance(options={}, additional_data={})
+        if census is not _UNSET:
+            appliance.command_payload = census
+        return _option_block(appliance)
+
+    def test_the_census_is_printed_as_the_engine_recorded_it(self):
+        census = {"settings": "command", "dictionaryId": "additional_data", "x": "unparsed"}
+        self.assertEqual(census, self._block(census)["command_payload"])
+
+    def test_an_engine_without_the_census_prints_null_not_an_empty_map(self):
+        self.assertIsNone(self._block(_UNSET)["command_payload"])
+
+    def test_it_sits_between_the_catalog_options_and_the_delivery_verdict(self):
+        keys = list(self._block({"settings": "command"}))
+        self.assertEqual(
+            keys.index("command_payload") + 1, keys.index("last_command_delivery")
+        )
+        self.assertLess(keys.index("appliance_options"), keys.index("command_payload"))
+
+    def test_a_runaway_payload_is_bounded_and_says_so(self):
+        cap = diagnostics._COMMAND_PAYLOAD_MAX_ROWS
+        block = self._block({f"k{i:04d}": "unparsed" for i in range(cap + 3)})
+        self.assertEqual(cap, len(block["command_payload"]))
+        self.assertTrue(block["command_payload_truncated"])
 
 
 if __name__ == "__main__":

@@ -515,8 +515,6 @@ class HonCommand:
             label := self._program_label_to_send(program_label)
         ):
             extra["program_label"] = label
-        if sync_shadow:
-            self.appliance.sync_command_to_params(self.name)
         result = await self.api.send_command(
             self._appliance,
             self._name,
@@ -530,6 +528,24 @@ class HonCommand:
         if not result:
             _LOGGER.error("Command rejected by cloud: %s", self._name)
             raise ApiError("Can't send command")
+        # The optimistic shadow mirror only AFTER the cloud accepted, as the sparse
+        # dispatcher already does (command_dispatch.py). Run before the call, a refused
+        # or failed command still showed as applied for the shield window plus a poll,
+        # then "reverted by itself". The payload is built above either way, so what is
+        # transmitted does not change (decision F2 of 2026-10-06).
+        # The mirror copies `params`, what went out, not the command: a push landing
+        # during the await resyncs `settings` from the old shadow, and mirroring the
+        # command then shielded those old values (PR #121 review). The `settings`
+        # command, the only one a push rewrites, is then realigned to the shadow.
+        if sync_shadow:
+            self.appliance.sync_payload_to_params(params)
+            if self._name == "settings":
+                self.appliance.sync_params_to_command("settings")
+        if self._name in ("startProgram", "stopProgram"):
+            # The `/history` list a dump prints should already hold this command.
+            schedule = getattr(self.appliance, "schedule_history_refresh", None)
+            if callable(schedule):
+                schedule()
         return result
 
     def ancillary_parameters(self) -> dict[str, str | float]:

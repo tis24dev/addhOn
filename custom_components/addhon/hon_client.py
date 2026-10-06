@@ -852,6 +852,14 @@ class HonClient:
         """
         return self._run_on_hon_loop(coro, budget.COMMAND)
 
+    def refresh_command_history_sync(self, appliance) -> None:
+        """Re-read one appliance's `/history` on the dedicated loop (diagnostics only).
+
+        To be called in executor. `HonAppliance.refresh_command_history` never raises
+        and records its own outcome; a watchdog expiry here leaves it at "pending".
+        """
+        return self._run_on_hon_loop(appliance.refresh_command_history(), budget.COMMAND)
+
     def dispatch_patch_sync(self, appliance, patch: CommandPatch) -> bool:
         return self._run_on_hon_loop(
             self._command_dispatcher.dispatch(appliance, patch), budget.COMMAND

@@ -100,6 +100,7 @@ class HonCommandLoader:
         # `_set_last_category`.
         self._history_recovery: dict[str, str] = {}
         self._commands: dict[str, HonCommand] = {}
+        self._command_payload: dict[str, str] = {}
         self._appliance_data: dict[str, Any] = {}
         self._additional_data: dict[str, Any] = {}
 
@@ -398,6 +399,7 @@ class HonCommandLoader:
                 deepcopy(history_data) if isinstance(history_data, list) else []
             ),
             history_recovery=dict(self._history_recovery),
+            command_payload=dict(self._command_payload),
         )
 
     def _parse_candidate(
@@ -520,9 +522,19 @@ class HonCommandLoader:
 
     def _get_commands(self) -> None:
         commands = []
+        self._command_payload = {}
         for name, data in self._api_commands.items():
-            if command := self._parse_command(data, name):
+            command = self._parse_command(data, name)
+            if command is not None:
                 commands.append(command)
+                self._command_payload[name] = "command"
+            elif not isinstance(data, dict):
+                self._command_payload[name] = "additional_data"
+            else:
+                # A dict that is neither a command nor a set of categories: dropped in
+                # silence until now, so a dump could not tell "nothing else offered"
+                # from "offered and not parsed".
+                self._command_payload[name] = "unparsed"
         self._commands = {c.name: c for c in commands}
 
     def _parse_command(

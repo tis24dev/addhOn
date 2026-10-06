@@ -277,6 +277,14 @@ class CommandPatch:
     which is what a real program start must carry; "" suppresses the key for a
     `startProgram` that starts no program. Only the cooker hood asks for the
     suppression -- see `HonCommand._send_parameters` for the whole argument.
+
+    `verbatim` names requested keys whose value goes on the wire exactly as given,
+    without passing through the parameter's own setter, which is left untouched. For
+    a schema that types a key wrongly: the heat-pump water heater declares its eco
+    day mask `opp1EcoDays` a decimal range 0-40 (#113, #115), while the device
+    publishes and the app writes a hex mask ("1f", "60", "7f"; apk2
+    decomp.txt:4505245), which that range refuses. The key must still exist in the
+    schema; empty (the default) changes nothing for anyone else.
     """
 
     command_name: str
@@ -284,9 +292,11 @@ class CommandPatch:
     action: str
     prepare: PrepareCallback | None = None
     program_name: str | None = None
+    verbatim: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+        object.__setattr__(self, "verbatim", frozenset(self.verbatim))
 
 
 @dataclass(frozen=True, slots=True)
@@ -428,7 +438,7 @@ class CommandDispatcher:
             active_command = self._active_command(active_command, patch.command_name)
 
         for key, value in patch.values.items():
-            if key != selector_key:
+            if key != selector_key and key not in patch.verbatim:
                 active_command.parameters[key].value = value
 
         active_command = self._active_command(active_command, patch.command_name)
@@ -461,7 +471,11 @@ class CommandDispatcher:
         changed = frozenset(changed_order)
 
         payload = {
-            key: active_parameters[key].intern_value
+            key: (
+                str(patch.values[key])
+                if key in patch.verbatim and key in patch.values
+                else active_parameters[key].intern_value
+            )
             for key in requested_order + mandatory_order + changed_order
         }
         return PreparedCommand(

@@ -13,10 +13,11 @@ sync_*. `api` is OUR transport.api.HonApi.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from time import monotonic
 from typing import Any, Optional
 
@@ -35,6 +36,10 @@ _LOGGER = logging.getLogger(__name__)
 
 class HonAppliance:
     _MINIMAL_UPDATE_INTERVAL = 5  # seconds
+    # How long after an accepted startProgram/stopProgram `/history` is read again: the
+    # execution lands 1-3 s after acceptance in every dump, and the GET must not race
+    # the cloud writing the row (decision of 2026-10-06, issues #112/#115).
+    _HISTORY_REFRESH_DELAY = 10.0
     # Realtime liveness is authoritative only while RECENT: a realtime message overrides
     # a STALE REST DISCONNECTED only if received within this wall-clock window. Without
     # the bound, a once-seen realtime time would keep a silently-dead appliance online
@@ -69,7 +74,20 @@ class HonAppliance:
         self._zone = zone
         self._additional_data: dict[str, Any] = {}
         self._command_history: list[dict[str, Any]] = []
+        # HA's UTC instant of the last SUCCESSFUL read of `/history` (None: never), and
+        # the outcome of the last re-read, for a dump or after a start/stop ("ok",
+        # "pending" while in flight, or the exception's class name). Issues #112/#115:
+        # a list read only at setup was 42 h old in a dump and silently missed the
+        # starts it was opened to show.
+        self._command_history_at: Optional[datetime] = None
+        self._command_history_refresh: Optional[str] = None
+        self._history_refresh_timer: Optional[asyncio.TimerHandle] = None
+        self._history_refresh_task: Optional[asyncio.Task] = None
+        self._command_payload: dict[str, str] = {}
         self._history_recovery: dict[str, str] = {}
+        # (key, shadow value) pairs already reported as unsyncable: sync runs on every
+        # poll and every MQTT push, so only the first sight of a pair is worth an INFO.
+        self._unsyncable_seen: set[tuple[str, str]] = set()
         self._last_update: Optional[datetime] = None
         self._default_setting = HonParameter("", {}, "")
         self._connection = (
@@ -208,13 +226,77 @@ class HonAppliance:
         return self._additional_data
 
     @property
+    def command_payload(self) -> dict[str, str]:
+        """{top-level key of the commands payload: what became of it}; see
+        `CommandHydration.command_payload`. Read by the diagnostics dump only."""
+        return self._command_payload
+
+    @property
     def command_history(self) -> list[dict[str, Any]]:
         """The cloud's `/history` list from the last catalog load, verbatim.
 
         Read by the diagnostics dump only. Refreshed when the catalog is loaded (setup
-        or reload), not on every poll.
+        or reload) and by `refresh_command_history`, not on every poll.
         """
         return self._command_history
+
+    @property
+    def command_history_at(self) -> Optional[datetime]:
+        """HA's UTC instant of the last successful `/history` read, or None."""
+        return self._command_history_at
+
+    @property
+    def command_history_refresh(self) -> Optional[str]:
+        """Outcome of the last `refresh_command_history`: None if never run."""
+        return self._command_history_refresh
+
+    async def refresh_command_history(self) -> None:
+        """Read `/history` again (for a dump, or after a start/stop). Never raises.
+
+        A failure keeps the list and its instant and names the exception's class, so a
+        dump can tell a fresh list from an old one it could not replace. Cancellation
+        still propagates. The recovery of the active programme is NOT re-run: it reads
+        the list of the catalog load, and changing that is not a dump's business.
+        """
+        self._command_history_refresh = "pending"
+        try:
+            history = await self.api.load_command_history(self)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 - a dump must degrade, never raise
+            self._command_history_refresh = type(error).__name__
+            return
+        if not isinstance(history, list):
+            self._command_history_refresh = "invalid"
+            return
+        self._command_history = history
+        self._command_history_at = datetime.now(timezone.utc)
+        self._command_history_refresh = "ok"
+
+    def schedule_history_refresh(self) -> None:
+        """Read `/history` again `_HISTORY_REFRESH_DELAY` s from now, in the background.
+
+        Called on the client loop when the cloud accepts a startProgram or stopProgram,
+        so the list a dump prints already holds the command. A pending read is replaced,
+        so two quick commands cost one GET. Never blocks the command; a failure is
+        recorded by `refresh_command_history` and reaches no one. A timer, not a
+        sleeping task: a loop that closes first drops it without a pending task.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._history_refresh_timer is not None:
+            self._history_refresh_timer.cancel()
+        self._history_refresh_timer = loop.call_later(
+            self._HISTORY_REFRESH_DELAY, self._start_history_refresh
+        )
+
+    def _start_history_refresh(self) -> None:
+        self._history_refresh_timer = None
+        self._history_refresh_task = asyncio.get_running_loop().create_task(
+            self.refresh_command_history()
+        )
 
     @property
     def history_recovery(self) -> dict[str, str]:
@@ -302,7 +384,15 @@ class HonAppliance:
         self._commands = hydration.commands
         self._additional_data = hydration.additional_data
         self._command_history = hydration.command_history
+        # A failed history leaves the list empty: an earlier load's instant would
+        # date a list it never read (PR #121 review).
+        self._command_history_at = (
+            datetime.now(timezone.utc)
+            if hydration.history_outcome in ("ok", "empty")
+            else None
+        )
         self._history_recovery = hydration.history_recovery
+        self._command_payload = hydration.command_payload
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 
@@ -476,5 +566,8 @@ class HonAppliance:
                         continue
                     except ValueError:
                         pass
-                _LOGGER.info("Can't sync %s from shadow %r - %s", key, raw, error)
+                pair = (key, raw)
+                level = logging.DEBUG if pair in self._unsyncable_seen else logging.INFO
+                self._unsyncable_seen.add(pair)
+                _LOGGER.log(level, "Can't sync %s from shadow %r - %s", key, raw, error)
                 continue

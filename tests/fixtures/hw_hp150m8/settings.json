@@ -1,0 +1,328 @@
+{
+    "_comment": "`settings` catalogue of the same real Haier HP150M8-9 (type HW, series m8) as catalog.json, rebuilt into the raw hOn node shape from the addhOn 5.26.0-beta9 diagnostics attached to issue #115 (generated 2026-10-02). EXACT from the dump: the 41 parameter names of `setParameters`, each typology, mandatory flag, range bounds and step, and the enum values of powerSupplySource. INFERRED: every fixedValue, taken from the #113 HP110M8-9 dump of 2026-09-27 (`0000-00-00`, `00:00`, `grTimingPowerOnOff`) because a dump prints the value after the shadow sync, not the schema's own; each range's defaultValue (the dump's value); description and protocolType. Left out: the `setConfig` category (the dump names it in the `category` enum but never prints it), the ancillaryParameters, and every identity and timestamp.",
+    "model": "HP150M8-9",
+    "type": "HW",
+    "series": "m8",
+    "source": "https://github.com/tis24dev/addhOn/issues/115 (diagnostics attachment, 5.26.0-beta9)",
+    "captured": "2026-10-02",
+    "settings": {
+        "setParameters": {
+            "description": "The command allows to set parameters",
+            "protocolType": "MQTT",
+            "parameters": {
+                "operationName": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "grTimingPowerOnOff"
+                },
+                "vacEndDate": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "0000-00-00"
+                },
+                "vacStartDate": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "0000-00-00"
+                },
+                "opp1EcoEndTime1": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp1EcoEndTime2": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp1EcoEndTime3": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp1EcoStartTime1": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp1EcoStartTime2": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp1EcoStartTime3": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp2EcoEndTime1": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp2EcoEndTime2": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp2EcoEndTime3": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp2EcoStartTime1": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp2EcoStartTime2": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp2EcoStartTime3": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "opp1EcoDays": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 1,
+                    "defaultValue": "0",
+                    "minimumValue": "0",
+                    "maximumValue": "40",
+                    "incrementValue": "1"
+                },
+                "silentEndTime1": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "silentEndTime2": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "silentStartTime1": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "silentStartTime2": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 1,
+                    "fixedValue": "00:00"
+                },
+                "timingPowerOff": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 1,
+                    "defaultValue": "0",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "timingPowerOn": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 1,
+                    "defaultValue": "0",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "boostStatus": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "0",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "hcTempSel": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "65",
+                    "minimumValue": "55",
+                    "maximumValue": "75",
+                    "incrementValue": "1"
+                },
+                "lockStatus": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "0",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "offPeakPeriodScheme": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "1",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "offpeakSignalHeatMode": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "1",
+                    "minimumValue": "1",
+                    "maximumValue": "3",
+                    "incrementValue": "1"
+                },
+                "offpeakSignalHeatStrategy": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "1",
+                    "minimumValue": "1",
+                    "maximumValue": "4",
+                    "incrementValue": "1"
+                },
+                "offpeakSignalNcNo": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "1",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "onOffStatus": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "1",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "powerSupplySource": {
+                    "category": "command",
+                    "typology": "enum",
+                    "mandatory": 0,
+                    "defaultValue": "0",
+                    "enumValues": [
+                        "0",
+                        "2",
+                        "3",
+                        "4"
+                    ]
+                },
+                "pvTempSel": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "65",
+                    "minimumValue": "55",
+                    "maximumValue": "75",
+                    "incrementValue": "1"
+                },
+                "sgTempSel": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "65",
+                    "minimumValue": "55",
+                    "maximumValue": "75",
+                    "incrementValue": "1"
+                },
+                "silentStatus": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "0",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "sterilizationInterval": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "2",
+                    "minimumValue": "1",
+                    "maximumValue": "3",
+                    "incrementValue": "1"
+                },
+                "sterilizationStatus": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "0",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "sterilizationTempSel": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "65",
+                    "minimumValue": "55",
+                    "maximumValue": "75",
+                    "incrementValue": "1"
+                },
+                "sterilizationTime": {
+                    "category": "command",
+                    "typology": "fixed",
+                    "mandatory": 0,
+                    "fixedValue": "00:00"
+                },
+                "tempSel": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "60",
+                    "minimumValue": "35",
+                    "maximumValue": "75",
+                    "incrementValue": "1"
+                },
+                "tempUnit": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "0",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                },
+                "timingOnOffStatus": {
+                    "category": "command",
+                    "typology": "range",
+                    "mandatory": 0,
+                    "defaultValue": "0",
+                    "minimumValue": "0",
+                    "maximumValue": "1",
+                    "incrementValue": "1"
+                }
+            }
+        }
+    }
+}

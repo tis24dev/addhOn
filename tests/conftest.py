@@ -140,8 +140,8 @@ def _install_shared_entity_stubs() -> None:
 
 
 def _install_entity_platform_stubs() -> None:
-    """Shared entity-platform stubs: `binary_sensor`, `fan`, `light`, `number`,
-    `select`, `sensor` and `switch`.
+    """Shared entity-platform stubs: `binary_sensor`, `date`, `fan`, `light`,
+    `number`, `select`, `sensor`, `switch` and `time`.
 
     Installed here rather than per test module: each of these is imported by
     several test modules, and a partial per-file stub winning the first-wins
@@ -381,6 +381,7 @@ def _install_entity_platform_stubs() -> None:
         icon: str | None = None
         device_class: object | None = None
         entity_category: object | None = None
+        entity_registry_enabled_default: bool = True
 
     class BinarySensorDeviceClass:
         CONNECTIVITY = "connectivity"
@@ -399,6 +400,19 @@ def _install_entity_platform_stubs() -> None:
     )
     binary_sensor.BinarySensorDeviceClass = getattr(
         binary_sensor, "BinarySensorDeviceClass", BinarySensorDeviceClass
+    )
+
+    # The heat-pump water heater's vacation dates (#113): fixed-key entities, so only
+    # the entity base is needed.
+    date = _ensure_module("homeassistant.components.date")
+    components.date = date
+    date.DateEntity = getattr(date, "DateEntity", type("DateEntity", (), {}))
+
+    # Its sterilization time (block 5): a fixed-key entity too, the base is enough.
+    time_platform = _ensure_module("homeassistant.components.time")
+    components.time = time_platform
+    time_platform.TimeEntity = getattr(
+        time_platform, "TimeEntity", type("TimeEntity", (), {})
     )
 
     number = _ensure_module("homeassistant.components.number")
@@ -507,6 +521,47 @@ def _install_percentage_util_stub() -> None:
     percentage.percentage_to_ordered_list_item = getattr(
         percentage, "percentage_to_ordered_list_item", percentage_to_ordered_list_item
     )
+
+
+def _install_restore_state_stub() -> None:
+    """Install `homeassistant.helpers.restore_state`, where the heat-pump water
+    heater's energy counters keep their state between two starts (#115).
+
+    `async_get_last_extra_data` answers None, which is what Home Assistant answers
+    for an entity it has nothing stored for: the first start after the entity is
+    created, or a start more than seven days after it was last seen. A test that
+    needs a previous run patches it on the entity.
+
+    `async_added_to_hass` stands in for `Entity`'s own no-op, which the real
+    `super()` chain ends on; `CoordinatorEntity` here does not carry one.
+    """
+    helpers = _ensure_module("homeassistant.helpers")
+    restore_state = _ensure_module("homeassistant.helpers.restore_state")
+    helpers.restore_state = restore_state
+
+    class ExtraStoredData:
+        """Mirror of the real abstract base: `as_dict` must be JSON-serializable."""
+
+        def as_dict(self) -> dict:
+            raise NotImplementedError
+
+    class RestoreEntity:
+        """Mirror of the restore mixin surface the counters use."""
+
+        async def async_added_to_hass(self) -> None:
+            return None
+
+        async def async_get_last_extra_data(self):
+            return None
+
+        @property
+        def extra_restore_state_data(self):
+            return None
+
+    restore_state.ExtraStoredData = getattr(
+        restore_state, "ExtraStoredData", ExtraStoredData
+    )
+    restore_state.RestoreEntity = getattr(restore_state, "RestoreEntity", RestoreEntity)
 
 
 def _ensure_yarl() -> None:
@@ -628,6 +683,7 @@ _install_homeassistant_error()
 _install_shared_entity_stubs()
 _install_entity_platform_stubs()
 _install_percentage_util_stub()
+_install_restore_state_stub()
 _install_selector_stubs()
 _install_service_helper_stubs()
 _ensure_yarl()

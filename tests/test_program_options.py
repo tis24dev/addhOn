@@ -671,7 +671,7 @@ class _WireAppliance:
         self.commands: dict = {}
         self.info: dict = {}
 
-    def sync_command_to_params(self, name: str) -> None:
+    def sync_payload_to_params(self, params) -> None:
         pass
 
 

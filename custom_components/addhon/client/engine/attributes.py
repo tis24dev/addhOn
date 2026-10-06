@@ -32,6 +32,13 @@ class HonAttribute:
         self._value: str = ""
         self._last_update: Optional[datetime] = None
         self._lock_timestamp: Optional[datetime] = None
+        # When HA was handed the value it now holds, and by which road ("rest": the
+        # shadow row carries `lastUpdate`; "mqtt": a delta, which carries none). Only a
+        # cloud row that CHANGES the value moves it: a poll repeating the value, our own
+        # shielded write and a row the lock rejects do not (issue #115).
+        self._received_value: Optional[str] = None
+        self._received_at: Optional[datetime] = None
+        self._received_via: Optional[str] = None
         self.update(data)
 
     @property
@@ -52,6 +59,16 @@ class HonAttribute:
         return self._last_update
 
     @property
+    def received_at(self) -> Optional[datetime]:
+        """HA's own UTC instant at which the cloud delivered the value held now."""
+        return self._received_at
+
+    @property
+    def received_via(self) -> Optional[str]:
+        """"rest" or "mqtt": the road that value came by (None before any)."""
+        return self._received_via
+
+    @property
     def lock(self) -> bool:
         """True while the value is "shielded" (within _LOCK_TIMEOUT seconds of a
         shield): in that window non-shield updates are ignored, so a just-sent
@@ -66,10 +83,17 @@ class HonAttribute:
             return False
         if shield:
             self._lock_timestamp = datetime.now(timezone.utc)
+            # Our write changes the value held: whatever the cloud sends next, even
+            # the value it last sent, is a reception (PR #121 review).
+            self._received_value = None
         if isinstance(data, str):
             self.value = data
             return True
         self.value = data.get("parNewVal", "")
+        if not shield and self._value != self._received_value:
+            self._received_value = self._value
+            self._received_at = datetime.now(timezone.utc)
+            self._received_via = "rest" if "lastUpdate" in data else "mqtt"
         if last_update := data.get("lastUpdate"):
             try:
                 self._last_update = datetime.fromisoformat(last_update)

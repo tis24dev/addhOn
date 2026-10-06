@@ -6,7 +6,7 @@
 DOMAIN = "addhon"
 
 # Supported platforms
-PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button", "number", "fan", "water_heater"]
+PLATFORMS = ["climate", "sensor", "binary_sensor", "switch", "select", "button", "number", "fan", "water_heater", "date", "time"]
 
 # Update interval in seconds
 # NOTE: the initial setup + first fetch takes ~22s on a slow cloud.
@@ -140,6 +140,10 @@ ATTR_LEVEL = "level"
 # entries: the automation-callable equivalent of the per-device "Refresh now"
 # button. Global to the domain (no target, no fields), registered once.
 SERVICE_REFRESH = "refresh"
+
+# Entity service of the heat-pump water heater (block 5): writes its eco windows the
+# way the app does. Registered by the water_heater platform, experimental only.
+SERVICE_SET_ECO_SCHEDULE = "set_eco_schedule"
 
 # Identifier suffix of the synthetic per-account "diagnostics" device, whose
 # DeviceInfo `base_entity.account_device_info` builds as

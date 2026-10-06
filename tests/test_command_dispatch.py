@@ -20,6 +20,7 @@ from custom_components.addhon.client.engine.attributes import HonAttribute
 from custom_components.addhon.client.engine.commands import HonCommand
 from custom_components.addhon.client.engine.exceptions import ApiError
 from custom_components.addhon.command_dispatch import CommandDispatcher, CommandPatch
+from custom_components.addhon.send_profiles import HPWH as HPWH_PROFILE
 from tests.contract_fixtures import load_contract_cases
 
 
@@ -304,6 +305,11 @@ def test_dispatcher_has_no_production_entity_caller() -> None:
         Path("hpwh.py"),
         # The water heater platform dispatches the hpwh.py patches it builds (#113).
         Path("water_heater.py"),
+        # Its scheduling writes (block 5): the vacation dates, the clear button and
+        # the sterilization time dispatch hpwh.py patches too.
+        Path("date.py"),
+        Path("button.py"),
+        Path("time.py"),
         Path("fan.py"),
         Path("light.py"),
         # Mixed files: the AP entities dispatch, the legacy ones stay legacy.
@@ -704,6 +710,86 @@ def test_prepare_rejects_all_off_schema_keys_before_any_mutation(
     assert prepared_called is False
     assert command.parameters["mode"].intern_value == "1"
     assert command.parameters["light"].intern_value == "0"
+
+
+def _mistyped_command() -> HonCommand:
+    """The heat-pump water heater's day mask: a hex string the schema types as a
+    decimal range 0-40 (#113, #115), so its own setter refuses every real value."""
+    appliance = _Appliance()
+    command = HonCommand(
+        "settings",
+        {
+            "parameters": {
+                "opp1EcoDays": {
+                    "typology": "range",
+                    "category": "command",
+                    "mandatory": 1,
+                    "minimumValue": "0",
+                    "maximumValue": "40",
+                    "incrementValue": "1",
+                },
+                "operationName": {
+                    "typology": "fixed",
+                    "category": "command",
+                    "mandatory": 1,
+                    "fixedValue": "grTimingPowerOnOff",
+                },
+            }
+        },
+        appliance,
+    )
+    appliance.commands["settings"] = command
+    return command
+
+
+def test_patch_has_no_verbatim_key_by_default() -> None:
+    patch = CommandPatch("settings", {"mode": "2"}, action="set_mode")
+    assert patch.verbatim == frozenset()
+    keyed = CommandPatch("settings", {"mode": "2"}, action="x", verbatim={"mode"})
+    assert keyed.verbatim == frozenset({"mode"})
+
+
+def test_prepare_sends_a_verbatim_key_as_written(dispatcher: CommandDispatcher) -> None:
+    command = _mistyped_command()
+    patch = CommandPatch(
+        "settings",
+        {"opp1EcoDays": "1f", "operationName": "grSetWeekGroup"},
+        action="set_eco_days",
+        verbatim=frozenset({"opp1EcoDays"}),
+    )
+
+    prepared = dispatcher._prepare(command, patch, HPWH_PROFILE)
+
+    assert prepared.payload == {"opp1EcoDays": "1f", "operationName": "grSetWeekGroup"}
+    # The parameter itself is not written: the schema could not hold the value.
+    assert command.parameters["opp1EcoDays"].intern_value == "0"
+    assert command.parameters["operationName"].intern_value == "grSetWeekGroup"
+
+
+def test_without_the_verbatim_channel_the_schema_refuses_it(
+    dispatcher: CommandDispatcher,
+) -> None:
+    command = _mistyped_command()
+    with pytest.raises(ValueError):
+        dispatcher._prepare(
+            command,
+            CommandPatch("settings", {"opp1EcoDays": "1f"}, action="set_eco_days"),
+            HPWH_PROFILE,
+        )
+
+
+def test_a_verbatim_key_must_still_exist_in_the_schema(
+    dispatcher: CommandDispatcher,
+) -> None:
+    with pytest.raises(ValueError, match="opp9EcoDays"):
+        dispatcher._prepare(
+            _mistyped_command(),
+            CommandPatch(
+                "settings", {"opp9EcoDays": "1f"}, action="x",
+                verbatim=frozenset({"opp9EcoDays"}),
+            ),
+            HPWH_PROFILE,
+        )
 
 
 class _DispatchAppliance(_Appliance):
@@ -1950,10 +2036,24 @@ def test_mixed_platform_legacy_classes_keep_the_legacy_sender() -> None:
 
     from custom_components.addhon import switch
 
-    from custom_components.addhon import number, select
+    import sys
+    import types
+
+    # The button platform base, getattr-guarded like every per-module stub: conftest
+    # does not install it.
+    button_stub = sys.modules.setdefault(
+        "homeassistant.components.button", types.ModuleType("homeassistant.components.button")
+    )
+    button_stub.ButtonEntity = getattr(button_stub, "ButtonEntity", type("ButtonEntity", (), {}))
+
+    from custom_components.addhon import button, number, select
 
     legacy_only = {
         switch.HonWashingMachinePauseSwitch: "run_command_sync",
+        # button.py joined the allow-list with the heat-pump vacation clear (block 5);
+        # its program buttons keep their own senders.
+        button.HonProgramCommandButton: "run_command_sync",
+        button.HonRefPresetButton: "async_send_program",
         select.HonAcDirectionSelect: "async_send_settings",
         # Buffers onto startProgram instead of sending; the buffering IS its write
         # path, so losing it would be the same regression as losing a sender.
