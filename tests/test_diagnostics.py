@@ -4295,6 +4295,20 @@ class HobDerivedCoverageTest(unittest.TestCase):
         self.assertNotIn("sensor.remaining_time_zone1", sources)
 
 
+# Block 5's writes, as `hpwh.py` sends them (sterilization: always all four keys;
+# eco windows: the scheme, the day mask, the twelve windows, the operation name).
+STERILIZATION = (
+    "sterilizationStatus", "sterilizationInterval", "sterilizationTime",
+    "sterilizationTempSel",
+)
+ECO_SCHEDULE = (
+    "offPeakPeriodScheme", "opp1EcoDays",
+    *(f"opp{period}Eco{edge}Time{slot}"
+      for period in (1, 2) for slot in (1, 2, 3) for edge in ("Start", "End")),
+    "operationName",
+)
+
+
 class HeatPumpStateCoverageTest(unittest.TestCase):
     """The HW state sensor (#113) reads attributes no description table names."""
 
@@ -4309,6 +4323,8 @@ class HeatPumpStateCoverageTest(unittest.TestCase):
         # the eco-window sensor.
         "vacStartDate", "vacEndDate", "autoDefrostStatus", "sterilizationTime",
         "opp1EcoStartTime2", "opp2EcoStartTime3",
+        # Block 5: the sterilization switch and numbers read the other three keys.
+        "sterilizationStatus", "sterilizationInterval", "sterilizationTempSel",
     )
 
     def test_every_attribute_it_reads_is_mapped(self) -> None:
@@ -4345,19 +4361,43 @@ class HeatPumpStateCoverageTest(unittest.TestCase):
             ("binary_sensor.electric_heating", "electricHeatingCurrentStatus"),
         ):
             self.assertEqual(sources[tag]["read"], [flag, *vacation], tag)
-        self.assertEqual(sources["date.vacation_start"], {"read": ["vacStartDate"]})
-        self.assertEqual(sources["date.vacation_end"], {"read": ["vacEndDate"]})
-        self.assertEqual(sources["binary_sensor.defrost"]["read"], ["autoDefrostStatus"])
+        # Block 5: each date write sends both dates and the operation name.
+        vacation_write = ["vacStartDate", "vacEndDate", "operationName"]
         self.assertEqual(
-            sources["sensor.sterilization_time"]["read"], ["sterilizationTime"]
+            sources["date.vacation_start"], {"read": ["vacStartDate"], "write": vacation_write}
+        )
+        self.assertEqual(
+            sources["date.vacation_end"], {"read": ["vacEndDate"], "write": vacation_write}
+        )
+        self.assertEqual(sources["binary_sensor.defrost"]["read"], ["autoDefrostStatus"])
+        # The `time` entity replaced the block-3 sensor; it writes all four keys.
+        self.assertNotIn("sensor.sterilization_time", sources)
+        self.assertEqual(
+            sources["time.sterilization_time"],
+            {"read": ["sterilizationTime"], "write": list(STERILIZATION)},
         )
 
     def test_the_controls_name_what_they_write(self) -> None:
         _attrs, params, sources, _ = diagnostics._mapped_sets("HW")
         heater = sources["water_heater.heat_pump_water_heater"]
-        self.assertEqual(set(heater["write"]), {"onOffStatus", "tempSel", "boostStatus", "machMode"})
+        # Block 5: the eco windows go out through its `set_eco_schedule` service.
+        self.assertEqual(
+            set(heater["write"]),
+            {"onOffStatus", "tempSel", "boostStatus", "machMode", *ECO_SCHEDULE},
+        )
         self.assertEqual(sources["switch.boost_switch"]["write"], ["boostStatus"])
-        for name in ("onOffStatus", "tempSel", "boostStatus", "machMode"):
+        self.assertEqual(
+            sources["button.vacation_clear"],
+            {"write": ["vacStartDate", "vacEndDate", "operationName"]},
+        )
+        for tag, read in (
+            ("switch.sterilization_schedule", "sterilizationStatus"),
+            ("number.sterilization_interval", "sterilizationInterval"),
+            ("number.sterilization_temperature", "sterilizationTempSel"),
+        ):
+            self.assertEqual(sources[tag], {"read": [read], "write": list(STERILIZATION)}, tag)
+        for name in ("onOffStatus", "tempSel", "boostStatus", "machMode", *STERILIZATION,
+                     "vacStartDate", "vacEndDate", "operationName", *ECO_SCHEDULE):
             self.assertIn(name, params)
 
 
@@ -5793,7 +5833,7 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
         # reader can never see, and a row whose domain is not a real platform
         # would never join with `by_domain`.
         domains = {"sensor", "binary_sensor", "number", "select", "switch",
-                   "button", "climate", "fan", "water_heater", "date"}
+                   "button", "climate", "fan", "water_heater", "date", "time"}
         for entry in diagnostics._CUSTOM_ENTITY_SOURCES:
             domain, _dot, suffix = entry["tag"].partition(".")
             self.assertIn(domain, domains, entry["tag"])
@@ -5850,6 +5890,16 @@ _TABLES_OUTSIDE_COVERAGE: dict[str, str] = {
         "already carry a per-switch `switch.<key>` row in `_CUSTOM_ENTITY_SOURCES` "
         "naming each one as both read and write; walking the table would emit the same "
         "four names a second time under a tag the custom rows already own.",
+    # The heat-pump water heater's two sterilization numbers (block 5). Same shape:
+    # each WRITE sends all four sterilization keys, which no `param` field can say,
+    # so `_CUSTOM_ENTITY_SOURCES` carries `number.sterilization_interval` and
+    # `number.sterilization_temperature` with their own key read and the four written,
+    # and the HW branch of `_mapped_sets` maps the four on both axes.
+    "number._HPWH_STERILIZATION_NUMBERS":
+        "Its two keys are mapped on both axes by the HW branch of `_mapped_sets` "
+        "(`HPWH_STERILIZATION_KEYS`), and each number has a `number.<key>` row in "
+        "`_CUSTOM_ENTITY_SOURCES` naming its own key read and all four written; a "
+        "walked row would name one written key where four go out.",
 }
 
 # Planted into a clone of every table at once, then looked for in the tags

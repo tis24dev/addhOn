@@ -141,7 +141,7 @@ def _install_shared_entity_stubs() -> None:
 
 def _install_entity_platform_stubs() -> None:
     """Shared entity-platform stubs: `binary_sensor`, `date`, `fan`, `light`,
-    `number`, `select`, `sensor` and `switch`.
+    `number`, `select`, `sensor`, `switch` and `time`.
 
     Installed here rather than per test module: each of these is imported by
     several test modules, and a partial per-file stub winning the first-wins
@@ -407,6 +407,13 @@ def _install_entity_platform_stubs() -> None:
     date = _ensure_module("homeassistant.components.date")
     components.date = date
     date.DateEntity = getattr(date, "DateEntity", type("DateEntity", (), {}))
+
+    # Its sterilization time (block 5): a fixed-key entity too, the base is enough.
+    time_platform = _ensure_module("homeassistant.components.time")
+    components.time = time_platform
+    time_platform.TimeEntity = getattr(
+        time_platform, "TimeEntity", type("TimeEntity", (), {})
+    )
 
     number = _ensure_module("homeassistant.components.number")
     components.number = number

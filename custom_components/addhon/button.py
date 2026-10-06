@@ -14,15 +14,18 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonAccountEntity, HonBaseEntity
+from .command_dispatch import async_dispatch_patch
 from .const import (
     APPLIANCE_DW,
     APPLIANCE_FR,
     APPLIANCE_FRE,
+    APPLIANCE_HW,
     APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
     APPLIANCE_WD,
     APPLIANCE_WM,
     CONF_ENABLE_DEBUG,
+    CONF_ENABLE_EXPERIMENTAL,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
     PROGRAM_PARAM_NAMES,
@@ -30,6 +33,13 @@ from .const import (
     PROGRAM_PENDING_STORE,
 )
 from .debug_utils import command_names, param_snapshot, redact_id, redact_store
+from .hpwh import (
+    HPWH_VACATION_KEYS,
+    raise_refusal,
+    schedule_writes_supported,
+    vacation_block,
+    vacation_clear_patch,
+)
 from .logging_utils import reset_integration_log_level, silence_mqtt_noise
 from .param_rollback import restore_params, snapshot_params
 from .program_labels import for_coordinator
@@ -57,6 +67,10 @@ async def async_setup_entry(
     entry_data = hass.data[DOMAIN][entry.entry_id]
     coordinator = entry_data["coordinator"]
     client = entry_data["client"]
+    # Guarded like the switch platform: only the heat-pump vacation button reads it.
+    experimental = bool(
+        (getattr(entry, "options", None) or {}).get(CONF_ENABLE_EXPERIMENTAL, False)
+    )
     entities = []
     for appliance_id, data in coordinator.data.items():
         app_type = data.get("type")
@@ -103,6 +117,16 @@ async def async_setup_entry(
                     "repository names (ref_programs.REF_DOWNLOAD_PRESETS)",
                     data.get("name"),
                     redact_id(appliance_id),
+                )
+            continue
+        if app_type == APPLIANCE_HW:
+            # The heat-pump water heater's vacation clear (block 5): experimental, and
+            # only where its write is rebuilt (plain m7/m8, the three keys declared).
+            if experimental and schedule_writes_supported(
+                data.get("appliance"), HPWH_VACATION_KEYS
+            ):
+                entities.append(
+                    HonHeatPumpVacationClearButton(coordinator, appliance_id, client)
                 )
             continue
         if app_type not in APPLIANCE_PROGRAM_GROUP:
@@ -537,6 +561,29 @@ class HonRefPresetButton(HonBaseEntity, ButtonEntity):
         # is not cosmetic: `number.target_temp_zone1` and its siblings show the new
         # values on the next poll. The preset's own identity is not recoverable and
         # nothing here pretends otherwise.
+        await self._async_request_command_refresh()
+
+
+class HonHeatPumpVacationClearButton(HonBaseEntity, ButtonEntity):
+    """End the heat-pump water heater's vacation, as the app's switch does.
+
+    Both dates at the app's `turnOffDate` '2000-01-01' with `grSetVacDate`
+    (apk2 decomp.txt:2334636-2334637, 4490243-4490251). A button, not a switch:
+    "on" would need two dates nobody chose.
+    """
+
+    _attr_translation_key = "vacation_clear"
+    _attr_icon = "mdi:calendar-remove"
+
+    def __init__(self, coordinator, appliance_id: str, client=None) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self._attr_unique_id = f"{appliance_id}_vacation_clear"
+
+    async def async_press(self) -> None:
+        raise_refusal(vacation_block(self._get_attr))
+        await async_dispatch_patch(
+            self.hass, self._hon_client, self._appliance, vacation_clear_patch()
+        )
         await self._async_request_command_refresh()
 
 

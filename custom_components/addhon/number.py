@@ -62,6 +62,7 @@ from .const import (
     APPLIANCE_FR,
     APPLIANCE_FRE,
     APPLIANCE_HO,
+    APPLIANCE_HW,
     APPLIANCE_OV,
     APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
@@ -73,6 +74,12 @@ from .const import (
 )
 from .debug_utils import redact_id
 from .hood import HOOD_DELAY_TIME_PARAM
+from .hpwh import (
+    HPWH_STERILIZATION_KEYS,
+    schedule_writes_supported,
+    settings_parameters,
+    sterilization_write,
+)
 from .hon_commands import (
     async_send_command,
     command_param,
@@ -345,6 +352,44 @@ _AP_TIMING_NUMBERS: tuple[HonAirPurifierTimeDescription, ...] = (
 )
 
 
+@dataclass(frozen=True, kw_only=True)
+class HonHeatPumpSterilizationDescription(NumberEntityDescription):
+    """One sterilization setting of the heat-pump water heater (block 5).
+
+    - `key` = unique_id suffix and translation key.
+    - `param` = the `settings` parameter it reads and writes.
+    - `fallback` = (min, max, step) when the parameter declares no range; normally
+      the live schema's own range is read.
+    """
+
+    param: str
+    fallback: tuple[float, float, float]
+
+
+# EXPERIMENTAL, plain m7/m8 only: the two numbers of the app's sterilization screen.
+# Each write sends the four sterilization keys together (`hpwh.sterilization_write`).
+# The interval is the app's code: 1 once, 2 weekly, 3 monthly (apk2
+# decomp.txt:4593677-4593745); the temperature 55-75 °C (4591681-4591814).
+_HPWH_STERILIZATION_NUMBERS: tuple[HonHeatPumpSterilizationDescription, ...] = (
+    HonHeatPumpSterilizationDescription(
+        key="sterilization_interval",
+        translation_key="sterilization_interval",
+        param="sterilizationInterval",
+        fallback=(1.0, 3.0, 1.0),
+        icon="mdi:calendar-sync",
+    ),
+    HonHeatPumpSterilizationDescription(
+        key="sterilization_temperature",
+        translation_key="sterilization_temperature",
+        param="sterilizationTempSel",
+        fallback=(55.0, 75.0, 1.0),
+        device_class=NumberDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        icon="mdi:thermometer-water",
+    ),
+)
+
+
 def _is_enum_param(param) -> bool:
     """True if the parameter is an enum (no numeric range), not a range parameter.
 
@@ -486,6 +531,18 @@ async def async_setup_entry(
                     coordinator, appliance_id, data, client, experimental
                 )
             )
+            continue
+        if app_type == APPLIANCE_HW:
+            # The heat-pump water heater's sterilization numbers (block 5).
+            if experimental and schedule_writes_supported(
+                appliance, HPWH_STERILIZATION_KEYS
+            ):
+                entities.extend(
+                    HonHeatPumpSterilizationNumber(
+                        coordinator, appliance_id, description, client
+                    )
+                    for description in _HPWH_STERILIZATION_NUMBERS
+                )
             continue
         created: list[str] = []
         # The fridge family only, resolved once per appliance: whether this drawer has
@@ -980,6 +1037,67 @@ class HonAirPurifierTimeNumber(HonBaseEntity, NumberEntity):
 def _clean_number(value: float) -> str:
     """'30' not '30.0'; keep the decimals for a non-integer."""
     return str(int(value)) if float(value).is_integer() else str(value)
+
+
+class HonHeatPumpSterilizationNumber(HonBaseEntity, NumberEntity):
+    """The sterilization interval or temperature of the heat-pump water heater.
+
+    A sparse patch through the dispatcher, never the legacy sender: the four
+    sterilization keys and nothing else (`hpwh.sterilization_write`).
+    """
+
+    entity_description: HonHeatPumpSterilizationDescription
+
+    def __init__(
+        self,
+        coordinator,
+        appliance_id: str,
+        description: HonHeatPumpSterilizationDescription,
+        client=None,
+    ) -> None:
+        super().__init__(coordinator, appliance_id, client)
+        self.entity_description = description
+        self._attr_translation_key = description.translation_key
+        self._attr_unique_id = f"{appliance_id}_{description.key}"
+
+    @property
+    def _range(self) -> tuple[float, float, float]:
+        parameter = settings_parameters(self._appliance).get(self.entity_description.param)
+        return param_range(parameter) or self.entity_description.fallback
+
+    @property
+    def native_min_value(self) -> float:
+        return self._range[0]
+
+    @property
+    def native_max_value(self) -> float:
+        return self._range[1]
+
+    @property
+    def native_step(self) -> float:
+        return self._range[2]
+
+    @property
+    def native_value(self) -> float | None:
+        raw = self._get_attr(self.entity_description.param)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) else None
+
+    async def async_set_native_value(self, value: float) -> None:
+        # The schema check inside `sterilization_write` refuses a fraction; a whole
+        # number goes out as the app spells it ("3", "70").
+        text = str(int(value)) if float(value).is_integer() else str(value)
+        patch = sterilization_write(
+            self._get_attr,
+            settings_parameters(self._appliance),
+            self.entity_description.param,
+            text,
+        )
+        await async_dispatch_patch(self.hass, self._hon_client, self._appliance, patch)
+        await self._async_request_command_refresh()
 
 
 class HonProgramOptionNumber(HonProgramOptionEntity, NumberEntity):

@@ -109,6 +109,28 @@
           "description": "Log level to apply to the hOn MQTT realtime channel."
         }
       }
+    },
+    "set_eco_schedule": {
+      "name": "Set eco schedule",
+      "description": "Heat-pump water heater: write the eco windows the way the hOn app does (the scheme, then the days, then the windows; an unchanged scheme or unchanged days are not sent again), one step at a time, each confirmed by the appliance before the next one, about 15 seconds per step. Only in Eco mode, with the experimental option on, on the m7 and m8 series.",
+      "fields": {
+        "scheme": {
+          "name": "Scheme",
+          "description": "same: the same windows every day. different: the windows below on the chosen days, the other windows on the remaining days."
+        },
+        "days": {
+          "name": "Days",
+          "description": "Only with different: the consecutive days, Monday to Sunday, that use the windows below."
+        },
+        "windows": {
+          "name": "Windows",
+          "description": "Up to 3 windows written HH:MM-HH:MM, minutes 00, 15, 30 or 45. Every day with same, the chosen days with different. Empty: no window."
+        },
+        "other_windows": {
+          "name": "Other windows",
+          "description": "Only with different: up to 3 windows for the remaining days."
+        }
+      }
     }
   },
   "device": {
@@ -626,9 +648,6 @@
       "eco_window": {
         "name": "Eco window"
       },
-      "sterilization_time": {
-        "name": "Sterilization time"
-      },
       "compressor_energy": {
         "name": "Compressor energy"
       },
@@ -876,6 +895,9 @@
       "boost": {
         "name": "Boost"
       },
+      "sterilization_schedule": {
+        "name": "Scheduled sterilization"
+      },
       "sleep": {
         "name": "Sleep mode"
       },
@@ -1063,6 +1085,12 @@
       },
       "delay_off_time": {
         "name": "Switch-off delay"
+      },
+      "sterilization_interval": {
+        "name": "Sterilization interval"
+      },
+      "sterilization_temperature": {
+        "name": "Sterilization temperature"
       }
     },
     "select": {
@@ -1239,6 +1267,9 @@
       },
       "reset_debug": {
         "name": "Reset debug"
+      },
+      "vacation_clear": {
+        "name": "Cancel vacation"
       }
     },
     "fan": {
@@ -1266,6 +1297,11 @@
       },
       "vacation_end": {
         "name": "Vacation end"
+      }
+    },
+    "time": {
+      "sterilization_time": {
+        "name": "Sterilization time"
       }
     }
   },
@@ -1334,7 +1370,37 @@
       "message": "This purifier runs in discrete modes and has no fan speed. Set a preset mode instead of a percentage."
     },
     "vacation_dates_read_only": {
-      "message": "The vacation dates are read-only for now."
+      "message": "The vacation dates can be changed only with the experimental option on."
+    },
+    "sterilization_time_read_only": {
+      "message": "The sterilization time can be changed only with the experimental option on."
+    },
+    "hpwh_write_not_supported": {
+      "message": "This water heater does not take this setting from Home Assistant: its series or its command schema is not supported."
+    },
+    "hpwh_vacation_dates_order": {
+      "message": "The vacation must end after the day it starts."
+    },
+    "hpwh_sterilization_unreadable": {
+      "message": "The current sterilization settings cannot be read, so they cannot be sent back unchanged: try again after the next update."
+    },
+    "hpwh_eco_first": {
+      "message": "Switch the water heater to Eco first."
+    },
+    "hpwh_eco_days_invalid": {
+      "message": "With different windows per day, choose one or more consecutive days, Monday to Sunday."
+    },
+    "hpwh_eco_different_only": {
+      "message": "Days and other windows apply only to the different scheme."
+    },
+    "hpwh_eco_window_invalid": {
+      "message": "Window {window} is not valid: write HH:MM-HH:MM, minutes 00, 15, 30 or 45, ending after it starts, not overlapping another window."
+    },
+    "hpwh_eco_too_many_windows": {
+      "message": "At most 3 windows per set."
+    },
+    "hpwh_eco_step_not_applied": {
+      "message": "The water heater did not apply step {step} of {steps} of the eco schedule; the steps after it were not sent."
     }
   },
   "issues": {

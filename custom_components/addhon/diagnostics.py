@@ -107,12 +107,15 @@ from .debug_utils import _MAC_RE, redact_id
 from .hon_commands import SETTINGS_COMMANDS, param_range, param_values
 from .hpwh import (
     HPWH_DATE,
+    HPWH_ECO_SCHEDULE_KEYS,
     HPWH_ECO_WINDOW_ATTRS,
     HPWH_ENERGY_ATTRS,
     HPWH_ENERGY_COUNTERS,
     HPWH_ENERGY_STORE,
     HPWH_STATE_ATTRS,
+    HPWH_STERILIZATION_KEYS,
     HPWH_VACATION_ATTRS,
+    HPWH_VACATION_KEYS,
     HPWH_YEAR_SERIES,
     lifetime_as_dict,
     lifetime_from_dict,
@@ -268,9 +271,37 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         "types": (APPLIANCE_HW,),
         "read": ("electricHeatingCurrentStatus", *HPWH_VACATION_ATTRS),
     },
-    # The vacation dates: fixed-key entities, read-only until they get their write.
-    {"tag": "date.vacation_start", "types": (APPLIANCE_HW,), "read": ("vacStartDate",)},
-    {"tag": "date.vacation_end", "types": (APPLIANCE_HW,), "read": ("vacEndDate",)},
+    # The vacation dates: fixed-key entities. Each write (block 5, experimental)
+    # sends both dates and the operation name, as the clear button does.
+    {
+        "tag": "date.vacation_start",
+        "types": (APPLIANCE_HW,),
+        "read": ("vacStartDate",),
+        "write": HPWH_VACATION_KEYS,
+    },
+    {
+        "tag": "date.vacation_end",
+        "types": (APPLIANCE_HW,),
+        "read": ("vacEndDate",),
+        "write": HPWH_VACATION_KEYS,
+    },
+    {"tag": "button.vacation_clear", "types": (APPLIANCE_HW,), "write": HPWH_VACATION_KEYS},
+    # The sterilization settings (block 5): each entity reads its own key and every
+    # write sends all four. The `time` entity replaced the block-3 sensor.
+    *(
+        {
+            "tag": tag,
+            "types": (APPLIANCE_HW,),
+            "read": (key,),
+            "write": HPWH_STERILIZATION_KEYS,
+        }
+        for tag, key in (
+            ("time.sterilization_time", "sterilizationTime"),
+            ("switch.sterilization_schedule", "sterilizationStatus"),
+            ("number.sterilization_interval", "sterilizationInterval"),
+            ("number.sterilization_temperature", "sterilizationTempSel"),
+        )
+    ),
     # Its energy counters (#115): each adds up its `...Year...` series, reads the
     # other two to tell a real zero from an empty transient, and the appliance's
     # `date` as the guard's second witness of a new year. Rows for the HW only: on a
@@ -287,11 +318,14 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
         }
         for key, series in HPWH_ENERGY_COUNTERS.items()
     ),
+    # Its `set_eco_schedule` service (block 5) writes the eco windows as well.
     {
         "tag": "water_heater.heat_pump_water_heater",
         "types": (APPLIANCE_HW,),
         "read": ("temp", "tempSel", "onOffStatus", "machMode", "boostStatus"),
-        "write": ("onOffStatus", "tempSel", "boostStatus", "machMode"),
+        "write": (
+            "onOffStatus", "tempSel", "boostStatus", "machMode", *HPWH_ECO_SCHEDULE_KEYS
+        ),
     },
     {
         "tag": "switch.boost_switch",
@@ -2820,6 +2854,12 @@ def _mapped_sets(
         # And the energy counters, custom classes too: their three series and the date.
         mapped_attrs |= set(HPWH_ENERGY_ATTRS)
         mapped_params |= {"onOffStatus", "tempSel", "boostStatus", "machMode"}
+        # Block 5: the sterilization entities read their four keys, and the scheduling
+        # writes (vacation, sterilization, eco windows) name these parameters.
+        mapped_attrs |= set(HPWH_STERILIZATION_KEYS)
+        mapped_params |= set(HPWH_VACATION_KEYS)
+        mapped_params |= set(HPWH_STERILIZATION_KEYS)
+        mapped_params |= set(HPWH_ECO_SCHEDULE_KEYS)
     if app_type == APPLIANCE_HO:
         # Same shape as the AP block below, same reason. The hood's five parameters
         # are each read as state AND written as a command field, but only two of the

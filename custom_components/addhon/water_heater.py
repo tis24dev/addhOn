@@ -5,9 +5,13 @@
 Behind the experimental option until a real appliance confirms the commands. Every
 write is a sparse patch built by `hpwh.py` and shaped by the `HPWH` send profile,
 so it carries the keys the official app sends and nothing else.
+
+Block 5 adds the eco windows as the `addhon.set_eco_schedule` service of this
+entity: the app's own chain of writes, one step at a time.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from collections.abc import Mapping
@@ -30,9 +34,17 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .base_entity import HonBaseEntity, coordinator_data_map
 from .command_dispatch import async_dispatch_patch
-from .const import APPLIANCE_HW, CONF_ENABLE_EXPERIMENTAL, DOMAIN
+from .const import (
+    APPLIANCE_HW,
+    CONF_ENABLE_EXPERIMENTAL,
+    DOMAIN,
+    SERVICE_SET_ECO_SCHEDULE,
+)
 from .hon_commands import param_range
 from .hpwh import (
+    HPWH_ECO_DAY_NAMES,
+    HPWH_ECO_SCHEDULE_KEYS,
+    HPWH_ECO_SCHEMES,
     HPWH_MODE_CATEGORIES,
     HPWH_SETTINGS_COMMAND,
     HPWH_START_COMMAND,
@@ -42,15 +54,33 @@ from .hpwh import (
     boost_patch,
     code,
     controls_supported,
+    eco_block,
+    eco_changed_steps,
+    eco_schedule_steps,
+    eco_step_applied,
     mode_block,
     mode_patch,
     power_patch,
     raise_refusal,
+    schedule_writes_supported,
     temperature_block,
     temperature_patch,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# How long each step of the eco chain is given before it is checked. The app sends
+# the next step only on the appliance's `EXECUTED_COMMAND` with resultCode '0'
+# (apk2 decomp.txt:1527615, 1527704-1527706, 1527894-1527905), a push this integration never
+# receives: its MQTT channel handles `appliancestatus` and `disconnected` only, the
+# cloud's "0" to the send means accepted, not run (#115 D9), and for 10 s after a
+# send the shadow holds our own mirrored values (HonAttribute's shield). So each step
+# waits this long, then a cloud read, and the next step goes only when that read
+# shows the step's values. 15 s is the delivery check's own settle time
+# (`command_diagnostics._DELIVERY_SETTLE`): the read past it also lets that check
+# judge every step, not just the last. A delivered command shows in 0.6-4.9 s
+# (34 dumped entries; 2-4 s on the #115 m8).
+_ECO_STEP_SETTLE = 15.0
 
 _MACHMODE_TO_OPERATION = {"1": STATE_HEAT_PUMP, "2": STATE_ECO, "3": STATE_ELECTRIC}
 _OPERATIONS = [STATE_HEAT_PUMP, STATE_ECO, STATE_ELECTRIC, STATE_OFF]
@@ -208,6 +238,38 @@ def _mode_categories(appliance) -> dict[str, str] | None:
     return result
 
 
+async def _settle() -> None:
+    """The pause between one eco step and the read that confirms it."""
+    await asyncio.sleep(_ECO_STEP_SETTLE)
+
+
+def _register_eco_schedule_service() -> None:
+    """`addhon.set_eco_schedule`, an entity service of this platform.
+
+    Targets the water heater; only registered with the experimental option, when
+    this platform sets anything up. The schema only shapes the fields: the rules
+    (consecutive days, windows on the app's grid, at most three) are
+    `hpwh.eco_schedule_steps`, which answers with translated errors. voluptuous and
+    the platform helpers are imported here, as in `__init__._async_register_services`:
+    the test harness has neither.
+    """
+    import voluptuous as vol
+
+    from homeassistant.helpers import config_validation as cv
+    from homeassistant.helpers import entity_platform
+
+    entity_platform.async_get_current_platform().async_register_entity_service(
+        SERVICE_SET_ECO_SCHEDULE,
+        {
+            vol.Required("scheme"): vol.In(tuple(HPWH_ECO_SCHEMES)),
+            vol.Optional("days"): vol.All(cv.ensure_list, [vol.In(HPWH_ECO_DAY_NAMES)]),
+            vol.Optional("windows", default=[]): vol.All(cv.ensure_list, [cv.string]),
+            vol.Optional("other_windows"): vol.All(cv.ensure_list, [cv.string]),
+        },
+        "async_set_eco_schedule",
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -233,6 +295,7 @@ async def async_setup_entry(
             continue
         entities.append(HonHeatPumpWaterHeater(coordinator, appliance_id))
     async_add_entities(entities)
+    _register_eco_schedule_service()
 
 
 class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
@@ -321,8 +384,9 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
         raise_refusal(mode_block(self._get_attr))
         if operation_mode == STATE_ECO and code(self._get_attr("machMode")) == modes[STATE_ECO]:
             # ECO chosen while ECO is active: the app sends no startProgram, it goes on
-            # to the eco time-slot writes (apk2 decomp.txt:4506227-4506231), which are
-            # not offered here. AUTO and ELEC are sent again, as the app does.
+            # to the eco time-slot writes (apk2 decomp.txt:4506227-4506231), which here
+            # are the `set_eco_schedule` service. AUTO and ELEC are sent again, as the
+            # app does.
             return
         await self._send(mode_patch(HPWH_MODE_CATEGORIES[operation_mode], modes[operation_mode]))
 
@@ -365,6 +429,40 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
             )
         raise_refusal(temperature_block(self._get_attr))
         await self._send(temperature_patch(self._get_attr, int(value)))
+
+    async def async_set_eco_schedule(
+        self,
+        scheme: str,
+        days: list[str] | None = None,
+        windows: list[str] | None = None,
+        other_windows: list[str] | None = None,
+    ) -> None:
+        """`addhon.set_eco_schedule`: the app's eco chain, one confirmed step at a time.
+
+        Scheme, then (with `different`) the days, then the twelve windows
+        (`hpwh.eco_schedule_steps`), less the steps the app skips with Eco already
+        on (`hpwh.eco_changed_steps`): an unchanged scheme, unchanged days. Only on
+        the plain m7/m8 series and only in Eco, where the app writes them. A step the
+        cloud refuses raises its own error; a step the appliance does not show after
+        `_ECO_STEP_SETTLE` stops the chain with `hpwh_eco_step_not_applied` (numbered
+        among the steps actually sent), and nothing after it is sent.
+        """
+        if not schedule_writes_supported(self._appliance, HPWH_ECO_SCHEDULE_KEYS):
+            raise_refusal("hpwh_write_not_supported")
+        raise_refusal(eco_block(self._get_attr))
+        steps = eco_changed_steps(
+            self._get_attr, eco_schedule_steps(scheme, days, windows, other_windows)
+        )
+        for number, step in enumerate(steps, start=1):
+            await async_dispatch_patch(self.hass, self._hon_client, self._appliance, step)
+            await _settle()
+            await self._async_request_command_refresh()
+            if not eco_step_applied(self._get_attr, step):
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="hpwh_eco_step_not_applied",
+                    translation_placeholders={"step": str(number), "steps": str(len(steps))},
+                )
 
     def _fahrenheit(self) -> bool:
         return self.hass.config.units.temperature_unit == UnitOfTemperature.FAHRENHEIT

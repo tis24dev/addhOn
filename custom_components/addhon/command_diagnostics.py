@@ -6,6 +6,7 @@ import itertools
 import json
 import logging
 import math
+import re
 import threading
 import time
 from collections import deque
@@ -368,6 +369,35 @@ def observe_mqtt_update(
         _log_failure()
 
 
+# Two app spellings the heat-pump water heater republishes its own way (block 5): a
+# clock written without leading zeros ("15:0", `String(hours + ':' + minutes)`, apk2
+# decomp.txt:4592323-4592332) comes back "15:00", and the eco day mask written in
+# lower case ("1f", `toString(16)`, 4505245) comes back "1F" (#113, #115).
+_CLOCK = re.compile(r"(\d{1,2}):(\d{1,2})")
+_HEX = re.compile(r"[0-9a-fA-F]+")
+
+
+def _same_setting(sent: str, current: str | None) -> bool:
+    """Whether the appliance's reading `current` is the value `sent`.
+
+    Both already spelled by `comparable_text`, which leaves these two shapes as text:
+    a clock compares as (hour, minute), a hex mask without regard to case. Anything
+    else must match exactly, as before.
+    """
+    if current is None:
+        return False
+    if current == sent:
+        return True
+    sent_clock, current_clock = _CLOCK.fullmatch(sent), _CLOCK.fullmatch(current)
+    if sent_clock and current_clock:
+        return tuple(map(int, sent_clock.groups())) == tuple(
+            map(int, current_clock.groups())
+        )
+    if _HEX.fullmatch(sent) and _HEX.fullmatch(current):
+        return sent.lower() == current.lower()
+    return False
+
+
 def _shadow_text(attributes: object, key: str) -> str | None:
     """The shadow's value of `key`, spelled for comparison; None when it has none."""
     if not isinstance(attributes, Mapping):
@@ -409,7 +439,7 @@ def delivery_baseline(
         expected = {
             key: value
             for key, value in _expected_values(payload).items()
-            if _shadow_text(attributes, key) != value
+            if not _same_setting(value, _shadow_text(attributes, key))
         }
         accepted, _executed = _history_times(attributes)
         return DeliveryBaseline(accepted=accepted, expected=expected)
@@ -462,7 +492,7 @@ def _confirm_delivery(appliance: object, observed: Mapping[str, str]) -> None:
             confirmed = [
                 key
                 for key, value in check.expected.items()
-                if observed.get(key) == value
+                if _same_setting(value, observed.get(key))
             ]
             for key in confirmed:
                 del check.expected[key]
@@ -511,7 +541,7 @@ def observe_shadow_read(appliance: object, timestamp: float | None = None) -> No
         stale = []
         for key, sent in check.expected.items():
             current = _shadow_text(attributes, key)
-            if current is not None and current != sent:
+            if current is not None and not _same_setting(sent, current):
                 stale.append(f"{key} is {redact_identity(current)}, {sent} was sent")
         # Only a sent value the shadow does not hold is evidence about OUR send. The
         # history slot is shared with every client: a short gap there may be another

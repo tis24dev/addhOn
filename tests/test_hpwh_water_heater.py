@@ -158,6 +158,9 @@ def setUpModule() -> None:
             mock.AsyncMock(),
         )
     )
+    # The eco-schedule entity service needs voluptuous and a live platform: its
+    # registration is tested in test_hpwh_schedule_writes.
+    _PATCHERS.append(mock.patch.object(platform, "_register_eco_schedule_service"))
     for patcher in _PATCHERS:
         patcher.start()
 

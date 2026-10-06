@@ -129,7 +129,6 @@ from .hpwh import (
     lifetime_from_dict,
     lifetime_step,
     mode_key,
-    sterilization_time,
     water_level_percent,
     year_windows,
 )
@@ -1232,15 +1231,7 @@ _HEAT_PUMP_WATER_HEATER: tuple[HonSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         gated=True,
     ),
-    # The anti-legionella start time. The app writes it unpadded ("15:0"), so it is
-    # padded to "HH:MM" by `hpwh.sterilization_time`.
-    HonSensorEntityDescription(
-        key="sterilization_time",
-        attr_key="sterilizationTime",
-        icon="mdi:clock-outline",
-        value_fn=sterilization_time,
-        gated=True,
-    ),
+    # The anti-legionella start time is the `time` entity of time.py (block 5).
 )
 
 # Its energy (#115): key, whether it is a consumption (the ENERGY device class, the

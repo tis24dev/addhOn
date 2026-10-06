@@ -557,6 +557,10 @@ class ServiceTranslationParityTest(unittest.TestCase):
         self.assertIn("refresh", self.services)
         self.assertEqual(self.services["set_log_level"], {"level"})
         self.assertEqual(self.services["refresh"], set())
+        # An entity service: its `target` block is not a field.
+        self.assertEqual(
+            self.services["set_eco_schedule"], {"scheme", "days", "windows", "other_windows"}
+        )
 
     def test_every_service_is_named_in_every_language(self) -> None:
         for lang in LANGS:

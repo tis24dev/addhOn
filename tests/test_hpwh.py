@@ -68,6 +68,15 @@ def _install_package_stubs() -> None:
     date_mod = _mod("homeassistant.components.date")
     date_mod.DateEntity = getattr(date_mod, "DateEntity", type("DateEntity", (), {}))
     components.date = date_mod
+    # The sterilization time (block 5) and the vacation clear button: entity bases only.
+    time_mod = _mod("homeassistant.components.time")
+    time_mod.TimeEntity = getattr(time_mod, "TimeEntity", type("TimeEntity", (), {}))
+    components.time = time_mod
+    button_mod = _mod("homeassistant.components.button")
+    button_mod.ButtonEntity = getattr(
+        button_mod, "ButtonEntity", type("ButtonEntity", (), {})
+    )
+    components.button = button_mod
     const = _mod("homeassistant.const")
     const.UnitOfEnergy = getattr(
         const, "UnitOfEnergy", type("UnitOfEnergy", (), {"KILO_WATT_HOUR": "kWh"})
@@ -563,17 +572,28 @@ class VacationDateTest(unittest.TestCase):
             self.assertIsNone(hpwh.vacation_date(raw), raw)
 
 
-class SterilizationTimeTest(unittest.TestCase):
+class SterilizationClockTest(unittest.TestCase):
     """`sterilizationTime`: the app writes it without leading zeros ("15:0")."""
 
-    def test_padded_as_hh_mm(self) -> None:
-        for raw, text in (("15:0", "15:00"), ("2:0", "02:00"), ("7:30", "07:30"),
-                          ("15:00", "15:00"), ("00:00", "00:00")):
-            self.assertEqual(hpwh.sterilization_time(raw), text, raw)
+    def test_read_with_or_without_padding(self) -> None:
+        from datetime import time
+
+        for raw, clock in (("15:0", time(15, 0)), ("2:0", time(2, 0)),
+                           ("7:30", time(7, 30)), ("15:00", time(15, 0)),
+                           ("00:00", time(0, 0))):
+            self.assertEqual(hpwh.sterilization_clock(raw), clock, raw)
 
     def test_missing_or_not_a_time_is_none(self) -> None:
         for raw in (None, "", "abc", "24:00", "12:60", "12", "1:2:3", 15):
-            self.assertIsNone(hpwh.sterilization_time(raw), raw)
+            self.assertIsNone(hpwh.sterilization_clock(raw), raw)
+
+    def test_written_back_unpadded_like_the_app(self) -> None:
+        # `String(hours + ':' + minutes)` (apk2 decomp.txt:4592323-4592332).
+        from datetime import time
+
+        for clock, text in ((time(15, 0), "15:0"), (time(2, 0), "2:0"),
+                            (time(3, 30), "3:30"), (time(0, 45), "0:45")):
+            self.assertEqual(hpwh.clock_text(clock), text, clock)
 
 
 class EcoWindowTest(unittest.TestCase):
@@ -700,7 +720,7 @@ class HeatPumpEntitiesTest(unittest.IsolatedAsyncioTestCase):
                 "hw-1_hot_water_available": 83,
                 "hw-1_heat_pump_mode": "auto",
                 "hw-1_errors": "0",
-                "hw-1_sterilization_time": "00:00",
+                # The sterilization time is a `time` entity now (block 5).
                 "hw-1_heat_pump_state": "off",
                 # Every window of the #113 appliance is "00:00"-"00:00".
                 "hw-1_eco_window": None,
@@ -883,7 +903,8 @@ class HeatPumpVacationEntitiesTest(unittest.IsolatedAsyncioTestCase):
         for entity in entities:
             self.assertIsNone(entity.native_value, entity._attr_unique_id)
 
-    async def test_the_dates_are_read_only_for_now(self) -> None:
+    async def test_the_dates_are_read_only_without_the_experimental_option(self) -> None:
+        # `_Entry` carries no options: the write of block 5 stays behind the option.
         from datetime import date as calendar_date
 
         from homeassistant.exceptions import HomeAssistantError
@@ -925,13 +946,19 @@ class HeatPumpScheduleEntitiesTest(unittest.IsolatedAsyncioTestCase):
         defrost.coordinator.data["hw-1"]["attributes"]["autoDefrostStatus"] = 1.0
         self.assertTrue(defrost.is_on)
 
-    async def test_the_sterilization_time_is_padded(self) -> None:
-        from custom_components.addhon import sensor
+    async def test_the_sterilization_time_is_no_sensor_any_more(self) -> None:
+        # Block 5: the `time` entity replaces the block-3 sensor, which never shipped.
+        from custom_components.addhon import sensor, time
 
         data = _data()
         data["hw-1"]["attributes"]["sterilizationTime"] = "15:0"
-        entities = {e._attr_unique_id: e for e in await _build(sensor, data)}
-        self.assertEqual(entities["hw-1_sterilization_time"].native_value, "15:00")
+        self.assertNotIn(
+            "hw-1_sterilization_time", {e._attr_unique_id for e in await _build(sensor, data)}
+        )
+        entities = {e._attr_unique_id: e for e in await _build(time, data)}
+        from datetime import time as clock
+
+        self.assertEqual(entities["hw-1_sterilization_time"].native_value, clock(15, 0))
 
     async def test_the_eco_window_of_the_115_appliance(self) -> None:
         from custom_components.addhon import sensor
@@ -962,6 +989,11 @@ class HeatPumpScheduleEntitiesTest(unittest.IsolatedAsyncioTestCase):
         from custom_components.addhon.const import PLATFORMS
 
         self.assertIn("date", PLATFORMS)
+
+    def test_the_time_platform_is_set_up(self) -> None:
+        from custom_components.addhon.const import PLATFORMS
+
+        self.assertIn("time", PLATFORMS)
 
     async def test_no_eco_window_without_the_schedule(self) -> None:
         from custom_components.addhon import sensor
