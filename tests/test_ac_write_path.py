@@ -791,6 +791,36 @@ class AcClimateReadPathTest(unittest.IsolatedAsyncioTestCase):
     A current value that is unmapped, or mapped but not advertised, -> None.
     """
 
+    async def test_an_off_grid_target_is_shown_on_the_device_grid(self) -> None:
+        # Decision F3 of 2026-10-06: HA's dial derives the next setpoint from the
+        # STATE, so an off-grid shadow reading (23.2 on a step-1 range) turned every
+        # +/- into a request the Range setter refuses. Shown on the grid, as the
+        # water heater already does; what is sent stays exactly what is asked.
+        entity, _, _ = _climate(
+            {"tempSel": RangeParam("23", mn=16, mx=30, step=1)},
+            attributes={"settings.tempSel": "23.2"},
+        )
+        self.assertEqual(23.0, entity.target_temperature)
+
+    async def test_a_half_degree_grid_keeps_its_half_degrees(self) -> None:
+        entity, _, _ = _climate(
+            {"tempSel": RangeParam("22", mn=16, mx=30, step=0.5)},
+            attributes={"settings.tempSel": "22.7"},
+        )
+        self.assertEqual(22.5, entity.target_temperature)
+        on_grid, _, _ = _climate(
+            {"tempSel": RangeParam("22", mn=16, mx=30, step=0.5)},
+            attributes={"settings.tempSel": "22.5"},
+        )
+        self.assertEqual(22.5, on_grid.target_temperature)
+
+    async def test_without_a_device_grid_the_target_is_shown_as_published(self) -> None:
+        # The fallback range is a UI guess, not the device's grid: never snap to it.
+        entity, _, _ = _climate(
+            {"tempSel": Param("23")}, attributes={"settings.tempSel": "23.2"}
+        )
+        self.assertEqual(23.2, entity.target_temperature)
+
     async def test_hvac_mode_valid_mapped_and_advertised(self) -> None:
         entity, _, _ = _climate(
             {"machMode": Param("1", values=["0", "1", "2", "4", "6"])},

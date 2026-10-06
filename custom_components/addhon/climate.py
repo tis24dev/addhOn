@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode
@@ -266,15 +267,28 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
 
     @property
     def target_temperature(self) -> float | None:
-        """Return the set temperature. None if not available."""
+        """Return the set temperature, on the device's own grid. None if not available.
+
+        HA's dial derives the next setpoint from this STATE, so an off-grid shadow
+        reading (23.2 on a step-1 range) made every +/- ask for a value the Range
+        setter refuses, and the setpoint stuck. Shown on the grid the DEVICE declares
+        (half a step rounding up), as the water heater does; with no declared grid --
+        only the UI fallback -- it is shown as published. What is sent is untouched:
+        an off-grid write still fails loudly (decision F3 of 2026-10-06).
+        """
         val = self._get_attr(AC_ATTR_TEMP)
         try:
             result = float(val) if val is not None else None
-            _LOGGER.debug("Climate debug: target_temperature raw=%r -> %s", val, result)
-            return result
         except (ValueError, TypeError):
             _LOGGER.debug("Climate debug: target_temperature not numeric raw=%r", val)
             return None
+        grid = param_range(self._temp_param) if self._temp_param is not None else None
+        if result is not None and grid is not None and math.isfinite(result):
+            low, _high, step = grid
+            if step and step > 0:
+                result = low + math.floor((result - low) / step + 0.5) * step
+        _LOGGER.debug("Climate debug: target_temperature raw=%r -> %s", val, result)
+        return result
 
     @property
     def current_temperature(self) -> float | None:
