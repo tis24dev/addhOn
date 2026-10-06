@@ -24,8 +24,10 @@ from .base_entity import HonBaseEntity, coordinator_data_map
 from .command_dispatch import async_dispatch_patch
 from .const import APPLIANCE_HW, CONF_ENABLE_EXPERIMENTAL, DOMAIN
 from .hpwh import (
+    HPWH_SCHEDULE_LOCK_STORE,
     HPWH_VACATION_KEYS,
     raise_refusal,
+    schedule_lock,
     schedule_writes_supported,
     vacation_block,
     vacation_date,
@@ -100,13 +102,16 @@ class HonHeatPumpVacationDate(HonBaseEntity, DateEntity):
             )
         if not schedule_writes_supported(self._appliance, HPWH_VACATION_KEYS):
             raise_refusal("hpwh_write_not_supported")
-        raise_refusal(vacation_block(self._get_attr))
-        if self._shadow_key == "vacStartDate":
-            start, end = vacation_range(self._get_attr, start=value)
-        else:
-            start, end = vacation_range(self._get_attr, end=value)
-        raise_refusal(vacation_order_block(start, end))
-        await async_dispatch_patch(
-            self.hass, self._hon_client, self._appliance, vacation_patch(start, end)
-        )
+        async with schedule_lock(
+            self._coordinator_store(HPWH_SCHEDULE_LOCK_STORE), self._appliance_id
+        ):
+            raise_refusal(vacation_block(self._get_attr))
+            if self._shadow_key == "vacStartDate":
+                start, end = vacation_range(self._get_attr, start=value)
+            else:
+                start, end = vacation_range(self._get_attr, end=value)
+            raise_refusal(vacation_order_block(start, end))
+            await async_dispatch_patch(
+                self.hass, self._hon_client, self._appliance, vacation_patch(start, end)
+            )
         await self._async_request_command_refresh()

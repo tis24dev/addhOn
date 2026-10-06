@@ -46,6 +46,7 @@ from .hpwh import (
     HPWH_ECO_SCHEDULE_KEYS,
     HPWH_ECO_SCHEMES,
     HPWH_MODE_CATEGORIES,
+    HPWH_SCHEDULE_LOCK_STORE,
     HPWH_SETTINGS_COMMAND,
     HPWH_START_COMMAND,
     appliance_series,
@@ -62,6 +63,7 @@ from .hpwh import (
     mode_patch,
     power_patch,
     raise_refusal,
+    schedule_lock,
     schedule_writes_supported,
     temperature_block,
     temperature_patch,
@@ -449,20 +451,29 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
         """
         if not schedule_writes_supported(self._appliance, HPWH_ECO_SCHEDULE_KEYS):
             raise_refusal("hpwh_write_not_supported")
-        raise_refusal(eco_block(self._get_attr))
-        steps = eco_changed_steps(
-            self._get_attr, eco_schedule_steps(scheme, days, windows, other_windows)
-        )
-        for number, step in enumerate(steps, start=1):
-            await async_dispatch_patch(self.hass, self._hon_client, self._appliance, step)
-            await _settle()
-            await self._async_request_command_refresh()
-            if not eco_step_applied(self._get_attr, step):
-                raise HomeAssistantError(
-                    translation_domain=DOMAIN,
-                    translation_key="hpwh_eco_step_not_applied",
-                    translation_placeholders={"step": str(number), "steps": str(len(steps))},
+        # The whole chain under the appliance's schedule lock: another schedule could
+        # otherwise pick its steps from a shadow this one is still changing.
+        async with schedule_lock(
+            self._coordinator_store(HPWH_SCHEDULE_LOCK_STORE), self._appliance_id
+        ):
+            raise_refusal(eco_block(self._get_attr))
+            steps = eco_changed_steps(
+                self._get_attr, eco_schedule_steps(scheme, days, windows, other_windows)
+            )
+            for number, step in enumerate(steps, start=1):
+                await async_dispatch_patch(
+                    self.hass, self._hon_client, self._appliance, step
                 )
+                await _settle()
+                await self._async_request_command_refresh()
+                if not eco_step_applied(self._get_attr, step):
+                    raise HomeAssistantError(
+                        translation_domain=DOMAIN,
+                        translation_key="hpwh_eco_step_not_applied",
+                        translation_placeholders={
+                            "step": str(number), "steps": str(len(steps))
+                        },
+                    )
 
     def _fahrenheit(self) -> bool:
         return self.hass.config.units.temperature_unit == UnitOfTemperature.FAHRENHEIT

@@ -48,6 +48,7 @@ from .const import (
 from .debug_utils import redact_id
 from .hon_commands import command_param
 from .hpwh import (
+    HPWH_SCHEDULE_LOCK_STORE,
     HPWH_STERILIZATION_KEYS,
     appliance_series,
     boost_block,
@@ -55,6 +56,7 @@ from .hpwh import (
     code as hpwh_code,
     controls_supported,
     raise_refusal,
+    schedule_lock,
     schedule_writes_supported,
     settings_parameters,
     sterilization_write,
@@ -767,13 +769,16 @@ class HonHeatPumpSterilizationSwitch(HonBaseEntity, SwitchEntity):
         await self._set("0")
 
     async def _set(self, status: str) -> None:
-        patch = sterilization_write(
-            self._get_attr,
-            settings_parameters(self._appliance),
-            "sterilizationStatus",
-            status,
-        )
-        await async_dispatch_patch(self.hass, self._hon_client, self._appliance, patch)
+        async with schedule_lock(
+            self._coordinator_store(HPWH_SCHEDULE_LOCK_STORE), self._appliance_id
+        ):
+            patch = sterilization_write(
+                self._get_attr,
+                settings_parameters(self._appliance),
+                "sterilizationStatus",
+                status,
+            )
+            await async_dispatch_patch(self.hass, self._hon_client, self._appliance, patch)
         await self._async_request_command_refresh()
 
 

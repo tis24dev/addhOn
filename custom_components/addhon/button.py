@@ -34,8 +34,10 @@ from .const import (
 )
 from .debug_utils import command_names, param_snapshot, redact_id, redact_store
 from .hpwh import (
+    HPWH_SCHEDULE_LOCK_STORE,
     HPWH_VACATION_KEYS,
     raise_refusal,
+    schedule_lock,
     schedule_writes_supported,
     vacation_block,
     vacation_clear_patch,
@@ -580,10 +582,13 @@ class HonHeatPumpVacationClearButton(HonBaseEntity, ButtonEntity):
         self._attr_unique_id = f"{appliance_id}_vacation_clear"
 
     async def async_press(self) -> None:
-        raise_refusal(vacation_block(self._get_attr))
-        await async_dispatch_patch(
-            self.hass, self._hon_client, self._appliance, vacation_clear_patch()
-        )
+        async with schedule_lock(
+            self._coordinator_store(HPWH_SCHEDULE_LOCK_STORE), self._appliance_id
+        ):
+            raise_refusal(vacation_block(self._get_attr))
+            await async_dispatch_patch(
+                self.hass, self._hon_client, self._appliance, vacation_clear_patch()
+            )
         await self._async_request_command_refresh()
 
 

@@ -21,6 +21,7 @@ vacation dates, the sterilization settings and the eco windows (`vacation_patch`
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from collections.abc import Callable, Collection, Mapping
@@ -700,6 +701,27 @@ def schedule_writes_supported(appliance, keys: Collection[str]) -> bool:
         return False
     parameters = settings_parameters(appliance)
     return all(key in parameters for key in keys)
+
+
+# Coordinator store (`HonBaseEntity._coordinator_store`) holding one lock per
+# appliance for its schedule writes: {appliance_id: asyncio.Lock}.
+HPWH_SCHEDULE_LOCK_STORE = "hpwh_schedule_locks"
+
+
+def schedule_lock(store: dict, appliance_id: str) -> asyncio.Lock:
+    """The lock every schedule write of one appliance holds (PR #121 review).
+
+    The sterilization four, the vacation dates, the clear button and the eco chain
+    each build what they send from the shadow, and the dispatcher's own lock covers
+    one send, not that read: two writes at once could each build on a value the
+    other is changing, and the second undid the first. Held from the read to the
+    send (the whole chain for the eco windows), a write waits its turn and then
+    reads the shadow the previous one left (decision of 2026-10-06).
+    """
+    lock = store.get(appliance_id)
+    if lock is None:
+        lock = store[appliance_id] = asyncio.Lock()
+    return lock
 
 
 # Vacation, `sendVacModeDate` (apk2 decomp.txt:2334500-2334545): `setParameters`

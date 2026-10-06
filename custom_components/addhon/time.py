@@ -25,8 +25,10 @@ from .base_entity import HonBaseEntity, coordinator_data_map
 from .command_dispatch import async_dispatch_patch
 from .const import APPLIANCE_HW, CONF_ENABLE_EXPERIMENTAL, DOMAIN
 from .hpwh import (
+    HPWH_SCHEDULE_LOCK_STORE,
     HPWH_STERILIZATION_KEYS,
     raise_refusal,
+    schedule_lock,
     schedule_writes_supported,
     settings_parameters,
     sterilization_clock,
@@ -85,11 +87,14 @@ class HonHeatPumpSterilizationTime(HonBaseEntity, TimeEntity):
             )
         if not schedule_writes_supported(self._appliance, HPWH_STERILIZATION_KEYS):
             raise_refusal("hpwh_write_not_supported")
-        patch = sterilization_write(
-            self._get_attr,
-            settings_parameters(self._appliance),
-            _SHADOW_KEY,
-            sterilization_clock_value(value),
-        )
-        await async_dispatch_patch(self.hass, self._hon_client, self._appliance, patch)
+        async with schedule_lock(
+            self._coordinator_store(HPWH_SCHEDULE_LOCK_STORE), self._appliance_id
+        ):
+            patch = sterilization_write(
+                self._get_attr,
+                settings_parameters(self._appliance),
+                _SHADOW_KEY,
+                sterilization_clock_value(value),
+            )
+            await async_dispatch_patch(self.hass, self._hon_client, self._appliance, patch)
         await self._async_request_command_refresh()

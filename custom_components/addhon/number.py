@@ -75,7 +75,9 @@ from .const import (
 from .debug_utils import redact_id
 from .hood import HOOD_DELAY_TIME_PARAM
 from .hpwh import (
+    HPWH_SCHEDULE_LOCK_STORE,
     HPWH_STERILIZATION_KEYS,
+    schedule_lock,
     schedule_writes_supported,
     settings_parameters,
     sterilization_write,
@@ -1090,13 +1092,16 @@ class HonHeatPumpSterilizationNumber(HonBaseEntity, NumberEntity):
         # The schema check inside `sterilization_write` refuses a fraction; a whole
         # number goes out as the app spells it ("3", "70").
         text = str(int(value)) if float(value).is_integer() else str(value)
-        patch = sterilization_write(
-            self._get_attr,
-            settings_parameters(self._appliance),
-            self.entity_description.param,
-            text,
-        )
-        await async_dispatch_patch(self.hass, self._hon_client, self._appliance, patch)
+        async with schedule_lock(
+            self._coordinator_store(HPWH_SCHEDULE_LOCK_STORE), self._appliance_id
+        ):
+            patch = sterilization_write(
+                self._get_attr,
+                settings_parameters(self._appliance),
+                self.entity_description.param,
+                text,
+            )
+            await async_dispatch_patch(self.hass, self._hon_client, self._appliance, patch)
         await self._async_request_command_refresh()
 
 

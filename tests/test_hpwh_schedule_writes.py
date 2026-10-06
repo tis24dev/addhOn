@@ -13,6 +13,7 @@ the real loader and the real dispatcher on its rebuilt `settings` catalogue.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 import types
@@ -838,6 +839,125 @@ def _apply(entity, patch) -> None:
         if key == "operationName":
             continue
         attributes[key] = value.upper() if key == "opp1EcoDays" else value
+
+
+class ScheduleWriteLockTest(unittest.IsolatedAsyncioTestCase):
+    """Two schedule writes at once on one appliance (PR #121 review, Greptile).
+
+    Each write builds its patch from the shadow; the dispatcher's own lock covers one
+    send, not that read. Decision of 2026-10-06: one lock per appliance around every
+    schedule write (sterilization, vacation dates, vacation clear, the whole eco
+    chain); a second write waits its turn, then reads the shadow the first one left.
+    """
+
+    async def _entities(self, **overrides) -> dict:
+        """Every HW schedule entity of one appliance, on ONE coordinator."""
+        SENT.clear()
+        attributes = dict(json.loads(ATTRIBUTES.read_text(encoding="utf-8"))["attributes"])
+        attributes.update(ISSUE115)
+        attributes.update(overrides)
+        self.attributes = attributes
+        data = {"hw-1": {"type": "HW", "name": "Boiler", "attributes": attributes,
+                         "settings": {}, "appliance": _appliance()}}
+        hass = types.SimpleNamespace(
+            data={DOMAIN: {"entry-1": {"coordinator": _Coordinator(data),
+                                       "client": object()}}},
+            config=types.SimpleNamespace(
+                units=types.SimpleNamespace(temperature_unit="°C")),
+        )
+        added: list = []
+        for module in (date_platform, button_platform, switch_platform,
+                       number_platform, water_heater):
+            await module.async_setup_entry(hass, _Entry(True), added.extend)
+        for entity in added:
+            entity.hass = hass
+        return _by_id(added)
+
+    async def _dispatch(self, hass, client, appliance, patch) -> None:
+        # The cloud takes its time, then the accepted payload lands in the shadow
+        # (the dispatcher's mirror after acceptance).
+        for _ in range(3):
+            await asyncio.sleep(0)
+        SENT.append(patch)
+        for key, value in patch.values.items():
+            if key != "operationName":
+                self.attributes[key] = value
+
+    def _patched(self):
+        stack = contextlib.ExitStack()
+        for module in (date_platform, button_platform, switch_platform,
+                       number_platform, water_heater):
+            stack.enter_context(
+                mock.patch.object(module, "async_dispatch_patch", self._dispatch))
+
+        async def _settle() -> None:
+            await asyncio.sleep(0)
+
+        stack.enter_context(mock.patch.object(water_heater, "_settle", _settle))
+        return stack
+
+    async def test_sterilization_writes_do_not_undo_each_other(self) -> None:
+        entities = await self._entities()
+        with self._patched():
+            await asyncio.gather(
+                entities["hw-1_sterilization_schedule"].async_turn_on(),
+                entities["hw-1_sterilization_temperature"].async_set_native_value(70.0),
+            )
+        self.assertEqual(self.attributes["sterilizationStatus"], "1")
+        self.assertEqual(self.attributes["sterilizationTempSel"], "70")
+        self.assertEqual(SENT[1].values["sterilizationStatus"], "1")
+
+    async def test_two_vacation_dates_at_once_keep_both(self) -> None:
+        entities = await self._entities()
+        with self._patched():
+            await asyncio.gather(
+                entities["hw-1_vacation_start"].async_set_value(date(2026, 12, 20)),
+                entities["hw-1_vacation_end"].async_set_value(date(2027, 1, 6)),
+            )
+        self.assertEqual(self.attributes["vacStartDate"], "2026-12-20")
+        self.assertEqual(self.attributes["vacEndDate"], "2027-01-06")
+
+    async def test_a_date_after_a_clear_reads_the_cleared_shadow(self) -> None:
+        entities = await self._entities(vacStartDate="2026-12-20", vacEndDate="2026-12-27")
+        with self._patched():
+            await asyncio.gather(
+                entities["hw-1_vacation_clear"].async_press(),
+                entities["hw-1_vacation_end"].async_set_value(date(2027, 1, 6)),
+            )
+        # The end goes out after the clear, so its start is the day before, not the
+        # 2026-12-20 the shadow held before the clear landed.
+        self.assertEqual(SENT[1].values["vacStartDate"], "2027-01-05")
+
+    async def test_two_eco_schedules_do_not_interleave(self) -> None:
+        entities = await self._entities(offPeakPeriodScheme=1, opp1EcoDays="7F")
+        heater = next(e for e in entities.values() if hasattr(e, "async_set_eco_schedule"))
+        with self._patched():
+            await asyncio.gather(
+                heater.async_set_eco_schedule(
+                    scheme="different", days=["sat", "sun"], windows=["08:00-10:00"],
+                    other_windows=["00:15-06:00"]),
+                heater.async_set_eco_schedule(scheme="same", windows=["06:00-08:00"]),
+            )
+        # The first chain whole (scheme, days, windows), then the second, which now
+        # has to put the scheme back before its windows.
+        self.assertEqual([p.action for p in SENT], [
+            "set_eco_scheme", "set_eco_days", "set_eco_windows",
+            "set_eco_scheme", "set_eco_windows",
+        ])
+        self.assertEqual(self.attributes["offPeakPeriodScheme"], "1")
+
+    async def test_a_sterilization_write_waits_for_the_eco_chain(self) -> None:
+        entities = await self._entities(offPeakPeriodScheme=1, opp1EcoDays="7F")
+        heater = next(e for e in entities.values() if hasattr(e, "async_set_eco_schedule"))
+        with self._patched():
+            await asyncio.gather(
+                heater.async_set_eco_schedule(
+                    scheme="different", days=["sat", "sun"], windows=["08:00-10:00"]),
+                entities["hw-1_sterilization_schedule"].async_turn_on(),
+            )
+        self.assertEqual([p.action for p in SENT], [
+            "set_eco_scheme", "set_eco_days", "set_eco_windows", "sterilization_on",
+        ])
 
 
 class EcoScheduleRegistrationTest(unittest.IsolatedAsyncioTestCase):
