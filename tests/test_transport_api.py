@@ -706,6 +706,34 @@ class SendCommandTest(unittest.TestCase):
                 self.assertEqual("40", sent["temp"])
                 self.assertIn("dryLevel", params)  # the caller's mapping is not touched
 
+    def test_send_command_strips_water_hard_off_every_start_program(self) -> None:
+        # The app's send epic deletes `waterHard` from every startProgram, whatever the
+        # type (apk2 decomp.txt:3477640-3477661): it is a setting, set through
+        # setParameters. No body of the official app in diagnostics/ carries it.
+        cases = (
+            ("WD", "startProgram", None, False),
+            ("DW", "startProgram", None, False),
+            ("WM", "startProgram", None, False),
+            ("DW", "settings", None, True),
+            ("WM", "setParameters", None, True),
+            ("HW", "settings", "setParameters", True),
+            ("WD", "startProgramAlias", "startProgram", False),
+        )
+        for appliance_type, command, wire_command, kept in cases:
+            with self.subTest(appliance_type=appliance_type, command=command):
+                self._patch_clock("2026-06-18T12:34:56.789012")
+                conn = FakeConnection({"payload": {"resultCode": "0"}})
+                app = FakeAppliance()
+                app.appliance_type = appliance_type
+                params = {"waterHard": "1", "temp": "40"}
+                _run(_call(conn).send_command(
+                    app, command, params, {}, wire_command=wire_command
+                ))
+                sent = conn.calls[0][2]["json"]["parameters"]
+                self.assertEqual(kept, "waterHard" in sent)
+                self.assertEqual("40", sent["temp"])
+                self.assertIn("waterHard", params)  # the caller's mapping is not touched
+
 
 class CommandTimestampTest(unittest.TestCase):
     def test_format_millis_and_z(self) -> None:

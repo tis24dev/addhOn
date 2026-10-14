@@ -517,6 +517,13 @@ class HonApi:
         # schema declares it, fixed "0" and mandatory.
         if appliance.appliance_type not in ("WD", "TD") and "dryLevel" in parameters:
             parameters = {k: v for k, v in parameters.items() if k != "dryLevel"}
+        # `waterHard` never rides a program start: the app's send epic deletes it from
+        # every startProgram, whatever the type (apk2 decomp.txt:3477640-3477661), and
+        # sets it through setParameters from its water settings screen. The schema
+        # carries it in the start of a washer-dryer (issue #99) and of one dishwasher
+        # program (issue #106); no official-app body in diagnostics/ has it.
+        if (wire_command or command) == "startProgram" and "waterHard" in parameters:
+            parameters = {k: v for k, v in parameters.items() if k != "waterHard"}
         attributes: dict[str, Any] = {"channel": "mobileApp", "origin": "standardProgram"}
         if energy_label:
             attributes["energyLabel"] = "0" if energy_label is True else energy_label
