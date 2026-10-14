@@ -10785,6 +10785,52 @@ class LastCommandDeliveryTest(unittest.TestCase):
         )
         self.assertEqual("unknown", section["verdict"])
         self.assertEqual(-6408.9, section["gap_s"])
+        self.assertEqual("slot", section["source"])
+
+    def _with_history(self, slot, *rows):
+        return _option_block(_history_appliance(list(rows)), attributes=slot)[
+            "last_command_delivery"
+        ]
+
+    def test_a_slot_read_before_the_execution_takes_the_history_row(self):
+        # robmoss2k, issue #99 beta11: the poll right after the send read the slot
+        # between acceptance and execution, then only MQTT followed, so the slot kept
+        # the executed instant of September. The `/history` row re-read at dump time
+        # carries the same command with both instants.
+        row = _history_entry(
+            "2026-10-12T12:17:10.762Z", "2026-10-12T12:17:12.1Z", dryTime="0"
+        )
+        row["timestampExecuted"] = "2026-10-12T12:17:13.0Z"
+        section = self._with_history(
+            _slot("2026-10-12T12:17:12.1Z", "2026-09-17T15:38:39.2Z"), row
+        )
+        self.assertEqual("delivered", section["verdict"])
+        self.assertEqual(0.9, section["gap_s"])
+        self.assertEqual("history", section["source"])
+        self.assertEqual("2026-10-12T12:17:12.100000+00:00", section["accepted"])
+        self.assertEqual("2026-10-12T12:17:13+00:00", section["executed"])
+
+    def test_a_history_row_of_another_command_leaves_the_slot_alone(self):
+        row = _history_entry("2026-09-23T07:21:58.0Z", "2026-09-23T07:21:59.0Z")
+        row["timestampExecuted"] = "2026-09-23T07:22:00.0Z"
+        section = self._with_history(
+            _slot("2026-09-23T09:08:48.9Z", "2026-09-23T07:22:00.0Z"), row
+        )
+        self.assertEqual("unknown", section["verdict"])
+        self.assertEqual(-6408.9, section["gap_s"])
+        self.assertEqual("slot", section["source"])
+
+    def test_a_matching_row_without_its_executed_instant_leaves_the_slot_alone(self):
+        for executed in (None, "junk"):
+            with self.subTest(executed=executed):
+                row = _history_entry(None, "2026-10-12T12:17:12.1Z")
+                if executed is not None:
+                    row["timestampExecuted"] = executed
+                section = self._with_history(
+                    _slot("2026-10-12T12:17:12.1Z", "2026-09-17T15:38:39.2Z"), row
+                )
+                self.assertEqual("slot", section["source"])
+                self.assertEqual("2026-09-17T15:38:39.200000+00:00", section["executed"])
 
     def test_the_same_keys_in_every_state(self):
         class Raising(dict):
@@ -10809,7 +10855,7 @@ class LastCommandDeliveryTest(unittest.TestCase):
                 _slot("2026-09-29T11:13:11.8Z", "2026-09-29T11:13:12.5Z")
             ),
         }
-        keys = {"accepted", "executed", "gap_s", "verdict", "caveat"}
+        keys = {"accepted", "executed", "gap_s", "verdict", "source", "caveat"}
         for state, section in sections.items():
             with self.subTest(state=state):
                 self.assertEqual(keys, set(section))
