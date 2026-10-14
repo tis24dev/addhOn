@@ -25,6 +25,7 @@ decoupled from the engine, as the whole native layer is.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -64,6 +65,17 @@ def _redacted_body(data: dict[str, Any]) -> Any:
 # line users paste into public issues.
 _CLOUD_ERROR_MAX_CHARS = 300
 
+# What in that free text could name someone, masked before the ERROR line (always
+# emitted, unlike the DEBUG payload line). Emails and UUIDs by shape; then any run of
+# 15+ token characters mixing letters and digits: a JWT segment, a Salesforce or
+# cognito id, a hex digest, a serial. A plain word ("ConditionalCheckFailedException")
+# has no digit and a timestamp breaks at ':' well short of 15, so both stay readable.
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_TOKEN_RE = re.compile(r"(?<![\w+/=-])(?=[\w+/=-]*\d)(?=[\w+/=-]*[A-Za-z])[\w+/=-]{15,}")
+
 
 def _cloud_error(payload: Any) -> str | None:
     """The cloud's own words on a refused send, for the ERROR line; None without any.
@@ -71,7 +83,9 @@ def _cloud_error(payload: Any) -> str | None:
     Issue #126: Haier's command handler, an AWS Lambda, could not start and answered
     `{"errorType": "Runtime.ImportModuleError", "errorMessage": "Unable to import
     module 'handler': ..."}` with no resultCode. Only the DEBUG payload line said so.
-    A MAC inside the text is masked, as everywhere in the logs.
+    A MAC inside the text is masked, as everywhere in the logs, and so is anything
+    shaped like an email, a UUID or a token (`_TOKEN_RE`): the line is always emitted
+    and the vocabulary is the vendor's, not ours.
     """
     if not isinstance(payload, dict):
         return None
@@ -83,6 +97,8 @@ def _cloud_error(payload: Any) -> str | None:
     if not parts:
         return None
     text = redact_identity(": ".join(parts))
+    for pattern in (_EMAIL_RE, _UUID_RE, _TOKEN_RE):
+        text = pattern.sub("***", text)
     if len(text) > _CLOUD_ERROR_MAX_CHARS:
         text = text[: _CLOUD_ERROR_MAX_CHARS - 3] + "..."
     return text

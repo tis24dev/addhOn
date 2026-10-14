@@ -705,6 +705,43 @@ class SendCommandTest(unittest.TestCase):
             ["hOn send_command failed: command=setParameters resultCode=7"], errors
         )
 
+    def test_the_cloud_error_text_masks_what_could_name_someone(self) -> None:
+        # The ERROR line is always emitted and pasted into public issues, and the
+        # message is the vendor's free text: mask anything shaped like an identity.
+        secrets = {
+            "email": "mario.rossi+hon@example.co.uk",
+            "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+            "uuid": "eu-west-1:3f2a9c1e-7b4d-4e8f-9a0b-1c2d3e4f5a6b",
+            "salesforce id": "001bU00000hPkWkQAK",
+            "hex": "a3f9c2e81b7d4f60a3f9c2e81b7d4f60",
+            "serial": "0021800012345ABC67890",
+            "mac": "AA:BB:CC:DD:EE:FF",
+        }
+        for name, secret in secrets.items():
+            with self.subTest(name=name):
+                text = api_mod._cloud_error(
+                    {"errorType": "Forbidden", "errorMessage": f"denied for {secret} now"}
+                )
+                self.assertNotIn(secret, text)
+                self.assertIn("***", text)
+                self.assertTrue(text.startswith("Forbidden: denied for "), text)
+                self.assertTrue(text.endswith(" now"), text)
+
+    def test_the_cloud_error_text_keeps_the_words_that_explain_it(self) -> None:
+        for message in (
+            "Unable to import module 'handler': No module named 'lib'",
+            "Task timed out after 30.03 seconds",
+            "Rate exceeded at 2026-10-12T15:16:33.597Z",
+            "ConditionalCheckFailedException",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(
+                    f"Runtime.ImportModuleError: {message}",
+                    api_mod._cloud_error(
+                        {"errorType": "Runtime.ImportModuleError", "errorMessage": message}
+                    ),
+                )
+
     def test_send_command_failure_bounds_a_long_cloud_error(self) -> None:
         self._patch_clock("2026-06-18T12:34:56.789012")
         conn = FakeConnection({"payload": {"errorType": "X", "errorMessage": "m" * 5000}})
