@@ -366,7 +366,7 @@ class FollowAStartMadeElsewhereTest(_Harness):
         self._poll(app, 2)
         self.cloud.history.insert(0, _start("PROGRAMS.WM_WD.HQD_SPIN", "2026-10-06T16:00:00Z"))
         self.cloud.context["activity"] = {"activityStarted": "2026-10-06T16:00:04Z",
-                                          "attributes": {}}
+                                          "attributes": {"programName": "HQD_SPIN"}}
         self._poll(app, 2)
         self.assertEqual("PROGRAMS.WM_WD.HQD_SPIN", self._start_command(app).category)
         self.assertEqual(2, app.followed_starts)
@@ -577,6 +577,44 @@ class ReviewOfTheReleaseTest(_Harness):
             _ACTIVITY_AT, "HQD_SYNTHETIC_AND_COLOURED", "appliance")
         self._poll(app, 3)
         self.assertEqual(reads, self.cloud.history_reads)
+
+    def test_an_activity_that_names_no_programme_applies_nothing(self) -> None:  # S4
+        app = self._quiet_setup()
+        reads = self.cloud.history_reads
+        self.cloud.history.insert(0, _start("PROGRAMS.WM_WD.IOT_WASH_DARK", _DARK_AT, temp="40"))
+        self.cloud.context["activity"] = self._activity("2026-10-06T16:00:04Z")
+        self._poll(app, 3)
+        self.assertEqual(reads, self.cloud.history_reads)
+        self.assertEqual("PROGRAMS.WM_WD.HQD_SPIN", self._start_command(app).category)
+        self.assertEqual(0, app.followed_starts)
+
+    def test_an_announcement_without_its_activity_expires(self) -> None:  # S1
+        app = self._at_setup()
+        self._poll(app)
+        self._app_starts_dark(activity=False)  # accepted, no cycle behind it
+        self._poll(app, 4)
+        self.assertEqual(1, app.followed_starts)
+        # Later the same programme runs again from the app; its slot was missed.
+        again = _start("PROGRAMS.WM_WD.IOT_WASH_DARK", "2026-10-06T18:00:00Z", temp="60")
+        self.cloud.history.insert(0, again)
+        self.cloud.context["commandHistory"] = None
+        self.cloud.context["activity"] = self._activity(
+            "2026-10-06T18:00:04Z", "IOT_WASH_DARK", "mobileApp")
+        self._poll(app, 2)
+        self.assertEqual(2, app.followed_starts)
+        self.assertEqual("60", str(self._start_command(app).parameters["temp"].value))
+
+    def test_our_own_start_is_followed_but_not_counted(self) -> None:  # S9
+        # The count drops the choices made in HA; a start of ours has consumed them
+        # already, and those made since are for the next one.
+        app = self._at_setup()
+        ours = _start("PROGRAMS.WM_WD.IOT_WASH_DARK", _DARK_AT, temp="40")
+        ours["command"]["device"] = {"deviceModel": "addhon"}
+        self.cloud.history = [ours, _start("PROGRAMS.WM_WD.HQD_SPIN", _SPIN_AT)]
+        self.cloud.context["commandHistory"] = ours
+        self._poll(app, 2)
+        self.assertEqual("iot_wash_dark", app.attributes["programName"])
+        self.assertEqual(0, app.followed_starts)
 
     def test_a_new_start_gets_its_own_three_reads(self) -> None:  # S6
         app = self._at_setup()

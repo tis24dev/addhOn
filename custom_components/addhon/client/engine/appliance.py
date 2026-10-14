@@ -122,6 +122,7 @@ class HonAppliance:
         self._awaited_programme: Optional[str] = None
         self._follow_reads_left = 0
         self._announced_programme: Optional[str] = None
+        self._announced_polls_left = 0
         self._follow_task: Optional[asyncio.Task] = None
         self._follow_list: Optional[list[dict[str, Any]]] = None
         self._followed_starts = 0
@@ -350,7 +351,9 @@ class HonAppliance:
         programme (S1); an app start seen only through its activity waits, up to three
         reads, for a row of that programme and takes no other (S3, S4); a panel start
         reads nothing; every new start gets three reads of its own (S6). An activity
-        without those names is followed as before.
+        that names no programme starts no follow (S4), an announcement whose activity
+        does not come within three polls expires (S1), and a start of ours is
+        recovered but not counted in `followed_starts` (S9).
 
         Runs once per poll, on the client loop, after the context was read; the list
         read is applied by `_apply_followed_list` at the start of the next poll, before
@@ -376,8 +379,12 @@ class HonAppliance:
             self._recovered_start = listed
             if how is not None:
                 self._history_recovery = {**self._history_recovery, "startProgram": how}
-            self._followed_starts += 1
-            if _programme_key(_newest_start(history).get("programName")) == (
+            newest = _newest_start(history)
+            device = newest.get("device")
+            if not (isinstance(device, dict) and device.get("deviceModel") == "addhon"):
+                # Our own start consumed the choices made in HA already (S9).
+                self._followed_starts += 1
+            if _programme_key(newest.get("programName")) == (
                 self._awaited_programme
             ):
                 self._awaited_programme = None
@@ -417,6 +424,7 @@ class HonAppliance:
         if start != self._recovered_start:
             self._awaited_start = start
             self._announced_programme = _programme_key(command.get("programName")) or ""
+            self._announced_polls_left = self._FOLLOW_ATTEMPTS
             self._arm_follow()
 
     def _watch_activity(self) -> None:
@@ -426,6 +434,12 @@ class HonAppliance:
             self._seen_activity = started or None
             return
         if not started or started == self._seen_activity:
+            if self._announced_programme is not None:
+                # No activity for the announced start within three polls: it had no
+                # cycle behind it, and must not hide the next one (S1).
+                self._announced_polls_left -= 1
+                if self._announced_polls_left <= 0:
+                    self._announced_programme = None
             return
         self._seen_activity = started
         details = activity.get("attributes") if isinstance(activity, dict) else None
@@ -438,8 +452,9 @@ class HonAppliance:
             # The slot already announced this cycle's start: one read is enough (S1:
             # only when the activity names that programme, or names none).
             return
-        if details.get("channel") == "appliance":
-            # Started on the panel: such a start never reaches /history.
+        if details.get("channel") == "appliance" or programme is None:
+            # Started on the panel: such a start never reaches /history. An activity
+            # naming no programme cannot tell its row from another (S4).
             return
         self._awaited_programme = programme
         self._arm_follow()
