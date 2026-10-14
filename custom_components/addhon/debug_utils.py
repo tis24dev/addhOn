@@ -99,6 +99,9 @@ _IDENTITY_KEYS = frozenset(
         "sk_secondary",
         "applianceid",
         "eepromid",
+        # The hOn account that started a cycle from the official app, in
+        # `attributes.activity` (issue #112).
+        "principaluserid",
     }
 )
 

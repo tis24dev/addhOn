@@ -273,6 +273,8 @@ class IdentityKeysBehaviouralTest(unittest.TestCase):
         "pk", "sk", "applianceid", "eepromid",
         # The `/history` rows carry the same table's third key (issue #112).
         "sk_secondary",
+        # The hOn account that started the cycle, in `attributes.activity` (#112).
+        "principaluserid",
     )
 
     # Keys no exact set would have contained, masked by the substring rule. Named the

@@ -164,6 +164,9 @@ _TO_REDACT = frozenset(
         "pk",
         "sk",
         "sk_secondary",
+        # `attributes.activity` names the hOn account that started the cycle when the
+        # official app did (issue #112: five published dumps carried it in clear).
+        "principaluserid",
     }
 )
 

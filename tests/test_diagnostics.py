@@ -748,7 +748,21 @@ class DiagnosticsRedactionTest(unittest.TestCase):
         "transactionid", "transaction_id", "mobileid", "mobile_id",
         # The table keys of the `/history` rows printed by `command_history` (#112).
         "pk", "sk", "sk_secondary",
+        # The hOn account that started the cycle, in `attributes.activity` (#112).
+        "principaluserid",
     )
+
+    def test_the_account_that_started_a_cycle_is_masked_in_the_activity(self):
+        # Lajahome's and infy1995's dumps (#112): the start from the official app
+        # names the account in `activity.attributes.principalUserId`.
+        activity = {
+            "category": "CYCLE",
+            "attributes": {"principalUserId": "001bU00000hPkWkQAK", "prCode": "116"},
+        }
+        printed = diagnostics._redact({"attributes": {"activity": activity}})
+        attributes = printed["attributes"]["activity"]["attributes"]
+        self.assertEqual("***", attributes["principalUserId"])
+        self.assertEqual("116", attributes["prCode"])
 
     def test_credential_key_names_are_redacted_anywhere_they_appear(self):
         """The entry envelope redacts with explicit literals, so the CREDENTIAL half
