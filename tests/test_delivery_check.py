@@ -297,6 +297,21 @@ def test_a_setpoint_back_in_whole_fahrenheit_is_the_value_sent(
     assert _warnings(caplog) == []
 
 
+def test_only_the_water_heater_reads_its_setpoint_to_the_degree(caplog) -> None:
+    # PR #127 review: the whole-°F firmware is the water heater's; any other type
+    # that ever arms the check keeps comparing its setpoint exactly.
+    appliance = _Appliance("AC", tempSel="25")
+    _arm(appliance, {"tempSel": "23"})
+    appliance.cloud_read("2026-10-07T17:27:07.0Z", "2026-10-07T17:27:07.9Z",
+                         tempSel="22.8")
+
+    diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 63)
+
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert "tempSel is 22.8, 23 was sent" in warnings[0]
+
+
 def test_a_setpoint_already_on_that_degree_arms_nothing(caplog) -> None:
     # Home Assistant shows 62.8 as 63 (`water_heater.target_temperature`).
     appliance = _Appliance(tempSel="62.8")
