@@ -64,17 +64,38 @@ def _redacted_body(data: dict[str, Any]) -> Any:
 # A cloud error is the vendor's free text: bounded, so a stack dump cannot flood a log
 # line users paste into public issues.
 _CLOUD_ERROR_MAX_CHARS = 300
+# How much of it is scanned at all. Masking only shortens the text, so this many
+# characters always cover the 300 printed; the cap keeps a huge answer from costing
+# the client loop anything (PR #127 review).
+_CLOUD_ERROR_SCAN_CHARS = 1000
 
 # What in that free text could name someone, masked before the ERROR line (always
 # emitted, unlike the DEBUG payload line). Emails and UUIDs by shape; then any run of
 # 15+ token characters mixing letters and digits: a JWT segment, a Salesforce or
 # cognito id, a hex digest, a serial. A plain word ("ConditionalCheckFailedException")
 # has no digit and a timestamp breaks at ':' well short of 15, so both stay readable.
-_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# Each pattern may only START where its run of characters starts (the lookbehinds):
+# restarting inside a long run made the email pattern quadratic (PR #127 review,
+# 32 KB without "@" took 2.8 s).
+_EMAIL_RE = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
 _TOKEN_RE = re.compile(r"(?<![\w+/=-])(?=[\w+/=-]*\d)(?=[\w+/=-]*[A-Za-z])[\w+/=-]{15,}")
+# Every character either pattern above can match: what the scan bound cut through.
+_MASKABLE_PUNCTUATION = frozenset("_.+/=@-")
+
+
+def _drop_cut_run(text: str) -> str:
+    """`text` without the run the scan bound cut through, which no pattern can judge.
+
+    Half a token can be shorter than `_TOKEN_RE`'s 15 characters, and masking what
+    precedes it can slide it into the printed part.
+    """
+    end = len(text)
+    while end and (text[end - 1].isalnum() or text[end - 1] in _MASKABLE_PUNCTUATION):
+        end -= 1
+    return text[:end]
 
 
 def _cloud_error(payload: Any) -> str | None:
@@ -96,7 +117,10 @@ def _cloud_error(payload: Any) -> str | None:
     ]
     if not parts:
         return None
-    text = redact_identity(": ".join(parts))
+    text = ": ".join(parts)
+    if len(text) > _CLOUD_ERROR_SCAN_CHARS:
+        text = _drop_cut_run(text[:_CLOUD_ERROR_SCAN_CHARS]) + "..."
+    text = redact_identity(text)
     for pattern in (_EMAIL_RE, _UUID_RE, _TOKEN_RE):
         text = pattern.sub("***", text)
     if len(text) > _CLOUD_ERROR_MAX_CHARS:

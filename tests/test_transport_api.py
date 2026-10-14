@@ -742,6 +742,33 @@ class SendCommandTest(unittest.TestCase):
                     ),
                 )
 
+    def test_the_cloud_error_text_is_scrubbed_in_linear_time(self) -> None:
+        # PR #127 review: the email pattern restarted at every position of a long run
+        # without "@" (32 KB took 2.8 s on the client loop).
+        import time
+
+        for message in ("a" * 300_000, "a." * 150_000, "x1" * 150_000):
+            with self.subTest(size=len(message), head=message[:4]):
+                start = time.perf_counter()
+                text = api_mod._cloud_error({"errorType": "X", "errorMessage": message})
+                self.assertLess(time.perf_counter() - start, 0.2)
+                self.assertLessEqual(len(text), 300)
+
+    def test_a_token_cut_by_the_scan_bound_never_shows_a_fragment(self) -> None:
+        # Masking shortens the text, so what follows the scan bound could slide into
+        # the 300 characters printed: a token the bound cut in two must go entirely.
+        token = "t0k3n" + "9" * 12  # 17 characters, masked to "***"
+        count = (api_mod._CLOUD_ERROR_SCAN_CHARS - 10) // (len(token) + 1)
+        filler = " ".join([token] * count)
+        secret = "Zq7" * 20  # starts just before the bound, ends well after it
+        self.assertLess(len(filler), api_mod._CLOUD_ERROR_SCAN_CHARS)
+        self.assertGreater(len(filler) + 1 + len(secret), api_mod._CLOUD_ERROR_SCAN_CHARS)
+        text = api_mod._cloud_error(
+            {"errorType": "X", "errorMessage": filler + " " + secret}
+        )
+        for size in range(4, len(secret)):
+            self.assertNotIn(secret[:size], text, size)
+
     def test_send_command_failure_bounds_a_long_cloud_error(self) -> None:
         self._patch_clock("2026-06-18T12:34:56.789012")
         conn = FakeConnection({"payload": {"errorType": "X", "errorMessage": "m" * 5000}})
