@@ -98,26 +98,16 @@ def _drop_cut_run(text: str) -> str:
     return text[:end]
 
 
-def _cloud_error(payload: Any) -> str | None:
-    """The cloud's own words on a refused send, for the ERROR line; None without any.
+def _scrub_cloud_text(text: str) -> str:
+    """Cloud-chosen text as an always-emitted log line may show it.
 
-    Issue #126: Haier's command handler, an AWS Lambda, could not start and answered
-    `{"errorType": "Runtime.ImportModuleError", "errorMessage": "Unable to import
-    module 'handler': ..."}` with no resultCode. Only the DEBUG payload line said so.
-    A MAC inside the text is masked, as everywhere in the logs, and so is anything
-    shaped like an email, a UUID or a token (`_TOKEN_RE`): the line is always emitted
-    and the vocabulary is the vendor's, not ours.
+    Bounded twice: at most `_CLOUD_ERROR_SCAN_CHARS` are scanned, the run the bound
+    cuts through dropped whole (`_drop_cut_run`), and at most
+    `_CLOUD_ERROR_MAX_CHARS` printed. A MAC is masked, as everywhere in the logs,
+    and so is anything shaped like an email, a UUID or a token (`_TOKEN_RE`).
+    Masking by shape is not a guarantee, which is why only the errorType goes
+    through here (see `_cloud_error`).
     """
-    if not isinstance(payload, dict):
-        return None
-    parts = [
-        str(payload[key])
-        for key in ("errorType", "errorMessage")
-        if payload.get(key) not in (None, "")
-    ]
-    if not parts:
-        return None
-    text = ": ".join(parts)
     if len(text) > _CLOUD_ERROR_SCAN_CHARS:
         text = _drop_cut_run(text[:_CLOUD_ERROR_SCAN_CHARS]) + "..."
     text = redact_identity(text)
@@ -126,6 +116,21 @@ def _cloud_error(payload: Any) -> str | None:
     if len(text) > _CLOUD_ERROR_MAX_CHARS:
         text = text[: _CLOUD_ERROR_MAX_CHARS - 3] + "..."
     return text
+
+
+def _cloud_error(payload: Any) -> str | None:
+    """The cloud's own name for a refused send, for the ERROR line; None without one.
+
+    Issue #126: Haier's command handler, an AWS Lambda, could not start and answered
+    `{"errorType": "Runtime.ImportModuleError", "errorMessage": "Unable to import
+    module 'handler': ..."}` with no resultCode. The errorType names the failure;
+    the errorMessage is the vendor's free text, which no shape-based scrubbing makes
+    safe for a line that is always emitted and pasted into public issues (PR #127
+    review), so it stays in the DEBUG payload line only.
+    """
+    if not isinstance(payload, dict) or payload.get("errorType") in (None, ""):
+        return None
+    return _scrub_cloud_text(str(payload["errorType"]))
 
 
 def _command_timestamp() -> str:

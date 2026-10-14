@@ -669,8 +669,10 @@ class SendCommandTest(unittest.TestCase):
 
     def test_send_command_failure_names_the_cloud_error_at_error_level(self) -> None:
         # #126: the cloud's own handler failed (an AWS Lambda that could not start) and
-        # answered without a resultCode. The ERROR line said only resultCode=None; the
-        # cause was in the DEBUG payload line, which a user without debug never sees.
+        # answered without a resultCode. The ERROR line said only resultCode=None. It
+        # now names the errorType; the free-text errorMessage stays in the DEBUG
+        # payload line (PR #127 review, C1: no shape-based scrubbing makes vendor free
+        # text safe for a line that is always emitted).
         self._patch_clock("2026-06-18T12:34:56.789012")
         app = FakeAppliance()
         conn = FakeConnection({
@@ -684,15 +686,27 @@ class SendCommandTest(unittest.TestCase):
             "authInfo": {},
         })
         logger = "custom_components.addhon.client.transport.api"
-        with self.assertLogs(logger, level="ERROR") as cm:
+        with self.assertLogs(logger, level="DEBUG") as cm:
             ok = _run(_call(conn).send_command(app, "settings", {"tempSel": "23"}, {}))
         self.assertFalse(ok)
         errors = "\n".join(r.getMessage() for r in cm.records if r.levelno == logging.ERROR)
-        self.assertIn("command=settings", errors)
-        self.assertIn("resultCode=None", errors)
-        self.assertIn("Runtime.ImportModuleError", errors)
-        self.assertIn("No module named 'lib'", errors)
-        self.assertNotIn(app.mac_address, errors)
+        self.assertEqual(
+            "hOn send_command failed: command=settings resultCode=None"
+            " error=Runtime.ImportModuleError",
+            errors,
+        )
+        debug = "\n".join(r.getMessage() for r in cm.records if r.levelno == logging.DEBUG)
+        self.assertIn("No module named 'lib'", debug)
+        self.assertNotIn(app.mac_address, debug)
+
+    def test_an_error_message_alone_never_reaches_the_error_line(self) -> None:
+        self._patch_clock("2026-06-18T12:34:56.789012")
+        conn = FakeConnection({"payload": {"errorMessage": "denied for 415-555-0123"}})
+        logger = "custom_components.addhon.client.transport.api"
+        with self.assertLogs(logger, level="ERROR") as cm:
+            _run(_call(conn).send_command(FakeAppliance(), "settings", {}, {}))
+        errors = [r.getMessage() for r in cm.records if r.levelno == logging.ERROR]
+        self.assertEqual(["hOn send_command failed: command=settings resultCode=None"], errors)
 
     def test_send_command_failure_without_a_cloud_error_keeps_its_line(self) -> None:
         self._patch_clock("2026-06-18T12:34:56.789012")
@@ -706,8 +720,8 @@ class SendCommandTest(unittest.TestCase):
         )
 
     def test_the_cloud_error_text_masks_what_could_name_someone(self) -> None:
-        # The ERROR line is always emitted and pasted into public issues, and the
-        # message is the vendor's free text: mask anything shaped like an identity.
+        # The errorType is still the vendor's text on a line always emitted and pasted
+        # into public issues: anything shaped like an identity is masked.
         secrets = {
             "email": "mario.rossi+hon@example.co.uk",
             "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
@@ -719,28 +733,26 @@ class SendCommandTest(unittest.TestCase):
         }
         for name, secret in secrets.items():
             with self.subTest(name=name):
-                text = api_mod._cloud_error(
-                    {"errorType": "Forbidden", "errorMessage": f"denied for {secret} now"}
-                )
+                text = api_mod._scrub_cloud_text(f"Forbidden: denied for {secret} now")
                 self.assertNotIn(secret, text)
                 self.assertIn("***", text)
                 self.assertTrue(text.startswith("Forbidden: denied for "), text)
                 self.assertTrue(text.endswith(" now"), text)
+                self.assertNotIn(secret, api_mod._cloud_error({"errorType": secret}))
 
     def test_the_cloud_error_text_keeps_the_words_that_explain_it(self) -> None:
-        for message in (
-            "Unable to import module 'handler': No module named 'lib'",
+        for text in (
+            "Runtime.ImportModuleError",
             "Task timed out after 30.03 seconds",
             "Rate exceeded at 2026-10-12T15:16:33.597Z",
             "ConditionalCheckFailedException",
         ):
-            with self.subTest(message=message):
-                self.assertEqual(
-                    f"Runtime.ImportModuleError: {message}",
-                    api_mod._cloud_error(
-                        {"errorType": "Runtime.ImportModuleError", "errorMessage": message}
-                    ),
-                )
+            with self.subTest(text=text):
+                self.assertEqual(text, api_mod._scrub_cloud_text(text))
+        self.assertEqual(
+            "Runtime.ImportModuleError",
+            api_mod._cloud_error({"errorType": "Runtime.ImportModuleError"}),
+        )
 
     def test_the_cloud_error_text_is_scrubbed_in_linear_time(self) -> None:
         # PR #127 review: the email pattern restarted at every position of a long run
@@ -750,7 +762,7 @@ class SendCommandTest(unittest.TestCase):
         for message in ("a" * 300_000, "a." * 150_000, "x1" * 150_000):
             with self.subTest(size=len(message), head=message[:4]):
                 start = time.perf_counter()
-                text = api_mod._cloud_error({"errorType": "X", "errorMessage": message})
+                text = api_mod._cloud_error({"errorType": message})
                 self.assertLess(time.perf_counter() - start, 0.2)
                 self.assertLessEqual(len(text), 300)
 
@@ -763,15 +775,13 @@ class SendCommandTest(unittest.TestCase):
         secret = "Zq7" * 20  # starts just before the bound, ends well after it
         self.assertLess(len(filler), api_mod._CLOUD_ERROR_SCAN_CHARS)
         self.assertGreater(len(filler) + 1 + len(secret), api_mod._CLOUD_ERROR_SCAN_CHARS)
-        text = api_mod._cloud_error(
-            {"errorType": "X", "errorMessage": filler + " " + secret}
-        )
+        text = api_mod._scrub_cloud_text(filler + " " + secret)
         for size in range(4, len(secret)):
             self.assertNotIn(secret[:size], text, size)
 
     def test_send_command_failure_bounds_a_long_cloud_error(self) -> None:
         self._patch_clock("2026-06-18T12:34:56.789012")
-        conn = FakeConnection({"payload": {"errorType": "X", "errorMessage": "m" * 5000}})
+        conn = FakeConnection({"payload": {"errorType": "m" * 5000}})
         logger = "custom_components.addhon.client.transport.api"
         with self.assertLogs(logger, level="ERROR") as cm:
             _run(_call(conn).send_command(FakeAppliance(), "settings", {}, {}))
