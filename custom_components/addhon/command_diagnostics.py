@@ -377,16 +377,37 @@ _CLOCK = re.compile(r"(\d{1,2}):(\d{1,2})")
 _HEX = re.compile(r"[0-9a-fA-F]+")
 
 
-def _same_setting(sent: str, current: str | None) -> bool:
-    """Whether the appliance's reading `current` is the value `sent`.
+def _same_degree(sent: str, current: str) -> bool:
+    """Whether the setpoint `current` reads as the whole degree `sent`.
+
+    The heat-pump water heater keeps its setpoint in whole °F: 63 comes back as
+    145 °F = 62.8, 59 as 58.9, whoever set it, the official app included (issue
+    #115, apk2/analysis/issue115-hw/7-prova-beta11-2026-10-07.md). Read to the
+    whole degree, half a degree rounding up, as `water_heater.target_temperature`
+    shows it.
+    """
+    try:
+        wanted, reading = float(sent), float(current)
+    except ValueError:
+        return False
+    if not (math.isfinite(wanted) and math.isfinite(reading)) or wanted != int(wanted):
+        return False
+    return math.floor(reading + 0.5) == wanted
+
+
+def _same_setting(sent: str, current: str | None, key: str | None = None) -> bool:
+    """Whether the appliance's reading `current` of `key` is the value `sent`.
 
     Both already spelled by `comparable_text`, which leaves these two shapes as text:
-    a clock compares as (hour, minute), a hex mask without regard to case. Anything
+    a clock compares as (hour, minute), a hex mask without regard to case. The
+    setpoint `tempSel` compares to the whole degree (`_same_degree`). Anything
     else must match exactly, as before.
     """
     if current is None:
         return False
     if current == sent:
+        return True
+    if key == "tempSel" and _same_degree(sent, current):
         return True
     sent_clock, current_clock = _CLOCK.fullmatch(sent), _CLOCK.fullmatch(current)
     if sent_clock and current_clock:
@@ -439,7 +460,7 @@ def delivery_baseline(
         expected = {
             key: value
             for key, value in _expected_values(payload).items()
-            if not _same_setting(value, _shadow_text(attributes, key))
+            if not _same_setting(value, _shadow_text(attributes, key), key)
         }
         accepted, _executed = _history_times(attributes)
         return DeliveryBaseline(accepted=accepted, expected=expected)
@@ -492,7 +513,7 @@ def _confirm_delivery(appliance: object, observed: Mapping[str, str]) -> None:
             confirmed = [
                 key
                 for key, value in check.expected.items()
-                if _same_setting(value, observed.get(key))
+                if _same_setting(value, observed.get(key), key)
             ]
             for key in confirmed:
                 del check.expected[key]
@@ -541,7 +562,7 @@ def observe_shadow_read(appliance: object, timestamp: float | None = None) -> No
         stale = []
         for key, sent in check.expected.items():
             current = _shadow_text(attributes, key)
-            if current is not None and not _same_setting(sent, current):
+            if current is not None and not _same_setting(sent, current, key):
                 stale.append(f"{key} is {redact_identity(current)}, {sent} was sent")
         # Only a sent value the shadow does not hold is evidence about OUR send. The
         # history slot is shared with every client: a short gap there may be another

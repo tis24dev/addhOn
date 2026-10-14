@@ -271,6 +271,44 @@ def test_the_appliances_own_spelling_is_the_value_sent(caplog, key, sent, publis
     assert _warnings(caplog) == []
 
 
+@pytest.mark.parametrize(
+    ("sent", "published"),
+    [
+        # phroc's HP150M8-9, beta11: the firmware keeps the setpoint in whole °F, so
+        # 63 comes back as 145 °F = 62.8 and 59 as 138 °F = 58.9, also when set from
+        # the app (apk2/analysis/issue115-hw/7-prova-beta11-2026-10-07.md).
+        ("63", "62.8"),
+        ("59", "58.9"),
+        # 61 is 141.8 °F: 60.6 if the firmware truncates rather than rounds.
+        ("61", "60.6"),
+        ("65", "65.0"),
+    ],
+)
+def test_a_setpoint_back_in_whole_fahrenheit_is_the_value_sent(
+    caplog, sent, published
+) -> None:
+    appliance = _Appliance(tempSel="65" if sent != "65" else "60")
+    _arm(appliance, {"tempSel": sent})
+    appliance.cloud_read("2026-10-07T17:27:07.0Z", "2026-10-07T17:27:07.9Z",
+                         tempSel=published)
+
+    diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 63)
+
+    assert _warnings(caplog) == []
+
+
+def test_a_setpoint_already_on_that_degree_arms_nothing(caplog) -> None:
+    # Home Assistant shows 62.8 as 63 (`water_heater.target_temperature`).
+    appliance = _Appliance(tempSel="62.8")
+    _arm(appliance, {"tempSel": "63"})
+    appliance.cloud_read("2026-10-07T17:27:07.0Z", "2026-10-07T17:27:07.0Z",
+                         tempSel="65")
+
+    diagnostics.observe_shadow_read(appliance, timestamp=_SENT_AT + 63)
+
+    assert _warnings(caplog) == []
+
+
 def test_a_spelling_already_there_arms_nothing(caplog) -> None:
     appliance = _Appliance(sterilizationTime="15:00", opp1EcoDays="1F")
     _arm(appliance, {"sterilizationTime": "15:0", "opp1EcoDays": "1f"})
@@ -303,6 +341,11 @@ def test_an_mqtt_push_in_the_appliances_spelling_closes_the_check(caplog) -> Non
         ("opp1EcoDays", "1f", "7F"),
         # Only a clock and a hex mask are respelled: other text stays exact.
         ("operationName", "grSetEcoTime", "GRSETECOTIME"),
+        # A setpoint is read to the whole degree, and no further.
+        ("tempSel", "63", "62.4"),
+        ("tempSel", "63", "63.5"),
+        # Only the setpoint: any other number stays exact.
+        ("otherTemp", "63", "62.8"),
     ],
 )
 def test_another_value_still_warns(caplog, key, sent, published) -> None:
