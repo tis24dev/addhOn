@@ -667,6 +667,54 @@ class SendCommandTest(unittest.TestCase):
         self.assertIn("7", errors)                # resultCode in the ERROR line
         self.assertIn("***", blob)                # redaction marker
 
+    def test_send_command_failure_names_the_cloud_error_at_error_level(self) -> None:
+        # #126: the cloud's own handler failed (an AWS Lambda that could not start) and
+        # answered without a resultCode. The ERROR line said only resultCode=None; the
+        # cause was in the DEBUG payload line, which a user without debug never sees.
+        self._patch_clock("2026-06-18T12:34:56.789012")
+        app = FakeAppliance()
+        conn = FakeConnection({
+            "payload": {
+                "errorMessage": "Unable to import module 'handler': No module named 'lib'"
+                                f" (device {app.mac_address})",
+                "errorType": "Runtime.ImportModuleError",
+                "requestId": "",
+                "stackTrace": [],
+            },
+            "authInfo": {},
+        })
+        logger = "custom_components.addhon.client.transport.api"
+        with self.assertLogs(logger, level="ERROR") as cm:
+            ok = _run(_call(conn).send_command(app, "settings", {"tempSel": "23"}, {}))
+        self.assertFalse(ok)
+        errors = "\n".join(r.getMessage() for r in cm.records if r.levelno == logging.ERROR)
+        self.assertIn("command=settings", errors)
+        self.assertIn("resultCode=None", errors)
+        self.assertIn("Runtime.ImportModuleError", errors)
+        self.assertIn("No module named 'lib'", errors)
+        self.assertNotIn(app.mac_address, errors)
+
+    def test_send_command_failure_without_a_cloud_error_keeps_its_line(self) -> None:
+        self._patch_clock("2026-06-18T12:34:56.789012")
+        conn = FakeConnection({"payload": {"resultCode": "7"}})
+        logger = "custom_components.addhon.client.transport.api"
+        with self.assertLogs(logger, level="ERROR") as cm:
+            _run(_call(conn).send_command(FakeAppliance(), "setParameters", {}, {}))
+        errors = [r.getMessage() for r in cm.records if r.levelno == logging.ERROR]
+        self.assertEqual(
+            ["hOn send_command failed: command=setParameters resultCode=7"], errors
+        )
+
+    def test_send_command_failure_bounds_a_long_cloud_error(self) -> None:
+        self._patch_clock("2026-06-18T12:34:56.789012")
+        conn = FakeConnection({"payload": {"errorType": "X", "errorMessage": "m" * 5000}})
+        logger = "custom_components.addhon.client.transport.api"
+        with self.assertLogs(logger, level="ERROR") as cm:
+            _run(_call(conn).send_command(FakeAppliance(), "settings", {}, {}))
+        errors = [r.getMessage() for r in cm.records if r.levelno == logging.ERROR]
+        self.assertEqual(1, len(errors))
+        self.assertLess(len(errors[0]), 500)
+
     def test_send_command_raising_logs_the_redacted_payload(self) -> None:
         # #99: a 500 surfaces as an exception out of the connection, before any
         # resultCode, and the payload that caused it was nowhere in the log -- beta4's

@@ -60,6 +60,34 @@ def _redacted_body(data: dict[str, Any]) -> Any:
     return redacted
 
 
+# A cloud error is the vendor's free text: bounded, so a stack dump cannot flood a log
+# line users paste into public issues.
+_CLOUD_ERROR_MAX_CHARS = 300
+
+
+def _cloud_error(payload: Any) -> str | None:
+    """The cloud's own words on a refused send, for the ERROR line; None without any.
+
+    Issue #126: Haier's command handler, an AWS Lambda, could not start and answered
+    `{"errorType": "Runtime.ImportModuleError", "errorMessage": "Unable to import
+    module 'handler': ..."}` with no resultCode. Only the DEBUG payload line said so.
+    A MAC inside the text is masked, as everywhere in the logs.
+    """
+    if not isinstance(payload, dict):
+        return None
+    parts = [
+        str(payload[key])
+        for key in ("errorType", "errorMessage")
+        if payload.get(key) not in (None, "")
+    ]
+    if not parts:
+        return None
+    text = redact_identity(": ".join(parts))
+    if len(text) > _CLOUD_ERROR_MAX_CHARS:
+        text = text[: _CLOUD_ERROR_MAX_CHARS - 3] + "..."
+    return text
+
+
 def _command_timestamp() -> str:
     """Command UTC timestamp in milliseconds + "Z" (e.g. 2026-06-18T12:34:56.789Z).
 
@@ -558,9 +586,20 @@ class HonApi:
                 # command + resultCode at ERROR (no identity, always emitted), and the
                 # full REDACTED payload/response at DEBUG (gated) for troubleshooting.
                 result_code = payload.get("resultCode") if isinstance(payload, dict) else None
-                _LOGGER.error(
-                    "hOn send_command failed: command=%s resultCode=%s", command, result_code
-                )
+                cloud_error = _cloud_error(payload)
+                if cloud_error is None:
+                    _LOGGER.error(
+                        "hOn send_command failed: command=%s resultCode=%s",
+                        command,
+                        result_code,
+                    )
+                else:
+                    _LOGGER.error(
+                        "hOn send_command failed: command=%s resultCode=%s error=%s",
+                        command,
+                        result_code,
+                        cloud_error,
+                    )
                 _LOGGER.debug(
                     "hOn send_command failed payload (redacted)=%s response=%s",
                     _redacted_body(data),
