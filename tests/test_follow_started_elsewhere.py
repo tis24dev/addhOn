@@ -176,10 +176,6 @@ class _Harness(unittest.TestCase):
     def _start_command(app):
         return app.commands["startProgram"]
 
-
-class FollowAStartMadeElsewhereTest(_Harness):
-    """infy1995's case, then the signals one by one."""
-
     def _at_setup(self):
         # Setup read a spin; the washer now runs a 116 nobody told us about.
         context = _shadow("116") | {"activity": {}, "commandHistory": _start(
@@ -198,6 +194,10 @@ class FollowAStartMadeElsewhereTest(_Harness):
                 "activityStarted": _ACTIVITY_AT,
                 "attributes": {"programName": "IOT_WASH_DARK", "prCode": "116"},
             }
+
+
+class FollowAStartMadeElsewhereTest(_Harness):
+    """infy1995's case, then the signals one by one."""
 
     def test_setup_shows_the_base_programme_of_the_shared_code(self) -> None:
         # The starting point of the report: the spin read at setup does not match 116.
@@ -239,6 +239,9 @@ class FollowAStartMadeElsewhereTest(_Harness):
 
     def test_both_signals_in_one_poll_cost_one_read(self) -> None:  # T2
         app = self._at_setup()
+        # The first poll only takes note of the activity (PR #127 review: without it
+        # the activity change below was that baseline, not a second signal).
+        self._poll(app)
         reads = self.cloud.history_reads
         self._app_starts_dark()
         self._poll(app, 4)
@@ -476,6 +479,127 @@ class RecoveredProgrammeAndPrPositionTest(_Harness):
         happy_hour.category = "iot_happy_hour"
         self.loop.run_until_complete(app.load_attributes())
         self.assertEqual("eco", app.attributes["programName"])
+
+
+    def test_a_start_that_matches_no_programme_takes_the_mark_off(self) -> None:
+        # PR #127 review: a followed start the catalog cannot place left the mark on
+        # the programme recovered before, which then hid the shadow's prPosition.
+        app = self._dw([_start("PROGRAMS.DW.IOT_HAPPY_HOUR", _DARK_AT, pr_code="8")])
+        self.assertEqual("iot_happy_hour", app.attributes["programName"])
+        self.cloud.history = [
+            _start("PROGRAMS.DW.IOT_NOT_IN_THIS_CATALOG", "2026-10-06T15:00:00Z", pr_code="8")
+        ]
+        self.cloud.context["commandHistory"] = self.cloud.history[0]
+        self._poll(app, 2)
+        self.assertEqual("eco", app.attributes["programName"])
+
+
+class ReviewOfTheReleaseTest(_Harness):
+    """The follow, as the review of PR #127 (release 5.26.0) asked to fix it.
+
+    Decisions of 2026-10-14: an activity names its own programme and channel
+    (`mobileApp` for the app, `appliance` for the panel, 5 + 2 dumps), so an activity
+    is tied to the start that announced it by programme name (S1), an app start seen
+    only through its activity waits for a row of that programme (S3) and takes no
+    other (S4), and a panel start reads nothing at all, never reaching `/history`.
+    """
+
+    @staticmethod
+    def _activity(stamp, programme=None, channel=None):
+        attributes = {}
+        if programme is not None:
+            attributes["programName"] = programme
+        if channel is not None:
+            attributes["channel"] = channel
+        return {"activityStarted": stamp, "attributes": attributes}
+
+    def _quiet_setup(self):
+        app = self._at_setup()
+        self.cloud.context["commandHistory"] = None
+        self._poll(app)
+        return app
+
+    def test_a_start_with_no_cycle_does_not_hide_the_next_one(self) -> None:  # S1
+        app = self._at_setup()
+        self._poll(app)
+        # The app's start is accepted but no cycle follows (no new activity).
+        self._app_starts_dark(activity=False)
+        self._poll(app, 2)
+        self.assertEqual(1, app.followed_starts)
+        # Later a spin starts from the app; its slot was overwritten before a poll.
+        self.cloud.history.insert(0, _start("PROGRAMS.WM_WD.HQD_SPIN", "2026-10-06T16:00:00Z"))
+        self.cloud.context["commandHistory"] = None
+        self.cloud.context["activity"] = self._activity(
+            "2026-10-06T16:00:04Z", "HQD_SPIN", "mobileApp")
+        self._poll(app, 2)
+        self.assertEqual("PROGRAMS.WM_WD.HQD_SPIN", self._start_command(app).category)
+        self.assertEqual(2, app.followed_starts)
+
+    def test_the_activity_of_the_announced_start_costs_no_read(self) -> None:  # S1
+        app = self._at_setup()
+        self._poll(app)
+        self._app_starts_dark(activity=False)
+        self._poll(app, 2)
+        reads = self.cloud.history_reads
+        self.cloud.context["activity"] = self._activity(
+            _ACTIVITY_AT, "IOT_WASH_DARK", "mobileApp")
+        self._poll(app, 2)
+        self.assertEqual(reads, self.cloud.history_reads)
+
+    def test_an_app_start_seen_by_its_activity_waits_for_its_row(self) -> None:  # S3
+        app = self._quiet_setup()
+        reads = self.cloud.history_reads
+        self.cloud.context["activity"] = self._activity(
+            _ACTIVITY_AT, "IOT_WASH_DARK", "mobileApp")
+        self._poll(app, 2)  # two reads, the row is not there yet
+        self.cloud.history = [
+            _start("PROGRAMS.WM_WD.IOT_WASH_DARK", _DARK_AT, temp="40"),
+            _start("PROGRAMS.WM_WD.HQD_SPIN", _SPIN_AT),
+        ]
+        self._poll(app, 2)  # the third lists it, the next poll applies it
+        self.assertEqual(reads + 3, self.cloud.history_reads)
+        self.assertEqual("iot_wash_dark", app.attributes["programName"])
+
+    def test_an_app_start_seen_by_its_activity_takes_no_other_row(self) -> None:  # S4
+        app = self._quiet_setup()
+        # A dark start the follow never saw sits on top of /history.
+        self.cloud.history.insert(0, _start("PROGRAMS.WM_WD.IOT_WASH_DARK", _DARK_AT, temp="40"))
+        self.cloud.context["activity"] = self._activity(
+            "2026-10-06T16:00:04Z", "HQD_SYNTHETIC_AND_COLOURED", "mobileApp")
+        self._poll(app, 6)
+        self.assertEqual("PROGRAMS.WM_WD.HQD_SPIN", self._start_command(app).category)
+        self.assertEqual(0, app.followed_starts)
+
+    def test_a_panel_start_reads_nothing(self) -> None:  # T1, revised
+        app = self._quiet_setup()
+        reads = self.cloud.history_reads
+        self.cloud.context["activity"] = self._activity(
+            _ACTIVITY_AT, "HQD_SYNTHETIC_AND_COLOURED", "appliance")
+        self._poll(app, 3)
+        self.assertEqual(reads, self.cloud.history_reads)
+
+    def test_a_new_start_gets_its_own_three_reads(self) -> None:  # S6
+        app = self._at_setup()
+        self.cloud.history_error = TimeoutError()
+        reads = self.cloud.history_reads
+        self._app_starts_dark(activity=False)
+        self._poll(app)  # one read spent on the dark start
+        self.cloud.context["commandHistory"] = _start(
+            "PROGRAMS.WM_WD.HQD_SPIN", "2026-10-06T13:47:30Z")
+        self._poll(app, 6)
+        self.assertEqual(reads + 1 + 3, self.cloud.history_reads)
+
+    def test_an_option_the_row_leaves_out_goes_back_to_its_default(self) -> None:  # S8
+        app = self._at_setup()
+        dark = self._start_command(app).categories["iot_wash_dark"]
+        dark.parameters["temp"].value = "60"  # an earlier start of the same programme
+        row = _start("PROGRAMS.WM_WD.IOT_WASH_DARK", _DARK_AT)
+        del row["command"]["parameters"]["temp"]
+        self.cloud.history = [row, _start("PROGRAMS.WM_WD.HQD_SPIN", _SPIN_AT)]
+        self.cloud.context["commandHistory"] = row
+        self._poll(app, 2)
+        self.assertIs(dark, self._start_command(app))
+        self.assertEqual("30", str(dark.parameters["temp"].value))
 
 
 class NoReadAfterOurOwnCommandTest(_Harness):

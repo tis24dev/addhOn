@@ -775,7 +775,16 @@ class HonCommandLoader:
         for name, command in self.commands.items():
             self._recover_command_state(name, command)
 
-    def _recover_command_state(self, name: str, command: HonCommand) -> None:
+    def _recover_command_state(
+        self, name: str, command: HonCommand, rebuild: bool = False
+    ) -> None:
+        """Point `command` at the category `/history` last started, with its values.
+
+        `rebuild` first puts that category back to its schema (`rebuild_from_schema`):
+        for a start followed at runtime, whose category may still hold an earlier
+        cycle's values, so a key the row leaves out shows its default as after a load
+        (PR #127 review). A catalog load builds fresh categories and needs none.
+        """
         if (last_index := self._get_last_command_index(name)) is None:
             return
         last_command = self._command_history[last_index].get("command", {})
@@ -786,6 +795,8 @@ class HonCommandLoader:
         )
         if target is None:
             return
+        if rebuild and callable(rebuilder := getattr(target, "rebuild_from_schema", None)):
+            rebuilder()
         for key, data in target.settings.items():
             if parameters.get(key) is None:
                 continue
@@ -808,8 +819,16 @@ class HonCommandLoader:
         self._history_recovery = {}
         if (command := commands.get("startProgram")) is None:
             return None
-        self._recover_command_state("startProgram", command)
-        return self._history_recovery.get("startProgram")
+        self._recover_command_state("startProgram", command, rebuild=True)
+        how = self._history_recovery.get("startProgram")
+        if how in (None, "none", "default"):
+            # The newer start matches no category: the one recovered before is no
+            # longer what runs, so it loses the mark that lets it past the shadow's
+            # prPosition (PR #127 review).
+            for category in command.categories.values():
+                if callable(unmark := getattr(category, "mark_recovered", None)):
+                    unmark(False)
+        return how
 
     def _add_favourites(self) -> None:
         for favourite in self._favourites:

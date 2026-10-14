@@ -39,6 +39,26 @@ _LOGGER = logging.getLogger(__name__)
 _UNSEEN = object()
 
 
+def _programme_key(name: Any) -> Optional[str]:
+    """A programme name as a start row and an activity can both spell it.
+
+    `/history` and the `commandHistory` slot carry the catalog key
+    (`PROGRAMS.WM_WD.IOT_WASH_DARK`), an activity the bare name (`IOT_WASH_DARK`).
+    """
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return name.strip().rsplit(".", 1)[-1].upper()
+
+
+def _newest_start(history: Any) -> dict[str, Any]:
+    """The newest `startProgram` body a `/history` list holds, {} without one."""
+    for entry in history if isinstance(history, list) else ():
+        command = entry.get("command") if isinstance(entry, dict) else None
+        if isinstance(command, dict) and command.get("commandName") == "startProgram":
+            return command
+    return {}
+
+
 class HonAppliance:
     _MINIMAL_UPDATE_INTERVAL = 5  # seconds
     # Types whose start is followed when a cycle begins elsewhere (issue #112, decision
@@ -90,15 +110,18 @@ class HonAppliance:
         self._command_history_refresh: Optional[str] = None
         # Following a cycle started elsewhere (issue #112, see `_follow_new_cycle`):
         # the start the last recovery used, the last `commandHistory` start seen, the
-        # last activity seen, the start announced and still awaited, the reads left,
-        # whether the cycle's start is already handled, the read in flight, a list
-        # read and not applied yet, and how many starts were followed.
+        # last activity seen, the start announced and still awaited, the programme an
+        # app start seen only through its activity is awaited by, the reads left, the
+        # programme of the start the slot announced and whose activity is still to
+        # come ("" when the slot named none), the read in flight, a list read and not
+        # applied yet, and how many starts were followed.
         self._recovered_start: Optional[str] = None
         self._seen_slot_start: Optional[str] = None
         self._seen_activity: Any = _UNSEEN
         self._awaited_start: Optional[str] = None
+        self._awaited_programme: Optional[str] = None
         self._follow_reads_left = 0
-        self._cycle_start_handled = False
+        self._announced_programme: Optional[str] = None
         self._follow_task: Optional[asyncio.Task] = None
         self._follow_list: Optional[list[dict[str, Any]]] = None
         self._followed_starts = 0
@@ -321,6 +344,14 @@ class HonAppliance:
           lacks the start the slot announced;
         - a list with no newer start (a panel start never reaches it) changes nothing.
 
+        Review of the 5.26.0 release PR (#127), decisions of 2026-10-14: an activity
+        names its programme and channel (`mobileApp` from the app, `appliance` from
+        the panel), so the activity of a start the slot announced is recognised by its
+        programme (S1); an app start seen only through its activity waits, up to three
+        reads, for a row of that programme and takes no other (S3, S4); a panel start
+        reads nothing; every new start gets three reads of its own (S6). An activity
+        without those names is followed as before.
+
         Runs once per poll, on the client loop, after the context was read; the list
         read is applied by `_apply_followed_list` at the start of the next poll, before
         the context, so the programme name derived from it already sees the recovery.
@@ -334,7 +365,11 @@ class HonAppliance:
         if history is None:
             return
         listed = start_identity(history)
-        if listed is not None and listed != self._recovered_start:
+        if (
+            listed is not None
+            and listed != self._recovered_start
+            and self._is_awaited_row(history)
+        ):
             how = HonCommandLoader(
                 self._api, self, self._catalog_repository
             ).recover_start(self._commands, history)
@@ -342,11 +377,33 @@ class HonAppliance:
             if how is not None:
                 self._history_recovery = {**self._history_recovery, "startProgram": how}
             self._followed_starts += 1
-        # A start the slot announced and this list does not hold yet (the cloud is
-        # behind, or a second start came while the read was in flight) keeps the reads
-        # going; anything else ends the follow, a list with no newer start included.
-        if self._awaited_start is None or self._awaited_start == self._recovered_start:
+            if _programme_key(_newest_start(history).get("programName")) == (
+                self._awaited_programme
+            ):
+                self._awaited_programme = None
+        # A start the slot announced, or an app start its activity named, that this
+        # list does not hold yet (the cloud is behind, or a second start came while
+        # the read was in flight) keeps the reads going; anything else ends the
+        # follow, a list with no newer start included.
+        if (
+            self._awaited_start is None or self._awaited_start == self._recovered_start
+        ) and self._awaited_programme is None:
             self._end_follow()
+
+    def _is_awaited_row(self, history: list[dict[str, Any]]) -> bool:
+        """Whether the newest start of `history` may be applied (S4).
+
+        An app start known only through its activity has no identity, only a
+        programme: a newer row of another programme is not its row. A start the slot
+        announced is awaited by identity, and any newer row is applied on the way.
+        """
+        if self._awaited_programme is None or self._awaited_start not in (
+            None,
+            self._recovered_start,
+        ):
+            return True
+        row = _programme_key(_newest_start(history).get("programName"))
+        return row == self._awaited_programme
 
     def _watch_command_slot(self) -> None:
         slot = self._attributes.get("commandHistory")
@@ -359,7 +416,7 @@ class HonAppliance:
         self._seen_slot_start = start
         if start != self._recovered_start:
             self._awaited_start = start
-            self._cycle_start_handled = True
+            self._announced_programme = _programme_key(command.get("programName")) or ""
             self._arm_follow()
 
     def _watch_activity(self) -> None:
@@ -371,23 +428,35 @@ class HonAppliance:
         if not started or started == self._seen_activity:
             return
         self._seen_activity = started
-        if self._cycle_start_handled:
-            # The slot already announced this cycle's start: one read is enough.
-            self._cycle_start_handled = False
+        details = activity.get("attributes") if isinstance(activity, dict) else None
+        details = details if isinstance(details, dict) else {}
+        programme = _programme_key(details.get("programName"))
+        announced, self._announced_programme = self._announced_programme, None
+        if announced is not None and (
+            not announced or programme is None or programme == announced
+        ):
+            # The slot already announced this cycle's start: one read is enough (S1:
+            # only when the activity names that programme, or names none).
             return
+        if details.get("channel") == "appliance":
+            # Started on the panel: such a start never reaches /history.
+            return
+        self._awaited_programme = programme
         self._arm_follow()
 
     def _arm_follow(self) -> None:
-        if self._follow_reads_left == 0:
-            self._follow_reads_left = self._FOLLOW_ATTEMPTS
+        # A new start gets its own reads, whatever an earlier one left (S6).
+        self._follow_reads_left = self._FOLLOW_ATTEMPTS
 
     def _end_follow(self) -> None:
         self._follow_reads_left = 0
         self._awaited_start = None
+        self._awaited_programme = None
 
     def _read_for_new_cycle(self) -> None:
         if self._follow_reads_left == 0:
             self._awaited_start = None
+            self._awaited_programme = None
             return
         if self._follow_task is not None and not self._follow_task.done():
             return
