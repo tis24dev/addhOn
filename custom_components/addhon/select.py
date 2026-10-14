@@ -845,7 +845,7 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
             redact_store(store),
         )
         store[self._appliance_id] = code
-        mark_pending_choice(self.coordinator, self._appliance_id)
+        mark_pending_choice(self.coordinator, self._appliance_id, PROGRAM_PENDING_STORE)
         # Changing the program invalidates any buffered program OPTIONS: they were chosen
         # for the previous program and must not silently carry into the new one at Start
         # (PR #38 / Greptile P1). Clear them ONLY on an actual program change, so

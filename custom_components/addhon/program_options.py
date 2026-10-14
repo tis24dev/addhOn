@@ -77,21 +77,28 @@ def startprogram_command(appliance):
 
 # Coordinator attribute: {appliance id: the engine's `followed_starts` seen last poll}.
 _FOLLOWED_STARTS_SEEN = "addhon_followed_starts_seen"
-# {appliance id: monotonic instant of the last programme or option chosen in HA}.
+# {appliance id: {store name: monotonic instant of the last choice made in HA}}.
 _PENDING_CHOICE_AT = "addhon_pending_choice_at"
 
 
-def mark_pending_choice(coordinator, appliance_id, at: float | None = None) -> None:
-    """Stamp a choice buffered in HA for `appliance_id`, for the follow below.
+def mark_pending_choice(
+    coordinator, appliance_id, store_name: str, at: float | None = None
+) -> None:
+    """Stamp a choice buffered in HA in `store_name` for `appliance_id`.
 
     PR #127 review (S9): a start followed during a poll must not drop a choice the user
-    made after that poll began, which is newer than the start it saw.
+    made after that poll began, which is newer than the start it saw. One instant per
+    store: an option chosen after the poll began says nothing about a programme chosen
+    before it.
     """
     stamps = getattr(coordinator, _PENDING_CHOICE_AT, None)
     if not isinstance(stamps, dict):
         stamps = {}
         setattr(coordinator, _PENDING_CHOICE_AT, stamps)
-    stamps[appliance_id] = time.monotonic() if at is None else at
+    per = stamps.get(appliance_id)
+    if not isinstance(per, dict):
+        per = stamps[appliance_id] = {}
+    per[store_name] = time.monotonic() if at is None else at
 
 
 def forget_choices_after_followed_starts(
@@ -124,20 +131,23 @@ def forget_choices_after_followed_starts(
         seen[appliance_id] = count
         if previous is None or previous == count:
             continue
-        chosen_at = stamps.get(appliance_id)
-        if (
-            poll_started is not None
-            and isinstance(chosen_at, (int, float))
-            and chosen_at >= poll_started
-        ):
-            _LOGGER.debug(
-                "Program options: a start made elsewhere was followed for %s; the "
-                "choices made in HA since the poll began are kept",
-                redact_id(appliance_id),
-            )
-            continue
-        stamps.pop(appliance_id, None)
+        chosen = stamps.get(appliance_id)
+        chosen = chosen if isinstance(chosen, dict) else {}
         for name in (PROGRAM_PENDING_STORE, PROGRAM_PENDING_OPTIONS):
+            chosen_at = chosen.get(name)
+            if (
+                poll_started is not None
+                and isinstance(chosen_at, (int, float))
+                and chosen_at >= poll_started
+            ):
+                _LOGGER.debug(
+                    "Program options: a start made elsewhere was followed for %s; "
+                    "the %s chosen in HA since the poll began are kept",
+                    redact_id(appliance_id),
+                    name,
+                )
+                continue
+            chosen.pop(name, None)
             store = getattr(coordinator, name, None)
             if isinstance(store, dict) and store.pop(appliance_id, None) is not None:
                 _LOGGER.debug(
@@ -540,7 +550,7 @@ class HonProgramOptionEntity(HonBaseEntity):
             per = {}
             store[self._appliance_id] = per
         per[self._param] = value
-        mark_pending_choice(self.coordinator, self._appliance_id)
+        mark_pending_choice(self.coordinator, self._appliance_id, PROGRAM_PENDING_OPTIONS)
         cleared = self._clear_exclusive_siblings(per, value)
         _LOGGER.debug(
             "ProgramOption debug: buffered '%s'=%s id=%s param=%s cleared=%s",

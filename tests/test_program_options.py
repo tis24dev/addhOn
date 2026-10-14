@@ -419,7 +419,9 @@ class BufferWriteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, start.send_calls)
         self.assertEqual("800", entity.current_option)
         # Stamped, so a start followed meanwhile does not drop it (PR #127 review, S9).
-        self.assertIn("washer-1", getattr(coordinator, "addhon_pending_choice_at"))
+        self.assertIn(
+            "pending_options", getattr(coordinator, "addhon_pending_choice_at")["washer-1"]
+        )
 
     async def test_number_buffers_and_rejects_off_grid(self) -> None:
         from homeassistant.exceptions import HomeAssistantError
@@ -2294,7 +2296,8 @@ class ForgetChoicesAfterAFollowedStartTest(unittest.TestCase):
 
         coordinator, programs, options = self._coordinator()
         self._poll(coordinator, {"wm": 0, "dw": 0})
-        mark_pending_choice(coordinator, "wm", at=105.0)
+        mark_pending_choice(coordinator, "wm", programs, at=105.0)
+        mark_pending_choice(coordinator, "wm", options, at=106.0)
         data = {"wm": {"appliance": types.SimpleNamespace(followed_starts=1)}}
         forget_choices_after_followed_starts(coordinator, data, poll_started=100.0)
         self.assertEqual("iot_wash_dark", getattr(coordinator, programs)["wm"])
@@ -2308,11 +2311,29 @@ class ForgetChoicesAfterAFollowedStartTest(unittest.TestCase):
 
         coordinator, programs, options = self._coordinator()
         self._poll(coordinator, {"wm": 0, "dw": 0})
-        mark_pending_choice(coordinator, "wm", at=95.0)
+        mark_pending_choice(coordinator, "wm", programs, at=95.0)
+        mark_pending_choice(coordinator, "wm", options, at=96.0)
         data = {"wm": {"appliance": types.SimpleNamespace(followed_starts=1)}}
         forget_choices_after_followed_starts(coordinator, data, poll_started=100.0)
         self.assertNotIn("wm", getattr(coordinator, programs))
         self.assertNotIn("wm", getattr(coordinator, options))
+
+    def test_each_store_keeps_its_own_instant(self) -> None:
+        # PR #127 review: one stamp per appliance let an option chosen after the poll
+        # began keep a programme chosen before it.
+        from custom_components.addhon.program_options import (
+            forget_choices_after_followed_starts,
+            mark_pending_choice,
+        )
+
+        coordinator, programs, options = self._coordinator()
+        self._poll(coordinator, {"wm": 0, "dw": 0})
+        mark_pending_choice(coordinator, "wm", programs, at=95.0)
+        mark_pending_choice(coordinator, "wm", options, at=105.0)
+        data = {"wm": {"appliance": types.SimpleNamespace(followed_starts=1)}}
+        forget_choices_after_followed_starts(coordinator, data, poll_started=100.0)
+        self.assertNotIn("wm", getattr(coordinator, programs))
+        self.assertEqual({"temp": "60"}, getattr(coordinator, options)["wm"])
 
     def test_a_coordinator_with_no_choices_yet_is_fine(self) -> None:
         coordinator = types.SimpleNamespace()
