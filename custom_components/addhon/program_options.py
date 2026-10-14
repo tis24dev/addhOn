@@ -36,6 +36,7 @@ so the entity is never created (auto-removes the fixed toggles on the user's mod
 from __future__ import annotations
 
 import logging
+import time
 
 from homeassistant.exceptions import HomeAssistantError
 
@@ -76,9 +77,26 @@ def startprogram_command(appliance):
 
 # Coordinator attribute: {appliance id: the engine's `followed_starts` seen last poll}.
 _FOLLOWED_STARTS_SEEN = "addhon_followed_starts_seen"
+# {appliance id: monotonic instant of the last programme or option chosen in HA}.
+_PENDING_CHOICE_AT = "addhon_pending_choice_at"
 
 
-def forget_choices_after_followed_starts(coordinator, data) -> None:
+def mark_pending_choice(coordinator, appliance_id, at: float | None = None) -> None:
+    """Stamp a choice buffered in HA for `appliance_id`, for the follow below.
+
+    PR #127 review (S9): a start followed during a poll must not drop a choice the user
+    made after that poll began, which is newer than the start it saw.
+    """
+    stamps = getattr(coordinator, _PENDING_CHOICE_AT, None)
+    if not isinstance(stamps, dict):
+        stamps = {}
+        setattr(coordinator, _PENDING_CHOICE_AT, stamps)
+    stamps[appliance_id] = time.monotonic() if at is None else at
+
+
+def forget_choices_after_followed_starts(
+    coordinator, data, poll_started: float | None = None
+) -> None:
     """Drop the programme and options chosen in HA once a start made elsewhere is followed.
 
     Issue #112, decision D2 of 2026-10-06: when the engine follows a cycle started from
@@ -86,7 +104,13 @@ def forget_choices_after_followed_starts(coordinator, data) -> None:
     programme select and the option entities show that start, as after a reload. A
     choice buffered in Home Assistant and never started would otherwise hide it, and
     a reload drops it anyway. The first poll only takes note of the count.
+
+    `poll_started` is the monotonic instant the poll that saw the start began: a choice
+    stamped since (`mark_pending_choice`) is newer than that start and stays (PR #127
+    review, S9).
     """
+    stamps = getattr(coordinator, _PENDING_CHOICE_AT, None)
+    stamps = stamps if isinstance(stamps, dict) else {}
     seen = getattr(coordinator, _FOLLOWED_STARTS_SEEN, None)
     if not isinstance(seen, dict):
         seen = {}
@@ -100,6 +124,19 @@ def forget_choices_after_followed_starts(coordinator, data) -> None:
         seen[appliance_id] = count
         if previous is None or previous == count:
             continue
+        chosen_at = stamps.get(appliance_id)
+        if (
+            poll_started is not None
+            and isinstance(chosen_at, (int, float))
+            and chosen_at >= poll_started
+        ):
+            _LOGGER.debug(
+                "Program options: a start made elsewhere was followed for %s; the "
+                "choices made in HA since the poll began are kept",
+                redact_id(appliance_id),
+            )
+            continue
+        stamps.pop(appliance_id, None)
         for name in (PROGRAM_PENDING_STORE, PROGRAM_PENDING_OPTIONS):
             store = getattr(coordinator, name, None)
             if isinstance(store, dict) and store.pop(appliance_id, None) is not None:
@@ -503,6 +540,7 @@ class HonProgramOptionEntity(HonBaseEntity):
             per = {}
             store[self._appliance_id] = per
         per[self._param] = value
+        mark_pending_choice(self.coordinator, self._appliance_id)
         cleared = self._clear_exclusive_siblings(per, value)
         _LOGGER.debug(
             "ProgramOption debug: buffered '%s'=%s id=%s param=%s cleared=%s",

@@ -347,6 +347,8 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(["Eco (1)", "Eco (2)", "Cotone"], entity._attr_options)
         await entity.async_select_option("Eco (1)")
         self.assertEqual({"washer-1": "1"}, coordinator.pending_programs)
+        # Stamped, so a start followed meanwhile does not drop it (PR #127 review, S9).
+        self.assertIn("washer-1", getattr(coordinator, "addhon_pending_choice_at"))
         await entity.async_select_option("Eco (2)")
         self.assertEqual({"washer-1": "2"}, coordinator.pending_programs)
         # current_option reflects the pending disambiguated option (must be in options)

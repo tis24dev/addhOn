@@ -6,6 +6,7 @@ import logging
 import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from typing import NoReturn
 
 from homeassistant.config_entries import ConfigEntry
@@ -976,11 +977,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """Fetch the updated data from all the hOn devices."""
         try:
             _LOGGER.debug("Coordinator debug: starting hOn data update")
+            poll_started = monotonic()
             data = await hon_client.async_get_appliances_data()
             # Issue #112: a start made elsewhere and followed by the engine replaces
-            # the programme and options chosen in HA and not started.
+            # the programme and options chosen in HA and not started -- those chosen
+            # before this poll began (PR #127 review, S9).
             if coordinator_box:
-                forget_choices_after_followed_starts(coordinator_box[0], data)
+                forget_choices_after_followed_starts(
+                    coordinator_box[0], data, poll_started=poll_started
+                )
             await catalog_store.async_sync(hon_client)
             # A runtime token refresh / background re-auth may have rotated the refresh
             # token during this fetch; persist it (only on a real change) so it survives a

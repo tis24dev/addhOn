@@ -418,6 +418,8 @@ class BufferWriteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"washer-1": {"spinSpeed": "800"}}, coordinator.pending_options)
         self.assertEqual(0, start.send_calls)
         self.assertEqual("800", entity.current_option)
+        # Stamped, so a start followed meanwhile does not drop it (PR #127 review, S9).
+        self.assertIn("washer-1", getattr(coordinator, "addhon_pending_choice_at"))
 
     async def test_number_buffers_and_rejects_off_grid(self) -> None:
         from homeassistant.exceptions import HomeAssistantError
@@ -782,6 +784,59 @@ class RebuildAtStartTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HomeAssistantError):
             await self._button(appliance, appliance.api, "delicate").async_press()
         self.assertEqual(before, categories["delicate"].parameter_groups["parameters"])
+
+    async def test_a_refused_send_keeps_a_start_followed_meanwhile(self) -> None:
+        # PR #127 review (S5): a poll follows a start made elsewhere while our own send
+        # is awaited, then the send fails. The rollback must not put back the programme
+        # the recovery replaced, nor the values the recovery wrote.
+        from homeassistant.exceptions import HomeAssistantError
+
+        appliance = None
+        categories: dict = {}
+
+        class _RecoveringApi(_WireApi):
+            async def send_command(self, *args, **kwargs) -> bool:
+                cotton = categories["cotton"]
+                cotton.parameters["spinSpeed"].value = "0"
+                appliance.commands["startProgram"] = cotton
+                appliance.followed_starts += 1
+                raise RuntimeError("cloud refused")
+
+        api = _RecoveringApi()
+        appliance, built = _real_categories(api)
+        categories.update(built)
+        appliance.followed_starts = 0
+        appliance.commands["startProgram"] = categories["delicate"]
+        with self.assertRaises(HomeAssistantError):
+            await self._button(appliance, api, "delicate", {"spinSpeed": "1400"}).async_press()
+        self.assertIs(categories["cotton"], appliance.commands["startProgram"])
+        self.assertEqual("0", str(categories["cotton"].parameters["spinSpeed"].value))
+        # What our own send touched and no recovery replaced is still rolled back.
+        self.assertEqual("400", str(categories["delicate"].parameters["spinSpeed"].value))
+
+    async def test_a_refused_send_keeps_a_recovery_of_the_same_programme(self) -> None:
+        # The recovery may pick the very category our send was using: the pointer does
+        # not move, but the values are the recovery's and stay.
+        from homeassistant.exceptions import HomeAssistantError
+
+        appliance = None
+        categories: dict = {}
+
+        class _RecoveringApi(_WireApi):
+            async def send_command(self, *args, **kwargs) -> bool:
+                categories["delicate"].parameters["temp"].value = "20"
+                appliance.followed_starts += 1
+                raise RuntimeError("cloud refused")
+
+        api = _RecoveringApi()
+        appliance, built = _real_categories(api)
+        categories.update(built)
+        appliance.followed_starts = 0
+        appliance.commands["startProgram"] = categories["delicate"]
+        with self.assertRaises(HomeAssistantError):
+            await self._button(appliance, api, "delicate", {"spinSpeed": "1400"}).async_press()
+        self.assertIs(categories["delicate"], appliance.commands["startProgram"])
+        self.assertEqual("20", str(categories["delicate"].parameters["temp"].value))
 
     async def test_a_command_without_categories_is_not_rebuilt(self) -> None:
         # `HonCommand.categories` answers `{"_": self}` for a category-less command, and a
@@ -2228,6 +2283,36 @@ class ForgetChoicesAfterAFollowedStartTest(unittest.TestCase):
         forget_choices_after_followed_starts(coordinator, {"wm": {"appliance": object()}})
         forget_choices_after_followed_starts(coordinator, {"wm": {}, "dw": None})
         self.assertEqual({"wm": "iot_wash_dark", "dw": "eco"}, getattr(coordinator, programs))
+
+    def test_a_choice_made_while_the_poll_ran_is_kept(self) -> None:
+        # PR #127 review (S9): a choice made after the poll that saw the followed
+        # start began is newer than that start, and is the user's next one.
+        from custom_components.addhon.program_options import (
+            forget_choices_after_followed_starts,
+            mark_pending_choice,
+        )
+
+        coordinator, programs, options = self._coordinator()
+        self._poll(coordinator, {"wm": 0, "dw": 0})
+        mark_pending_choice(coordinator, "wm", at=105.0)
+        data = {"wm": {"appliance": types.SimpleNamespace(followed_starts=1)}}
+        forget_choices_after_followed_starts(coordinator, data, poll_started=100.0)
+        self.assertEqual("iot_wash_dark", getattr(coordinator, programs)["wm"])
+        self.assertEqual({"temp": "60"}, getattr(coordinator, options)["wm"])
+
+    def test_a_choice_made_before_the_poll_is_dropped(self) -> None:
+        from custom_components.addhon.program_options import (
+            forget_choices_after_followed_starts,
+            mark_pending_choice,
+        )
+
+        coordinator, programs, options = self._coordinator()
+        self._poll(coordinator, {"wm": 0, "dw": 0})
+        mark_pending_choice(coordinator, "wm", at=95.0)
+        data = {"wm": {"appliance": types.SimpleNamespace(followed_starts=1)}}
+        forget_choices_after_followed_starts(coordinator, data, poll_started=100.0)
+        self.assertNotIn("wm", getattr(coordinator, programs))
+        self.assertNotIn("wm", getattr(coordinator, options))
 
     def test_a_coordinator_with_no_choices_yet_is_fine(self) -> None:
         coordinator = types.SimpleNamespace()

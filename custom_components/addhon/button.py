@@ -279,6 +279,9 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                     rollback["name"] = self._command_name
                     rollback["original_command"] = command
                     rollback["snapshots"] = [(params, snapshot_params(params))]
+                    # A start made elsewhere may be followed while the send is awaited
+                    # (issue #112); its count tells the rollback (PR #127 review, S5).
+                    rollback["followed_starts"] = getattr(appliance, "followed_starts", None)
                     if _LOGGER.isEnabledFor(logging.DEBUG):
                         _LOGGER.debug(
                             "Button debug: before command '%s' params=%s",
@@ -465,9 +468,25 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                 cmds = rollback.get("commands")
                 name = rollback.get("name")
                 original = rollback.get("original_command")
-                if isinstance(cmds, dict) and original is not None and cmds.get(name) is not original:
+                current = cmds.get(name) if isinstance(cmds, dict) else None
+                # A start followed while the send was awaited supersedes it: the
+                # programme it points at and the values it wrote stay, and only what
+                # our send alone touched goes back (PR #127 review, S5).
+                followed_before = rollback.get("followed_starts")
+                recovered = isinstance(followed_before, int) and (
+                    getattr(appliance, "followed_starts", followed_before) != followed_before
+                )
+                if (
+                    not recovered
+                    and isinstance(cmds, dict)
+                    and original is not None
+                    and current is not original
+                ):
                     cmds[name] = original
+                kept = getattr(current, "parameters", None) if recovered else None
                 for ps, snap in reversed(rollback.get("snapshots", [])):
+                    if kept is not None and ps is kept:
+                        continue
                     restore_params(ps, snap)
             _LOGGER.error(
                 "Button %s: command error: %s",

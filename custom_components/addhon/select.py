@@ -76,6 +76,7 @@ from .program_options import (
     HonProgramOptionEntity,
     async_send_program,
     is_settable_option,
+    mark_pending_choice,
     normalize_code,
     option_choices,
 )
@@ -844,6 +845,7 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
             redact_store(store),
         )
         store[self._appliance_id] = code
+        mark_pending_choice(self.coordinator, self._appliance_id)
         # Changing the program invalidates any buffered program OPTIONS: they were chosen
         # for the previous program and must not silently carry into the new one at Start
         # (PR #38 / Greptile P1). Clear them ONLY on an actual program change, so
