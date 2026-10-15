@@ -5,9 +5,10 @@ name: Issue Closed Thanks
 # support through GitHub Sponsors. When every one of them is already a public
 # sponsor, the request becomes a thank-you for the sponsorship.
 #
-# A hidden marker tags the comment. On a later close the new comment is posted
-# first and the earlier tagged ones are deleted, so a single copy sits at the end
-# of the thread. Only comments written by github-actions[bot] are ever deleted.
+# A hidden marker tags the comment. On a later close the earlier tagged ones are
+# deleted first and the new comment is posted after them, so a single copy sits at
+# the end of the thread. Only comments written by github-actions[bot] are ever
+# deleted.
 #
 # The sponsor list is read with the workflow's own token. Only active PUBLIC
 # sponsorships are asked for: thanking a private sponsor in a public thread would
@@ -91,10 +92,11 @@ jobs:
             printf '\n%s\n' "$marker"
           } >"$body"
 
-          # Post first, then delete the earlier copies: a failed post leaves the old one in place.
+          # Delete the earlier copies first, then post: a failed delete stops the run
+          # before a second copy can appear.
           old_ids=$(jq -r --arg marker "$marker" '
             .[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains($marker))) | .id' <<<"$comments")
-          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
           for id in $old_ids; do
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id"
           done
+          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
