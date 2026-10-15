@@ -119,3 +119,5 @@ body:
         3. Go to **Settings → System → Logs** and choose **Download full log**.
         4. Drag the `home-assistant.log` file into this box.
         5. Press **Reset debug** on the same device to turn debug logging off.
+
+        Before attaching, check it for passwords, tokens or addresses written by other integrations.

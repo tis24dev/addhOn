@@ -91,3 +91,5 @@ body:
           ```
 
         Then go to **Settings → System → Logs**, choose **Download full log** and drag the `home-assistant.log` file into this box.
+
+        Before attaching, check it for passwords, tokens or addresses written by other integrations.
