@@ -1,0 +1,34 @@
+name: Issue Welcome
+
+# Posts one acknowledgement comment on every newly opened issue, except the ones
+# the repository owner or a bot opens. GitHub runs `issues` workflows from the
+# default branch, so a change here takes effect only once it reaches main.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  welcome:
+    name: welcome
+    if: >-
+      github.event.issue.user.login != github.repository_owner &&
+      github.event.issue.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Comment on the new issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR: ${{ github.event.issue.user.login }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF
+          Thanks @${AUTHOR}, we received your issue.
+          We'll reply as soon as we can; no reply yet means we're already working on it.
+          If we need more details or tests, we'll ask here.
+          EOF
