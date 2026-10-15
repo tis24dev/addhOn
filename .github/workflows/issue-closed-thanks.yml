@@ -1,0 +1,103 @@
+name: Issue Closed Thanks
+
+# On every close, thanks the people who took part in the issue (its author and
+# everyone who commented, minus the repository owner and bots) and asks for
+# support through GitHub Sponsors. When every one of them is already a public
+# sponsor, the request becomes a thank-you for the sponsorship.
+#
+# A hidden marker tags the comment. On a later close the new comment is posted
+# first and the earlier tagged ones are deleted, so a single copy sits at the end
+# of the thread. Only comments written by github-actions[bot] are ever deleted.
+#
+# The sponsor list is read with the SPONSORS_READ_TOKEN secret (the workflow's own
+# token cannot read it). Without the secret, or if the read fails, the standard
+# message is posted.
+#
+# GitHub runs `issues` workflows from the default branch, so a change here takes
+# effect only once it reaches main.
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  issues: write
+
+concurrency:
+  group: issue-closed-thanks-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  thanks:
+    name: thanks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Thank the participants
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPONSORS_TOKEN: ${{ secrets.SPONSORS_READ_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          NUMBER: ${{ github.event.issue.number }}
+          AUTHOR: ${{ github.event.issue.user.login }}
+          AUTHOR_TYPE: ${{ github.event.issue.user.type }}
+        run: |
+          set -euo pipefail
+          marker='<!-- addhon-closed-thanks -->'
+          comments=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments?per_page=100" | jq -s 'add // []')
+
+          # Author first, then commenters in order of appearance, each once.
+          participants=$(jq -r --arg owner "$OWNER" --arg author "$AUTHOR" --arg author_type "$AUTHOR_TYPE" '
+            [{login: $author, type: $author_type}] + [.[].user | select(. != null) | {login, type}]
+            | map(select(.type != "Bot" and (.login | ascii_downcase) != ($owner | ascii_downcase)))
+            | reduce .[].login as $l ([]; if any(.[]; ascii_downcase == ($l | ascii_downcase)) then . else . + [$l] end)
+            | .[]' <<<"$comments")
+          if [ -z "$participants" ]; then
+            echo "Nobody to thank besides the owner and bots."
+            exit 0
+          fi
+
+          all_sponsors=false
+          if [ -n "${SPONSORS_TOKEN:-}" ]; then
+            if sponsors=$(GH_TOKEN="$SPONSORS_TOKEN" gh api graphql --paginate -f owner="$OWNER" -f query='
+                query($owner: String!, $endCursor: String) {
+                  user(login: $owner) {
+                    sponsors(first: 100, after: $endCursor) {
+                      nodes { ... on User { login } ... on Organization { login } }
+                      pageInfo { hasNextPage endCursor }
+                    }
+                  }
+                }' --jq '.data.user.sponsors.nodes[].login'); then
+              all_sponsors=true
+              while read -r login; do
+                grep -Fqix -- "$login" <<<"$sponsors" || { all_sponsors=false; break; }
+              done <<<"$participants"
+            else
+              echo "::warning::Could not read the sponsor list; posting the standard message."
+            fi
+          fi
+
+          mentions=$(sed 's/^/@/' <<<"$participants" | paste -sd' ' -)
+          body="$RUNNER_TEMP/body.md"
+          {
+            printf '%s thanks for using addhOn!\n\n' "$mentions"
+            if [ "$all_sponsors" = true ]; then
+              printf '> [!IMPORTANT]\n'
+              printf '> Thank you for sponsoring addhOn: your support keeps this independent project going.\n'
+            else
+              printf '> [!IMPORTANT]\n'
+              printf '> addhOn is an independent, self-funded project: every bit of support really makes a difference.\n'
+              printf '>\n'
+              printf '> [![Sponsor addhOn on GitHub](https://img.shields.io/badge/Sponsor_addhOn-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/tis24dev)\n'
+            fi
+            printf '\n%s\n' "$marker"
+          } >"$body"
+
+          # Post first, then delete the earlier copies: a failed post leaves the old one in place.
+          old_ids=$(jq -r --arg marker "$marker" '
+            .[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains($marker))) | .id' <<<"$comments")
+          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          for id in $old_ids; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id"
+          done
