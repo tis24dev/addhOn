@@ -1,0 +1,92 @@
+name: Appliance support / missing entities
+description: Your appliance is not supported, or entities or controls the hOn app has are missing.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for asking. The fields marked with * are required: support for an appliance is built from its diagnostics file.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before opening
+      options:
+        - label: I searched the [existing issues](https://github.com/tis24dev/addhOn/issues?q=is%3Aissue) and this is not a duplicate.
+          required: true
+        - label: I am on the [latest addhOn release](https://github.com/tis24dev/addhOn/releases) (stable or beta).
+          required: true
+
+  - type: input
+    id: addhon_version
+    attributes:
+      label: addhOn version
+      description: Shown in HACS → addhOn.
+      placeholder: e.g. 5.22.0
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Shown in Settings → About.
+      placeholder: e.g. 2026.10.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: appliance_type
+    attributes:
+      label: Appliance type
+      options:
+        - Air conditioner (AC)
+        - Washing machine (WM)
+        - Tumble dryer (TD)
+        - Washer-dryer (WD)
+        - Dishwasher (DW)
+        - Refrigerator / fridge-freezer (REF)
+        - Freezer (FRE)
+        - Wine cooler (WC)
+        - Oven (OV)
+        - Induction hob (IH)
+        - Hood (HO)
+        - Air purifier (AP)
+        - Water heater (WH)
+        - Heat-pump water heater (HW)
+        - Coffee machine (KT)
+        - Robot vacuum cleaner (RVC)
+        - Other / don't know
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Appliance model
+      description: The exact model number on the appliance label or in the hOn app.
+      placeholder: e.g. HP110M8-9
+    validations:
+      required: true
+
+  - type: textarea
+    id: missing
+    attributes:
+      label: What is missing compared to the hOn app?
+      description: List the values and controls the hOn app shows that Home Assistant does not.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics file
+      description: |
+        How to download it from Home Assistant:
+        1. Go to **Settings → Devices & services** and open **addhOn**.
+        2. On the addhOn entry, open the three-dot menu (⋮) and choose **Download diagnostics**.
+        3. Drag the downloaded `.json` file into this box.
+
+        The file covers every appliance on the account. Email, password, serial numbers and MAC addresses are masked in it.
+    validations:
+      required: true

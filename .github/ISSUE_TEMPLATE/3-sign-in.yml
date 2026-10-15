@@ -1,0 +1,93 @@
+name: Sign-in problem
+description: addhOn cannot sign in to your hOn account.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The fields marked with * are required.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before opening
+      options:
+        - label: I searched the [existing issues](https://github.com/tis24dev/addhOn/issues?q=is%3Aissue) and this is not a duplicate.
+          required: true
+        - label: I am on the [latest addhOn release](https://github.com/tis24dev/addhOn/releases) (stable or beta).
+          required: true
+
+  - type: input
+    id: addhon_version
+    attributes:
+      label: addhOn version
+      description: Shown in HACS → addhOn.
+      placeholder: e.g. 5.22.0
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Shown in Settings → About.
+      placeholder: e.g. 2026.10.1
+    validations:
+      required: true
+
+  - type: input
+    id: error_code
+    attributes:
+      label: Error code
+      description: Shown in the sign-in dialog or in the log. Paste the code with its message. If no code appears, write `none` and paste the message you see.
+      placeholder: "e.g. ADDHON-130: Could not retrieve the hOn session token."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: when
+    attributes:
+      label: When does it happen?
+      options:
+        - During the first setup
+        - It worked before, then stopped
+    validations:
+      required: true
+
+  - type: dropdown
+    id: two_factor
+    attributes:
+      label: Is two-factor authentication (2FA) on for the hOn account?
+      options:
+        - "Yes"
+        - "No"
+        - Don't know
+    validations:
+      required: true
+
+  - type: dropdown
+    id: app_login
+    attributes:
+      label: Does the hOn app sign in with the same email and password?
+      options:
+        - "Yes"
+        - "No"
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log
+      description: |
+        Optional, but often needed. How to capture it:
+        - **If addhOn was already set up:** go to **Settings → Devices & services → addhOn**, open the **addhOn diagnostics** device and turn on **Debug logging**. Press **Reset debug** there when you are done.
+        - **If the first setup fails:** add these lines to `configuration.yaml`, restart Home Assistant, then try to sign in again. Remove them when you are done.
+          ```yaml
+          logger:
+            default: warning
+            logs:
+              custom_components.addhon: debug
+          ```
+
+        Then go to **Settings → System → Logs**, choose **Download full log** and drag the `home-assistant.log` file into this box.

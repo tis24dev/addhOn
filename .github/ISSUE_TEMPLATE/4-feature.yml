@@ -1,0 +1,76 @@
+name: Feature request
+description: Suggest something new for addhOn.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. The fields marked with * are required.
+        If an appliance is not supported, or the hOn app has controls that Home Assistant lacks, use the appliance support form instead.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before opening
+      options:
+        - label: I searched the [existing issues](https://github.com/tis24dev/addhOn/issues?q=is%3Aissue) and this is not a duplicate.
+          required: true
+        - label: I am on the [latest addhOn release](https://github.com/tis24dev/addhOn/releases) (stable or beta).
+          required: true
+
+  - type: input
+    id: addhon_version
+    attributes:
+      label: addhOn version
+      description: Shown in HACS → addhOn.
+      placeholder: e.g. 5.22.0
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Shown in Settings → About.
+      placeholder: e.g. 2026.10.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: request
+    attributes:
+      label: What would you like?
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: What would you use it for?
+      description: The situation or automation where you miss it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: appliance_type
+    attributes:
+      label: Appliance type
+      description: If the request is about one appliance type.
+      options:
+        - Air conditioner (AC)
+        - Washing machine (WM)
+        - Tumble dryer (TD)
+        - Washer-dryer (WD)
+        - Dishwasher (DW)
+        - Refrigerator / fridge-freezer (REF)
+        - Freezer (FRE)
+        - Wine cooler (WC)
+        - Oven (OV)
+        - Induction hob (IH)
+        - Hood (HO)
+        - Air purifier (AP)
+        - Water heater (WH)
+        - Heat-pump water heater (HW)
+        - Coffee machine (KT)
+        - Robot vacuum cleaner (RVC)
+        - Other / don't know

@@ -1,0 +1,121 @@
+name: Bug report
+description: Something that used to work, or should work, does not.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The fields marked with * are required: without them the problem cannot be reproduced.
+        Sign-in problems have their own form.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before opening
+      options:
+        - label: I searched the [existing issues](https://github.com/tis24dev/addhOn/issues?q=is%3Aissue) and this is not a duplicate.
+          required: true
+        - label: I am on the [latest addhOn release](https://github.com/tis24dev/addhOn/releases) (stable or beta).
+          required: true
+
+  - type: input
+    id: addhon_version
+    attributes:
+      label: addhOn version
+      description: Shown in HACS → addhOn.
+      placeholder: e.g. 5.22.0
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Shown in Settings → About.
+      placeholder: e.g. 2026.10.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: appliance_type
+    attributes:
+      label: Appliance type
+      options:
+        - Air conditioner (AC)
+        - Washing machine (WM)
+        - Tumble dryer (TD)
+        - Washer-dryer (WD)
+        - Dishwasher (DW)
+        - Refrigerator / fridge-freezer (REF)
+        - Freezer (FRE)
+        - Wine cooler (WC)
+        - Oven (OV)
+        - Induction hob (IH)
+        - Hood (HO)
+        - Air purifier (AP)
+        - Water heater (WH)
+        - Heat-pump water heater (HW)
+        - Coffee machine (KT)
+        - Robot vacuum cleaner (RVC)
+        - Other / don't know
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Appliance model
+      description: The model number on the appliance label or in the hOn app.
+      placeholder: e.g. HW100-BP14357
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happens
+    attributes:
+      label: What happens, and what did you expect?
+      description: Name the entity or action involved, and what the hOn app shows for the same thing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+
+  - type: input
+    id: error_code
+    attributes:
+      label: Error code
+      description: If an `ADDHON-xxx` code appears in the UI or in the log, paste it with its message.
+      placeholder: e.g. ADDHON-220
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics file
+      description: |
+        How to download it from Home Assistant:
+        1. Go to **Settings → Devices & services** and open **addhOn**.
+        2. On the addhOn entry, open the three-dot menu (⋮) and choose **Download diagnostics**.
+        3. Drag the downloaded `.json` file into this box.
+
+        The file covers every appliance on the account. Email, password, serial numbers and MAC addresses are masked in it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log
+      description: |
+        Optional, but often needed. How to capture it:
+        1. Go to **Settings → Devices & services → addhOn**, open the **addhOn diagnostics** device and turn on **Debug logging**.
+        2. Reproduce the problem.
+        3. Go to **Settings → System → Logs** and choose **Download full log**.
+        4. Drag the `home-assistant.log` file into this box.
+        5. Press **Reset debug** on the same device to turn debug logging off.

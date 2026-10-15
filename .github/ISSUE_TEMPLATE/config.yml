@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and general help
+    url: https://github.com/tis24dev/addhOn/discussions
+    about: Ask how to set up or use addhOn in GitHub Discussions.
