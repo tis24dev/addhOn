@@ -10,8 +10,10 @@ name: Issue Closed Thanks
 # of the thread. Only comments written by github-actions[bot] are ever deleted.
 #
 # The sponsor list is read with the SPONSORS_READ_TOKEN secret (the workflow's own
-# token cannot read it). Without the secret, or if the read fails, the standard
-# message is posted.
+# token cannot read it). Only active PUBLIC sponsorships are read: the secret is the
+# maintainer's token, which also sees private ones, and thanking a private sponsor
+# in a public thread would reveal the sponsorship. Without the secret, or if the
+# read fails, the standard message is posted.
 #
 # GitHub runs `issues` workflows from the default branch, so a change here takes
 # effect only once it reaches main.
@@ -63,12 +65,12 @@ jobs:
             if sponsors=$(GH_TOKEN="$SPONSORS_TOKEN" gh api graphql --paginate -f owner="$OWNER" -f query='
                 query($owner: String!, $endCursor: String) {
                   user(login: $owner) {
-                    sponsors(first: 100, after: $endCursor) {
-                      nodes { ... on User { login } ... on Organization { login } }
+                    sponsorshipsAsMaintainer(first: 100, after: $endCursor, includePrivate: false, activeOnly: true) {
+                      nodes { sponsorEntity { ... on User { login } ... on Organization { login } } }
                       pageInfo { hasNextPage endCursor }
                     }
                   }
-                }' --jq '.data.user.sponsors.nodes[].login'); then
+                }' --jq '.data.user.sponsorshipsAsMaintainer.nodes[].sponsorEntity.login'); then
               all_sponsors=true
               while read -r login; do
                 grep -Fqix -- "$login" <<<"$sponsors" || { all_sponsors=false; break; }
