@@ -25,6 +25,12 @@ from typing import Any, Optional, Union
 from .energy_label import actual_duration, ancillary_values
 from .energy_label import energy_label as label_for_duration
 from .exceptions import ApiError, NoAuthenticationException
+from .hqd_duration import (
+    DELAY_TIME_MAX,
+    delay_counts_to_end,
+    delay_to_send,
+    programme_duration,
+)
 from .parameter.base import HonParameter
 from .parameter.enum import HonParameterEnum
 from .parameter.fixed import HonParameterFixed
@@ -65,6 +71,11 @@ def _whole_minutes(value: object) -> int:
         return int(float(str(value)))
     except (TypeError, ValueError, OverflowError):
         return 0
+
+
+def _minutes_text(minutes: float) -> str:
+    """Minutes for a log line: 108, not 108.0; a fraction kept as it is."""
+    return str(int(minutes)) if float(minutes).is_integer() else str(minutes)
 
 
 class _CanonicalExactPayload(dict[str, str | float]):
@@ -111,6 +122,9 @@ class HonCommand:
         # see `remaining_times`). Kept aside, not instead: `_load_parameters` still files
         # its sub-nodes as before.
         self._remaining_times: Any = attributes.get("remainingTimes")
+        # The category's `ancillaryParameters` group exactly as the cloud sent it (issue
+        # #131, see `ancillary_group`), nodes without a typology included.
+        self._ancillary_group: Any = attributes.get("ancillaryParameters")
         attributes.pop("description", "")
         attributes.pop("protocolType", "")
         self._load_parameters(attributes)
@@ -193,6 +207,17 @@ class HonCommand:
         whole. A favourite is a `copy` of its category and shares it.
         """
         return self._remaining_times
+
+    @property
+    def ancillary_group(self) -> Any:
+        """The category's raw `ancillaryParameters` group, None when the catalog has none.
+
+        What the hOn app hands its HQD duration engine as the catalogue's ancillaries
+        (issue #131, `hqd_duration.programme_duration`). The parameters keep only the
+        nodes with a typology; a node without one is still part of this group, as
+        `suggestedLoadW` may be for the engine. A favourite shares its category's.
+        """
+        return self._ancillary_group
 
     @property
     def parameters(self) -> dict[str, HonParameter]:
@@ -442,6 +467,48 @@ class HonCommand:
         )
         return str(label) if label else None
 
+    def _delay_to_end(
+        self, params: dict[str, str | float], ancillary: Mapping[str, str | float]
+    ) -> None:
+        """Turn a delayed start into the delay to the END this washer counts. Issue #131.
+
+        With `delayType: end` the appliance finishes `delayTime` minutes from now, so the
+        app adds the programme's duration to the start the user picks and rounds to the
+        half hour (`getRightDelayTime` @2646628, apk2/analysis/issue131-wm-delay/).
+        `number.opt_delay_time` keeps meaning minutes to the start. Decisions of
+        2026-10-16: without a duration the delay goes out unchanged, as the app's
+        (D6); above 1410 it stops at 1410 (D7); each conversion is logged at INFO (H3).
+        """
+        chosen = _whole_minutes(params.get("delayTime"))
+        duration = programme_duration(self._appliance, self, params, ancillary)
+        if duration is None:
+            _LOGGER.warning(
+                "Delayed start of %s: no programme duration, delayTime %s sent as chosen;"
+                " this appliance counts it to the end of the cycle, which will start earlier",
+                self._category_name,
+                chosen,
+            )
+            return
+        sent, capped = delay_to_send(chosen, duration)
+        if capped:
+            _LOGGER.warning(
+                "Delayed start of %s: %s min to the start + %s min of programme is above"
+                " %s, delayTime %s sent; the cycle will start early",
+                self._category_name,
+                chosen,
+                _minutes_text(duration),
+                DELAY_TIME_MAX,
+                sent,
+            )
+        _LOGGER.info(
+            "Delayed start of %s: %s min to the start + %s min of programme -> delayTime %s",
+            self._category_name,
+            chosen,
+            _minutes_text(duration),
+            sent,
+        )
+        params["delayTime"] = str(sent) if isinstance(params.get("delayTime"), str) else float(sent)
+
     async def send_specific(self, param_names: list[str]) -> bool:
         params: dict[str, str | float] = {}
         for key, parameter in self._parameters.items():
@@ -510,6 +577,8 @@ class HonCommand:
                 wire_energy_label = label
                 ancillary["energyLabel"] = label
         if self._is_washer_start() and _whole_minutes(params.get("delayTime")) > 0:
+            if delay_counts_to_end(self._appliance):
+                self._delay_to_end(params, ancillary)
             # Issue #112: the app confirms every delayed washer start with
             # ecoDelayStart '0' (seen in each delayed command of the reporters'
             # histories); '1' belongs to its Eco Delay configuration, which we lack.

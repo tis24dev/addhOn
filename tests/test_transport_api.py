@@ -1708,14 +1708,18 @@ class FetchCensusEnvelopeTest(unittest.TestCase):
 class _WasherAppliance:
     """The root-appliance surface HonCommand and HonApi.send_command read."""
 
-    def __init__(self, conn, appliance_type="WM", platform="HQD") -> None:
+    def __init__(self, conn, appliance_type="WM", platform="HQD", delay_type=None,
+                 brand="Haier") -> None:
         self.api = HonApi(conn)
         self.appliance_type = appliance_type
+        self.brand = brand
         self.mac_address = "AA:BB:CC:DD:EE:FF"
         self.options = {}
         self.zone = 0
         self.commands: dict = {}
         self.model_attributes = {} if platform is None else {"platform": platform}
+        if delay_type is not None:
+            self.model_attributes["delayType"] = delay_type
 
     def sync_payload_to_params(self, params) -> None:
         pass
@@ -1769,11 +1773,11 @@ class WasherStartBodyTest(unittest.TestCase):
 
     def _send(self, *, command="startProgram", appliance_type="WM", platform="HQD",
               category="PROGRAMS.WM_WD.HQD_COTTONS", favourite="", label=None,
-              **program):
+              delay_type=None, brand="Haier", **program):
         from custom_components.addhon.client.engine.commands import HonCommand
 
         conn = FakeConnection({"payload": {"resultCode": "0"}})
-        appliance = _WasherAppliance(conn, appliance_type, platform)
+        appliance = _WasherAppliance(conn, appliance_type, platform, delay_type, brand)
         cmd = HonCommand(command, _washer_program(**program), appliance,
                          category_name=category)
         cmd.favourite_name = favourite
@@ -1846,7 +1850,9 @@ class WasherStartBodyTest(unittest.TestCase):
     def test_a_delayed_washer_start_confirms_eco_delay_off(self) -> None:
         for kwargs in (
             dict(platform=None),
-            dict(platform="HQD"),
+            # An HQD model counting the delay to the start; to the end, see
+            # DelayCountedToTheEndTest.
+            dict(platform="HQD", delay_type="start"),
             dict(appliance_type="WD", platform=None),
         ):
             with self.subTest(**kwargs):
@@ -1938,6 +1944,67 @@ class WasherStartBodyTest(unittest.TestCase):
     def test_the_platform_matches_in_any_case(self) -> None:
         # As program_options.keep_fresh_hidden reads it.
         self.assertEqual("3", self._label(platform="hqd"))
+
+
+class DelayCountedToTheEndTest(unittest.TestCase):
+    """Issue #131: a washer that counts `delayTime` to the END of the cycle.
+
+    HQD, `delayType` other than 'start', brand other than Hoover: the app adds the
+    programme's duration to the chosen start and rounds to the half hour
+    (`getRightDelayTime`, apk2 decomp.txt:2646628). The duration here is the
+    catalogue's `remainingTime`, what the HQD engine falls back to without formulas.
+    """
+
+    LOGGER = "custom_components.addhon.client.engine.commands"
+    _send = WasherStartBodyTest._send
+
+    def test_the_delay_carries_the_programmes_duration(self) -> None:
+        for kwargs in (dict(delay_type="end"), dict(appliance_type="WD", delay_type="end")):
+            with self.subTest(**kwargs):
+                with self.assertLogs(self.LOGGER, level="INFO") as logs:
+                    data, cmd = self._send(delay="570", remaining="108", **kwargs)
+                # 570 + 108 = 678, rounded to 690: the cycle starts 12 minutes late.
+                self.assertEqual("690", str(data["parameters"]["delayTime"]))
+                self.assertEqual("0", data["ancillaryParameters"]["ecoDelayStart"])
+                self.assertIn(
+                    "570 min to the start + 108 min of programme -> delayTime 690",
+                    "\n".join(logs.output),
+                )
+                # The option keeps the minutes to the start the user chose.
+                self.assertEqual("570", str(cmd.parameters["delayTime"].value))
+
+    def test_an_hqd_model_without_delay_type_counts_to_the_end(self) -> None:
+        # The app tests `delayType !== 'start'`.
+        data, _ = self._send(delay="570", remaining="108")
+        self.assertEqual("690", str(data["parameters"]["delayTime"]))
+
+    def test_without_a_duration_the_delay_goes_out_as_chosen(self) -> None:
+        with self.assertLogs(self.LOGGER, level="WARNING") as logs:
+            data, _ = self._send(delay="570", remaining=None, delay_type="end")
+        self.assertEqual("570", str(data["parameters"]["delayTime"]))
+        self.assertIn("no programme duration", "\n".join(logs.output))
+
+    def test_above_the_schemas_bound_the_delay_stops_at_1410(self) -> None:
+        with self.assertLogs(self.LOGGER, level="WARNING") as logs:
+            data, _ = self._send(delay="1350", remaining="108", delay_type="end")
+        self.assertEqual("1410", str(data["parameters"]["delayTime"]))
+        self.assertIn("will start early", "\n".join(logs.output))
+
+    def test_the_other_models_send_the_delay_as_chosen(self) -> None:
+        for kwargs in (
+            dict(delay_type="start"),
+            dict(delay_type="end", brand="Hoover"),
+            dict(platform=None, delay_type="end"),
+            dict(platform="CHG", delay_type="end"),
+        ):
+            with self.subTest(**kwargs):
+                data, _ = self._send(delay="570", remaining="108", **kwargs)
+                self.assertEqual("570", str(data["parameters"]["delayTime"]))
+
+    def test_no_delay_nothing_to_convert(self) -> None:
+        data, _ = self._send(delay="0", remaining="108", delay_type="end")
+        self.assertEqual("0", str(data["parameters"]["delayTime"]))
+        self.assertNotIn("ecoDelayStart", data["ancillaryParameters"])
 
 
 if __name__ == "__main__":

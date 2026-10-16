@@ -1,0 +1,3514 @@
+{
+ "models": {
+  "BP 49SBL8-FR": {
+   "categories": {
+    "PROGRAMS.WM_WD.IOT_WASH_100_CUSTOM_WASH": {
+     "ancillaryParameters": {
+      "delayStatus": {
+       "defaultValue": "0",
+       "typology": "range"
+      },
+      "energyLabel": {
+       "defaultValue": "4",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "2",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "2",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "fixedValue": "download",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "4.5",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "105",
+       "typology": "fixed"
+      }
+     }
+    },
+    "PROGRAMS.WM_WD.SYNTHETIC_AND_COLOURED": {
+     "ancillaryParameters": {
+      "delayStatus": {
+       "defaultValue": "0",
+       "typology": "range"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "2",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "2",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "9",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "traditional",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "fixedValue": "hidden",
+       "typology": "fixed"
+      },
+      "programIntensity": {
+       "fixedValue": "standard",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "4.5",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "95",
+       "typology": "fixed"
+      }
+     }
+    }
+   },
+   "model_attributes": {
+    "delayType": "start",
+    "drawerType": "flHqd",
+    "drumCleanType": "appCounter",
+    "encoding": "utf8",
+    "enrollmentType": "3.3",
+    "finalSpinDuration": "{\"spinSpeed\":{\"0\":0,\"400|600|800\":3,\"1000\":4,\"1200\":5,\"default\":7}}",
+    "fwLabel": "iotfw_epp",
+    "heatingTime": "{\"prCode\":{\"207\":0,\"default\":{\"#suggestedLoadWKG\":{\"0\":0,\"1\":{\"temp\":{\"0\":5,\"20\":5,\"30\":10,\"40\":15,\"50\":20,\"60\":25,\"70\":30,\"80\":35,\"90\":40}},\"2\":{\"temp\":{\"0\":5,\"20\":5,\"30\":10,\"40\":20,\"50\":25,\"60\":30,\"70\":35,\"80\":45,\"90\":50}},\"3\":{\"temp\":{\"0\":5,\"20\":5,\"30\":15,\"40\":20,\"50\":30,\"60\":35,\"70\":45,\"80\":50,\"90\":55}},\"4\":{\"temp\":{\"0\":5,\"20\":10,\"30\":15,\"40\":25,\"50\":35,\"60\":40,\"70\":50,\"80\":55,\"90\":65}},\"5\":{\"temp\":{\"0\":10,\"20\":10,\"30\":20,\"40\":30,\"50\":35,\"60\":45,\"70\":55,\"80\":65,\"90\":75}},\"6\":{\"temp\":{\"0\":10,\"20\":10,\"30\":20,\"40\":30,\"50\":40,\"60\":50,\"70\":60,\"80\":70,\"90\":80}},\"7\":{\"temp\":{\"0\":10,\"20\":10,\"30\":20,\"40\":35,\"50\":45,\"60\":55,\"70\":65,\"80\":80,\"90\":90}},\"8\":{\"temp\":{\"0\":10,\"20\":10,\"30\":25,\"40\":35,\"50\":50,\"60\":60,\"70\":75,\"80\":85,\"90\":100}},\"9\":{\"temp\":{\"0\":10,\"20\":15,\"30\":25,\"40\":40,\"50\":55,\"60\":65,\"70\":80,\"80\":95,\"90\":105}},\"10\":{\"temp\":{\"0\":10,\"20\":15,\"30\":30,\"40\":45,\"50\":55,\"60\":70,\"70\":85,\"80\":100,\"90\":115}},\"11\":{\"temp\":{\"0\":10,\"20\":15,\"30\":30,\"40\":45,\"50\":60,\"60\":75,\"70\":90,\"80\":105,\"90\":125}},\"12\":{\"temp\":{\"0\":10,\"20\":15,\"30\":35,\"40\":50,\"50\":65,\"60\":80,\"70\":100,\"80\":115,\"90\":130}},\"default\":{\"temp\":{\"0\":10,\"20\":15,\"30\":35,\"40\":50,\"50\":65,\"60\":80,\"70\":100,\"80\":115,\"90\":130}}}}}}",
+    "interfaceType": "series|seriesVersion|loadCapacityWash|option",
+    "iot": "hOn",
+    "loadCapacityWash": "9",
+    "lowerBarrierDate": "2508",
+    "option": "tumbling|silent",
+    "platform": "HQD",
+    "plmCode": "31020691",
+    "remainingTime": "{\"prCode\":{\"202\":213,\"210\":24,\"234\":20,\"235\":16,\"220\":120,\"221\":90,\"222\":180,\"223\":24,\"219\":{\"temp\":{\"90\":8,\"default\":60}},\"201|216\":\"#remainingTimeMainWash+#remainingTimeRinse+#remainingTimeFinalSpin+#remainingTimeAntiWrinkle+#remainingTimeDirtyLevel+#remainingTimeMainDry+remainingTimePrewash*0+1\",\"204\":\"#remainingTimeMainWash+#remainingTimeRinse+#remainingTimeFinalSpin+#remainingTimeAntiWrinkle+#remainingTimeDirtyLevel+#remainingTimeMainDry+remainingTimePrewash*0+19+2\",\"226\":\"#remainingTimeMainWash+#remainingTimeRinse+#remainingTimeFinalSpin+#remainingTimeAntiWrinkle+#remainingTimeDirtyLevel+#remainingTimeMainDry+remainingTimePrewash*0+44\",\"203\":\"#remainingTimeMainWash+#remainingTimeRinse+#remainingTimeFinalSpin+#remainingTimeAntiWrinkle+#remainingTimeDirtyLevel+#remainingTimeMainDry+remainingTimePrewash*0-1\",\"205\":\"#remainingTimeMainWash+#remainingTimeRinse+#remainingTimeFinalSpin+#remainingTimeAntiWrinkle+#remainingTimeDirtyLevel+#remainingTimeMainDry+remainingTimePrewash*0-2\",\"211\":\"#remainingTimeMainWash+#remainingTimeRinse+#remainingTimeFinalSpin+#remainingTimeAntiWrinkle+#remainingTimeDirtyLevel+#remainingTimeMainDry+remainingTimePrewash*0-3\",\"default\":\"#remainingTimeMainWash+#remainingTimeRinse+#remainingTimeFinalSpin+#remainingTimeAntiWrinkle+#remainingTimeDirtyLevel+#remainingTimeMainDry+remainingTimePrewash*0\"}}",
+    "remainingTimeAntiWrinkle": "{\"permanentPressStatus\":{\"0\":0,\"default\":1}}",
+    "remainingTimeDirtyLevel": "{\"dirtyLevel\":{\"1\":0,\"2\":{\"prCode\":{\"232\":5,\"218\":10,\"204|205|216|224|229|230\":20,\"201\":30,\"default\":0}},\"3\":{\"prCode\":{\"232\":10,\"218\":20,\"204|205|216|224|229|230\":40,\"201\":60,\"default\":0}}}}",
+    "remainingTimeFinalSpin": "{\"prCode\":{\"202|203|204|205|208|209\":{\"#spinDurationInRinsePhase\":{\"0\":2,\"default\":\"1+2+#spinDurationInRinsePhase\"}},\"201|206|207\":{\"#finalSpinDuration\":{\"0\":2,\"default\":\"1+2+#finalSpinDuration\"}},\"default\":{\"#spinDurationInRinsePhase\":{\"0\":0,\"default\":\"1+2+#spinDurationInRinsePhase\"}}}}",
+    "remainingTimeMainDry": "{\"dryProgFlag\":{\"1\":{\"dryType\":{\"C\":{\"dryLevel\":{\"1\":120,\"2\":180,\"3\":190,\"default\":0}},\"S\":{\"dryLevel\":{\"1\":80,\"2\":90,\"3\":120,\"default\":0}},\"default\":0}},\"default\":0}}",
+    "remainingTimeMainWash": "{\"#heatingTime\":{\"0\":0,\"default\":{\"prCode\":{\"203\":\"mainWashTime+#heatingTime+1+1\",\"212|213|217|226\":\"mainWashTime+#heatingTime+1+#spinDurationInRinsePhase\",\"default\":\"mainWashTime+#heatingTime+1+1+#spinDurationInRinsePhase\"}}}}",
+    "remainingTimePrewash": "{\"opt1\":{\"0\":0,\"default\":{\"prCode\":{\"206|207\":\"opt1+1+1+#finalSpinDuration\",\"default\":\"opt1+1+1+#spinDurationInRinsePhase\"}}}}",
+    "remainingTimeRinse": "{\"rinseIterations\":{\"0\":0,\"default\":\"(rinseIterationTime*1+1+2+#spinDurationInRinsePhase*1)*(rinseIterations*1-1)+rinseIterationTime*1)\"}}",
+    "rpm": "1400",
+    "series": "betterPro",
+    "seriesVersion": "professional",
+    "serviceability": "none",
+    "spinDurationInRinsePhase": "{\"spinSpeed\":{\"0\":0,\"default\":{\"prCode\":{\"212|213|214\":1,\"default\":3}}}}",
+    "suggestedLoadWKG": "{\"round\":0,\"suggestedLoadW\":{\"RL100\":\"#loadCapacityWash*1\",\"RL95\":\"#loadCapacityWash*0.95\",\"RL90\":\"#loadCapacityWash*0.9\",\"RL85\":\"#loadCapacityWash*0.85\",\"RL80\":\"#loadCapacityWash*0.8\",\"RL75\":\"#loadCapacityWash*0.75\",\"RL70\":\"#loadCapacityWash*0.7\",\"RL65\":\"#loadCapacityWash*0.65\",\"RL60\":\"#loadCapacityWash*0.6\",\"RL55\":\"#loadCapacityWash*0.55\",\"RL50\":\"#loadCapacityWash*0.5\",\"RL45\":\"#loadCapacityWash*0.45\",\"RL40\":\"#loadCapacityWash*0.4\",\"RL35\":\"#loadCapacityWash*0.35\",\"RL30\":\"#loadCapacityWash*0.3\",\"RL25\":\"#loadCapacityWash*0.25\",\"RL20\":\"#loadCapacityWash*0.2\",\"RL17\":\"#loadCapacityWash*0.17\",\"RL15\":\"#loadCapacityWash*0.15\",\"RL10\":\"#loadCapacityWash*0.1\",\"RL5\":\"#loadCapacityWash*0.05\",\"RL0\":\"#loadCapacityWash*0\"}}",
+    "supportedLanguage": "en|it|fr|nl|pt|es|de|bg|cs|sk|hr|el|pl|sr|sl|ro|ru|uk|hu|da|fi|no|sv|tr",
+    "tumblingType": "auto"
+   },
+   "starts": [
+    {
+     "ancillaryParameters": {
+      "delayStatus": "0",
+      "energyLabel": "4",
+      "liquidDetergentDose": "2",
+      "powderDetergentDose": "2",
+      "prPosition": "9",
+      "programCluster": "traditional",
+      "programFamily": "[hidden]",
+      "programIntensity": "standard",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": 4.5,
+      "tempContribution": "1"
+     },
+     "expected": 1.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "anticrease": "1",
+      "autoDetergentStatus": "0",
+      "autoSoftenerStatus": "0",
+      "bestIroning": "0",
+      "childLock": "0",
+      "clothesWeightPercentage": "50",
+      "creaseResistSoakStatus": "0",
+      "delayTime": "0",
+      "dirtyLevel": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "extraRinse1": "0",
+      "extraRinse2": "0",
+      "extraRinse3": "0",
+      "fastMode": "0",
+      "haier_MainWashWaterLevel": "0",
+      "highWaterLevelStatus": "0",
+      "intensiveMode": "0",
+      "nightWashStatus": "1",
+      "operationName": "grCHGWash",
+      "permanentPressStatus": "1",
+      "prCode": "205",
+      "prewash": "1",
+      "silentMode": "1",
+      "spinSpeed": "1000",
+      "steamStatus": "0",
+      "temp": "30",
+      "texture": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.SYNTHETIC_AND_COLOURED"
+    },
+    {
+     "ancillaryParameters": {
+      "delayStatus": "0",
+      "ecoDelayStart": "0",
+      "energyLabel": "5",
+      "liquidDetergentDose": "2",
+      "powderDetergentDose": "2",
+      "prPosition": "8",
+      "programFamily": "[download]",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "4.5",
+      "tempContribution": "1"
+     },
+     "expected": 1.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "anticrease": "1",
+      "autoDetergentStatus": "0",
+      "autoSoftenerStatus": "0",
+      "childLock": "0",
+      "clothesWeightPercentage": "50",
+      "creaseResistSoakStatus": "0",
+      "delayTime": "180",
+      "dirtyLevel": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "extraRinse1": "0",
+      "extraRinse2": "0",
+      "extraRinse3": "0",
+      "fastMode": "0",
+      "haier_MainWashWaterLevel": "0",
+      "highWaterLevelStatus": "0",
+      "intensiveMode": "0",
+      "nightWashStatus": "0",
+      "operationName": "grCHGWash",
+      "permanentPressStatus": "1",
+      "prCode": "242",
+      "prewash": "1",
+      "silentMode": "1",
+      "spinSpeed": "1000",
+      "steamStatus": "0",
+      "temp": "40",
+      "texture": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_100_CUSTOM_WASH"
+    },
+    {
+     "ancillaryParameters": {
+      "delayStatus": "0",
+      "ecoDelayStart": "0",
+      "energyLabel": "5",
+      "liquidDetergentDose": "2",
+      "powderDetergentDose": "2",
+      "prPosition": "8",
+      "programFamily": "[download]",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "4.5",
+      "tempContribution": "1"
+     },
+     "expected": 1.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "anticrease": "1",
+      "autoDetergentStatus": "0",
+      "autoSoftenerStatus": "0",
+      "childLock": "0",
+      "clothesWeightPercentage": "50",
+      "creaseResistSoakStatus": "0",
+      "delayTime": "360",
+      "dirtyLevel": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "extraRinse1": "0",
+      "extraRinse2": "0",
+      "extraRinse3": "0",
+      "fastMode": "0",
+      "haier_MainWashWaterLevel": "0",
+      "highWaterLevelStatus": "0",
+      "intensiveMode": "0",
+      "nightWashStatus": "0",
+      "operationName": "grCHGWash",
+      "permanentPressStatus": "1",
+      "prCode": "242",
+      "prewash": "1",
+      "silentMode": "1",
+      "spinSpeed": "1200",
+      "steamStatus": "0",
+      "temp": "30",
+      "texture": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_100_CUSTOM_WASH"
+    },
+    {
+     "ancillaryParameters": {
+      "delayStatus": "0",
+      "ecoDelayStart": "0",
+      "energyLabel": "5",
+      "liquidDetergentDose": "2",
+      "powderDetergentDose": "2",
+      "prPosition": "8",
+      "programFamily": "[download]",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "4.5",
+      "tempContribution": "1"
+     },
+     "expected": 1.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "anticrease": "1",
+      "autoDetergentStatus": "0",
+      "autoSoftenerStatus": "0",
+      "childLock": "0",
+      "clothesWeightPercentage": "50",
+      "creaseResistSoakStatus": "0",
+      "delayTime": "300",
+      "dirtyLevel": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "extraRinse1": "0",
+      "extraRinse2": "0",
+      "extraRinse3": "0",
+      "fastMode": "0",
+      "haier_MainWashWaterLevel": "0",
+      "highWaterLevelStatus": "0",
+      "intensiveMode": "0",
+      "nightWashStatus": "0",
+      "operationName": "grCHGWash",
+      "permanentPressStatus": "1",
+      "prCode": "242",
+      "prewash": "1",
+      "silentMode": "1",
+      "spinSpeed": "1200",
+      "steamStatus": "0",
+      "temp": "30",
+      "texture": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_100_CUSTOM_WASH"
+    },
+    {
+     "ancillaryParameters": {
+      "delayStatus": "0",
+      "energyLabel": "5",
+      "liquidDetergentDose": "2",
+      "powderDetergentDose": "2",
+      "prPosition": "8",
+      "programFamily": "[download]",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "4.5",
+      "tempContribution": "1"
+     },
+     "expected": 1.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "anticrease": "0",
+      "autoDetergentStatus": "0",
+      "autoSoftenerStatus": "0",
+      "childLock": "0",
+      "clothesWeightPercentage": "50",
+      "creaseResistSoakStatus": "0",
+      "delayTime": "0",
+      "dirtyLevel": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "extraRinse1": "0",
+      "extraRinse2": "0",
+      "extraRinse3": "0",
+      "fastMode": "0",
+      "haier_MainWashWaterLevel": "0",
+      "highWaterLevelStatus": "0",
+      "intensiveMode": "0",
+      "nightWashStatus": "0",
+      "operationName": "grCHGWash",
+      "permanentPressStatus": "1",
+      "prCode": "242",
+      "prewash": "0",
+      "silentMode": "1",
+      "spinSpeed": "1200",
+      "steamStatus": "0",
+      "temp": "30",
+      "texture": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_100_CUSTOM_WASH"
+    }
+   ],
+   "type": "WM"
+  },
+  "HW80-B14959TU1-S": {
+   "categories": {
+    "PROGRAMS.WM_WD.HQD_COTTONS": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "7",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "traditional",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "fixedValue": "dashboard",
+       "typology": "fixed"
+      },
+      "programIntensity": {
+       "fixedValue": "intensiveWashing",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "82",
+       "typology": "fixed"
+      }
+     }
+    },
+    "PROGRAMS.WM_WD.HQD_QUICK_15": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "fixedValue": "5",
+       "typology": "fixed"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "2",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "defaultValue": "quick_eco_traditional",
+       "typology": "enum"
+      },
+      "programFamily": {
+       "fixedValue": "dashboard",
+       "typology": "fixed"
+      },
+      "programIntensity": {
+       "fixedValue": "standard",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "1.6",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "15",
+       "typology": "fixed"
+      }
+     }
+    },
+    "PROGRAMS.WM_WD.HQD_SMART": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "4",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "defaultValue": "eco_traditional",
+       "typology": "enum"
+      },
+      "programFamily": {
+       "defaultValue": "dashboard_smart",
+       "typology": "enum"
+      },
+      "programIntensity": {
+       "fixedValue": "standard",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "63",
+       "typology": "fixed"
+      }
+     }
+    },
+    "PROGRAMS.WM_WD.HQD_SPIN": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "fixedValue": "5",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "6",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "traditional",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "fixedValue": "dashboard",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      }
+     }
+    },
+    "PROGRAMS.WM_WD.IOT_WASH_BATHROBE": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "7",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "home",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "defaultValue": "download_guided",
+       "typology": "enum"
+      },
+      "programIntensity": {
+       "fixedValue": "intensiveWashing",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "95",
+       "typology": "fixed"
+      }
+     }
+    },
+    "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "7",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "home",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "defaultValue": "download_guided",
+       "typology": "enum"
+      },
+      "programIntensity": {
+       "fixedValue": "intensiveWashing",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "95",
+       "typology": "fixed"
+      }
+     }
+    },
+    "PROGRAMS.WM_WD.IOT_WASH_DARK": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "3",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "3",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "traditional",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "defaultValue": "download_guided_care",
+       "typology": "enum"
+      },
+      "programIntensity": {
+       "fixedValue": "standard",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "115",
+       "typology": "fixed"
+      }
+     }
+    },
+    "PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "7",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "traditional",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "fixedValue": "download",
+       "typology": "fixed"
+      },
+      "programIntensity": {
+       "fixedValue": "intensiveWashing",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": {
+      "remainingTime": {
+       "fixedValue": "95",
+       "typology": "fixed"
+      }
+     }
+    },
+    "PROGRAMS.WM_WD.IOT_WASH_PETS_ODOURS_STAINS_REMOVAL": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "7",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "pets",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "fixedValue": "download",
+       "typology": "fixed"
+      },
+      "programRules": {
+       "category": "rule",
+       "enumValues": {
+        "addWashDefaultTime": {
+         "stainType": {
+          "0": 0,
+          "11|19|24|25|26": 20,
+          "1|2|4|15|16|17|20|21|22": 35,
+          "3|6|7|8|9|12|18|23": 5,
+          "5|10|13|14": 25
+         }
+        },
+        "stainType": {
+         "extended": {
+          "BUTTER": 6,
+          "DEODORANT": 15,
+          "GLUE": 16,
+          "ICE_CREAM": 9,
+          "MAYONNAISE": 20,
+          "MECH_GREASE": 14,
+          "OIL": 14,
+          "PERFUME": 15,
+          "RUST": 13
+         },
+         "native": {
+          "BABY_FOOD": 22,
+          "BEAN_PASTE": 24,
+          "BLOOD": 4,
+          "BLUEBERRY": 18,
+          "BLUE_INK": 14,
+          "CHILI_OIL": 13,
+          "CHILI_SAUCE": 25,
+          "CHOCOLATE": 9,
+          "COFFEE": 8,
+          "COLOR_PENCIL": 15,
+          "COOKING_OIL": 6,
+          "CURRY": 11,
+          "EGG": 20,
+          "FRUIT": 26,
+          "GRASS": 2,
+          "KETCHUP": 21,
+          "LIP_GLOSS": 10,
+          "MILK": 5,
+          "MILK_TEA": 12,
+          "OIL_PASTEL": 17,
+          "SHOE_CREAM": 16,
+          "SOIL": 3,
+          "SOY_SAUCE": 23,
+          "SWEAT": 19,
+          "TEA": 7,
+          "WINE": 1
+         }
+        },
+        "temp": {
+         "stainType": {
+          "1": 35,
+          "10": 45,
+          "11|26": 40,
+          "18": 30,
+          "2|3|19|25": 50,
+          "4|14|21": 20,
+          "5|6|7|8|9|12|13|15|16|17|20|22|23|24": 60
+         }
+        }
+       },
+       "mandatory": 0,
+       "typology": "enum"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": null
+    }
+   },
+   "model_attributes": {
+    "delayType": "end",
+    "drawerType": "flHqd",
+    "drumCleanType": "appCounter",
+    "finalSpinDuration": "{\"spinSpeed\":{\"0\":0,\"default\":{\"prCode\":{\"72\":1,\"default\":3}}}}",
+    "fwLabel": "iotfw_epp",
+    "interfaceType": "series|seriesVersion|loadCapacityWash|option",
+    "iot": "hOn",
+    "loadCapacityWash": "8",
+    "lowerBarrierDate": "2141",
+    "option": "steam|tumbling",
+    "platform": "HQD",
+    "plmCode": "31019005",
+    "remainingTime": "remainingTimePrewash+remainingTimeMainWash+remainingTimeRinse+remainingTimeFinalSpin+remainingTimeAntiWrinkle",
+    "remainingTimeAntiWrinkle": "{\"prCode\":{\"71\":0,\"121\":0,\"default\":{\"antiWrinkle\":{\"0\":0,\"default\":1}}}}",
+    "remainingTimeFinalSpin": "{\"prCode\":{\"71\":0,\"121\":0,\"default\":{\"#finalSpinDuration\":{\"0\":0,\"default\":\"#finalSpinDuration+2\"}}}}",
+    "remainingTimeMainWash": "{\"prCode\":{\"121\":24,\"71\":60,\"default\":{\"mainWashTime\":{\"0\":0,\"default\":{\"suggestedLoadW\":{\"undefined\":{\"prCode\":{\"85\":\"mainWashTime+2\",\"90\":\"mainWashTime+2\",\"106\":\"mainWashTime+#finalSpinDuration+5\",\"132\":\"mainWashTime+2\",\"default\":\"mainWashTime+#finalSpinDuration+2\"}},\"default\":{\"#suggestedLoadWKg\":{\"1\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+42\",\"90\":\"mainWashTime+42\",\"106\":\"mainWashTime+#finalSpinDuration+45\",\"132\":\"mainWashTime+42\",\"default\":\"mainWashTime+#finalSpinDuration+42\"}}}},\"2\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}}}},\"3\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}}}},\"4\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+42\",\"90\":\"mainWashTime+42\",\"106\":\"mainWashTime+#finalSpinDuration+45\",\"132\":\"mainWashTime+42\",\"default\":\"mainWashTime+#finalSpinDuration+42\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}}}},\"5\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+77\",\"90\":\"mainWashTime+77\",\"106\":\"mainWashTime+#finalSpinDuration+80\",\"132\":\"mainWashTime+77\",\"default\":\"mainWashTime+#finalSpinDuration+77\"}}}},\"6\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+42\",\"90\":\"mainWashTime+42\",\"106\":\"mainWashTime+#finalSpinDuration+45\",\"132\":\"mainWashTime+42\",\"default\":\"mainWashTime+#finalSpinDuration+42\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+62\",\"90\":\"mainWashTime+62\",\"106\":\"mainWashTime+#finalSpinDuration+65\",\"132\":\"mainWashTime+62\",\"default\":\"mainWashTime+#finalSpinDuration+62\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+72\",\"90\":\"mainWashTime+72\",\"106\":\"mainWashTime+#finalSpinDuration+75\",\"132\":\"mainWashTime+72\",\"default\":\"mainWashTime+#finalSpinDuration+72\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+82\",\"90\":\"mainWashTime+82\",\"106\":\"mainWashTime+#finalSpinDuration+85\",\"132\":\"mainWashTime+82\",\"default\":\"mainWashTime+#finalSpinDuration+82\"}}}},\"7\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+82\",\"90\":\"mainWashTime+82\",\"106\":\"mainWashTime+#finalSpinDuration+85\",\"132\":\"mainWashTime+82\",\"default\":\"mainWashTime+#finalSpinDuration+82\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+92\",\"90\":\"mainWashTime+92\",\"106\":\"mainWashTime+#finalSpinDuration+95\",\"132\":\"mainWashTime+92\",\"default\":\"mainWashTime+#finalSpinDuration+92\"}}}},\"8\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+62\",\"90\":\"mainWashTime+62\",\"106\":\"mainWashTime+#finalSpinDuration+65\",\"132\":\"mainWashTime+62\",\"default\":\"mainWashTime+#finalSpinDuration+62\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+77\",\"90\":\"mainWashTime+77\",\"106\":\"mainWashTime+#finalSpinDuration+80\",\"132\":\"mainWashTime+77\",\"default\":\"mainWashTime+#finalSpinDuration+77\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+87\",\"90\":\"mainWashTime+87\",\"106\":\"mainWashTime+#finalSpinDuration+90\",\"132\":\"mainWashTime+87\",\"default\":\"mainWashTime+#finalSpinDuration+87\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+102\",\"90\":\"mainWashTime+102\",\"106\":\"mainWashTime+#finalSpinDuration+105\",\"132\":\"mainWashTime+102\",\"default\":\"mainWashTime+#finalSpinDuration+102\"}}}},\"9\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+42\",\"90\":\"mainWashTime+42\",\"106\":\"mainWashTime+#finalSpinDuration+45\",\"132\":\"mainWashTime+42\",\"default\":\"mainWashTime+#finalSpinDuration+42\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+82\",\"90\":\"mainWashTime+82\",\"106\":\"mainWashTime+#finalSpinDuration+85\",\"132\":\"mainWashTime+82\",\"default\":\"mainWashTime+#finalSpinDuration+82\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+2+95\",\"90\":\"mainWashTime+2+95\",\"106\":\"mainWashTime+#finalSpinDuration+5+95\",\"132\":\"mainWashTime+2+95\",\"default\":\"mainWashTime+#finalSpinDuration+2+95\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+107\",\"90\":\"mainWashTime+107\",\"106\":\"mainWashTime+#finalSpinDuration+110\",\"132\":\"mainWashTime+107\",\"default\":\"mainWashTime+#finalSpinDuration+107\"}}}},\"10\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+72\",\"90\":\"mainWashTime+72\",\"106\":\"mainWashTime+#finalSpinDuration+75\",\"132\":\"mainWashTime+72\",\"default\":\"mainWashTime+#finalSpinDuration+72\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+87\",\"90\":\"mainWashTime+87\",\"106\":\"mainWashTime+#finalSpinDuration+90\",\"132\":\"mainWashTime+87\",\"default\":\"mainWashTime+#finalSpinDuration+87\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+102\",\"90\":\"mainWashTime+102\",\"106\":\"mainWashTime+#finalSpinDuration+105\",\"132\":\"mainWashTime+102\",\"default\":\"mainWashTime+#finalSpinDuration+102\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+117\",\"90\":\"mainWashTime+117\",\"106\":\"mainWashTime+#finalSpinDuration+120\",\"132\":\"mainWashTime+117\",\"default\":\"mainWashTime+#finalSpinDuration+117\"}}}},\"11\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+62\",\"90\":\"mainWashTime+62\",\"106\":\"mainWashTime+#finalSpinDuration+65\",\"132\":\"mainWashTime+62\",\"default\":\"mainWashTime+#finalSpinDuration+62\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+77\",\"90\":\"mainWashTime+77\",\"106\":\"mainWashTime+#finalSpinDuration+80\",\"132\":\"mainWashTime+77\",\"default\":\"mainWashTime+#finalSpinDuration+77\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+92\",\"90\":\"mainWashTime+92\",\"106\":\"mainWashTime+#finalSpinDuration+95\",\"132\":\"mainWashTime+92\",\"default\":\"mainWashTime+#finalSpinDuration+92\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+107\",\"90\":\"mainWashTime+107\",\"106\":\"mainWashTime+#finalSpinDuration+110\",\"132\":\"mainWashTime+107\",\"default\":\"mainWashTime+#finalSpinDuration+107\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+127\",\"90\":\"mainWashTime+127\",\"106\":\"mainWashTime+#finalSpinDuration+130\",\"132\":\"mainWashTime+127\",\"default\":\"mainWashTime+#finalSpinDuration+127\"}}}},\"12\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+82\",\"90\":\"mainWashTime+82\",\"106\":\"mainWashTime+#finalSpinDuration+85\",\"132\":\"mainWashTime+82\",\"default\":\"mainWashTime+#finalSpinDuration+82\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+102\",\"90\":\"mainWashTime+102\",\"106\":\"mainWashTime+#finalSpinDuration+105\",\"132\":\"mainWashTime+102\",\"default\":\"mainWashTime+#finalSpinDuration+102\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+117\",\"90\":\"mainWashTime+117\",\"106\":\"mainWashTime+#finalSpinDuration+120\",\"132\":\"mainWashTime+117\",\"default\":\"mainWashTime+#finalSpinDuration+117\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+132\",\"90\":\"mainWashTime+132\",\"106\":\"mainWashTime+#finalSpinDuration+135\",\"132\":\"mainWashTime+132\",\"default\":\"mainWashTime+#finalSpinDuration+132\"}}}}}}}}}}}}",
+    "remainingTimePrewash": "{\"prCode\":{\"71\":0,\"121\":0,\"default\":{\"haier_SoakPrewashSelection\":{\"0\":0,\"default\":\"#finalSpinDuration+17\"}}}}",
+    "remainingTimeRinse": "{\"prCode\":{\"71\":0,\"121\":0,\"default\":{\"rinseIterations\":{\"0\":0,\"default\":{\"spinSpeed\":{\"0\":\"(rinseIterationTime+2)*(rinseIterations-1)+rinseIterationTime\",\"default\":{\"prCode\":{\"72\":{\"400\":\"(rinseIterationTime+3)*(rinseIterations-1)+rinseIterationTime\",\"600\":\"(rinseIterationTime+3)*(rinseIterations-1)+rinseIterationTime\",\"800\":\"(rinseIterationTime+3)*(rinseIterations-1)+rinseIterationTime\",\"1000\":\"(rinseIterationTime+3)*(rinseIterations-1)+rinseIterationTime\",\"1200\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"1400\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\"},\"default\":{\"400\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"600\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"800\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"1000\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"1200\":\"(rinseIterationTime+7)*(rinseIterations-1)+rinseIterationTime\",\"1400\":\"(rinseIterationTime+7)*(rinseIterations-1)+rinseIterationTime\"}}}}}}}}}",
+    "rpm": "1400",
+    "series": "959",
+    "serviceability": "none",
+    "suggestedLoadWKg": "{\"round\":0,\"suggestedLoadW\":{\"RL100\":\"#loadCapacityWash*1\",\"RL95\":\"#loadCapacityWash*0.95\",\"RL90\":\"#loadCapacityWash*0.9\",\"RL85\":\"#loadCapacityWash*0.85\",\"RL80\":\"#loadCapacityWash*0.8\",\"RL75\":\"#loadCapacityWash*0.75\",\"RL70\":\"#loadCapacityWash*0.7\",\"RL65\":\"#loadCapacityWash*0.65\",\"RL60\":\"#loadCapacityWash*0.6\",\"RL55\":\"#loadCapacityWash*0.55\",\"RL50\":\"#loadCapacityWash*0.5\",\"RL45\":\"#loadCapacityWash*0.45\",\"RL40\":\"#loadCapacityWash*0.4\",\"RL35\":\"#loadCapacityWash*0.35\",\"RL30\":\"#loadCapacityWash*0.3\",\"RL25\":\"#loadCapacityWash*0.25\",\"RL20\":\"#loadCapacityWash*0.2\",\"RL17\":\"#loadCapacityWash*0.17\",\"RL15\":\"#loadCapacityWash*0.15\",\"RL10\":\"#loadCapacityWash*0.1\",\"RL5\":\"#loadCapacityWash*0.05\",\"RL0\":\"#loadCapacityWash*0\"}}",
+    "tumblingType": "auto"
+   },
+   "starts": [
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "ecoDelayStart": "0",
+      "energyLabel": "4",
+      "liquidDetergentDose": "3",
+      "powderDetergentDose": "3",
+      "prPosition": "8",
+      "programCluster": "traditional",
+      "programFamily": "[download|guided|care]",
+      "programIntensity": "standard",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "4",
+      "tempContribution": "1"
+     },
+     "expected": 108.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "570",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "2",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "15",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "prCode": "116",
+      "rinseIterationTime": "9",
+      "rinseIterations": "3",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1000",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "6",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_DARK"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "3",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "home",
+      "programFamily": "[download|guided]",
+      "programIntensity": "intensiveWashing",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": 8,
+      "tempContribution": "1"
+     },
+     "expected": 167.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "2",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "25",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "prCode": "115",
+      "rinseIterationTime": "9",
+      "rinseIterations": "4",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1200",
+      "strongStatus": "0",
+      "temp": "60",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "0",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "pets",
+      "programFamily": "[download]",
+      "programRules": {
+       "category": "rule",
+       "enumValues": {
+        "addWashDefaultTime": {
+         "stainType": {
+          "0": 0,
+          "11|19|24|25|26": 20,
+          "1|2|4|15|16|17|20|21|22": 35,
+          "3|6|7|8|9|12|18|23": 5,
+          "5|10|13|14": 25
+         }
+        },
+        "stainType": {
+         "extended": {
+          "BUTTER": 6,
+          "DEODORANT": 15,
+          "GLUE": 16,
+          "ICE_CREAM": 9,
+          "MAYONNAISE": 20,
+          "MECH_GREASE": 14,
+          "OIL": 14,
+          "PERFUME": 15,
+          "RUST": 13
+         },
+         "native": {
+          "BABY_FOOD": 22,
+          "BEAN_PASTE": 24,
+          "BLOOD": 4,
+          "BLUEBERRY": 18,
+          "BLUE_INK": 14,
+          "CHILI_OIL": 13,
+          "CHILI_SAUCE": 25,
+          "CHOCOLATE": 9,
+          "COFFEE": 8,
+          "COLOR_PENCIL": 15,
+          "COOKING_OIL": 6,
+          "CURRY": 11,
+          "EGG": 20,
+          "FRUIT": 26,
+          "GRASS": 2,
+          "KETCHUP": 21,
+          "LIP_GLOSS": 10,
+          "MILK": 5,
+          "MILK_TEA": 12,
+          "OIL_PASTEL": 17,
+          "SHOE_CREAM": 16,
+          "SOIL": 3,
+          "SOY_SAUCE": 23,
+          "SWEAT": 19,
+          "TEA": 7,
+          "WINE": 1
+         }
+        },
+        "temp": {
+         "stainType": {
+          "1": 35,
+          "10": 45,
+          "11|26": 40,
+          "18": 30,
+          "2|3|19|25": 50,
+          "4|14|21": 20,
+          "5|6|7|8|9|12|13|15|16|17|20|22|23|24": 60
+         }
+        }
+       },
+       "mandatory": 0,
+       "typology": "enum"
+      },
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": 8,
+      "tempContribution": "1"
+     },
+     "expected": 151.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "2",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "20",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "0",
+      "prCode": "115",
+      "rinseIterationTime": "10",
+      "rinseIterations": "3",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1000",
+      "strongStatus": "0",
+      "temp": "60",
+      "texture": "0",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_PETS_ODOURS_STAINS_REMOVAL"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "3",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "home",
+      "programFamily": "[download|guided]",
+      "programIntensity": "intensiveWashing",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "8",
+      "tempContribution": "1"
+     },
+     "expected": 148.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "2",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "20",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "prCode": "115",
+      "rinseIterationTime": "9",
+      "rinseIterations": "3",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1200",
+      "strongStatus": "0",
+      "temp": "60",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_BATHROBE"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "0",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "traditional",
+      "programFamily": "[download]",
+      "programIntensity": "intensiveWashing",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": 8,
+      "tempContribution": "1"
+     },
+     "expected": 133.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "25",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "prCode": "115",
+      "rinseIterationTime": "9",
+      "rinseIterations": "3",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1000",
+      "strongStatus": "0",
+      "temp": "60",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "4",
+      "liquidDetergentDose": "3",
+      "powderDetergentDose": "3",
+      "prPosition": "8",
+      "programCluster": "traditional",
+      "programFamily": "[download|guided|care]",
+      "programIntensity": "standard",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": 4,
+      "tempContribution": "1"
+     },
+     "expected": 69.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "10",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "0",
+      "prCode": "116",
+      "rinseIterationTime": "9",
+      "rinseIterations": "2",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1000",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "6",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_DARK"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "0",
+      "prPosition": "6",
+      "programCluster": "traditional",
+      "programFamily": "[dashboard]",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "8",
+      "tempContribution": "0"
+     },
+     "expected": 6.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "0",
+      "haier_MainWashRotateTime": "0",
+      "haier_MainWashSpeed": "0",
+      "haier_MainWashStopTime": "0",
+      "haier_MainWashWaterLevel": "0",
+      "haier_RinseRotateTime": "0",
+      "haier_RinseSpeed": "0",
+      "haier_RinseStopTime": "0",
+      "haier_SoakPrewashRotateTime": "0",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "0",
+      "haier_SoakPrewashStopTime": "0",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "0",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "0",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "0",
+      "prCode": "74",
+      "rinseIterationTime": "0",
+      "rinseIterations": "0",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1000",
+      "strongStatus": "0",
+      "temp": "0",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.HQD_SPIN"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "0",
+      "prPosition": "6",
+      "programCluster": "traditional",
+      "programFamily": "[dashboard]",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "8",
+      "tempContribution": "0"
+     },
+     "expected": 6.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "0",
+      "haier_MainWashRotateTime": "0",
+      "haier_MainWashSpeed": "0",
+      "haier_MainWashStopTime": "0",
+      "haier_MainWashWaterLevel": "0",
+      "haier_RinseRotateTime": "0",
+      "haier_RinseSpeed": "0",
+      "haier_RinseStopTime": "0",
+      "haier_SoakPrewashRotateTime": "0",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "0",
+      "haier_SoakPrewashStopTime": "0",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "0",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "0",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "0",
+      "prCode": "74",
+      "rinseIterationTime": "0",
+      "rinseIterations": "0",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1200",
+      "strongStatus": "0",
+      "temp": "0",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.HQD_SPIN"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "3",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "home",
+      "programFamily": "[download|guided]",
+      "programIntensity": "intensiveWashing",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "8",
+      "tempContribution": "1"
+     },
+     "expected": 143.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "2",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "15",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "prCode": "115",
+      "rinseIterationTime": "9",
+      "rinseIterations": "3",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1200",
+      "strongStatus": "0",
+      "temp": "60",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "0",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "pets",
+      "programFamily": "[download]",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "8",
+      "tempContribution": "1"
+     },
+     "expected": 151.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "energySavingStatus": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "2",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "20",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "prCode": "115",
+      "rinseIterationTime": "10",
+      "rinseIterations": "3",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1000",
+      "strongStatus": "0",
+      "temp": "60",
+      "texture": "0",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_PETS_ODOURS_STAINS_REMOVAL"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "4",
+      "liquidDetergentDose": "1",
+      "powderDetergentDose": "1",
+      "prPosition": "2",
+      "programCluster": "[quick|eco|traditional]",
+      "programFamily": "[dashboard]",
+      "programIntensity": "standard",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "1.6",
+      "tempContribution": "0"
+     },
+     "expected": 18.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "15",
+      "haier_MainWashSpeed": "50",
+      "haier_MainWashStopTime": "0",
+      "haier_MainWashWaterLevel": "3",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "50",
+      "haier_RinseStopTime": "0",
+      "haier_SoakPrewashRotateTime": "15",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "0",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "0",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "3",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "0",
+      "prCode": "72",
+      "rinseIterationTime": "3",
+      "rinseIterations": "1",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1000",
+      "strongStatus": "0",
+      "temp": "0",
+      "texture": "20",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "2"
+     },
+     "programName": "PROGRAMS.WM_WD.HQD_QUICK_15"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "ecoDelayStart": "0",
+      "energyLabel": "5",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "traditional",
+      "programFamily": "[dashboard]",
+      "programIntensity": "intensiveWashing",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": 8,
+      "tempContribution": "1"
+     },
+     "expected": 133.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "150",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "2",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "5",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "prCode": "115",
+      "rinseIterationTime": "9",
+      "rinseIterations": "3",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1400",
+      "strongStatus": "0",
+      "temp": "60",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.HQD_COTTONS"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "4",
+      "liquidDetergentDose": "3",
+      "powderDetergentDose": "3",
+      "prPosition": "8",
+      "programCluster": "traditional",
+      "programFamily": "[download|guided|care]",
+      "programIntensity": "standard",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": 4,
+      "tempContribution": "1"
+     },
+     "expected": 69.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "10",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "prCode": "116",
+      "rinseIterationTime": "9",
+      "rinseIterations": "2",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1000",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "6",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_DARK"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "4",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "home",
+      "programFamily": "[download|guided]",
+      "programIntensity": "intensiveWashing",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": 8,
+      "tempContribution": "1"
+     },
+     "expected": 93.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "10",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "prCode": "115",
+      "rinseIterationTime": "9",
+      "rinseIterations": "3",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1200",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "energyLabel": "4",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "1",
+      "programCluster": "[eco|traditional]",
+      "programFamily": "[dashboard|smart]",
+      "programIntensity": "standard",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "suggestedLoadW": "8",
+      "tempContribution": "1"
+     },
+     "expected": 107.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dryLevel": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_MainWashRotateTime": "20",
+      "haier_MainWashSpeed": "50",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "20",
+      "haier_RinseSpeed": "50",
+      "haier_RinseStopTime": "5",
+      "haier_SoakPrewashRotateTime": "0",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "0",
+      "haier_SoakPrewashStopTime": "0",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "0",
+      "highWaterLevelStatus": "0",
+      "intelligenceStatus": "0",
+      "lockStatus": "0",
+      "mainWashTime": "15",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "0",
+      "prCode": "124",
+      "rinseIterationTime": "8",
+      "rinseIterations": "2",
+      "soakWashStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1000",
+      "strongStatus": "0",
+      "temp": "60",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "5"
+     },
+     "programName": "PROGRAMS.WM_WD.HQD_SMART"
+    }
+   ],
+   "type": "WM"
+  },
+  "HW90-B14387TU1-S": {
+   "categories": {
+    "PROGRAMS.WM_WD.HQD_COTTONS": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "dryType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "extendedStainType": {
+       "defaultValue": null,
+       "typology": "enum"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "7",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "traditional",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "fixedValue": "dashboard",
+       "typology": "fixed"
+      },
+      "programIntensity": {
+       "fixedValue": "intensiveWashing",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "stainTypeKey": {
+       "defaultValue": null,
+       "typology": "enum"
+      },
+      "steamType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "9",
+       "typology": "fixed"
+      },
+      "suggestedLoadWD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": null
+    },
+    "PROGRAMS.WM_WD.HQD_SHIRTS": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "dryType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "3",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "3",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "15",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "fixedValue": "hidden",
+       "typology": "fixed"
+      },
+      "programIntensity": {
+       "fixedValue": "delicate",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "steamType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "4.5",
+       "typology": "fixed"
+      },
+      "suggestedLoadWD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": null
+    },
+    "PROGRAMS.WM_WD.HQD_SPORT": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "dryType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "5",
+       "typology": "range"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "3",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "3",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "17",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "defaultValue": "sport_eco_traditional",
+       "typology": "enum"
+      },
+      "programFamily": {
+       "fixedValue": "hidden",
+       "typology": "fixed"
+      },
+      "programIntensity": {
+       "fixedValue": "standard",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "steamType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "4.5",
+       "typology": "fixed"
+      },
+      "suggestedLoadWD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": null
+    },
+    "PROGRAMS.WM_WD.IOT_WASH_BATHROBE": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "dryType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "extendedStainType": {
+       "defaultValue": null,
+       "typology": "enum"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "7",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "home",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "defaultValue": "download_guided",
+       "typology": "enum"
+      },
+      "programIntensity": {
+       "fixedValue": "intensiveWashing",
+       "typology": "fixed"
+      },
+      "programRules": {
+       "delayStatus": {
+        "nightWashStatus": {
+         "1": {
+          "fixedValue": "0",
+          "typology": "fixed"
+         }
+        }
+       },
+       "dryLevel": {
+        "dryOption": {
+         "0": {
+          "fixedValue": "0",
+          "typology": "fixed"
+         }
+        }
+       },
+       "nightWashStatus": {
+        "delayStatus": {
+         "1": {
+          "fixedValue": "0",
+          "typology": "fixed"
+         }
+        }
+       }
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "stainTypeKey": {
+       "defaultValue": null,
+       "typology": "enum"
+      },
+      "steamType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "9",
+       "typology": "fixed"
+      },
+      "suggestedLoadWD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": null
+    },
+    "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "dryType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "extendedStainType": {
+       "defaultValue": null,
+       "typology": "enum"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "4",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "7",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "home",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "defaultValue": "download_guided",
+       "typology": "enum"
+      },
+      "programIntensity": {
+       "fixedValue": "intensiveWashing",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "stainTypeKey": {
+       "defaultValue": null,
+       "typology": "enum"
+      },
+      "steamType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "9",
+       "typology": "fixed"
+      },
+      "suggestedLoadWD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": null
+    },
+    "PROGRAMS.WM_WD.IOT_WASH_DARK": {
+     "ancillaryParameters": {
+      "antiWrinkle": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "dryType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "energyLabel": {
+       "defaultValue": "3",
+       "typology": "range"
+      },
+      "extendedStainType": {
+       "defaultValue": null,
+       "typology": "enum"
+      },
+      "liquidDetergentDose": {
+       "fixedValue": "3",
+       "typology": "fixed"
+      },
+      "powderDetergentDose": {
+       "fixedValue": "3",
+       "typology": "fixed"
+      },
+      "prPosition": {
+       "fixedValue": "8",
+       "typology": "fixed"
+      },
+      "programCluster": {
+       "fixedValue": "traditional",
+       "typology": "fixed"
+      },
+      "programFamily": {
+       "defaultValue": "download_guided_care",
+       "typology": "enum"
+      },
+      "programIntensity": {
+       "fixedValue": "standard",
+       "typology": "fixed"
+      },
+      "programType": {
+       "fixedValue": "W",
+       "typology": "fixed"
+      },
+      "remoteActionable": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "remoteVisible": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      },
+      "stainTypeKey": {
+       "defaultValue": null,
+       "typology": "enum"
+      },
+      "steamType": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "suggestedLoadW": {
+       "fixedValue": "4.5",
+       "typology": "fixed"
+      },
+      "suggestedLoadWD": {
+       "fixedValue": "0",
+       "typology": "fixed"
+      },
+      "tempContribution": {
+       "fixedValue": "1",
+       "typology": "fixed"
+      }
+     },
+     "remainingTimes": null
+    }
+   },
+   "model_attributes": {
+    "delayType": "end",
+    "drawerType": "flHqdA",
+    "drumCleanType": "appCounter",
+    "enrollmentType": "3.3",
+    "finalSpinDuration": "{\"spinSpeed\":{\"0\":0,\"default\":{\"prCode\":{\"72\":1,\"default\":3}}}}",
+    "fwLabel": "iotfw_epp",
+    "interfaceType": "series|seriesVersion|loadCapacityWash|option",
+    "iot": "hOn",
+    "loadCapacityWash": "9",
+    "lowerBarrierDate": "2507",
+    "option": "tumbling",
+    "platform": "HQD",
+    "plmCode": "31020680",
+    "remainingTime": "remainingTimePrewash+remainingTimeMainWash+remainingTimeRinse+remainingTimeFinalSpin+remainingTimeAntiWrinkle",
+    "remainingTimeAntiWrinkle": "{\"antiWrinkle\":{\"0\":0,\"default\":1}}",
+    "remainingTimeFinalSpin": "{\"#finalSpinDuration\":{\"0\":0,\"default\":\"#finalSpinDuration+2\"}}",
+    "remainingTimeMainWash": "{\"mainWashTime\":{\"0\":0,\"default\":{\"suggestedLoadW\":{\"undefined\":{\"prCode\":{\"85\":\"mainWashTime+2\",\"90\":\"mainWashTime+2\",\"106\":\"mainWashTime+#finalSpinDuration+5\",\"132\":\"mainWashTime+2\",\"default\":\"mainWashTime+#finalSpinDuration+2\"}},\"default\":{\"#suggestedLoadWKg\":{\"1\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+42\",\"90\":\"mainWashTime+42\",\"106\":\"mainWashTime+#finalSpinDuration+45\",\"132\":\"mainWashTime+42\",\"default\":\"mainWashTime+#finalSpinDuration+42\"}}}},\"2\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}}}},\"3\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}}}},\"4\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+7\",\"90\":\"mainWashTime+7\",\"106\":\"mainWashTime+#finalSpinDuration+10\",\"132\":\"mainWashTime+7\",\"default\":\"mainWashTime+#finalSpinDuration+7\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+42\",\"90\":\"mainWashTime+42\",\"106\":\"mainWashTime+#finalSpinDuration+45\",\"132\":\"mainWashTime+42\",\"default\":\"mainWashTime+#finalSpinDuration+42\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}}}},\"5\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+77\",\"90\":\"mainWashTime+77\",\"106\":\"mainWashTime+#finalSpinDuration+80\",\"132\":\"mainWashTime+77\",\"default\":\"mainWashTime+#finalSpinDuration+77\"}}}},\"6\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+42\",\"90\":\"mainWashTime+42\",\"106\":\"mainWashTime+#finalSpinDuration+45\",\"132\":\"mainWashTime+42\",\"default\":\"mainWashTime+#finalSpinDuration+42\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+62\",\"90\":\"mainWashTime+62\",\"106\":\"mainWashTime+#finalSpinDuration+65\",\"132\":\"mainWashTime+62\",\"default\":\"mainWashTime+#finalSpinDuration+62\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+72\",\"90\":\"mainWashTime+72\",\"106\":\"mainWashTime+#finalSpinDuration+75\",\"132\":\"mainWashTime+72\",\"default\":\"mainWashTime+#finalSpinDuration+72\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+82\",\"90\":\"mainWashTime+82\",\"106\":\"mainWashTime+#finalSpinDuration+85\",\"132\":\"mainWashTime+82\",\"default\":\"mainWashTime+#finalSpinDuration+82\"}}}},\"7\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+22\",\"90\":\"mainWashTime+22\",\"106\":\"mainWashTime+#finalSpinDuration+25\",\"132\":\"mainWashTime+22\",\"default\":\"mainWashTime+#finalSpinDuration+22\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+82\",\"90\":\"mainWashTime+82\",\"106\":\"mainWashTime+#finalSpinDuration+85\",\"132\":\"mainWashTime+82\",\"default\":\"mainWashTime+#finalSpinDuration+82\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+92\",\"90\":\"mainWashTime+92\",\"106\":\"mainWashTime+#finalSpinDuration+95\",\"132\":\"mainWashTime+92\",\"default\":\"mainWashTime+#finalSpinDuration+92\"}}}},\"8\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+62\",\"90\":\"mainWashTime+62\",\"106\":\"mainWashTime+#finalSpinDuration+65\",\"132\":\"mainWashTime+62\",\"default\":\"mainWashTime+#finalSpinDuration+62\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+77\",\"90\":\"mainWashTime+77\",\"106\":\"mainWashTime+#finalSpinDuration+80\",\"132\":\"mainWashTime+77\",\"default\":\"mainWashTime+#finalSpinDuration+77\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+87\",\"90\":\"mainWashTime+87\",\"106\":\"mainWashTime+#finalSpinDuration+90\",\"132\":\"mainWashTime+87\",\"default\":\"mainWashTime+#finalSpinDuration+87\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+102\",\"90\":\"mainWashTime+102\",\"106\":\"mainWashTime+#finalSpinDuration+105\",\"132\":\"mainWashTime+102\",\"default\":\"mainWashTime+#finalSpinDuration+102\"}}}},\"9\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+27\",\"90\":\"mainWashTime+27\",\"106\":\"mainWashTime+#finalSpinDuration+30\",\"132\":\"mainWashTime+27\",\"default\":\"mainWashTime+#finalSpinDuration+27\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+42\",\"90\":\"mainWashTime+42\",\"106\":\"mainWashTime+#finalSpinDuration+45\",\"132\":\"mainWashTime+42\",\"default\":\"mainWashTime+#finalSpinDuration+42\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+82\",\"90\":\"mainWashTime+82\",\"106\":\"mainWashTime+#finalSpinDuration+85\",\"132\":\"mainWashTime+82\",\"default\":\"mainWashTime+#finalSpinDuration+82\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+2+95\",\"90\":\"mainWashTime+2+95\",\"106\":\"mainWashTime+#finalSpinDuration+5+95\",\"132\":\"mainWashTime+2+95\",\"default\":\"mainWashTime+#finalSpinDuration+2+95\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+107\",\"90\":\"mainWashTime+107\",\"106\":\"mainWashTime+#finalSpinDuration+110\",\"132\":\"mainWashTime+107\",\"default\":\"mainWashTime+#finalSpinDuration+107\"}}}},\"10\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+57\",\"90\":\"mainWashTime+57\",\"106\":\"mainWashTime+#finalSpinDuration+60\",\"132\":\"mainWashTime+57\",\"default\":\"mainWashTime+#finalSpinDuration+57\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+72\",\"90\":\"mainWashTime+72\",\"106\":\"mainWashTime+#finalSpinDuration+75\",\"132\":\"mainWashTime+72\",\"default\":\"mainWashTime+#finalSpinDuration+72\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+87\",\"90\":\"mainWashTime+87\",\"106\":\"mainWashTime+#finalSpinDuration+90\",\"132\":\"mainWashTime+87\",\"default\":\"mainWashTime+#finalSpinDuration+87\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+102\",\"90\":\"mainWashTime+102\",\"106\":\"mainWashTime+#finalSpinDuration+105\",\"132\":\"mainWashTime+102\",\"default\":\"mainWashTime+#finalSpinDuration+102\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+117\",\"90\":\"mainWashTime+117\",\"106\":\"mainWashTime+#finalSpinDuration+120\",\"132\":\"mainWashTime+117\",\"default\":\"mainWashTime+#finalSpinDuration+117\"}}}},\"11\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+32\",\"90\":\"mainWashTime+32\",\"106\":\"mainWashTime+#finalSpinDuration+35\",\"132\":\"mainWashTime+32\",\"default\":\"mainWashTime+#finalSpinDuration+32\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+47\",\"90\":\"mainWashTime+47\",\"106\":\"mainWashTime+#finalSpinDuration+50\",\"132\":\"mainWashTime+47\",\"default\":\"mainWashTime+#finalSpinDuration+47\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+62\",\"90\":\"mainWashTime+62\",\"106\":\"mainWashTime+#finalSpinDuration+65\",\"132\":\"mainWashTime+62\",\"default\":\"mainWashTime+#finalSpinDuration+62\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+77\",\"90\":\"mainWashTime+77\",\"106\":\"mainWashTime+#finalSpinDuration+80\",\"132\":\"mainWashTime+77\",\"default\":\"mainWashTime+#finalSpinDuration+77\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+92\",\"90\":\"mainWashTime+92\",\"106\":\"mainWashTime+#finalSpinDuration+95\",\"132\":\"mainWashTime+92\",\"default\":\"mainWashTime+#finalSpinDuration+92\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+107\",\"90\":\"mainWashTime+107\",\"106\":\"mainWashTime+#finalSpinDuration+110\",\"132\":\"mainWashTime+107\",\"default\":\"mainWashTime+#finalSpinDuration+107\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+127\",\"90\":\"mainWashTime+127\",\"106\":\"mainWashTime+#finalSpinDuration+130\",\"132\":\"mainWashTime+127\",\"default\":\"mainWashTime+#finalSpinDuration+127\"}}}},\"12\":{\"temp\":{\"0\":{\"prCode\":{\"85\":\"mainWashTime+12\",\"90\":\"mainWashTime+12\",\"106\":\"mainWashTime+#finalSpinDuration+15\",\"132\":\"mainWashTime+12\",\"default\":\"mainWashTime+#finalSpinDuration+12\"}},\"20\":{\"prCode\":{\"85\":\"mainWashTime+17\",\"90\":\"mainWashTime+17\",\"106\":\"mainWashTime+#finalSpinDuration+20\",\"132\":\"mainWashTime+17\",\"default\":\"mainWashTime+#finalSpinDuration+17\"}},\"30\":{\"prCode\":{\"85\":\"mainWashTime+37\",\"90\":\"mainWashTime+37\",\"106\":\"mainWashTime+#finalSpinDuration+40\",\"132\":\"mainWashTime+37\",\"default\":\"mainWashTime+#finalSpinDuration+37\"}},\"40\":{\"prCode\":{\"85\":\"mainWashTime+52\",\"90\":\"mainWashTime+52\",\"106\":\"mainWashTime+#finalSpinDuration+55\",\"132\":\"mainWashTime+52\",\"default\":\"mainWashTime+#finalSpinDuration+52\"}},\"50\":{\"prCode\":{\"85\":\"mainWashTime+67\",\"90\":\"mainWashTime+67\",\"106\":\"mainWashTime+#finalSpinDuration+70\",\"132\":\"mainWashTime+67\",\"default\":\"mainWashTime+#finalSpinDuration+67\"}},\"60\":{\"prCode\":{\"85\":\"mainWashTime+82\",\"90\":\"mainWashTime+82\",\"106\":\"mainWashTime+#finalSpinDuration+85\",\"132\":\"mainWashTime+82\",\"default\":\"mainWashTime+#finalSpinDuration+82\"}},\"70\":{\"prCode\":{\"85\":\"mainWashTime+102\",\"90\":\"mainWashTime+102\",\"106\":\"mainWashTime+#finalSpinDuration+105\",\"132\":\"mainWashTime+102\",\"default\":\"mainWashTime+#finalSpinDuration+102\"}},\"80\":{\"prCode\":{\"85\":\"mainWashTime+117\",\"90\":\"mainWashTime+117\",\"106\":\"mainWashTime+#finalSpinDuration+120\",\"132\":\"mainWashTime+117\",\"default\":\"mainWashTime+#finalSpinDuration+117\"}},\"90\":{\"prCode\":{\"85\":\"mainWashTime+132\",\"90\":\"mainWashTime+132\",\"106\":\"mainWashTime+#finalSpinDuration+135\",\"132\":\"mainWashTime+132\",\"default\":\"mainWashTime+#finalSpinDuration+132\"}}}}}}}}}}",
+    "remainingTimePrewash": "{\"haier_SoakPrewashSelection\":{\"0\":0,\"default\":\"#finalSpinDuration+17\"}}",
+    "remainingTimeRinse": "{\"rinseIterations\":{\"0\":0,\"default\":{\"spinSpeed\":{\"0\":\"(rinseIterationTime+2)*(rinseIterations-1)+rinseIterationTime\",\"default\":{\"prCode\":{\"72\":{\"400\":\"(rinseIterationTime+3)*(rinseIterations-1)+rinseIterationTime\",\"600\":\"(rinseIterationTime+3)*(rinseIterations-1)+rinseIterationTime\",\"800\":\"(rinseIterationTime+3)*(rinseIterations-1)+rinseIterationTime\",\"1000\":\"(rinseIterationTime+3)*(rinseIterations-1)+rinseIterationTime\",\"1200\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"1400\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\"},\"default\":{\"400\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"600\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"800\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"1000\":\"(rinseIterationTime+5)*(rinseIterations-1)+rinseIterationTime\",\"1200\":\"(rinseIterationTime+7)*(rinseIterations-1)+rinseIterationTime\",\"1400\":\"(rinseIterationTime+7)*(rinseIterations-1)+rinseIterationTime\"}}}}}}}",
+    "rpm": "1400",
+    "series": "x9",
+    "serviceability": "none",
+    "suggestedLoadWKg": "{\"round\":0,\"suggestedLoadW\":{\"RL100\":\"#loadCapacityWash*1\",\"RL95\":\"#loadCapacityWash*0.95\",\"RL90\":\"#loadCapacityWash*0.9\",\"RL85\":\"#loadCapacityWash*0.85\",\"RL80\":\"#loadCapacityWash*0.8\",\"RL75\":\"#loadCapacityWash*0.75\",\"RL70\":\"#loadCapacityWash*0.7\",\"RL65\":\"#loadCapacityWash*0.65\",\"RL60\":\"#loadCapacityWash*0.6\",\"RL55\":\"#loadCapacityWash*0.55\",\"RL50\":\"#loadCapacityWash*0.5\",\"RL45\":\"#loadCapacityWash*0.45\",\"RL40\":\"#loadCapacityWash*0.4\",\"RL35\":\"#loadCapacityWash*0.35\",\"RL30\":\"#loadCapacityWash*0.3\",\"RL25\":\"#loadCapacityWash*0.25\",\"RL20\":\"#loadCapacityWash*0.2\",\"RL17\":\"#loadCapacityWash*0.17\",\"RL15\":\"#loadCapacityWash*0.15\",\"RL10\":\"#loadCapacityWash*0.1\",\"RL5\":\"#loadCapacityWash*0.05\",\"RL0\":\"#loadCapacityWash*0\"}}",
+    "tumblingType": "auto"
+   },
+   "starts": [
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "dryType": "0",
+      "energyLabel": "0",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "traditional",
+      "programFamily": "[dashboard]",
+      "programIntensity": "intensiveWashing",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "steamType": "0",
+      "suggestedLoadD": "0",
+      "suggestedLoadW": "9",
+      "suggestedLoadWD": "0",
+      "tempContribution": "1"
+     },
+     "expected": 101.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "babyEssenceInjectStatus": "0",
+      "box1DischargeResidualLiquid": "0",
+      "box2DischargeResidualLiquid": "0",
+      "box3DischargeResidualLiquid": "0",
+      "box4DischargeResidualLiquid": "0",
+      "brightenerInjectStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "dataSynParam": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dispersantInjectStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "essenceInjectStatus": "0",
+      "fastMode": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_DetergentWeight": "253",
+      "haier_InWaterRotateTime": "0",
+      "haier_InWaterSpeed": "0",
+      "haier_InWaterStopTime": "0",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "15",
+      "haier_SoftenerWeight": "253",
+      "highWaterLevelStatus": "0",
+      "inkBoxDispersantAutoVolume": "253",
+      "intelligenceStatus": "0",
+      "intensiveMode": "0",
+      "lockStatus": "0",
+      "mainWashSpinSpeed": "2540",
+      "mainWashTime": "10",
+      "mainWashWaterDepth": "253",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "photoPlasmaCareTime": "0",
+      "photoPlasmaStatus": "0",
+      "prCode": "115",
+      "purifiedWashStatus": "0",
+      "rinseHeatTemperature": "0",
+      "rinseIterationTime": "10",
+      "rinseIterations": "3",
+      "rinseSpinSpeed": "2540",
+      "rinseWaterLevel": "253",
+      "soakWashStatus": "0",
+      "softenerInjectStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1400",
+      "stainType": "0",
+      "startProgram": "1",
+      "staticStatus": "0",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "4.5",
+      "wetcleaningProgram": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.HQD_COTTONS"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "dryType": "0",
+      "energyLabel": "0",
+      "liquidDetergentDose": "3",
+      "powderDetergentDose": "3",
+      "prPosition": "17",
+      "programCluster": "[sport|eco|traditional]",
+      "programFamily": "[hidden]",
+      "programIntensity": "standard",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "steamType": "0",
+      "suggestedLoadD": "0",
+      "suggestedLoadW": 4.5,
+      "suggestedLoadWD": "0",
+      "tempContribution": "1"
+     },
+     "expected": 30.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "babyEssenceInjectStatus": "0",
+      "box1DischargeResidualLiquid": "0",
+      "box2DischargeResidualLiquid": "0",
+      "box3DischargeResidualLiquid": "0",
+      "box4DischargeResidualLiquid": "0",
+      "brightenerInjectStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "dataSynParam": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dispersantInjectStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "essenceInjectStatus": "0",
+      "fastMode": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_DetergentWeight": "253",
+      "haier_InWaterRotateTime": "0",
+      "haier_InWaterSpeed": "0",
+      "haier_InWaterStopTime": "0",
+      "haier_MainWashRotateTime": "20",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "3",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "15",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "10",
+      "haier_SoakPrewashTemperature": "30",
+      "haier_SoakPrewashTime": "15",
+      "haier_SoftenerWeight": "253",
+      "highWaterLevelStatus": "0",
+      "inkBoxDispersantAutoVolume": "253",
+      "intelligenceStatus": "0",
+      "intensiveMode": "0",
+      "lockStatus": "0",
+      "mainWashSpinSpeed": "2540",
+      "mainWashTime": "5",
+      "mainWashWaterDepth": "253",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "0",
+      "photoPlasmaCareTime": "0",
+      "photoPlasmaStatus": "0",
+      "prCode": "89",
+      "purifiedWashStatus": "0",
+      "rinseHeatTemperature": "0",
+      "rinseIterationTime": "4",
+      "rinseIterations": "1",
+      "rinseSpinSpeed": "2540",
+      "rinseWaterLevel": "253",
+      "soakWashStatus": "0",
+      "softenerInjectStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "800",
+      "stainType": "0",
+      "startProgram": "1",
+      "staticStatus": "0",
+      "strongStatus": "0",
+      "temp": "20",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "2",
+      "wetcleaningProgram": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.HQD_SPORT"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "dryType": "0",
+      "energyLabel": "3",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "home",
+      "programFamily": "[download|guided]",
+      "programIntensity": "intensiveWashing",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "steamType": "0",
+      "suggestedLoadD": "0",
+      "suggestedLoadW": "9",
+      "suggestedLoadWD": "0",
+      "tempContribution": "1"
+     },
+     "expected": 86.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "babyEssenceInjectStatus": "0",
+      "box1DischargeResidualLiquid": "0",
+      "box2DischargeResidualLiquid": "0",
+      "box3DischargeResidualLiquid": "0",
+      "box4DischargeResidualLiquid": "0",
+      "brightenerInjectStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "dataSynParam": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dispersantInjectStatus": "0",
+      "dryLevel": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "essenceInjectStatus": "0",
+      "fastMode": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_DetergentWeight": "253",
+      "haier_InWaterRotateTime": "0",
+      "haier_InWaterSpeed": "0",
+      "haier_InWaterStopTime": "0",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "0",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "0",
+      "haier_SoakPrewashStopTime": "0",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "0",
+      "haier_SoftenerWeight": "253",
+      "highWaterLevelStatus": "0",
+      "inkBoxDispersantAutoVolume": "253",
+      "intelligenceStatus": "0",
+      "intensiveMode": "0",
+      "lockStatus": "0",
+      "mainWashSpinSpeed": "2540",
+      "mainWashTime": "10",
+      "mainWashWaterDepth": "253",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "0",
+      "photoPlasmaCareTime": "0",
+      "photoPlasmaStatus": "0",
+      "prCode": "115",
+      "purifiedWashStatus": "0",
+      "rinseHeatTemperature": "0",
+      "rinseIterationTime": "10",
+      "rinseIterations": "2",
+      "rinseSpinSpeed": "2540",
+      "rinseWaterLevel": "253",
+      "soakWashStatus": "0",
+      "softenerInjectStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1400",
+      "stainType": "0",
+      "startProgram": "1",
+      "staticStatus": "0",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "4.5",
+      "wetcleaningProgram": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "dryType": "0",
+      "energyLabel": "0",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "home",
+      "programFamily": "[download|guided]",
+      "programIntensity": "intensiveWashing",
+      "programRules": {
+       "delayStatus": {
+        "nightWashStatus": {
+         "1": {
+          "fixedValue": "0",
+          "typology": "fixed"
+         }
+        }
+       },
+       "dryLevel": {
+        "dryOption": {
+         "0": {
+          "fixedValue": "0",
+          "typology": "fixed"
+         }
+        }
+       },
+       "nightWashStatus": {
+        "delayStatus": {
+         "1": {
+          "fixedValue": "0",
+          "typology": "fixed"
+         }
+        }
+       }
+      },
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "steamType": "0",
+      "suggestedLoadD": "0",
+      "suggestedLoadW": 9,
+      "suggestedLoadWD": "0",
+      "tempContribution": "1"
+     },
+     "expected": 31.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "babyEssenceInjectStatus": "0",
+      "box1DischargeResidualLiquid": "0",
+      "box2DischargeResidualLiquid": "0",
+      "box3DischargeResidualLiquid": "0",
+      "box4DischargeResidualLiquid": "0",
+      "brightenerInjectStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "dataSynParam": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dispersantInjectStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "essenceInjectStatus": "0",
+      "fastMode": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_DetergentWeight": "253",
+      "haier_InWaterRotateTime": "0",
+      "haier_InWaterSpeed": "0",
+      "haier_InWaterStopTime": "0",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "0",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "0",
+      "haier_SoakPrewashStopTime": "0",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "0",
+      "haier_SoftenerWeight": "253",
+      "highWaterLevelStatus": "0",
+      "inkBoxDispersantAutoVolume": "253",
+      "intelligenceStatus": "0",
+      "intensiveMode": "0",
+      "lockStatus": "0",
+      "mainWashSpinSpeed": "2540",
+      "mainWashTime": "10",
+      "mainWashWaterDepth": "253",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "photoPlasmaCareTime": "0",
+      "photoPlasmaStatus": "0",
+      "prCode": "115",
+      "purifiedWashStatus": "0",
+      "rinseHeatTemperature": "0",
+      "rinseIterationTime": "10",
+      "rinseIterations": "2",
+      "rinseSpinSpeed": "2540",
+      "rinseWaterLevel": "253",
+      "soakWashStatus": "0",
+      "softenerInjectStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1400",
+      "stainType": "NaN",
+      "startProgram": "1",
+      "staticStatus": "0",
+      "strongStatus": "0",
+      "temp": "NaN",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "4.5",
+      "wetcleaningProgram": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_BATHROBE"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "dryType": "0",
+      "energyLabel": "0",
+      "liquidDetergentDose": "3",
+      "powderDetergentDose": "3",
+      "prPosition": "15",
+      "programFamily": "[hidden]",
+      "programIntensity": "delicate",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "steamType": "0",
+      "suggestedLoadD": "0",
+      "suggestedLoadW": 4.5,
+      "suggestedLoadWD": "0",
+      "tempContribution": "1"
+     },
+     "expected": 55.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "babyEssenceInjectStatus": "0",
+      "box1DischargeResidualLiquid": "0",
+      "box2DischargeResidualLiquid": "0",
+      "box3DischargeResidualLiquid": "0",
+      "box4DischargeResidualLiquid": "0",
+      "brightenerInjectStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "dataSynParam": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dispersantInjectStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "essenceInjectStatus": "0",
+      "fastMode": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_DetergentWeight": "253",
+      "haier_InWaterRotateTime": "0",
+      "haier_InWaterSpeed": "0",
+      "haier_InWaterStopTime": "0",
+      "haier_MainWashRotateTime": "20",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "3",
+      "haier_RinseRotateTime": "20",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "5",
+      "haier_SoakPrewashRotateTime": "20",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "45",
+      "haier_SoakPrewashStopTime": "5",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "15",
+      "haier_SoftenerWeight": "253",
+      "highWaterLevelStatus": "0",
+      "inkBoxDispersantAutoVolume": "253",
+      "intelligenceStatus": "0",
+      "intensiveMode": "0",
+      "lockStatus": "0",
+      "mainWashSpinSpeed": "2540",
+      "mainWashTime": "5",
+      "mainWashWaterDepth": "253",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "photoPlasmaCareTime": "0",
+      "photoPlasmaStatus": "0",
+      "prCode": "81",
+      "purifiedWashStatus": "0",
+      "rinseHeatTemperature": "0",
+      "rinseIterationTime": "9",
+      "rinseIterations": "1",
+      "rinseSpinSpeed": "2540",
+      "rinseWaterLevel": "253",
+      "soakWashStatus": "0",
+      "softenerInjectStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "800",
+      "stainType": "0",
+      "startProgram": "1",
+      "staticStatus": "0",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "2",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "4.5",
+      "wetcleaningProgram": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.HQD_SHIRTS"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "dryType": "0",
+      "energyLabel": "0",
+      "liquidDetergentDose": "3",
+      "powderDetergentDose": "3",
+      "prPosition": "8",
+      "programCluster": "traditional",
+      "programFamily": "[download|guided|care]",
+      "programIntensity": "standard",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "steamType": "0",
+      "suggestedLoadD": "0",
+      "suggestedLoadW": "4.5",
+      "suggestedLoadWD": "0",
+      "tempContribution": "1"
+     },
+     "expected": 129.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "babyEssenceInjectStatus": "0",
+      "box1DischargeResidualLiquid": "0",
+      "box2DischargeResidualLiquid": "0",
+      "box3DischargeResidualLiquid": "0",
+      "box4DischargeResidualLiquid": "0",
+      "brightenerInjectStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "dataSynParam": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dispersantInjectStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "essenceInjectStatus": "0",
+      "fastMode": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_DetergentWeight": "253",
+      "haier_InWaterRotateTime": "0",
+      "haier_InWaterSpeed": "0",
+      "haier_InWaterStopTime": "0",
+      "haier_MainWashRotateTime": "20",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "20",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "5",
+      "haier_SoakPrewashRotateTime": "0",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "0",
+      "haier_SoakPrewashStopTime": "0",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "0",
+      "haier_SoftenerWeight": "253",
+      "highWaterLevelStatus": "0",
+      "inkBoxDispersantAutoVolume": "253",
+      "intelligenceStatus": "0",
+      "intensiveMode": "0",
+      "lockStatus": "0",
+      "mainWashSpinSpeed": "2540",
+      "mainWashTime": "65",
+      "mainWashWaterDepth": "253",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "photoPlasmaCareTime": "0",
+      "photoPlasmaStatus": "0",
+      "prCode": "116",
+      "purifiedWashStatus": "0",
+      "rinseHeatTemperature": "0",
+      "rinseIterationTime": "9",
+      "rinseIterations": "2",
+      "rinseSpinSpeed": "2540",
+      "rinseWaterLevel": "253",
+      "soakWashStatus": "0",
+      "softenerInjectStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1200",
+      "stainType": "0",
+      "startProgram": "1",
+      "staticStatus": "0",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "4.5",
+      "wetcleaningProgram": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_DARK"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "dryType": "0",
+      "energyLabel": "0",
+      "liquidDetergentDose": "3",
+      "powderDetergentDose": "3",
+      "prPosition": "8",
+      "programCluster": "traditional",
+      "programFamily": "[download|guided|care]",
+      "programIntensity": "standard",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "steamType": "0",
+      "suggestedLoadD": "0",
+      "suggestedLoadW": 4.5,
+      "suggestedLoadWD": "0",
+      "tempContribution": "1"
+     },
+     "expected": 129.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "babyEssenceInjectStatus": "0",
+      "box1DischargeResidualLiquid": "0",
+      "box2DischargeResidualLiquid": "0",
+      "box3DischargeResidualLiquid": "0",
+      "box4DischargeResidualLiquid": "0",
+      "brightenerInjectStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "dataSynParam": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dispersantInjectStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "essenceInjectStatus": "0",
+      "fastMode": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_DetergentWeight": "253",
+      "haier_InWaterRotateTime": "0",
+      "haier_InWaterSpeed": "0",
+      "haier_InWaterStopTime": "0",
+      "haier_MainWashRotateTime": "20",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "20",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "5",
+      "haier_SoakPrewashRotateTime": "0",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "0",
+      "haier_SoakPrewashStopTime": "0",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "0",
+      "haier_SoftenerWeight": "253",
+      "highWaterLevelStatus": "0",
+      "inkBoxDispersantAutoVolume": "253",
+      "intelligenceStatus": "0",
+      "intensiveMode": "0",
+      "lockStatus": "0",
+      "mainWashSpinSpeed": "2540",
+      "mainWashTime": "65",
+      "mainWashWaterDepth": "253",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "photoPlasmaCareTime": "0",
+      "photoPlasmaStatus": "0",
+      "prCode": "116",
+      "purifiedWashStatus": "0",
+      "rinseHeatTemperature": "0",
+      "rinseIterationTime": "9",
+      "rinseIterations": "2",
+      "rinseSpinSpeed": "2540",
+      "rinseWaterLevel": "253",
+      "soakWashStatus": "0",
+      "softenerInjectStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1200",
+      "stainType": "0",
+      "startProgram": "1",
+      "staticStatus": "0",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "4.5",
+      "wetcleaningProgram": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_DARK"
+    },
+    {
+     "ancillaryParameters": {
+      "antiWrinkle": "1",
+      "dryType": "0",
+      "energyLabel": "0",
+      "liquidDetergentDose": "4",
+      "powderDetergentDose": "4",
+      "prPosition": "7",
+      "programCluster": "home",
+      "programFamily": "[download|guided]",
+      "programIntensity": "intensiveWashing",
+      "programType": "W",
+      "remoteActionable": "1",
+      "remoteVisible": "1",
+      "steamType": "0",
+      "suggestedLoadD": "0",
+      "suggestedLoadW": "9",
+      "suggestedLoadWD": "0",
+      "tempContribution": "1"
+     },
+     "expected": 86.0,
+     "parameters": {
+      "antiAllergyStatus": "0",
+      "antiCreaseStatus": "0",
+      "autoDetergentStatus": "0",
+      "autoDisinfectantStatus": "0",
+      "autoSoftenerStatus": "0",
+      "babyEssenceInjectStatus": "0",
+      "box1DischargeResidualLiquid": "0",
+      "box2DischargeResidualLiquid": "0",
+      "box3DischargeResidualLiquid": "0",
+      "box4DischargeResidualLiquid": "0",
+      "brightenerInjectStatus": "0",
+      "careSwitch": "0",
+      "cloudProgId": "255",
+      "cloudProgSrc": "2",
+      "creaseResistSoakStatus": "0",
+      "dataSynParam": "0",
+      "delayStatus": "0",
+      "delayTime": "0",
+      "detergentBStatus": "0",
+      "dispersantInjectStatus": "0",
+      "dryProgFlag": "0",
+      "dryTime": "0",
+      "energySavingStatus": "0",
+      "essenceInjectStatus": "0",
+      "fastMode": "0",
+      "freshAirStatus": "0",
+      "haier_ConstantTempStatus": "1",
+      "haier_DetergentWeight": "253",
+      "haier_InWaterRotateTime": "0",
+      "haier_InWaterSpeed": "0",
+      "haier_InWaterStopTime": "0",
+      "haier_MainWashRotateTime": "25",
+      "haier_MainWashSpeed": "45",
+      "haier_MainWashStopTime": "5",
+      "haier_MainWashWaterLevel": "2",
+      "haier_RinseRotateTime": "15",
+      "haier_RinseSpeed": "45",
+      "haier_RinseStopTime": "10",
+      "haier_SoakPrewashRotateTime": "0",
+      "haier_SoakPrewashSelection": "0",
+      "haier_SoakPrewashSpeed": "0",
+      "haier_SoakPrewashStopTime": "0",
+      "haier_SoakPrewashTemperature": "0",
+      "haier_SoakPrewashTime": "0",
+      "haier_SoftenerWeight": "253",
+      "highWaterLevelStatus": "0",
+      "inkBoxDispersantAutoVolume": "253",
+      "intelligenceStatus": "0",
+      "intensiveMode": "0",
+      "lockStatus": "0",
+      "mainWashSpinSpeed": "2540",
+      "mainWashTime": "10",
+      "mainWashWaterDepth": "253",
+      "nightWashStatus": "0",
+      "operationName": "grOnlineWash",
+      "permanentPressStatus": "1",
+      "photoPlasmaCareTime": "0",
+      "photoPlasmaStatus": "0",
+      "prCode": "115",
+      "purifiedWashStatus": "0",
+      "rinseHeatTemperature": "0",
+      "rinseIterationTime": "10",
+      "rinseIterations": "2",
+      "rinseSpinSpeed": "2540",
+      "rinseWaterLevel": "253",
+      "soakWashStatus": "0",
+      "softenerInjectStatus": "0",
+      "speedUpStatus": "0",
+      "spinSpeed": "1400",
+      "stainType": "0",
+      "startProgram": "1",
+      "staticStatus": "0",
+      "strongStatus": "0",
+      "temp": "40",
+      "texture": "1",
+      "uvSterilizationStatus": "0",
+      "voiceStatus": "0",
+      "washerDryIntensity": "4",
+      "weight": "4.5",
+      "wetcleaningProgram": "0"
+     },
+     "programName": "PROGRAMS.WM_WD.IOT_WASH_BATHROBE"
+    }
+   ],
+   "type": "WM"
+  }
+ },
+ "source": "apk2/analysis/issue131-wm-delay/strumenti/duration/product_check.py; expected = getProgramDuration of the hOn app 2.30.7 executed in Node"
+}
