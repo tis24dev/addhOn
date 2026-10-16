@@ -750,7 +750,21 @@ class DiagnosticsRedactionTest(unittest.TestCase):
         "pk", "sk", "sk_secondary",
         # The hOn account that started the cycle, in `attributes.activity` (#112).
         "principaluserid",
+        # The second account the same activity names (#131).
+        "secondaryuserid",
     )
+
+    def test_the_second_account_of_a_cycle_is_masked_in_the_activity(self):
+        # infy1995's dump (#131): next to principalUserId the activity names a
+        # second account in `secondaryUserId`.
+        activity = {
+            "category": "CYCLE",
+            "attributes": {"secondaryUserId": "second-account-id", "prCode": "116"},
+        }
+        printed = diagnostics._redact({"attributes": {"activity": activity}})
+        attributes = printed["attributes"]["activity"]["attributes"]
+        self.assertEqual("***", attributes["secondaryUserId"])
+        self.assertEqual("116", attributes["prCode"])
 
     def test_the_account_that_started_a_cycle_is_masked_in_the_activity(self):
         # Lajahome's and infy1995's dumps (#112): the start from the official app

@@ -275,6 +275,8 @@ class IdentityKeysBehaviouralTest(unittest.TestCase):
         "sk_secondary",
         # The hOn account that started the cycle, in `attributes.activity` (#112).
         "principaluserid",
+        # The second account the same activity names (#131).
+        "secondaryuserid",
     )
 
     # Keys no exact set would have contained, masked by the substring rule. Named the

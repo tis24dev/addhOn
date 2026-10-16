@@ -102,6 +102,8 @@ _IDENTITY_KEYS = frozenset(
         # The hOn account that started a cycle from the official app, in
         # `attributes.activity` (issue #112).
         "principaluserid",
+        # The second hOn account the same activity names (issue #131).
+        "secondaryuserid",
     }
 )
 

@@ -167,6 +167,9 @@ _TO_REDACT = frozenset(
         # `attributes.activity` names the hOn account that started the cycle when the
         # official app did (issue #112: five published dumps carried it in clear).
         "principaluserid",
+        # Its neighbour in the same activity: a second hOn account of the appliance
+        # (issue #131: the published dump carried it in clear).
+        "secondaryuserid",
     }
 )
 
