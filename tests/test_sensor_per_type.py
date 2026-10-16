@@ -723,5 +723,108 @@ class WashPhaseTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("phase_skip", options)
 
 
+class WashDelayTest(unittest.IsolatedAsyncioTestCase):
+    """#131: the start delay of a washer that counts `delayTime` to the end.
+
+    infy1995's HW80-B14959TU1-S (HQD, `delayType: end`): the shadow has no `delayTime`,
+    and while the phase is scheduled and `delayStatus` 1 its `remainingTimeMM` runs to the
+    end of the cycle. The app's dashboard puts the start at the end minus the programme
+    (`HQDSchedule`, apk2 decomp.txt:2586120); the programme of the reporter's start
+    lasts 108 minutes (tests/fixtures/wm_hqd_duration).
+    """
+
+    @staticmethod
+    def _model() -> dict:
+        import json
+        from pathlib import Path
+
+        fixture = Path(__file__).resolve().parent / "fixtures" / "wm_hqd_duration" / "cases.json"
+        return json.loads(fixture.read_text(encoding="utf-8"))["models"]["HW80-B14959TU1-S"]
+
+    async def _delay(self, attributes: dict, *, app_type="WM", model_overrides=None,
+                     history=True, brand="Haier"):
+        from custom_components.addhon import sensor
+        from custom_components.addhon.const import DOMAIN
+
+        model = self._model()
+        start = model["starts"][0]
+        node = model["categories"][start["programName"]]
+        category = types.SimpleNamespace(
+            ancillary_group=node["ancillaryParameters"], remaining_times=node["remainingTimes"]
+        )
+        row = {"command": {"commandName": "startProgram", "programName": start["programName"],
+                           "parameters": start["parameters"],
+                           "ancillaryParameters": start["ancillaryParameters"]}}
+        model_attributes = dict(model["model_attributes"], **(model_overrides or {}))
+        appliance = types.SimpleNamespace(
+            appliance_type=app_type,
+            model_attributes=model_attributes,
+            brand=brand,
+            command_history=[row] if history else [],
+            commands={"startProgram": types.SimpleNamespace(
+                categories={"iot_wash_dark": category})},
+        )
+        data = {
+            "x-1": {
+                "type": app_type,
+                "name": "Washer",
+                "appliance": appliance,
+                "attributes": attributes,
+                "settings": {},
+            }
+        }
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator, "client": None}}})
+        added: list = []
+        await sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+        entity = next(e for e in added if e._attr_unique_id == "x-1_delay_time")
+        return entity.native_value
+
+    WAITING = {"prPhase": "19", "delayStatus": "1", "remainingTimeMM": "556", "prCode": "116"}
+
+    async def test_waiting_shows_the_minutes_to_the_start(self) -> None:
+        # The reporter's dump at 21:48 UTC: 556 to the end, 448 to the start.
+        self.assertEqual(448, await self._delay(dict(self.WAITING)))
+
+    async def test_a_washer_dryer_too(self) -> None:
+        self.assertEqual(448, await self._delay(dict(self.WAITING), app_type="WD"))
+
+    async def test_nothing_waiting_is_zero(self) -> None:
+        for attributes in (
+            dict(self.WAITING, prPhase="2"),  # washing
+            dict(self.WAITING, delayStatus="0"),
+            {"prPhase": "0", "remainingTimeMM": "0", "prCode": "116"},
+            {},
+        ):
+            with self.subTest(**attributes):
+                self.assertEqual(0, await self._delay(attributes))
+
+    async def test_never_below_zero(self) -> None:
+        self.assertEqual(0, await self._delay(dict(self.WAITING, remainingTimeMM="100")))
+
+    async def test_whole_minutes_rounded_half_up(self) -> None:
+        self.assertEqual(448, await self._delay(dict(self.WAITING, remainingTimeMM="555.5")))
+
+    async def test_unknown_without_the_start_in_the_history(self) -> None:
+        # Started from the panel: /history has no row, or one of another programme.
+        self.assertIsNone(await self._delay(dict(self.WAITING), history=False))
+        self.assertIsNone(await self._delay(dict(self.WAITING, prCode="115")))
+
+    async def test_unknown_without_remaining_time(self) -> None:
+        attributes = dict(self.WAITING)
+        del attributes["remainingTimeMM"]
+        self.assertIsNone(await self._delay(attributes))
+
+    async def test_the_other_models_read_delay_time_as_before(self) -> None:
+        for kwargs in (
+            dict(model_overrides={"delayType": "start"}),
+            dict(brand="Hoover"),
+            dict(model_overrides={"platform": "CHG"}),
+        ):
+            with self.subTest(**kwargs):
+                attributes = dict(self.WAITING, delayTime="150")
+                self.assertEqual(150.0, await self._delay(attributes, **kwargs))
+
+
 if __name__ == "__main__":
     unittest.main()

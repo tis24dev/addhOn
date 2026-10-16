@@ -46,6 +46,7 @@ from .base_entity import (
     HonBaseEntity,
     coordinator_data_map,
 )
+from .client.engine.hqd_duration import delay_counts_to_end, started_programme_duration
 from .const import (
     APPLIANCE_AC,
     APPLIANCE_AP,
@@ -90,10 +91,12 @@ from .const import (
     WM_ATTR_CURRENT_ENERGY,
     WM_ATTR_CURRENT_WATER,
     WM_ATTR_DELAY,
+    WM_ATTR_DELAY_STATUS,
     WM_ATTR_DIRT_LEVEL,
     WM_ATTR_DRY_LEVEL,
     WM_ATTR_ERRORS,
     WM_ATTR_LOADING,
+    WM_ATTR_PROGRAM,
     WM_ATTR_PROGRAM_NAME,
     WM_ATTR_PROGRAM_PHASE,
     WM_ATTR_REMAINING,
@@ -1508,6 +1511,10 @@ async def async_setup_entry(
                 # The table depends on the model's platform, which a value_fn cannot
                 # see (#112).
                 entity_class = HonWashPhaseSensor
+            elif description is _DELAY and app_type in (APPLIANCE_WM, APPLIANCE_WD):
+                # A model that counts the delay to the end of the cycle needs the
+                # programme's duration and the start history (#131).
+                entity_class = HonWashDelaySensor
             elif app_type == APPLIANCE_AP:
                 entity_class = HonAirPurifierSensor
             else:
@@ -1702,6 +1709,50 @@ class HonWashPhaseSensor(HonSensor):
     @property
     def native_value(self):
         return wash_phase(self._get_attr(self.entity_description.attr_key), self._hqd)
+
+
+class HonWashDelaySensor(HonSensor):
+    """Washer / washer-dryer start delay; minutes to the start where the delay ends (#131).
+
+    A model with `delayType: end` on HQD (`hqd_duration.delay_counts_to_end`) neither
+    publishes `delayTime` in its shadow nor counts it to the start: its `remainingTimeMM`
+    runs to the END of the cycle. The app's dashboard puts the start at that end minus
+    the programme's duration (`HQDSchedule`, apk2 decomp.txt:2586120), while the phase
+    is SCHEDULED and `delayStatus` is above 0. Decisions of 2026-10-16: the duration of
+    the newest `/history` start with the shadow's `prCode` (D1, D5), 0 when nothing
+    waits (D3), whole minutes rounded half up (H5), unknown when the duration is not
+    known. Every other model reads `delayTime`, as before.
+    """
+
+    @property
+    def native_value(self):
+        if not delay_counts_to_end(self._appliance):
+            return super().native_value
+        delay_status = _finite(self._get_attr(WM_ATTR_DELAY_STATUS))
+        if (
+            wash_phase(self._get_attr(WM_ATTR_PROGRAM_PHASE), True) != "scheduled"
+            or delay_status is None
+            or delay_status <= 0
+        ):
+            return 0
+        remaining = _finite(self._get_attr(WM_ATTR_REMAINING))
+        if remaining is None:
+            return None
+        duration = started_programme_duration(
+            self._appliance, self._get_attr(WM_ATTR_PROGRAM)
+        )
+        if duration is None:
+            return None
+        return max(0, math.floor(remaining - duration + 0.5))
+
+
+def _finite(raw) -> float | None:
+    """`raw` as a finite number, None when absent or unreadable."""
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 class HonMyZoneTempSensor(HonSensor):

@@ -362,6 +362,7 @@ WM_ATTR_DIRT_LEVEL       = "dirtyLevel"          # selected soil level (1..3)
 WM_ATTR_DRY_LEVEL        = "dryLevel"            # dryness level (WD/TD)
 WM_ATTR_LOADING          = "loadingPercentage"  # drum load %
 WM_ATTR_DELAY            = "delayTime"           # configured start delay (minutes)
+WM_ATTR_DELAY_STATUS     = "delayStatus"         # > 0 while a delayed start waits (#131)
 # Binary sensor (0/1). Door/door-lock already defined above: WM_ATTR_DOOR_OPEN
 # (doorStatus, door open) and WM_ATTR_DOOR (doorLockStatus, door locked).
 WM_ATTR_CHILD_LOCK       = "lockStatus"          # control lock (child safety)
