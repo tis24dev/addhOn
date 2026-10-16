@@ -578,6 +578,10 @@ class HonCommand:
                 ancillary["energyLabel"] = label
         if self._is_washer_start() and _whole_minutes(params.get("delayTime")) > 0:
             if delay_counts_to_end(self._appliance):
+                # Converted on a copy (PR #132 review): a payload the caller keeps,
+                # as `send_exact` receives one, stays at the minutes to the start; the
+                # copy goes on the wire and to the mirror below, as what went out.
+                params = self.canonical_exact_payload(params)
                 self._delay_to_end(params, ancillary)
             # Issue #112: the app confirms every delayed washer start with
             # ecoDelayStart '0' (seen in each delayed command of the reporters'

@@ -1720,9 +1720,10 @@ class _WasherAppliance:
         self.model_attributes = {} if platform is None else {"platform": platform}
         if delay_type is not None:
             self.model_attributes["delayType"] = delay_type
+        self.mirrored: dict | None = None
 
     def sync_payload_to_params(self, params) -> None:
-        pass
+        self.mirrored = dict(params)
 
     def sync_params_to_command(self, name) -> None:
         pass
@@ -1972,6 +1973,34 @@ class DelayCountedToTheEndTest(unittest.TestCase):
                 )
                 # The option keeps the minutes to the start the user chose.
                 self.assertEqual("570", str(cmd.parameters["delayTime"].value))
+
+    def test_the_mirror_gets_what_went_out(self) -> None:
+        conn = FakeConnection({"payload": {"resultCode": "0"}})
+        appliance = _WasherAppliance(conn, "WM", "HQD", "end")
+        cmd = self._command(appliance, delay="570", remaining="108")
+        self.assertTrue(_run(cmd.send()))
+        self.assertEqual("690", str(conn.calls[0][2]["json"]["parameters"]["delayTime"]))
+        self.assertEqual("690", str(appliance.mirrored["delayTime"]))
+
+    def test_a_payload_the_caller_keeps_stays_as_chosen(self) -> None:
+        # PR #132 review: `send_exact` gets a payload already bound to the command;
+        # converting it in place would convert it again on a resend (690 -> 810).
+        conn = FakeConnection({"payload": {"resultCode": "0"}})
+        appliance = _WasherAppliance(conn, "WM", "HQD", "end")
+        cmd = self._command(appliance, delay="570", remaining="108")
+        payload = cmd.canonical_exact_payload({"temp": "60", "delayTime": "570"})
+        for _ in range(2):
+            self.assertTrue(_run(cmd.send_exact(payload)))
+            self.assertEqual("570", payload["delayTime"])
+        for call in conn.calls:
+            self.assertEqual("690", str(call[2]["json"]["parameters"]["delayTime"]))
+
+    @staticmethod
+    def _command(appliance, **program):
+        from custom_components.addhon.client.engine.commands import HonCommand
+
+        return HonCommand("startProgram", _washer_program(**program), appliance,
+                          category_name="PROGRAMS.WM_WD.HQD_COTTONS")
 
     def test_an_hqd_model_without_delay_type_counts_to_the_end(self) -> None:
         # The app tests `delayType !== 'start'`.
