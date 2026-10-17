@@ -468,6 +468,9 @@ class NativeMqttClient:
                     if name in params:
                         params[name].update(parameter)
                 appliance.sync_params_to_command("settings")
+                # The fields derived from the parameters (programName above all) follow
+                # the pushed values now, not at the next poll.
+                appliance.derive_attributes()
                 try:
                     observe_mqtt_update(appliance, observed_values)
                 except Exception:

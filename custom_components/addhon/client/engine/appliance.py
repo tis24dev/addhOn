@@ -642,8 +642,7 @@ class HonAppliance:
         # `available` UNIVERSAL (even for types without a per-type layer, e.g. AC):
         # connectivity is first-class as in the app. The per-type layer re-sets it (same value).
         self._attributes["available"] = self._connection
-        if self._extra:
-            self._attributes = self._extra.attributes(self._attributes)
+        self.derive_attributes()
         # A command the cloud accepted but the device never applied shows up only
         # here, in the next cloud read (issue #115, O4). Whoever asked for the read
         # (refresh after the command, poll, fallback) it is judged once, and it only
@@ -652,6 +651,17 @@ class HonAppliance:
             observe_shadow_read(self)
         except Exception:
             _LOGGER.debug("Delivery check failed", exc_info=True)
+
+    def derive_attributes(self) -> None:
+        """Re-run the per-type derivations (programName, active, pause, available).
+
+        They are read from the shadow parameters, so whatever changes those parameters
+        calls this: `load_attributes` after a poll, the MQTT transport after a push.
+        Without the second, a pushed prCode kept the previous programme's name until
+        the next poll. Pure: no I/O, reads only the attributes already held.
+        """
+        if self._extra:
+            self._attributes = self._extra.attributes(self._attributes)
 
     async def load_statistics(self) -> None:
         self._statistics = await self.api.load_statistics(self)

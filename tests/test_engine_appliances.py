@@ -401,6 +401,37 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
     def test_a_code_no_category_declares_is_still_no_program(self) -> None:
         self.assertEqual("No Program", self._build("999").attributes["programName"])
 
+    @staticmethod
+    def _push_prcode(app, prcode):
+        # What the MQTT transport does with an appliancestatus push, then the call it
+        # makes once the parameters are applied.
+        app.attributes["parameters"]["prCode"].update(
+            {"parName": "prCode", "parNewVal": prcode}
+        )
+        app.derive_attributes()
+        return app.attributes["programName"]
+
+    def test_a_pushed_unshared_code_names_its_programme_without_a_poll(self) -> None:
+        # A cycle chosen on the panel: the last start was Perfect White on 115, the
+        # push reports 124, which only HQD_SMART declares.
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+        self.assertEqual("hqd_smart", self._push_prcode(app, "124"))
+
+    def test_a_pushed_shared_code_is_resolved_as_a_poll_resolves_it(self) -> None:
+        # The resolution itself is unchanged: on a shared code the push names what a
+        # poll would name, the base programme here.
+        app = self._build("124", _history("PROGRAMS.WM_WD.HQD_SMART"))
+        self.assertEqual("hqd_cottons", self._push_prcode(app, "115"))
+
+    def test_without_the_derivation_a_pushed_code_keeps_the_old_name(self) -> None:
+        # Pins the cause: the parameter alone does not move the name.
+        app = self._build("115", _history("PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE"))
+        app.attributes["parameters"]["prCode"].update(
+            {"parName": "prCode", "parNewVal": "124"}
+        )
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+
 
 # --- prPosition tie-break (dead code kept on purpose, see program.py) ---
 #
