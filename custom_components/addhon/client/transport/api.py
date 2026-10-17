@@ -49,8 +49,9 @@ _LOGGER = logging.getLogger(__name__)
 def _redacted_body(data: dict[str, Any]) -> Any:
     """A send body as the debug log may show it: `redact_identity`, plus `prStr`.
 
-    `attributes.prStr` is what a washer start names its programme with, and for a
-    favourite that is the user's own text (issue #112). Masked here and only here:
+    `attributes.prStr` is what a washer, washer-dryer or tumble-dryer start names its
+    programme with, and for a favourite that is the user's own text (issues #112,
+    #133). Masked here and only here:
     the key is not an identity key, and a fridge's `parameters.prStr` (a catalog
     key) stays readable in every log.
     """
@@ -579,8 +580,9 @@ class HonApi:
         platform, where the command computes it as the app does -- issue #112).
 
         `program_label`: the programme's name as `attributes.prStr`, which only a
-        washer start carries (issue #112). A favourite's name is the user's own
-        text, so the key is masked in the debug logs (`_redacted_body`).
+        washer, washer-dryer or tumble-dryer start carries (issues #112, #133). A
+        favourite's name is the user's own text, so the key is masked in the debug
+        logs (`_redacted_body`).
         """
         timestamp = _command_timestamp()
         # `dryLevel` reaches the cloud for washer-dryers and tumble dryers only: the

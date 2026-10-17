@@ -313,9 +313,10 @@ class HonCommand:
     ) -> bool:
         """Send this command's parameters.
 
-        `program_label`: the programme's name in the user's language, which a washer
-        start carries as `prStr` (see `_program_label_to_send`). The catalog it comes
-        from lives in the Home Assistant layer, hence the argument.
+        `program_label`: the programme's name in the user's language, which a washer,
+        washer-dryer or tumble-dryer start carries as `attributes.prStr` (see
+        `_program_label_to_send`). The catalog it comes from lives in the Home
+        Assistant layer, hence the argument.
         """
         grouped_params = (
             self.mandatory_parameter_groups if only_mandatory else self.parameter_groups
@@ -344,8 +345,9 @@ class HonCommand:
         return self._name == "startProgram" and appliance_type in ("WM", "WD", "TD")
 
     def _program_label_to_send(self, program_label: str | None) -> str:
-        """`attributes.prStr` of a washer start, as the app names the programme.
+        """`attributes.prStr` of a laundry start, as the app names the programme.
 
+        A washer, washer-dryer or tumble-dryer start (`_is_laundry_start`, issue #133).
         The app sends `translate(key)` with the key itself as the fallback (issue
         #112, apk/analysis/issue112-wm-hqd-program-options.md section 7.4): the
         catalog label in the user's language, else the raw category key such as
@@ -546,10 +548,12 @@ class HonCommand:
         key whose value is null or ''. Here a parameter whose schema prescribes no
         value, and that nothing wrote, still carries one this engine invented so reads
         never come back empty (a range's min, a fixed or enum "0"); `is_unset` tells it
-        apart, and it stays out as the app's empty value does: an unset `dryTime` on a
-        washer-dryer, a `prStr` without `fixedValue`, a `remainingTimeMM` without
-        default. Only the `parameters` group counts, which leaves out the `program`
-        view (group "custom").
+        apart, and it stays out as the app's empty value does. In the laundry catalogs
+        of hon-test-data that is only ever an unset `dryTime` on a washer-dryer (161
+        programmes, a range without default, as on the washer-dryer of issue #99); the
+        computed keys without a value, such as a `prStr` without `fixedValue`, have
+        already left with `_reset_computed_start_keys`. Only the `parameters` group
+        counts, which leaves out the `program` view (group "custom").
         """
         for key in list(params):
             parameter = self._parameters.get(key)
@@ -665,8 +669,9 @@ class HonCommand:
         a dryer's energyLabel '0' and duration (`_add_dryer_duration`), the dry-mode
         rule last (`_apply_dry_mode`). Every other body is unchanged.
 
-        `program_label` is the translated programme name for a washer start's
-        `prStr` (see `_program_label_to_send`); ignored by every other send.
+        `program_label` is the translated programme name for a washer, washer-dryer
+        or tumble-dryer start's `attributes.prStr` (see `_program_label_to_send`);
+        ignored by every other send.
 
         `ancillary_params` None (the default) sends this command's own
         `ancillary_parameters()`, as always; a mapping, even an empty one, is sent

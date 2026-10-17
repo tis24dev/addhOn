@@ -64,13 +64,13 @@ class HonParameter:
 
         Without a `defaultValue`/`fixedValue`, each typology seeds a value of its own (a
         range its `min`, an enum or a fixed "0"), one this engine invents so reads never
-        come back empty. The hOn app has nothing
-        to invent it from: its `setValue` falls through `fixedValue` and `defaultValue` to
-        `null` (decomp.txt:1778757-1778816), which none of its send paths lets reach the
-        wire. This tells the two apart for the payload builder, see
-        `HonCommand._drop_unset_start_keys`. Any write through the setter -- a user option, a
-        rule, the command-history recovery, a favourite -- counts, as the app's own
-        last-program and favourite slots outrank the schema; `reset()` clears it.
+        come back empty. The hOn app has nothing to invent it from: its `setValue` falls
+        through `fixedValue` and `defaultValue` to `null` (apk2 decomp.txt:1393672-1393734),
+        which none of its send paths lets reach the wire. This tells the two apart for the
+        payload builder, see `HonCommand._drop_unset_start_keys`. Any write through the
+        setter -- a user option, a rule, the command-history recovery, a favourite --
+        counts, as the app's own last-program and favourite slots outrank the schema;
+        `reset()` clears it.
         """
         return not self._written and self.schema_value is None
 
