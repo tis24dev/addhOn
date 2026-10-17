@@ -1,0 +1,828 @@
+{
+ "_comment": "Source: Andre0512/hon-test-data (MIT), test_data/td_624/commands.json, startProgram, three categories copied raw (parameters, ancillaryParameters with programRules, remainingTimes), and test_data/td_624/appliance_data.json, its attributes list only as parName: parValue (Candy ROE H9A2TCE-80, platform CHG). No app run involved: the expected minutes in tests/test_td_duration.py are read by hand off remainingTimes, as the dryer's actualDuration reads them (apk2 decomp.txt:1365423-1365628, issue #133).",
+ "models": {
+  "ROE H9A2TCE-80": {
+   "type": "TD",
+   "model_attributes": {
+    "display": "5D",
+    "installationType": "fs",
+    "interfaceType": "series|seriesVersion|installationType|display|structure|tankPosition",
+    "loadCapacityDry": "9",
+    "lowerBarrierDate": "2040",
+    "series": "rapido",
+    "structure": "heatpump",
+    "supportedLanguage": "en|it|fr|nl|pt|es|de|bg|cs|sk|hr|el|pl|sr|sl|ro|ru|uk|hu|da|fi|no|sv|tr",
+    "tankPosition": "door",
+    "option": "filterLED|tumbling",
+    "tumblingType": "auto",
+    "platform": "CHG",
+    "serviceability": "ble",
+    "fwLabel": "sdui"
+   },
+   "categories": {
+    "PROGRAMS.TD.MIX_AND_DRY": {
+     "parameters": {
+      "checkUpStatus": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "0"
+      },
+      "delayTime": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "0",
+       "minimumValue": "0",
+       "maximumValue": "1410",
+       "incrementValue": "30"
+      },
+      "dryLevel": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 0,
+       "defaultValue": "3",
+       "minimumValue": "1",
+       "maximumValue": "4",
+       "incrementValue": "1"
+      },
+      "dryTime": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 0,
+       "defaultValue": "4",
+       "minimumValue": "4",
+       "maximumValue": "12",
+       "incrementValue": "1"
+      },
+      "onOffStatus": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "1"
+      },
+      "anticrease": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "0",
+       "minimumValue": "0",
+       "maximumValue": "1",
+       "incrementValue": "1"
+      },
+      "dryingManager": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "1"
+      },
+      "bestIroning": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "0",
+       "minimumValue": "0",
+       "maximumValue": "1",
+       "incrementValue": "1"
+      },
+      "hybrid": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "0"
+      },
+      "prCode": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "17"
+      },
+      "prPosition": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "16"
+      },
+      "prStr": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1
+      },
+      "remainingTimeMM": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 0,
+       "minimumValue": "0",
+       "maximumValue": "65535",
+       "incrementValue": "1"
+      }
+     },
+     "ancillaryParameters": {
+      "dryTimeMM": {
+       "category": "general",
+       "typology": "range",
+       "mandatory": 0,
+       "defaultValue": "70",
+       "minimumValue": "70",
+       "maximumValue": "150",
+       "incrementValue": "10"
+      },
+      "energyLabel": {
+       "category": "general",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "2",
+       "minimumValue": "1",
+       "maximumValue": "5",
+       "incrementValue": "1"
+      },
+      "functionalId": {
+       "category": "cluster",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "7"
+      },
+      "programFamily": {
+       "category": "cluster",
+       "typology": "enum",
+       "mandatory": 1,
+       "enumValues": [
+        "hidden",
+        "auto"
+       ],
+       "defaultValue": "[hidden|auto]"
+      },
+      "programRules": {
+       "category": "rule",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": {
+        "dryLevel": {
+         "opt3": {
+          "1": {
+           "typology": "fixed",
+           "fixedValue": "1"
+          }
+         }
+        },
+        "opt3": {
+         "dryLevel": {
+          "2|3|4": {
+           "typology": "fixed",
+           "fixedValue": "0"
+          }
+         }
+        },
+        "dryTime": {
+         "dryTimeMM": {
+          "30": {
+           "typology": "fixed",
+           "fixedValue": "1"
+          },
+          "45": {
+           "typology": "fixed",
+           "fixedValue": "2"
+          },
+          "59": {
+           "typology": "fixed",
+           "fixedValue": "3"
+          },
+          "70": {
+           "typology": "fixed",
+           "fixedValue": "4"
+          },
+          "80": {
+           "typology": "fixed",
+           "fixedValue": "5"
+          },
+          "90": {
+           "typology": "fixed",
+           "fixedValue": "6"
+          },
+          "100": {
+           "typology": "fixed",
+           "fixedValue": "7"
+          },
+          "110": {
+           "typology": "fixed",
+           "fixedValue": "8"
+          },
+          "120": {
+           "typology": "fixed",
+           "fixedValue": "9"
+          },
+          "130": {
+           "typology": "fixed",
+           "fixedValue": "10"
+          },
+          "140": {
+           "typology": "fixed",
+           "fixedValue": "11"
+          },
+          "150": {
+           "typology": "fixed",
+           "fixedValue": "12"
+          },
+          "160": {
+           "typology": "fixed",
+           "fixedValue": "13"
+          },
+          "170": {
+           "typology": "fixed",
+           "fixedValue": "14"
+          },
+          "180": {
+           "typology": "fixed",
+           "fixedValue": "15"
+          },
+          "190": {
+           "typology": "fixed",
+           "fixedValue": "16"
+          },
+          "200": {
+           "typology": "fixed",
+           "fixedValue": "17"
+          },
+          "210": {
+           "typology": "fixed",
+           "fixedValue": "18"
+          },
+          "220": {
+           "typology": "fixed",
+           "fixedValue": "19"
+          }
+         }
+        }
+       }
+      },
+      "remoteActionable": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": "1"
+      },
+      "remoteVisible": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": "1"
+      },
+      "suggestedLoadD": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "4",
+       "suggestedValue": "4"
+      }
+     },
+     "remainingTimes": {
+      "dryLevel": {
+       "1": 83,
+       "2": 114,
+       "3": 125,
+       "4": 136
+      },
+      "dryTime": {
+       "4": 70,
+       "5": 80,
+       "6": 90,
+       "7": 100,
+       "8": 110,
+       "9": 120,
+       "10": 130,
+       "11": 140,
+       "12": 150
+      }
+     }
+    },
+    "PROGRAMS.TD.WHITES": {
+     "parameters": {
+      "checkUpStatus": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "0"
+      },
+      "delayTime": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "0",
+       "minimumValue": "0",
+       "maximumValue": "1410",
+       "incrementValue": "30"
+      },
+      "dryLevel": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 0,
+       "defaultValue": "2",
+       "minimumValue": "1",
+       "maximumValue": "4",
+       "incrementValue": "1"
+      },
+      "dryTime": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 0,
+       "defaultValue": "4",
+       "minimumValue": "4",
+       "maximumValue": "19",
+       "incrementValue": "1"
+      },
+      "onOffStatus": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "1"
+      },
+      "anticrease": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "0",
+       "minimumValue": "0",
+       "maximumValue": "1",
+       "incrementValue": "1"
+      },
+      "dryingManager": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "1"
+      },
+      "bestIroning": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "0",
+       "minimumValue": "0",
+       "maximumValue": "1",
+       "incrementValue": "1"
+      },
+      "hybrid": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "0"
+      },
+      "prCode": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "2"
+      },
+      "prPosition": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "13"
+      },
+      "prStr": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1
+      },
+      "remainingTimeMM": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 0,
+       "minimumValue": "0",
+       "maximumValue": "65535",
+       "incrementValue": "1"
+      }
+     },
+     "ancillaryParameters": {
+      "dryTimeMM": {
+       "category": "general",
+       "typology": "range",
+       "mandatory": 0,
+       "defaultValue": "70",
+       "minimumValue": "70",
+       "maximumValue": "220",
+       "incrementValue": "10"
+      },
+      "energyLabel": {
+       "category": "general",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "3",
+       "minimumValue": "1",
+       "maximumValue": "5",
+       "incrementValue": "1"
+      },
+      "functionalId": {
+       "category": "cluster",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "1"
+      },
+      "programFamily": {
+       "category": "cluster",
+       "typology": "enum",
+       "mandatory": 1,
+       "enumValues": [
+        "dashboard",
+        "auto"
+       ],
+       "defaultValue": "[dashboard|auto]"
+      },
+      "programRules": {
+       "category": "rule",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": {
+        "dryLevel": {
+         "opt3": {
+          "1": {
+           "typology": "fixed",
+           "fixedValue": "1"
+          }
+         }
+        },
+        "opt3": {
+         "dryLevel": {
+          "2|3|4": {
+           "typology": "fixed",
+           "fixedValue": "0"
+          }
+         }
+        },
+        "dryTime": {
+         "dryTimeMM": {
+          "30": {
+           "typology": "fixed",
+           "fixedValue": "1"
+          },
+          "45": {
+           "typology": "fixed",
+           "fixedValue": "2"
+          },
+          "59": {
+           "typology": "fixed",
+           "fixedValue": "3"
+          },
+          "70": {
+           "typology": "fixed",
+           "fixedValue": "4"
+          },
+          "80": {
+           "typology": "fixed",
+           "fixedValue": "5"
+          },
+          "90": {
+           "typology": "fixed",
+           "fixedValue": "6"
+          },
+          "100": {
+           "typology": "fixed",
+           "fixedValue": "7"
+          },
+          "110": {
+           "typology": "fixed",
+           "fixedValue": "8"
+          },
+          "120": {
+           "typology": "fixed",
+           "fixedValue": "9"
+          },
+          "130": {
+           "typology": "fixed",
+           "fixedValue": "10"
+          },
+          "140": {
+           "typology": "fixed",
+           "fixedValue": "11"
+          },
+          "150": {
+           "typology": "fixed",
+           "fixedValue": "12"
+          },
+          "160": {
+           "typology": "fixed",
+           "fixedValue": "13"
+          },
+          "170": {
+           "typology": "fixed",
+           "fixedValue": "14"
+          },
+          "180": {
+           "typology": "fixed",
+           "fixedValue": "15"
+          },
+          "190": {
+           "typology": "fixed",
+           "fixedValue": "16"
+          },
+          "200": {
+           "typology": "fixed",
+           "fixedValue": "17"
+          },
+          "210": {
+           "typology": "fixed",
+           "fixedValue": "18"
+          },
+          "220": {
+           "typology": "fixed",
+           "fixedValue": "19"
+          }
+         }
+        }
+       }
+      },
+      "remoteActionable": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": "1"
+      },
+      "remoteVisible": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": "1"
+      },
+      "suggestedLoadD": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": 9,
+       "suggestedValue": 9
+      }
+     },
+     "remainingTimes": {
+      "dryLevel": {
+       "1": 110,
+       "2": 150,
+       "3": 165,
+       "4": 180
+      },
+      "dryTime": {
+       "4": 70,
+       "5": 80,
+       "6": 90,
+       "7": 100,
+       "8": 110,
+       "9": 120,
+       "10": 130,
+       "11": 140,
+       "12": 150,
+       "13": 160,
+       "14": 170,
+       "15": 180,
+       "16": 190,
+       "17": 200,
+       "18": 210,
+       "19": 220
+      }
+     }
+    },
+    "PROGRAMS.TD.RAPID_30": {
+     "parameters": {
+      "checkUpStatus": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "0"
+      },
+      "delayTime": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "0",
+       "minimumValue": "0",
+       "maximumValue": "1410",
+       "incrementValue": "30"
+      },
+      "dryLevel": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": "0"
+      },
+      "dryTime": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": "1"
+      },
+      "onOffStatus": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "1"
+      },
+      "anticrease": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "0"
+      },
+      "dryingManager": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "0"
+      },
+      "bestIroning": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "0"
+      },
+      "hybrid": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "1"
+      },
+      "prCode": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "29"
+      },
+      "prPosition": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "17"
+      },
+      "prStr": {
+       "category": "command",
+       "typology": "fixed",
+       "mandatory": 1
+      },
+      "remainingTimeMM": {
+       "category": "command",
+       "typology": "range",
+       "mandatory": 0,
+       "minimumValue": "0",
+       "maximumValue": "65535",
+       "incrementValue": "1"
+      }
+     },
+     "ancillaryParameters": {
+      "dryTimeMM": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": "30"
+      },
+      "energyLabel": {
+       "category": "general",
+       "typology": "range",
+       "mandatory": 1,
+       "defaultValue": "5",
+       "minimumValue": "1",
+       "maximumValue": "5",
+       "incrementValue": "1"
+      },
+      "functionalId": {
+       "category": "cluster",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "8"
+      },
+      "programFamily": {
+       "category": "cluster",
+       "typology": "enum",
+       "mandatory": 1,
+       "enumValues": [
+        "hidden"
+       ],
+       "defaultValue": "[hidden]"
+      },
+      "programRules": {
+       "category": "rule",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": {
+        "dryLevel": {
+         "opt3": {
+          "1": {
+           "typology": "fixed",
+           "fixedValue": "1"
+          }
+         }
+        },
+        "opt3": {
+         "dryLevel": {
+          "2|3|4": {
+           "typology": "fixed",
+           "fixedValue": "0"
+          }
+         }
+        },
+        "dryTime": {
+         "dryTimeMM": {
+          "30": {
+           "typology": "fixed",
+           "fixedValue": "1"
+          },
+          "45": {
+           "typology": "fixed",
+           "fixedValue": "2"
+          },
+          "59": {
+           "typology": "fixed",
+           "fixedValue": "3"
+          },
+          "70": {
+           "typology": "fixed",
+           "fixedValue": "4"
+          },
+          "80": {
+           "typology": "fixed",
+           "fixedValue": "5"
+          },
+          "90": {
+           "typology": "fixed",
+           "fixedValue": "6"
+          },
+          "100": {
+           "typology": "fixed",
+           "fixedValue": "7"
+          },
+          "110": {
+           "typology": "fixed",
+           "fixedValue": "8"
+          },
+          "120": {
+           "typology": "fixed",
+           "fixedValue": "9"
+          },
+          "130": {
+           "typology": "fixed",
+           "fixedValue": "10"
+          },
+          "140": {
+           "typology": "fixed",
+           "fixedValue": "11"
+          },
+          "150": {
+           "typology": "fixed",
+           "fixedValue": "12"
+          },
+          "160": {
+           "typology": "fixed",
+           "fixedValue": "13"
+          },
+          "170": {
+           "typology": "fixed",
+           "fixedValue": "14"
+          },
+          "180": {
+           "typology": "fixed",
+           "fixedValue": "15"
+          },
+          "190": {
+           "typology": "fixed",
+           "fixedValue": "16"
+          },
+          "200": {
+           "typology": "fixed",
+           "fixedValue": "17"
+          },
+          "210": {
+           "typology": "fixed",
+           "fixedValue": "18"
+          },
+          "220": {
+           "typology": "fixed",
+           "fixedValue": "19"
+          }
+         }
+        }
+       }
+      },
+      "remoteActionable": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": "1"
+      },
+      "remoteVisible": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 0,
+       "fixedValue": "1"
+      },
+      "suggestedLoadD": {
+       "category": "general",
+       "typology": "fixed",
+       "mandatory": 1,
+       "fixedValue": "2.5",
+       "suggestedValue": "2.5"
+      }
+     },
+     "remainingTimes": {
+      "dryTime": {
+       "1": 30
+      }
+     }
+    }
+   }
+  }
+ }
+}

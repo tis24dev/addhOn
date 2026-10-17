@@ -13,10 +13,13 @@ and `#name` references to other attributes. The chain, top to bottom (apk2 decom
     getProgramDuration            @2624910-2625244
     calculateOneProgramsDuration  @1401487-1401672
     getCorrectCycleDuration       @1401172-1401245
-    getCycleDurationInSelection   @1403766-1404392  (HQD branch @1404041-1404102)
+    getCycleDurationInSelection   @1403766-1404392  (HQD branch @1404041-1404102,
+                                                     TD branch @1404274-1404374)
     getCommonCycleDuration        @1366766-1366807
     actualDuration (HQD)          @1365720-1366764  = remainingTimeGlobal @1366644
     lex / evaluate                @1366948-1367309 / @1367311-1367441
+    getHdryCyclesDuration (TD)    @1365630-1365675
+    actualDuration (TD)           @1365423-1365628
 
 Why it matters: with `delayType: end` in the model attributes the appliance counts
 `delayTime` to the END of the cycle. The app hides that behind "start at" / "end at":
@@ -30,7 +33,8 @@ dumps (apk2/analysis/issue131-wm-delay/2-motore-durata-hqd.md, strumenti/duratio
 Values follow the JavaScript model the decompiled code runs on: objects are dicts with
 string keys, numbers are floats, `_UNDEFINED` is `undefined` as opposed to None (null),
 and the coercions that decide a result (`Number()`, truthiness, `String()`) are kept.
-Only the HQD branch is ported: elsewhere the duration is None.
+Ported: the washer branch on HQD, and the tumble-dryer branch on any platform (issue
+#133); elsewhere the duration is None.
 """
 from __future__ import annotations
 
@@ -990,6 +994,77 @@ def _washing_type(program_type: Any, params: Any) -> Any:
     return "W"
 
 
+_INTEGER_PREFIX = re.compile(r"[+-]?[0-9]+")
+
+
+def _parse_int_decimal(value: Any) -> float:
+    """`parseInt(value, 10)`: the leading decimal digits of `String(value)`, else NaN."""
+    match = _INTEGER_PREFIX.match(_js_string(value).lstrip(_JS_WHITESPACE))
+    if not match:
+        return _NAN
+    try:
+        return float(int(match.group(0)))
+    except (OverflowError, ValueError):  # beyond a double: JavaScript gives Infinity
+        return -math.inf if match.group(0)[0] == "-" else math.inf
+
+
+def _hdry_actual_duration(appliance_type: Any, params: Any, remaining_times: Any) -> Any:
+    """`actualDuration` of the dryer @1365423-1365628: a `remainingTimes` table entry.
+
+    The app passes the ancillaries as its third argument and never reads them. The
+    first rule that applies decides, even when its table has no such entry.
+    """
+    if not _strict_equal(appliance_type, "TD"):  # @1365425-1365435
+        return _UNDEFINED
+    level = _optional(params, "dryLevel")
+    if (
+        _truthy(level)
+        and not _strict_equal(level, "0")
+        and not _nullish(remaining_times)
+        and _truthy(_get(remaining_times, "dryLevel"))
+        and not _truthy(_get(params, "remainingTimeMM"))
+    ):  # @1365436-1365459
+        index = _parse_int_decimal(level)  # @1365460-1365473
+        found = _optional(remaining_times, "dryLevel", index)  # @1365474-1365480
+        if _truthy(found):
+            return found  # @1365481-1365482, @1365496-1365497
+        return _optional(remaining_times, "dryTime", index)  # @1365483-1365497
+    timed = _optional(params, "dryTime")
+    if (
+        _truthy(timed)
+        and not _nullish(remaining_times)
+        and _truthy(_get(remaining_times, "dryTime"))
+        and not _strict_equal(timed, "0")
+    ):  # @1365498-1365517
+        return _optional(remaining_times, "dryTime", _parse_int_decimal(timed))  # @1365604-1365626
+    if not _nullish(params) and _truthy(_get(params, "remainingTimeMM")):  # @1365518-1365522
+        return _parse_int_decimal(_get(params, "remainingTimeMM"))  # @1365591-1365603
+    fallback: Any = None  # @1365523-1365538
+    if not _nullish(remaining_times) and _truthy(_get(remaining_times, "remainingTime")):
+        fallback = _parse_int_decimal(_get(_get(remaining_times, "remainingTime"), "fixedValue"))
+    for table in ("reminingTimeDryTimeMM", "dryTimeMM"):  # the app's spelling @1365539-1365548
+        if not _nullish(remaining_times) and _truthy(_get(remaining_times, table)):
+            index = _parse_int_decimal(_optional(params, "dryTimeMM"))
+            return _get(_get(remaining_times, table), index)  # @1365551-1365590
+    return fallback  # @1365549-1365550
+
+
+def _hdry_cycles_duration(
+    appliance_type: Any, params: Any, ancillary: Any, remaining_times: Any
+) -> Optional[_Duration]:
+    """`getHdryCyclesDuration` @1365630-1365675: a Duration or None, all under try/catch."""
+    try:
+        minutes = _hdry_actual_duration(appliance_type, params, remaining_times)  # @1365637-1365646
+        if not _string_is_numeric(minutes) or not _js_number(minutes) > 0:  # @1365647-1365653
+            return None
+        duration = _moment_duration(minutes, "minutes")  # @1365654-1365662
+        if not duration.valid:  # @1365663-1365667
+            return None
+        return duration
+    except _JSError:
+        return None  # @1365670-1365673
+
+
 def _cycle_duration_in_selection(
     appliance_type: Any,
     params: Any,
@@ -999,11 +1074,16 @@ def _cycle_duration_in_selection(
     _synthetic: Any = _UNDEFINED,
     dry_off: Any = _UNDEFINED,
 ):
-    """`getCycleDurationInSelection` @1403766-1404392, washer branch on HQD only.
+    """`getCycleDurationInSelection` @1403766-1404392: the washer and tumble-dryer branches.
 
-    The ancillaries the engine reads are the CATALOGUE's (`catalogue.ancillaryParameters`),
-    never the command's (@1404073-1404090). Off HQD the app sums the `remainingTimes`
-    table (issue #99, `energy_label.actual_duration`); this port returns None there.
+    The ancillaries the HQD engine reads are the CATALOGUE's (`catalogue.ancillaryParameters`),
+    never the command's (@1404073-1404090, @1404292-1404306). A washer off HQD has the
+    app sum the `remainingTimes` table (issue #99, `energy_label.actual_duration`); this
+    port returns None there. A tumble dryer (issue #133) runs the HQD engine on an HQD
+    model unless `_synthetic` (the sixth argument, `hasSynCycleRemainingTimes` at the
+    app's other callers, @2625217) is set; otherwise, or when the engine gives nothing,
+    it reads the `remainingTimes` tables (`getHdryCyclesDuration`), on any platform.
+    Dishwasher and laundry-centre branches are not ported: None.
     """
     rules = _optional(
         catalogue, "ancillaryParameters", "programRules", "fixedValue", "addWashDefaultTime", "stainType"
@@ -1033,7 +1113,35 @@ def _cycle_duration_in_selection(
         stain_minutes = _js_number(
             _temp_or_time_value(rules, _js_number(_optional(params, "stainType")))
         )
-    if appliance_type not in WASHER_TYPES:  # TD/DW/LC branches @1403952-1403966
+    if _strict_equal(appliance_type, "TD"):  # @1403952-1403956 -> @1404274
+        remaining_times = _optional(catalogue, "remainingTimes")
+        if (
+            not _nullish(attributes)
+            and _truthy(_get(attributes, "platform"))
+            and _strict_equal(_optional(attributes, "platform"), "HQD")  # isPlatformHqd @1023560
+            and not _truthy(_synthetic)
+        ):  # @1404274-1404291
+            nodes = _optional(catalogue, "ancillaryParameters")
+            mapped = _map_command_parameters(
+                {} if _nullish(nodes) else nodes, program_type, True
+            )  # @1404292-1404306
+            if _strict_equal(program_type, "SD") or _strict_equal(program_type, "D"):
+                selected = _assign(selected, {"dryProgFlag": "1"})  # @1404307-1404327
+            duration = _common_cycle_duration(
+                selected, mapped, attributes, remaining_times
+            )  # @1404328-1404343
+            if duration is None:
+                duration = _hdry_cycles_duration(
+                    appliance_type, selected, ancillary, remaining_times
+                )  # @1404344-1404359
+        else:
+            duration = _hdry_cycles_duration(
+                appliance_type, selected, ancillary, remaining_times
+            )  # @1404360-1404374
+        if _truthy(stain_minutes) and duration is not None:  # @1404375-1404383
+            duration = duration.add_minutes(stain_minutes)
+        return duration
+    if appliance_type not in WASHER_TYPES:  # DW/LC branches @1403957-1403966
         return None
     drying = any(_strict_equal(program_type, kind) for kind in ("SD", "WD", "W+D", "D"))
     timed_dry = _truthy(_optional(selected, "dryTime")) and not _strict_equal(
