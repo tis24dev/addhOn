@@ -1503,17 +1503,21 @@ class AncillaryPayloadTest(unittest.TestCase):
 class DryTimePayloadTest(unittest.TestCase):
     """What leaves as `dryTime` on a washer, washer-dryer or dryer start. Issues #99, #133.
 
-    The REAL W+D+S category declares `dryTime` 1..4 with no defaultValue, and 1..4 is
-    30/60/90/120 minutes of TIMED drying. Sending the range's own min, 1, turned an Eco
-    40-60 wash-and-dry into wash + 30 minutes by the clock (issue #99); sending null
-    (5.26.0-beta4) got an HTTP 500 from the cloud. We now send what the app's new
-    programme screen sends (apk2 decomp.txt): an unset `dryTime` is left out, as
-    `_normalize` leaves out a value the app does not have (@2632008-2632067); a level
-    and a time both above 0 become `dryTime "0"` plus `dryProgFlag "1"`
-    (`checkDryAndAutodoseOptions`, @1363771-1363818), except on a drying-only programme
-    (@2632516-2632523); a time without a level goes as it is. Only on `startProgram`,
-    only for WM, WD and TD. This replaces the classic screen's rule of #99, which sent
-    "0" for an unset time and never the flag.
+    The REAL W+D+S category (`PROGRAMS.WM_WD.IOT_WASH_RESISTANT_COLORED` of the app's
+    bundled catalogue, apk2 decomp.txt:3236056-3236296) declares `dryTime` 1..4 with no
+    defaultValue (@3236072-3236073), and 1..4 is 30/60/90/120 minutes of TIMED drying:
+    its `remainingTimes.dryTime` adds 30/60/90/120 minutes (@3236172-3236180), and the
+    app draws `dryTime-1`..`dryTime-4` with its `drying-30`..`drying-120` icons
+    (@1372676). Sending the range's own min, 1, turned an Eco 40-60 wash-and-dry into
+    wash + 30 minutes by the clock (issue #99); sending null (5.26.0-beta4) got an HTTP
+    500 from the cloud. We now send what the app's new programme screen sends: an unset
+    `dryTime` is left out, as `_normalize` leaves out a value the app does not have
+    (@2632008-2632067); a level and a time both above 0 become `dryTime "0"` plus
+    `dryProgFlag "1"` (`checkDryAndAutodoseOptions`, @1363771-1363818), except on a
+    drying-only programme (@2632516-2632523); a time without a level goes as it is.
+    Only on `startProgram`, only for WM, WD and TD. This replaces our #99 port of the
+    classic screen's rule (@4277166-4277256), which sent "0" for an unset time and no
+    `dryProgFlag`.
     """
 
     def _command(
