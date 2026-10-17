@@ -46,9 +46,13 @@ _LOGGER = logging.getLogger(__name__)
 # afresh on every start (issue #133). After each start the history recovery writes the
 # parameters it read back into the parameters of the same name, so without this a
 # duration, a dry-mode flag or a category key from an earlier start would ride the next.
+# `dryTimeMM` only where its node offers no choice: an enum or a range is the timer of a
+# Haier dryer, which the user sets (see `_reset_computed_start_keys`).
 _COMPUTED_START_KEYS = ("remainingTimeMM", "dryTimeMM", "dryProgFlag", "prStr")
-# The platforms whose tumble dryers carry the estimated duration in a start
-# (apk2 decomp.txt:1362586-1362599: HQD, or `PlaftormWashing.CHG`).
+# The platforms whose tumble dryers carry the estimated duration in a start, compared
+# exactly as the app does (apk2 decomp.txt:1362586-1362599): the raw attribute
+# `=== PlaftormWashing.HQD` (`getCommonCycleDurationSeries` @1366809-1366816) or
+# `=== PlaftormWashing.CHG`.
 _DURATION_PLATFORMS = ("HQD", "CHG")
 
 
@@ -75,6 +79,20 @@ def _whole_minutes(value: object) -> int:
         return int(float(str(value)))
     except (TypeError, ValueError, OverflowError):
         return 0
+
+
+def _schema_wire_value(parameter: HonParameter) -> str | None:
+    """The value the schema node prescribes, as the wire carries it; None for none.
+
+    `fixedValue`, then `defaultValue`, read off the raw node: `schema_value` gives the
+    same order, but an enum's reads back lower-cased (`clean_value`).
+    """
+    node = parameter.schema_node
+    for name in ("fixedValue", "defaultValue"):
+        declared = node.get(name)
+        if declared not in (None, ""):
+            return str(declared)
+    return None
 
 
 def _minutes_text(minutes: float) -> str:
@@ -336,14 +354,17 @@ class HonCommand:
         """
         return self._favourite_name or program_label or self._category_name
 
+    def _raw_platform(self) -> Any:
+        """The model's `platform` attribute as the cloud gave it, None when it has none."""
+        model = getattr(self._appliance, "model_attributes", None)
+        return model.get("platform") if isinstance(model, Mapping) else None
+
     def _platform(self) -> str:
         """The model's `platform` attribute upper-cased, "" when the model has none.
 
         Matched in any case, as `program_options.keep_fresh_hidden` matches it.
         """
-        model = getattr(self._appliance, "model_attributes", None)
-        platform = model.get("platform") if isinstance(model, Mapping) else None
-        return str(platform or "").upper()
+        return str(self._raw_platform() or "").upper()
 
     def _is_hqd(self) -> bool:
         """True on the HQD platform (`platform` in the model attributes, any case)."""
@@ -489,20 +510,31 @@ class HonCommand:
         (apk2 decomp.txt:1365518-1365522) and go out again at any other level; a
         `dryProgFlag "1"` would ride a start the dry-mode rule leaves alone; a `prStr`
         from before this release would bring the category key back once. So each of
-        `_COMPUTED_START_KEYS` goes out as its schema prescribes, whatever a write, a
-        rule or the recovery left in it, or not at all; the duration and the dry-mode
-        rule then decide them from scratch.
+        `_COMPUTED_START_KEYS` goes out as its schema node prescribes it, whatever a
+        write, a rule or the recovery left in it, or not at all; the duration and the
+        dry-mode rule then decide them from scratch.
+
+        Except a `dryTimeMM` whose node offers a choice (owner's decision of 2026-10-18).
+        On the Haier HQD dryers it is the timer the user sets, an enum such as
+        HQD_TIMER's 30..150 (16 or 17 programmes per catalog in hon-test-data), and a
+        favourite or the recovery of an app start writes the user's own value into it;
+        the app computes the duration from that value. An enum or a range keeps what it holds, written or
+        default (an unwritten one without a default still leaves with
+        `_drop_unset_start_keys`), and `_add_dryer_duration` computes from it; a fixed
+        node, or one that is not a parameter, is reset as the other keys are.
         """
         for key in _COMPUTED_START_KEYS:
             if key not in params:
                 continue
             parameter = self._parameters.get(key)
-            if (
-                parameter is not None
-                and parameter.group == "parameters"
-                and parameter.declares_value
+            if parameter is None or parameter.group != "parameters":
+                del params[key]
+            elif key == "dryTimeMM" and isinstance(
+                parameter, (HonParameterEnum, HonParameterRange)
             ):
-                params[key] = str(parameter.schema_value)
+                continue
+            elif (value := _schema_wire_value(parameter)) is not None:
+                params[key] = value
             else:
                 del params[key]
 
@@ -539,10 +571,12 @@ class HonCommand:
         one the app shows (`useCurrentCycleDuration`, @2632174-2632177), computed by
         `programme_duration` on the parameters as they are before the dry-mode rule.
         No duration, no key: the catalog's own `dryTimeMM` stays in the ancillaries.
+        The platform is matched exactly, as the app's `===` does (see
+        `_DURATION_PLATFORMS`): a lower-case "hqd" is not HQD there.
         """
         if (
             getattr(self._appliance, "appliance_type", "") != "TD"
-            or self._platform() not in _DURATION_PLATFORMS
+            or self._raw_platform() not in _DURATION_PLATFORMS
             or not (
                 _js_number(params.get("dryLevel")) > 0
                 or _js_number(params.get("dryTime")) > 0
@@ -553,6 +587,35 @@ class HonCommand:
         if minutes is not None:
             params["remainingTimeMM"] = params["dryTimeMM"] = _minutes_text(minutes)
 
+    def _restore_level_mode_dry_time(self, params: dict[str, str | float]) -> None:
+        """Put back the drying time a level-mode start turned into "0". Issue #133.
+
+        The dry-mode rule (`_apply_dry_mode`) sends a level plus a time as `dryTime "0"`
+        and `dryProgFlag "1"`. Where the catalog's `dryTime` accepts 0 (57 programmes of
+        the Haier washer-dryer wd_1889 in hon-test-data, a range 0..7 with default 1;
+        a fixed node, which takes any write, such as td_144's CARE_30), the history
+        recovery writes that "0" back, and so does a favourite saved in level mode: the
+        next start then finds no time, the rule does not fire, and
+        `_reset_computed_start_keys` has put `dryProgFlag` back to the schema's "0".
+        With a dry level set, an outgoing `dryTime` of 0 and a schema `dryTime` above 0,
+        the "0" can only come from such a write (no Home Assistant control writes
+        `dryTime`), so it goes back to the schema's value and the rule fires as on the
+        first start (owner's decision of 2026-10-18). Called by `_apply_dry_mode` past
+        its drying-only gate: where the rule never fires, a written 0 stays as it is.
+        """
+        if not (
+            _js_number(params.get("dryLevel")) > 0
+            and "dryTime" in params
+            and _js_number(params["dryTime"]) == 0
+        ):
+            return
+        parameter = self._parameters.get("dryTime")
+        if parameter is None or parameter.group != "parameters":
+            return
+        schema = _schema_wire_value(parameter)
+        if schema is not None and _js_number(schema) > 0:
+            params["dryTime"] = schema
+
     def _apply_dry_mode(self, params: dict[str, str | float]) -> None:
         """A dry level and a drying time together become the app's level mode. Issue #133.
 
@@ -562,11 +625,13 @@ class HonCommand:
         category's `programType` is 'D' (@2632516-2632523), so a drying-only programme
         keeps both. programType is matched on its raw value, as the app reads
         `fixedValue`: an enum reads back lower-cased (`clean_value`), so `value` would
-        never equal 'D'.
+        never equal 'D'. A level-mode start's `dryTime "0"` that came back through a
+        write is undone first (`_restore_level_mode_dry_time`), so the rule fires again.
         """
         program_type = self._parameters.get("programType")
         if program_type is not None and program_type.intern_value == "D":
             return
+        self._restore_level_mode_dry_time(params)
         if _js_number(params.get("dryTime")) > 0 and _js_number(params.get("dryLevel")) > 0:
             params["dryTime"] = "0"
             params["dryProgFlag"] = "1"

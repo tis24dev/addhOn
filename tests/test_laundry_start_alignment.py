@@ -11,8 +11,9 @@ estimated duration as `remainingTimeMM`/`dryTimeMM` and sends `energyLabel` "0"
 one, `checkDryAndAutodoseOptions` turns a level plus a time into `dryTime "0"` and
 `dryProgFlag "1"` (@1363771-1363818, gate @2632516-2632523).
 
-The dryer categories come from tests/fixtures/td_duration (Andre0512/hon-test-data,
-Candy ROE H9A2TCE-80, platform CHG); the others are small raw schemas.
+The dryer categories come from tests/fixtures/td_duration (Andre0512/hon-test-data:
+Candy ROE H9A2TCE-80, platform CHG; Haier HD90 models, platform HQD); the others are
+small raw schemas.
 """
 from __future__ import annotations
 
@@ -29,11 +30,15 @@ from tests._golden import install_stubs  # noqa: E402
 
 install_stubs()
 
+from custom_components.addhon.client.engine.command_loader import (  # noqa: E402
+    HonCommandLoader,
+)
 from custom_components.addhon.client.engine.commands import HonCommand  # noqa: E402
 from test_engine_cluster import _WD_WASH_DRY_REAL  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "td_duration" / "catalogs.json"
-_ROE = json.loads(FIXTURE.read_text(encoding="utf-8"))["models"]["ROE H9A2TCE-80"]
+_MODELS: dict = json.loads(FIXTURE.read_text(encoding="utf-8"))["models"]
+_ROE = _MODELS["ROE H9A2TCE-80"]
 _ROE_ATTRIBUTES: dict = _ROE["model_attributes"]
 
 
@@ -62,10 +67,50 @@ def _wd(**changes: dict) -> dict:
     return schema
 
 
+def _haier(model: str, name: str) -> tuple[_Category, dict]:
+    """A raw category of one of the fixture's Haier dryers, and the model's attributes."""
+    data = _MODELS[model]
+    return _Category(name, _copy(data["categories"][name]), data["type"]), dict(
+        data["model_attributes"]
+    )
+
+
+def _range(default: str, minimum: str, maximum: str) -> dict:
+    return {"typology": "range", "category": "command", "mandatory": 1,
+            "defaultValue": default, "minimumValue": minimum, "maximumValue": maximum,
+            "incrementValue": "1"}
+
+
 MIX = _roe("PROGRAMS.TD.MIX_AND_DRY")
 RAPID_30 = _roe("PROGRAMS.TD.RAPID_30")
 # Ruling R4: the same category without its `remainingTimes` group.
 MIX_WITHOUT_TABLE = _roe("PROGRAMS.TD.MIX_AND_DRY", without="remainingTimes")
+
+# Timed programmes of the HD90 dryers (HQD): the timer is `parameters.dryTimeMM`, an enum
+# with a default, and the dry level is fixed "11" (td_1014 and td_1015 of hon-test-data).
+HQD_TIMER, HQD_DE_ATTRIBUTES = _haier("HD90-A3959 DE", "PROGRAMS.TD.HQD_TIMER")
+HQD_DUVET, HQD_BNL_ATTRIBUTES = _haier("HD90-A3959 BNL", "PROGRAMS.TD.IOT_DRY_DUVET")
+
+# The level-mode nodes of the Haier washer-dryer wd_1889 of hon-test-data (HQD_COTTONS
+# and 90 more programmes): a `dryTime` that accepts 0, a dry level and a `dryProgFlag`.
+WD_LEVEL_MODE = _Category(
+    "PROGRAMS.WM_WD.HQD_COTTONS",
+    {
+        "parameters": {
+            "prCode": {"typology": "fixed", "category": "command", "mandatory": 1,
+                       "fixedValue": "1"},
+            "dryTime": _range("1", "0", "7"),
+            "dryLevel": _range("3", "0", "3"),
+            "dryProgFlag": _range("0", "0", "1"),
+        },
+        "ancillaryParameters": {
+            "programType": {"typology": "fixed", "category": "general", "mandatory": 1,
+                            "fixedValue": "W+D"},
+        },
+    },
+    "WD",
+)
+_HQD_WD_ATTRIBUTES = {"platform": "HQD"}
 
 WD_WASH_DRY_REAL = _Category(
     "PROGRAMS.WM_WD.IOT_WASH_RESISTANT_COLORED", _wd(), "WD"
@@ -90,6 +135,22 @@ WM_WITH_PRSTR_VALUE = _Category(
                       "fixedValue": "X"},
             "temp": {"typology": "enum", "category": "command", "mandatory": 1,
                      "defaultValue": "40", "enumValues": [0, 20, 30, 40, 60, 90]},
+        },
+        "ancillaryParameters": {
+            "programType": {"typology": "fixed", "category": "general", "mandatory": 1,
+                            "fixedValue": "W"},
+        },
+    },
+    "WM",
+)
+# A computed key the schema gives as an enum with a cased value (made up: no catalog of
+# hon-test-data has one); an enum's `value` reads back lower-cased (`clean_value`).
+WM_WITH_PRSTR_ENUM = _Category(
+    "PROGRAMS.WM_WD.COTTONS",
+    {
+        "parameters": {
+            "prStr": {"typology": "enum", "category": "command", "mandatory": 1,
+                      "defaultValue": "COTTONS", "enumValues": ["COTTONS"]},
         },
         "ancillaryParameters": {
             "programType": {"typology": "fixed", "category": "general", "mandatory": 1,
@@ -202,6 +263,37 @@ class LaundryStartAlignmentTest(unittest.TestCase):
         sent = self.api.sent[-1]
         return sent["params"], sent["ancillary"]
 
+    def favourite(
+        self, category: _Category, saved: dict, *, model_attributes: Any = _ROE_DEFAULT
+    ) -> HonCommand:
+        """The favourite `HonCommandLoader._add_favourites` files for `saved` on `category`."""
+        base = self.command(category, model_attributes=model_attributes)
+        loader = HonCommandLoader(None, None)
+        parent = types.SimpleNamespace(categories={category.name.split(".")[-1].lower(): base})
+        loader._commands = {"startProgram": parent}  # noqa: SLF001
+        loader._favourites = [{  # noqa: SLF001
+            "favouriteName": "Mine",
+            "command": {"commandName": "startProgram", "programName": category.name},
+            "parameters": dict(saved),
+        }]
+        loader._add_favourites()  # noqa: SLF001
+        return parent.categories["Mine"]
+
+    @staticmethod
+    def recover(command: HonCommand, body: dict) -> None:
+        """The loader's own recovery of `body` as the last start `/history` lists.
+
+        `_recover_command_state` with `rebuild`, as for a start followed at runtime:
+        the programme goes back to its schema, then each key of the body is written.
+        """
+        loader = HonCommandLoader(None, None)
+        loader._command_history = [{"command": {  # noqa: SLF001
+            "commandName": "startProgram",
+            "programName": command.category,
+            "parameters": dict(body),
+        }}]
+        loader._recover_command_state("startProgram", command, rebuild=True)  # noqa: SLF001
+
     def test_a_dryer_start_without_a_label_falls_back_to_the_key(self):
         self.start(MIX, dryLevel="4")
         self.assertEqual("PROGRAMS.TD.MIX_AND_DRY", self.api.sent[-1]["program_label"])
@@ -235,6 +327,68 @@ class LaundryStartAlignmentTest(unittest.TestCase):
         self.assertEqual("0", params["dryProgFlag"])
         self.assertEqual("2", params["dryTime"])
 
+    def test_a_chosen_dryer_timer_sets_the_duration(self):
+        # I1: on the HD90 timed programmes the timer is the user's choice (an enum), so it
+        # stays and the duration comes from it, written by an option, a favourite or the
+        # recovery of an app start. Minutes: the app's decompiled chain run in Node on the
+        # category's defaults with these keys (apk2/analysis/issue133-td/strumenti,
+        # job 'prod'); the hygiene option adds its 60 minutes.
+        cases = (
+            (HQD_TIMER, HQD_DE_ATTRIBUTES, {"dryTimeMM": "120"}, "120"),
+            (HQD_DUVET, HQD_BNL_ATTRIBUTES, {"dryTimeMM": "105"}, "105"),
+            (HQD_DUVET, HQD_BNL_ATTRIBUTES,
+             {"dryTimeMM": "105", "sterilizationStatus": "1"}, "165"),
+        )
+        for category, attributes, values, minutes in cases:
+            with self.subTest(programme=category.name, **values):
+                params, _ = self.start(category, model_attributes=attributes, **values)
+                self.assertEqual(minutes, params["dryTimeMM"])
+                self.assertEqual(minutes, params["remainingTimeMM"])
+
+    def test_a_favourite_timer_keeps_its_time(self):
+        # I1: a favourite "Timer 90" went out as the default 30. 90 minutes in Node, as above.
+        favourite = self.favourite(
+            HQD_TIMER, {"dryTimeMM": "90"}, model_attributes=HQD_DE_ATTRIBUTES
+        )
+        params, _ = self.start(favourite)
+        self.assertEqual(("90", "90"), (params["dryTimeMM"], params["remainingTimeMM"]))
+
+    def test_the_level_mode_survives_the_recovery_of_the_first_start(self):
+        # I2: the first start goes out in level mode, the history recovery writes its
+        # dryTime "0" and dryProgFlag "1" back, and Start pressed again sends the same body.
+        command = self.command(WD_LEVEL_MODE, model_attributes=_HQD_WD_ATTRIBUTES)
+        first, _ = self.start(command)
+        self.recover(command, first)
+        self.assertEqual("0", str(command.parameters["dryTime"].value))  # what the row left
+        second, _ = self.start(command)
+        self.assertEqual(("0", "1"), (first["dryTime"], first["dryProgFlag"]))
+        self.assertEqual(first, second)
+
+    def test_a_favourite_saved_in_level_mode_keeps_it(self):
+        # I2: the app saves the body it sent, so the favourite holds dryTime "0".
+        favourite = self.favourite(
+            WD_LEVEL_MODE,
+            {"dryLevel": "3", "dryTime": "0", "dryProgFlag": "1"},
+            model_attributes=_HQD_WD_ATTRIBUTES,
+        )
+        params, _ = self.start(favourite)
+        self.assertEqual(("0", "1"), (params["dryTime"], params["dryProgFlag"]))
+
+    def test_a_dry_time_of_0_stays_where_the_level_mode_does_not_apply(self):
+        # I2 is there for the level mode alone: without a dry level, or on a drying-only
+        # programme (programType "D", which the rule skips), a written 0 goes as it is.
+        command = self.command(WD_LEVEL_MODE, model_attributes=_HQD_WD_ATTRIBUTES)
+        params, _ = self.start(command, dryLevel="0", dryTime="0")
+        self.assertEqual(("0", "0"), (params["dryTime"], params["dryProgFlag"]))
+        schema = _copy(WD_LEVEL_MODE.schema)
+        schema["ancillaryParameters"]["programType"]["fixedValue"] = "D"
+        command = self.command(
+            WD_LEVEL_MODE._replace(schema=schema), model_attributes=_HQD_WD_ATTRIBUTES
+        )
+        params, _ = self.start(command, dryTime="0")
+        self.assertEqual(("3", "0", "0"),
+                         (params["dryLevel"], params["dryTime"], params["dryProgFlag"]))
+
     def test_a_timed_dryer_programme_keeps_its_time(self):
         params, _ = self.start(RAPID_30)
         self.assertEqual("1", params["dryTime"])
@@ -248,7 +402,10 @@ class LaundryStartAlignmentTest(unittest.TestCase):
         self.assertNotIn("dryTimeMM", params)
 
     def test_a_dryer_off_hqd_and_chg_sends_no_duration(self):
-        for attributes in ({"platform": "XYZ"}, {}, None):
+        # The app compares the platform strictly with 'HQD' and 'CHG' (apk2
+        # decomp.txt:1362589-1362599, @1366809-1366816): another case is another platform.
+        for attributes in ({"platform": "XYZ"}, {}, None, {"platform": "chg"},
+                           {"platform": "hqd"}):
             with self.subTest(attributes=attributes):
                 params, _ = self.start(MIX, dryLevel="4", model_attributes=attributes)
                 self.assertNotIn("remainingTimeMM", params)
@@ -271,6 +428,10 @@ class LaundryStartAlignmentTest(unittest.TestCase):
     def test_a_prstr_with_a_real_value_goes_as_it_is(self):
         params, _ = self.start(WM_WITH_PRSTR_VALUE)       # prStr fixedValue "X"
         self.assertEqual("X", params["prStr"])
+
+    def test_a_computed_key_goes_as_the_schema_writes_it(self):
+        params, _ = self.start(WM_WITH_PRSTR_ENUM)        # prStr enum, defaultValue "COTTONS"
+        self.assertEqual("COTTONS", params["prStr"])
 
     def test_other_types_keep_their_body(self):
         # DW: prStr still rewritten to the category key, an unset range still sent as its min,
