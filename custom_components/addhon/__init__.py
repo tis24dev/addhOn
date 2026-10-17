@@ -1071,13 +1071,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # channel was inert and entities only refreshed on the 60s poll. The push
         # arrives on the awscrt thread, so the snapshot is built THERE (a coherent
         # intra-thread read of the just-mutated appliances) and the publish is hopped
-        # onto the HA event loop via call_soon_threadsafe; async_set_updated_data
-        # publishes WITHOUT triggering a new poll (the 60s poll stays as a
-        # reconciliation safety-net). Detached on unload.
+        # onto the HA event loop via call_soon_threadsafe. Detached on unload.
+        #
+        # The publish leaves the poll schedule alone. `async_set_updated_data` would
+        # also cancel and re-arm the 60s poll ("reset refresh interval"), so an
+        # appliance pushing more often than once a minute -- any running cycle --
+        # held the poll back until a minute passed with no push, and with it
+        # everything only a poll reads (activity, /history, the REST shadow).
+        # `last_update_success` is set as `async_set_updated_data` sets it, so a push
+        # still marks the data good after a failed poll.
         @callback
         def _publish_realtime(snapshot: dict) -> None:
             if snapshot:
-                coordinator.async_set_updated_data(snapshot)
+                coordinator.data = snapshot
+                coordinator.last_update_success = True
+                coordinator.async_update_listeners()
 
         def _on_realtime_push(_arg) -> None:
             # Runs on the awscrt thread; must never let an exception reach it.

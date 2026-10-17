@@ -1270,7 +1270,7 @@ class RealtimeWiringSourceGuard(unittest.TestCase):
         # ...and marshalled onto the HA loop (NOT a direct coordinator call from the
         # awscrt thread, which would be unsafe).
         self.assertIn("call_soon_threadsafe", src)
-        self.assertIn("async_set_updated_data", src)
+        self.assertIn("async_update_listeners", src)
         # detached on unload
         self.assertIn("subscribe_updates(None)", src)
 
@@ -1288,8 +1288,20 @@ class RealtimeWiringSourceGuard(unittest.TestCase):
         start = src.index("def _publish_realtime")
         end = src.index("subscribe_updates(None)", start)
         push_region = src[start:end]
-        self.assertIn("async_set_updated_data", push_region)
         self.assertNotIn("async_request_refresh", push_region)
+
+    def test_init_push_leaves_the_poll_schedule_alone(self) -> None:
+        # `async_set_updated_data` cancels and re-arms the 60s poll: an appliance
+        # pushing more often than once a minute (a running cycle) kept the poll from
+        # ever running. The push publishes the snapshot and notifies, nothing else.
+        src = (self._COMPONENT / "__init__.py").read_text(encoding="utf-8")
+        start = src.index("def _publish_realtime")
+        end = src.index("def _on_realtime_push", start)
+        publish = src[start:end]
+        self.assertNotIn("async_set_updated_data(", publish)
+        self.assertIn("coordinator.data = snapshot", publish)
+        self.assertIn("coordinator.last_update_success = True", publish)
+        self.assertIn("coordinator.async_update_listeners()", publish)
 
     def test_hon_client_exposes_realtime_api(self) -> None:
         src = (self._COMPONENT / "hon_client.py").read_text(encoding="utf-8")
