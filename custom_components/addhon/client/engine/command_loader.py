@@ -55,6 +55,14 @@ _LOGGER = logging.getLogger(__name__)
 # standing idle. "0" as the app writes it, not the schema default, which may itself be
 # a delay (PR #118 review).
 _RECOVERED_AS = {"delayTime": "0"}
+# Parameters the history recovery leaves as they are, per appliance type. A tumble
+# dryer's start carries in `dryTimeMM` the duration the app computes for the body
+# (apk2 decomp.txt:1362586-1362668; `HonCommand._add_dryer_duration` here), not the
+# timer the user chose. Written back by name, that duration landed on the timer of the
+# Haier HQD dryers (an enum: 75 plus the hygiene's 60 minutes is 135 on IOT_DRY_DUVET,
+# and the next start sent 195) and on the catalog's ancillary range of the Candy/Hoover
+# CHG ones (sent as 150 in place of 70). Issue #133.
+_NOT_RECOVERED = {"TD": frozenset({"dryTimeMM"})}
 
 
 def start_identity(history: Any) -> Optional[str]:
@@ -784,6 +792,7 @@ class HonCommandLoader:
         for a start followed at runtime, whose category may still hold an earlier
         cycle's values, so a key the row leaves out shows its default as after a load
         (PR #127 review). A catalog load builds fresh categories and needs none.
+        The keys `_NOT_RECOVERED` names for the appliance's type keep the value they hold.
         """
         if (last_index := self._get_last_command_index(name)) is None:
             return
@@ -797,8 +806,9 @@ class HonCommandLoader:
             return
         if rebuild and callable(rebuilder := getattr(target, "rebuild_from_schema", None)):
             rebuilder()
+        kept = _NOT_RECOVERED.get(getattr(self._appliance, "appliance_type", ""), ())
         for key, data in target.settings.items():
-            if parameters.get(key) is None:
+            if key in kept or parameters.get(key) is None:
                 continue
             with suppress(ValueError):
                 data.value = _RECOVERED_AS.get(key, parameters.get(key))

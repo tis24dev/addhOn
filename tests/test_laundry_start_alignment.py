@@ -83,6 +83,7 @@ def _range(default: str, minimum: str, maximum: str) -> dict:
 
 MIX = _roe("PROGRAMS.TD.MIX_AND_DRY")
 RAPID_30 = _roe("PROGRAMS.TD.RAPID_30")
+WHITES = _roe("PROGRAMS.TD.WHITES")
 # Ruling R4: the same category without its `remainingTimes` group.
 MIX_WITHOUT_TABLE = _roe("PROGRAMS.TD.MIX_AND_DRY", without="remainingTimes")
 
@@ -111,6 +112,16 @@ WD_LEVEL_MODE = _Category(
     "WD",
 )
 _HQD_WD_ATTRIBUTES = {"platform": "HQD"}
+# The same nodes with the ancillary `dryTimeMM` of wd_1889's HQD_SMART (hon-test-data).
+WD_WITH_DRY_TIME_MM = WD_LEVEL_MODE._replace(schema={
+    **WD_LEVEL_MODE.schema,
+    "ancillaryParameters": {
+        **WD_LEVEL_MODE.schema["ancillaryParameters"],
+        "dryTimeMM": {"typology": "range", "category": "general", "mandatory": 1,
+                      "defaultValue": "30", "minimumValue": "0", "maximumValue": "210",
+                      "incrementValue": "30"},
+    },
+})
 
 WD_WASH_DRY_REAL = _Category(
     "PROGRAMS.WM_WD.IOT_WASH_RESISTANT_COLORED", _wd(), "WD"
@@ -285,8 +296,9 @@ class LaundryStartAlignmentTest(unittest.TestCase):
 
         `_recover_command_state` with `rebuild`, as for a start followed at runtime:
         the programme goes back to its schema, then each key of the body is written.
+        The loader is the appliance's own, as `HonAppliance` builds it.
         """
-        loader = HonCommandLoader(None, None)
+        loader = HonCommandLoader(None, command.appliance)
         loader._command_history = [{"command": {  # noqa: SLF001
             "commandName": "startProgram",
             "programName": command.category,
@@ -388,6 +400,49 @@ class LaundryStartAlignmentTest(unittest.TestCase):
         params, _ = self.start(command, dryTime="0")
         self.assertEqual(("3", "0", "0"),
                          (params["dryLevel"], params["dryTime"], params["dryProgFlag"]))
+
+    def test_a_dryer_timer_with_hygiene_goes_out_the_same_on_every_start(self):
+        # A tumble dryer's start carries the duration in `dryTimeMM`, not the timer: 75
+        # plus the hygiene's 60 minutes on IOT_DRY_DUVET, 135 in Node as above. Written
+        # back by the history recovery, 135 landed on the timer's enum (35..135) and the
+        # next start sent 195, then 135 again; the recovery leaves the timer alone and
+        # still writes back every other key, the hygiene option included.
+        command = self.command(HQD_DUVET, model_attributes=HQD_BNL_ATTRIBUTES)
+        command.parameters["sterilizationStatus"].value = "1"
+        sent, recovered = [], []
+        for _ in range(3):
+            params, _ = self.start(command)
+            sent.append((params["dryTimeMM"], params["remainingTimeMM"]))
+            self.recover(command, params)
+            recovered.append(tuple(
+                str(command.parameters[key].value)
+                for key in ("dryTimeMM", "sterilizationStatus")
+            ))
+        self.assertEqual([("135", "135")] * 3, sent)
+        self.assertEqual([("75", "1")] * 3, recovered)
+
+    def test_a_chg_dryer_keeps_the_catalogs_ancillary_dry_time(self):
+        # On the Candy ROE (CHG) the recovery wrote the first start's duration, 180 at
+        # level 4 (in Node as above), into the ancillary range `dryTimeMM` (70..220 step
+        # 10), and the next start sent 180 there in place of the catalog's 70.
+        command = self.command(WHITES)
+        first, first_ancillary = self.start(command, dryLevel="4")
+        self.recover(command, first)
+        self.assertEqual("4", str(command.parameters["dryLevel"].value))  # still recovered
+        second, second_ancillary = self.start(command)
+        self.assertEqual(("180", "70"), (first["dryTimeMM"], first_ancillary["dryTimeMM"]))
+        self.assertEqual(first, second)
+        self.assertEqual("70", second_ancillary["dryTimeMM"])
+
+    def test_the_recovery_still_writes_dry_time_mm_off_a_tumble_dryer(self):
+        # Only a tumble dryer's start carries a computed `dryTimeMM`: on the washer-dryer
+        # the recovery writes a recorded value into the ancillary of that name as before.
+        command = self.command(WD_WITH_DRY_TIME_MM, model_attributes=_HQD_WD_ATTRIBUTES)
+        self.recover(command, {"prCode": "1", "dryLevel": "2", "dryTimeMM": "90"})
+        self.assertEqual(
+            ("2", "90"),
+            tuple(str(command.parameters[key].value) for key in ("dryLevel", "dryTimeMM")),
+        )
 
     def test_a_timed_dryer_programme_keeps_its_time(self):
         params, _ = self.start(RAPID_30)
