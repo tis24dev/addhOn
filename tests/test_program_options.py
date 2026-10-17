@@ -873,13 +873,15 @@ class StartProgramLabelTest(unittest.IsolatedAsyncioTestCase):
 
     _button = RebuildAtStartTest._button
 
-    def _washer(self, labels=None):
+    def _washer(self, labels=None, appliance_type="WM"):
         from custom_components.addhon.program_labels import COORDINATOR_ATTR, ProgramLabels
 
         api = _LabelApi()
         appliance, categories = _real_categories(api)
-        appliance.appliance_type = "WM"
+        appliance.appliance_type = appliance_type
         button = self._button(appliance, api, "cotton")
+        # The Start button reads the type off the coordinator entry, not the appliance.
+        button._appliance_data["type"] = appliance_type
         if labels is not None:
             setattr(button.coordinator, COORDINATOR_ATTR, ProgramLabels(labels))
         return api, appliance, categories, button
@@ -895,6 +897,11 @@ class StartProgramLabelTest(unittest.IsolatedAsyncioTestCase):
                 api, _, _, button = self._washer(labels)
                 await button.async_press()
                 self.assertEqual("PROGRAMS.WM.COTTON", api.bodies[0]["prStr"])
+
+    async def test_a_dryer_start_carries_its_label_too(self) -> None:
+        api, _, _, button = self._washer({"TD": {"COTTON": "Cotone"}}, "TD")
+        await button.async_press()
+        self.assertEqual("Cotone", api.bodies[0]["prStr"])
 
     async def test_a_favourite_keeps_its_own_name(self) -> None:
         api, _, categories, button = self._washer({"WM_WD": {"COTTON": "Cotone"}})

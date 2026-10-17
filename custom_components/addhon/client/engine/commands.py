@@ -678,9 +678,10 @@ class HonCommand:
                 ancillary["energyLabel"] = "0"
             self._add_dryer_duration(params, ancillary)
             self._apply_dry_mode(params)
-        # Only a washer start names its programme; every other body keeps its shape.
+        # Only a washer, washer-dryer or dryer start names its programme; every other
+        # body keeps its shape.
         extra: dict[str, str] = {}
-        if self._is_washer_start() and (
+        if self._is_laundry_start() and (
             label := self._program_label_to_send(program_label)
         ):
             extra["program_label"] = label

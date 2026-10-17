@@ -202,6 +202,10 @@ class LaundryStartAlignmentTest(unittest.TestCase):
         sent = self.api.sent[-1]
         return sent["params"], sent["ancillary"]
 
+    def test_a_dryer_start_without_a_label_falls_back_to_the_key(self):
+        self.start(MIX, dryLevel="4")
+        self.assertEqual("PROGRAMS.TD.MIX_AND_DRY", self.api.sent[-1]["program_label"])
+
     def test_mix_and_dry_extra_dry_goes_out_as_the_apps(self):
         params, ancillary = self.start(MIX, dryLevel="4")
         self.assertEqual("4", params["dryLevel"])

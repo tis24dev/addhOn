@@ -22,6 +22,7 @@ from .const import (
     APPLIANCE_HW,
     APPLIANCE_PROGRAM_GROUP,
     APPLIANCE_REF,
+    APPLIANCE_TD,
     APPLIANCE_WD,
     APPLIANCE_WM,
     CONF_ENABLE_DEBUG,
@@ -242,9 +243,14 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
             self._command_name == "startProgram"
             and appliance_type in (APPLIANCE_WM, APPLIANCE_WD)
         )
-        # Issue #112: a washer start names its programme (`prStr`) in the user's
-        # language. The catalog is immutable, so reading it from `_inner` is safe.
-        program_labels = for_coordinator(self.coordinator) if washer_start else None
+        # Issue #112/#133: a washer, washer-dryer or dryer start names its programme
+        # (`prStr`) in the user's language. The catalog is immutable, so reading it
+        # from `_inner` is safe.
+        labelled_start = (
+            self._command_name == "startProgram"
+            and appliance_type in (APPLIANCE_WM, APPLIANCE_WD, APPLIANCE_TD)
+        )
+        program_labels = for_coordinator(self.coordinator) if labelled_start else None
         _LOGGER.debug(
             "Button debug: press '%s' id=%s pending_program=%s options=%s store=%s commands=%s",
             self._command_name,
