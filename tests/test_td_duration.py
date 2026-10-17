@@ -9,8 +9,11 @@ nothing, `getHdryCyclesDuration` (@1365630-1365675), whose `actualDuration` read
 category's `remainingTimes` tables by `dryLevel`, `dryTime`, `remainingTimeMM` or
 `dryTimeMM` (@1365423-1365628, apk2/analysis/issue133-td/README.md section 2.3).
 
-The catalogue in tests/fixtures/td_duration is a Candy ROE H9A2TCE-80 (platform CHG) of
-Andre0512/hon-test-data; the expected minutes are read by hand off its tables.
+The catalogues in tests/fixtures/td_duration come from Andre0512/hon-test-data. For the
+Candy ROE H9A2TCE-80 (platform CHG) the expected minutes are read by hand off its tables.
+The fixture's `cases` (four Haier HD90 models on HQD, a Hoover NDP4 on CHG) carry the
+minutes the app's own decompiled chain gives when run in Node
+(apk2/analysis/issue133-td/README.md section 5).
 """
 from __future__ import annotations
 
@@ -28,8 +31,11 @@ from custom_components.addhon.client.engine.hqd_duration import (  # noqa: E402
 )
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "td_duration" / "catalogs.json"
-MODELS: dict = json.loads(FIXTURE.read_text(encoding="utf-8"))["models"]
+_DATA: dict = json.loads(FIXTURE.read_text(encoding="utf-8"))
+MODELS: dict = _DATA["models"]
+CASES: list = _DATA["cases"]
 ROE = "ROE H9A2TCE-80"
+HQD_DE = "HD90-A3959 DE"
 
 
 def _appliance(model: str = ROE, **overrides) -> types.SimpleNamespace:
@@ -48,7 +54,7 @@ def _appliance(model: str = ROE, **overrides) -> types.SimpleNamespace:
 def _category(model: str, program_name: str, **overrides) -> types.SimpleNamespace:
     node = MODELS[model]["categories"][program_name]
     fields = dict(
-        ancillary_group=node["ancillaryParameters"], remaining_times=node["remainingTimes"]
+        ancillary_group=node["ancillaryParameters"], remaining_times=node.get("remainingTimes")
     )
     fields.update(overrides)
     return types.SimpleNamespace(**fields)
@@ -127,6 +133,32 @@ class DryerDurationTest(unittest.TestCase):
         self.assertIsNone(
             programme_duration(hqd, self.mix_without_table, {"dryLevel": "4", "dryTime": "4"})
         )
+
+    def test_hqd_dryers_last_what_the_app_computes(self):
+        for case in CASES:
+            with self.subTest(model=case["model"], program=case["programName"], params=case["parameters"]):
+                got = programme_duration(_appliance(case["model"]), _category(case["model"], case["programName"]), case["parameters"])
+                self.assertEqual(case["minutes"], got)
+
+    def test_a_drying_programme_hands_the_formulas_dry_prog_flag(self) -> None:
+        # On HQD the TD branch adds dryProgFlag '1' before the formulas when the
+        # programType is 'SD' or 'D' (@1404307-1404327). No real catalogue formula reads
+        # it, so this one is made up; the minutes are the app's, run in Node. A formula
+        # like "dryProgFlag*7" would not show the flag: checkValuesInLex takes the one
+        # number above zero as the result (@1366594-1366641).
+        hqd = _appliance(HQD_DE, model_attributes={"platform": "HQD", "remainingTime": "dryProgFlag*30+20"})
+        group = MODELS[HQD_DE]["categories"]["PROGRAMS.TD.HQD_COTTON"]["ancillaryParameters"]
+        variants = (
+            ("D", group, 50),
+            ("SD", dict(group, programType=dict(group["programType"], fixedValue="SD")), 50),
+            ("none", {key: node for key, node in group.items() if key != "programType"}, 20),
+        )
+        for program_type, ancillary_group, minutes in variants:
+            with self.subTest(programType=program_type):
+                category = _category(HQD_DE, "PROGRAMS.TD.HQD_COTTON", ancillary_group=ancillary_group)
+                self.assertEqual(
+                    minutes, programme_duration(hqd, category, {"prCode": "62", "dryLevel": "14"})
+                )
 
 
 if __name__ == "__main__":
