@@ -278,6 +278,25 @@ class LaundryStartAlignmentTest(unittest.TestCase):
         self.assertNotIn("dryProgFlag", params)
         self.assertEqual("3", ancillary["energyLabel"])    # the schema's own value
 
+    def test_a_dryer_send_without_the_label_keeps_the_schemas(self):
+        # energy_label=False is a send that keeps the label out of the attributes: G5
+        # adds no "0" then, and the ancillaries carry the schema's own value, or none.
+        command = self.command(MIX)
+        asyncio.run(command.send_exact(
+            command.canonical_exact_payload({"dryLevel": "4", "dryTime": "4"}),
+            energy_label=False,
+        ))
+        self.assertFalse(self.api.sent[-1]["energy_label"])
+        self.assertEqual("2", self.api.sent[-1]["ancillary"]["energyLabel"])
+        schema = _copy(MIX.schema)
+        del schema["ancillaryParameters"]["energyLabel"]
+        command = self.command(MIX._replace(schema=schema))
+        asyncio.run(command.send_exact(
+            command.canonical_exact_payload({"dryLevel": "4", "dryTime": "4"}),
+            energy_label=False,
+        ))
+        self.assertNotIn("energyLabel", self.api.sent[-1]["ancillary"])
+
     def test_the_callers_payload_is_left_untouched(self):
         command = self.command(MIX)
         payload = command.canonical_exact_payload({"dryLevel": "4", "dryTime": "4", "prStr": "0"})

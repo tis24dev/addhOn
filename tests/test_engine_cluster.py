@@ -1673,14 +1673,6 @@ class DryTimePayloadTest(unittest.TestCase):
         command.parameters["dryLevel"].value = "0"
         self.assertEqual("2", self._sent(command, appliance)["dryTime"])
 
-    def test_off_reads_like_the_apps_or_zero(self) -> None:
-        # `(dryLevel || '0') !== '0'` in the app: absent, empty and "0" are all off.
-        from custom_components.addhon.client.engine.commands import _is_zero
-        for off in (None, "", "0", 0):
-            self.assertTrue(_is_zero(off), off)
-        for on in ("1", 1, "11", "H1"):
-            self.assertFalse(_is_zero(on), on)
-
     def test_other_ranges_without_a_default_are_left_out_too(self) -> None:
         # Not a dryTime rule: a start leaves out every parameter without a value, as
         # the app's `_normalize` does; a dishwasher still sends the range's min.

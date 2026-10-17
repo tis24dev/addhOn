@@ -52,11 +52,6 @@ _COMPUTED_START_KEYS = ("remainingTimeMM", "dryTimeMM", "dryProgFlag", "prStr")
 _DURATION_PLATFORMS = ("HQD", "CHG")
 
 
-def _is_zero(value: object) -> bool:
-    """The app's `(value || '0') === '0'`: absent, empty or "0" all mean off."""
-    return value is None or str(value) in ("", "0")
-
-
 def _js_number(value: object) -> float:
     """The app's `value - 0`: a blank string is 0, anything unreadable NaN.
 
@@ -677,8 +672,9 @@ class HonCommand:
             # has seen the cleaned parameters above, for the label and the delay; it
             # sends a dryer's energyLabel as '0', in the ancillaries too, whatever the
             # catalog holds (@1362546, @1363028), and adds its duration; the dry-mode
-            # rule comes last (@2632516-2632523).
-            if getattr(self._appliance, "appliance_type", "") == "TD":
+            # rule comes last (@2632516-2632523). A send without the label leaves
+            # the ancillaries as they were, as the washer branches above do.
+            if energy_label and getattr(self._appliance, "appliance_type", "") == "TD":
                 ancillary["energyLabel"] = "0"
             self._add_dryer_duration(params, ancillary)
             self._apply_dry_mode(params)
