@@ -606,8 +606,8 @@ class HonProgramOptionEntity(HonBaseEntity):
         """What the SELECTED program prescribes for this option, or None.
 
         The hOn app shows exactly this: with a program freshly picked from the catalogue
-        its `setValue` falls through to `dictionaryParameter.fixedValue ?? defaultValue`
-        of the selected category (decomp.txt:1778771-1778793), which is
+        its `setValue` falls through to `dictionaryParameter.fixedValue || defaultValue`
+        of the selected category (apk2 decomp.txt:1393685-1393703), which is
         ``HonParameter.schema_value``. Reading the category's ``value`` instead would
         report the user's own past choice as the program's prescription -- three writers
         leave one in there and nothing resets it (see `schema_value`'s own docstring).

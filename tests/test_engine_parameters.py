@@ -176,7 +176,7 @@ class SchemaValueTest(unittest.TestCase):
     never undoes them on success, so `value` on a program the user has run before is their
     own past choice, while `_attributes` is the schema as received and nothing writes to it.
     Mirrors the hOn app, whose `setValue` reads
-    `dictionaryParameter.fixedValue ?? defaultValue` (decomp.txt:1778771-1778793).
+    `dictionaryParameter.fixedValue || defaultValue` (apk2 decomp.txt:1393685-1393703).
     """
 
     def test_fixed_value_wins_over_default(self) -> None:

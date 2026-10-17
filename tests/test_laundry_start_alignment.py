@@ -341,8 +341,9 @@ class LaundryStartAlignmentTest(unittest.TestCase):
 
     def test_a_chosen_dryer_timer_sets_the_duration(self):
         # I1: on the HD90 timed programmes the timer is the user's choice (an enum), so it
-        # stays and the duration comes from it, written by an option, a favourite or the
-        # recovery of an app start. Minutes: the app's decompiled chain run in Node on the
+        # stays and the duration comes from it: the schema's default, or a favourite's
+        # saved value (the history recovery leaves it alone; here a direct write stands
+        # in for the favourite). Minutes: the app's decompiled chain run in Node on the
         # category's defaults with these keys (apk2/analysis/issue133-td/strumenti,
         # job 'prod'); the hygiene option adds its 60 minutes.
         cases = (

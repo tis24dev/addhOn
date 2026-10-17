@@ -518,12 +518,15 @@ class HonCommand:
 
         Except a `dryTimeMM` whose node offers a choice (owner's decision of 2026-10-18).
         On the Haier HQD dryers it is the timer the user sets, an enum such as
-        HQD_TIMER's 30..150 (16 or 17 programmes per catalog in hon-test-data), and a
-        favourite or the recovery of an app start writes the user's own value into it;
-        the app computes the duration from that value. An enum or a range keeps what it holds, written or
-        default (an unwritten one without a default still leaves with
-        `_drop_unset_start_keys`), and `_add_dryer_duration` computes from it; a fixed
-        node, or one that is not a parameter, is reset as the other keys are.
+        HQD_TIMER's 30..150 (16 or 17 programmes per catalog in hon-test-data). It holds
+        the schema's default unless a favourite saved the user's own value: no control
+        of this integration writes it, and the history recovery leaves it alone, since a
+        dryer's start carries the duration there and not the timer
+        (`command_loader._NOT_RECOVERED`). The app computes the duration from that
+        value. An enum or a range keeps what it holds, written or default (an unwritten
+        one without a default still leaves with `_drop_unset_start_keys`), and
+        `_add_dryer_duration` computes from it; a fixed node, or one that is not a
+        parameter, is reset as the other keys are.
         """
         for key in _COMPUTED_START_KEYS:
             if key not in params:
