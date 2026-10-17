@@ -95,6 +95,14 @@ class DryerDurationTest(unittest.TestCase):
             ),
         )
 
+    def test_a_numeric_string_in_the_table_is_read_as_minutes(self) -> None:
+        # moment 2.29.4 takes a numeric string down its number path (@312779-312783,
+        # @312912-312923), so the app shows 83 minutes.
+        category = _category(ROE, "PROGRAMS.TD.MIX_AND_DRY", remaining_times={"dryLevel": {"1": "83"}})
+        self.assertEqual(
+            83, programme_duration(self.appliance, category, {"dryLevel": "1", "dryTime": "4"})
+        )
+
     def test_without_a_table_there_is_no_duration(self) -> None:
         self.assertIsNone(
             programme_duration(
@@ -111,9 +119,10 @@ class DryerDurationTest(unittest.TestCase):
         )
 
     def test_unreadable_formulas_are_no_duration(self) -> None:
-        # HQD path with a formula that cites itself (as tests/test_hqd_duration.py:133)
-        # and no table: the engine gives nothing, the table fallback gives nothing, no
-        # exception.
+        # HQD path with an unparseable formula and no table: the engine's JSON.parse of
+        # it throws a SyntaxError that remainingTimeGlobal absorbs (@1366726-1366728),
+        # validateResult finds no catalogue value (NaN), and the table fallback has no
+        # table: None, no exception.
         hqd = _appliance(model_attributes={"platform": "HQD", "remainingTime": "remainingTime+1"})
         self.assertIsNone(
             programme_duration(hqd, self.mix_without_table, {"dryLevel": "4", "dryTime": "4"})

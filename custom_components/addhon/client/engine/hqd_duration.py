@@ -1057,6 +1057,10 @@ def _hdry_cycles_duration(
         minutes = _hdry_actual_duration(appliance_type, params, remaining_times)  # @1365637-1365646
         if not _string_is_numeric(minutes) or not _js_number(minutes) > 0:  # @1365647-1365653
             return None
+        if _typeof(minutes) == "string":
+            # moment 2.29.4 `createDuration`: a string with `!isNaN(input - 0)` takes the
+            # number path as `+input` (@312779-312783, @312912-312923).
+            minutes = _js_number(minutes)
         duration = _moment_duration(minutes, "minutes")  # @1365654-1365662
         if not duration.valid:  # @1365663-1365667
             return None
