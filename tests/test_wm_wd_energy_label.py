@@ -428,7 +428,7 @@ class WasherStartEnergyLabelBodyTest(unittest.IsolatedAsyncioTestCase):
                 body = await _start(_Connection(_catalog(platform=platform)))
                 self.assertEqual("2", body["parameters"]["dirtyLevel"])
                 self.assertEqual("1", body["parameters"]["dryLevel"])
-                self.assertEqual("0", body["parameters"]["dryTime"])
+                self.assertNotIn("dryTime", body["parameters"])
                 self.assertEqual("40", body["parameters"]["temp"])
                 self.assertEqual("1", body["ancillaryParameters"]["energyLabel"])
                 self.assertEqual("1", body["attributes"]["energyLabel"])

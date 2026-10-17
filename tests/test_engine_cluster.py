@@ -1501,17 +1501,19 @@ class AncillaryPayloadTest(unittest.TestCase):
 
 
 class DryTimePayloadTest(unittest.TestCase):
-    """What leaves as `dryTime` on a washer or washer-dryer start. Issue #99.
+    """What leaves as `dryTime` on a washer, washer-dryer or dryer start. Issues #99, #133.
 
     The REAL W+D+S category declares `dryTime` 1..4 with no defaultValue, and 1..4 is
-    30/60/90/120 minutes of TIMED drying (decomp.txt:1757888). Sending the range's own
-    min, 1, turned an Eco 40-60 wash-and-dry into wash + 30 minutes by the clock; sending
-    null (5.26.0-beta4) got an HTTP 500 from the cloud, and no path of the app ever sends
-    null. We port the rule of the app's classic program screen (ProgramCycleDetailsView,
-    decomp.txt:4491800-4491856), the one whose payload the reporter's own app history
-    shows: with a dry level set, `dryTime` is "0" -- level and time are two modes of the
-    same drawer, and the level wins -- otherwise it is the value the program carries, or
-    "0" when it carries none. Only on `startProgram`, only for WM and WD.
+    30/60/90/120 minutes of TIMED drying. Sending the range's own min, 1, turned an Eco
+    40-60 wash-and-dry into wash + 30 minutes by the clock (issue #99); sending null
+    (5.26.0-beta4) got an HTTP 500 from the cloud. We now send what the app's new
+    programme screen sends (apk2 decomp.txt): an unset `dryTime` is left out, as
+    `_normalize` leaves out a value the app does not have (@2632008-2632067); a level
+    and a time both above 0 become `dryTime "0"` plus `dryProgFlag "1"`
+    (`checkDryAndAutodoseOptions`, @1363771-1363818), except on a drying-only programme
+    (@2632516-2632523); a time without a level goes as it is. Only on `startProgram`,
+    only for WM, WD and TD. This replaces the classic screen's rule of #99, which sent
+    "0" for an unset time and never the flag.
     """
 
     def _command(
@@ -1544,38 +1546,46 @@ class DryTimePayloadTest(unittest.TestCase):
             schema[group].update(nodes)
         return schema
 
-    def test_an_unset_dry_time_with_a_dry_level_goes_as_zero(self) -> None:
+    def test_an_unset_dry_time_with_a_dry_level_is_left_out(self) -> None:
         # The #99 case: Eco W+D, dryLevel at its default "1", dryTime without a default.
         command, appliance = self._command()
         self.assertEqual(1, command.parameters["dryTime"].value)  # reads still see the min
-        self.assertEqual("0", self._sent(command, appliance)["dryTime"])
+        params = self._sent(command, appliance)
+        self.assertNotIn("dryTime", params)
+        self.assertNotIn("dryProgFlag", params)
 
-    def test_a_written_dry_time_with_a_dry_level_goes_as_zero(self) -> None:
-        # Level and time together: the level wins, as on every app screen.
+    def test_a_written_dry_time_with_a_dry_level_goes_as_zero_with_the_flag(self) -> None:
+        # Level and time together: the app's level mode, dryTime "0" and dryProgFlag "1".
         command, appliance = self._command()
         command.parameters["dryTime"].value = "2"
-        self.assertEqual("0", self._sent(command, appliance)["dryTime"])
+        params = self._sent(command, appliance)
+        self.assertEqual(("0", "1"), (params["dryTime"], params["dryProgFlag"]))
 
     def test_a_written_dry_time_without_a_dry_level_goes_verbatim(self) -> None:
         # Timed drying proper: dryLevel "0", dryTime 2 = 60 minutes by the clock.
         command, appliance = self._command()
         command.parameters["dryLevel"].value = "0"
         command.parameters["dryTime"].value = "2"
-        self.assertEqual("2", self._sent(command, appliance)["dryTime"])
+        params = self._sent(command, appliance)
+        self.assertEqual("2", params["dryTime"])
+        self.assertNotIn("dryProgFlag", params)
 
-    def test_an_unset_dry_time_without_a_dry_level_goes_as_zero(self) -> None:
+    def test_an_unset_dry_time_without_a_dry_level_is_left_out(self) -> None:
         command, appliance = self._command()
         command.parameters["dryLevel"].value = "0"
-        self.assertEqual("0", self._sent(command, appliance)["dryTime"])
+        self.assertNotIn("dryTime", self._sent(command, appliance))
 
     def test_a_dry_time_the_schema_valued_yields_to_a_dry_level(self) -> None:
         schema = self._schema(parameters={"dryTime": dict(
             _WD_WASH_DRY_REAL["parameters"]["dryTime"], defaultValue="3")})
         command, appliance = self._command(schema)
-        self.assertEqual("0", self._sent(command, appliance)["dryTime"])
+        params = self._sent(command, appliance)
+        self.assertEqual(("0", "1"), (params["dryTime"], params["dryProgFlag"]))
         command, appliance = self._command(schema)
         command.parameters["dryLevel"].value = "0"
-        self.assertEqual("3", self._sent(command, appliance)["dryTime"])
+        params = self._sent(command, appliance)
+        self.assertEqual("3", params["dryTime"])
+        self.assertNotIn("dryProgFlag", params)
 
     def test_a_drying_only_program_keeps_its_dry_time(self) -> None:
         # programType "D": the app leaves dryTime to the program even with a level set.
@@ -1583,9 +1593,11 @@ class DryTimePayloadTest(unittest.TestCase):
             _WD_WASH_DRY_REAL["ancillaryParameters"]["programType"], fixedValue="D")})
         command, appliance = self._command(schema)
         command.parameters["dryTime"].value = "2"
-        self.assertEqual("2", self._sent(command, appliance)["dryTime"])
+        params = self._sent(command, appliance)
+        self.assertEqual("2", params["dryTime"])
+        self.assertNotIn("dryProgFlag", params)
         command, appliance = self._command(schema)
-        self.assertEqual("0", self._sent(command, appliance)["dryTime"])
+        self.assertNotIn("dryTime", self._sent(command, appliance))
 
     def test_a_drying_only_program_is_recognised_when_program_type_is_an_enum(self) -> None:
         # Every programType seen so far is `fixed`, but an enum reads back lower-cased
@@ -1595,7 +1607,9 @@ class DryTimePayloadTest(unittest.TestCase):
             "defaultValue": "D", "enumValues": ["D"]}})
         command, appliance = self._command(schema)
         command.parameters["dryTime"].value = "2"
-        self.assertEqual("2", self._sent(command, appliance)["dryTime"])
+        params = self._sent(command, appliance)
+        self.assertEqual("2", params["dryTime"])
+        self.assertNotIn("dryProgFlag", params)
 
     def test_a_program_without_dry_level_counts_as_no_level(self) -> None:
         schema = json.loads(json.dumps(_WD_WASH_DRY_REAL))
@@ -1603,7 +1617,9 @@ class DryTimePayloadTest(unittest.TestCase):
         del schema["ancillaryParameters"]["programRules"]
         command, appliance = self._command(schema)
         command.parameters["dryTime"].value = "2"
-        self.assertEqual("2", self._sent(command, appliance)["dryTime"])
+        params = self._sent(command, appliance)
+        self.assertEqual("2", params["dryTime"])
+        self.assertNotIn("dryProgFlag", params)
 
     def test_a_rebuild_from_schema_makes_it_unset_again(self) -> None:
         command, appliance = self._command()
@@ -1611,14 +1627,15 @@ class DryTimePayloadTest(unittest.TestCase):
         command.parameters["dryTime"].value = "2"
         self.assertTrue(command.rebuild_from_schema())
         command.parameters["dryLevel"].value = "0"
-        self.assertEqual("0", self._sent(command, appliance)["dryTime"])
+        self.assertNotIn("dryTime", self._sent(command, appliance))
 
     def test_no_payload_carries_a_null_dry_time(self) -> None:
         # The beta4 regression, pinned: whatever the drawer holds, never JSON null.
         for level in ("0", "1"):
             command, appliance = self._command()
             command.parameters["dryLevel"].value = level
-            self.assertIsNotNone(self._sent(command, appliance)["dryTime"])
+            params = self._sent(command, appliance)
+            self.assertTrue("dryTime" not in params or params["dryTime"] is not None, params)
 
     def test_a_payload_without_dry_time_does_not_gain_one(self) -> None:
         # dryTime is mandatory 0, so a mandatory-only send leaves it out; the rule
@@ -1628,13 +1645,18 @@ class DryTimePayloadTest(unittest.TestCase):
         _, params, _, _ = appliance.api.sent[-1]
         self.assertNotIn("dryTime", params)
 
-    def test_the_rule_is_for_washers_and_washer_dryers_only(self) -> None:
-        # Scope pin: a tumble dryer or a dishwasher keeps what it sent before #99's fix.
-        for appliance_type in ("TD", "DW", ""):
+    def test_the_rule_is_for_washers_washer_dryers_and_dryers_only(self) -> None:
+        # Scope pin: a dishwasher, or a type we do not know, keeps what it always sent.
+        for appliance_type in ("DW", ""):
             command, appliance = self._command(appliance_type=appliance_type)
             self.assertEqual("1", self._sent(command, appliance)["dryTime"])
-        command, appliance = self._command(appliance_type="WM")
-        self.assertEqual("0", self._sent(command, appliance)["dryTime"])
+        for appliance_type in ("WM", "WD", "TD"):
+            command, appliance = self._command(appliance_type=appliance_type)
+            self.assertNotIn("dryTime", self._sent(command, appliance))
+            command, appliance = self._command(appliance_type=appliance_type)
+            command.parameters["dryTime"].value = "2"
+            params = self._sent(command, appliance)
+            self.assertEqual(("0", "1"), (params["dryTime"], params["dryProgFlag"]))
 
     def test_the_rule_is_for_start_program_only(self) -> None:
         command, appliance = self._command(name="settings")
@@ -1645,7 +1667,8 @@ class DryTimePayloadTest(unittest.TestCase):
                          "defaultValue": "2", "enumValues": [0, 1, 2]}
         schema = self._schema(parameters={"dryTime": enum_dry_time})
         command, appliance = self._command(schema)
-        self.assertEqual("0", self._sent(command, appliance)["dryTime"])
+        params = self._sent(command, appliance)
+        self.assertEqual(("0", "1"), (params["dryTime"], params["dryProgFlag"]))
         command, appliance = self._command(schema)
         command.parameters["dryLevel"].value = "0"
         self.assertEqual("2", self._sent(command, appliance)["dryTime"])
@@ -1658,11 +1681,14 @@ class DryTimePayloadTest(unittest.TestCase):
         for on in ("1", 1, "11", "H1"):
             self.assertFalse(_is_zero(on), on)
 
-    def test_other_ranges_without_a_default_keep_their_min(self) -> None:
-        # Scope pin: the rule is for `dryTime` alone.
+    def test_other_ranges_without_a_default_are_left_out_too(self) -> None:
+        # Not a dryTime rule: a start leaves out every parameter without a value, as
+        # the app's `_normalize` does; a dishwasher still sends the range's min.
         schema = json.loads(json.dumps(_WD_WASH_DRY_REAL))
         schema["parameters"]["steamTime"] = dict(schema["parameters"]["dryTime"])
         command, appliance = self._command(schema)
+        self.assertNotIn("steamTime", self._sent(command, appliance))
+        command, appliance = self._command(schema, appliance_type="DW")
         self.assertEqual("1", self._sent(command, appliance)["steamTime"])
 
 

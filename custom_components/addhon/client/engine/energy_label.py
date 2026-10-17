@@ -336,7 +336,8 @@ def actual_duration(
 ) -> float | None:
     """The programme's minutes as the app's builder gets them, or None for its null.
 
-    `params`: the parameters the start sends (after the options and the dryTime rule);
+    `params`: the parameters the start sends, after the options and before the
+    dry-mode rule (`HonCommand._apply_dry_mode`), the order of the app's builder;
     `ancillary`: the category's ancillary values as `ancillary_values` maps them;
     `remaining_times`: the category's raw `remainingTimes` group.
 

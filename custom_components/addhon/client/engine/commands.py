@@ -42,6 +42,15 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
+# The keys of a washer, washer-dryer or tumble-dryer start that the send path decides
+# afresh on every start (issue #133). After each start the history recovery writes the
+# parameters it read back into the parameters of the same name, so without this a
+# duration, a dry-mode flag or a category key from an earlier start would ride the next.
+_COMPUTED_START_KEYS = ("remainingTimeMM", "dryTimeMM", "dryProgFlag", "prStr")
+# The platforms whose tumble dryers carry the estimated duration in a start
+# (apk2 decomp.txt:1362586-1362599: HQD, or `PlaftormWashing.CHG`).
+_DURATION_PLATFORMS = ("HQD", "CHG")
+
 
 def _is_zero(value: object) -> bool:
     """The app's `(value || '0') === '0'`: absent, empty or "0" all mean off."""
@@ -74,7 +83,11 @@ def _whole_minutes(value: object) -> int:
 
 
 def _minutes_text(minutes: float) -> str:
-    """Minutes for a log line: 108, not 108.0; a fraction kept as it is."""
+    """Minutes as text: 108, not 108.0; a fraction kept as it is.
+
+    For a log line, and for a dryer start's duration, which the app writes with
+    `asMinutes().toString()` (apk2 decomp.txt:1362638-1362668).
+    """
     return str(int(minutes)) if float(minutes).is_integer() else str(minutes)
 
 
@@ -295,59 +308,7 @@ class HonCommand:
             self.mandatory_parameter_groups if only_mandatory else self.parameter_groups
         )
         params = grouped_params.get("parameters", {})
-        if "dryTime" in params and self._resolves_dry_time():
-            params["dryTime"] = self._dry_time_to_send(params)
         return await self.send_parameters(params, program_label=program_label)
-
-    def _resolves_dry_time(self) -> bool:
-        """Whether this send carries the washer / washer-dryer `dryTime` rule.
-
-        Only a `startProgram` of a WM or WD: that is where the app's program screens
-        apply it (decomp.txt:4491766-4491914, skipped for DW), and a tumble dryer's
-        drying time is a different setting. Everything else sends `dryTime` untouched.
-        """
-        appliance_type = getattr(self._appliance, "appliance_type", "")
-        return self._name == "startProgram" and appliance_type in ("WM", "WD")
-
-    def _dry_time_to_send(self, params: Mapping[str, str | float]) -> str | float:
-        """`dryTime` as the app's classic program screen sends it. Issue #99.
-
-        On a washer-dryer `dryTime` 1..4 is 30/60/90/120 minutes of TIMED drying
-        (decomp.txt:1757888, `dryTime-1` = `drying-30`), and a dry level and a drying
-        time are two modes of the same drawer. The classic screen
-        (`ProgramCycleDetailsView`, decomp.txt:4491800-4491856) settles it once:
-
-            dryLevel != '0' and programType != 'D'  ->  dryTime = '0'  (the level wins)
-            otherwise                               ->  dryTime = its value, or '0'
-
-        A missing dryLevel counts as '0' (`dryLevel || '0'` there), and programType is
-        matched on its raw value as the app does: an enum reads back lower-cased
-        (`clean_value`), so `value` would never equal 'D'. "Its value" is what
-        the program or a write gave it; a range the schema left without a default has
-        none, only the `min` this engine invents for reads, so it goes as '0'.
-
-        This is the screen whose payload the reporter's own app history shows
-        (`dryLevel=1`, `dryTime=0`, `energyLabel=1`), and "0" is the only value proven
-        on his appliance (BHA6SD696M6DB980). What we sent before, and why it failed:
-        the range's `min`, 1, turned the Eco 40-60 wash-and-dry into wash + 30 minutes
-        by the clock (5.22.1); null got an HTTP 500 from the cloud (5.26.0-beta4) --
-        and no path of the app ever sends null. Analysis:
-        apk/analysis/wm-wd-send-pipeline.md and
-        apk/analysis/issue98-99-program-options-and-wd-dry.md sections 11-12.
-
-        IF DRYING PROGRAMS MISBEHAVE AFTER THIS, the app's other screen is the fallback:
-        `NewProgramCycleDetails` drops an unset `dryTime` from the body altogether
-        (`_normalize`, decomp.txt:2676915-2676974) instead of sending '0'.
-        """
-        program_type = self._parameters.get("programType")
-        if not _is_zero(params.get("dryLevel")) and (
-            program_type is None or program_type.intern_value != "D"
-        ):
-            return "0"
-        dry_time = self._parameters.get("dryTime")
-        if isinstance(dry_time, HonParameterRange) and dry_time.is_unset:
-            return "0"
-        return params["dryTime"]
 
     def _is_washer_start(self) -> bool:
         """A `startProgram` of a washer (WM) or washer-dryer (WD). Issue #112.
@@ -358,6 +319,16 @@ class HonCommand:
         """
         appliance_type = getattr(self._appliance, "appliance_type", "")
         return self._name == "startProgram" and appliance_type in ("WM", "WD")
+
+    def _is_laundry_start(self) -> bool:
+        """A `startProgram` of a washer, washer-dryer or tumble dryer. Issue #133.
+
+        The starts this integration shapes as the app's new programme screen does
+        (`usePrepareSendCommand`, apk2 decomp.txt:2632069; see `_send_parameters`).
+        Every other command and type goes out exactly as before.
+        """
+        appliance_type = getattr(self._appliance, "appliance_type", "")
+        return self._name == "startProgram" and appliance_type in ("WM", "WD", "TD")
 
     def _program_label_to_send(self, program_label: str | None) -> str:
         """`attributes.prStr` of a washer start, as the app names the programme.
@@ -370,14 +341,18 @@ class HonCommand:
         """
         return self._favourite_name or program_label or self._category_name
 
-    def _is_hqd(self) -> bool:
-        """True on the HQD platform (`platform` in the model attributes, any case).
+    def _platform(self) -> str:
+        """The model's `platform` attribute upper-cased, "" when the model has none.
 
-        Matched as `program_options.keep_fresh_hidden` matches it.
+        Matched in any case, as `program_options.keep_fresh_hidden` matches it.
         """
         model = getattr(self._appliance, "model_attributes", None)
         platform = model.get("platform") if isinstance(model, Mapping) else None
-        return str(platform or "").upper() == "HQD"
+        return str(platform or "").upper()
+
+    def _is_hqd(self) -> bool:
+        """True on the HQD platform (`platform` in the model attributes, any case)."""
+        return self._platform() == "HQD"
 
     def _energy_label(self, params: Mapping[str, str | float]) -> str:
         """`energyLabel` as the app computes it for a washer start. Issue #112.
@@ -509,6 +484,98 @@ class HonCommand:
         )
         params["delayTime"] = str(sent) if isinstance(params.get("delayTime"), str) else float(sent)
 
+    def _reset_computed_start_keys(self, params: dict[str, str | float]) -> None:
+        """Put the keys a laundry start computes back to the schema's value, or drop them.
+
+        Issue #133. After every start, ours included, the history recovery writes each
+        parameter of the last start into the parameter of the same name, and a write
+        sticks until the programme is picked again. A `remainingTimeMM` of 136 read back
+        that way would stop the dryer's duration lookup at its fourth step
+        (apk2 decomp.txt:1365518-1365522) and go out again at any other level; a
+        `dryProgFlag "1"` would ride a start the dry-mode rule leaves alone; a `prStr`
+        from before this release would bring the category key back once. So each of
+        `_COMPUTED_START_KEYS` goes out as its schema prescribes, whatever a write, a
+        rule or the recovery left in it, or not at all; the duration and the dry-mode
+        rule then decide them from scratch.
+        """
+        for key in _COMPUTED_START_KEYS:
+            if key not in params:
+                continue
+            parameter = self._parameters.get(key)
+            if (
+                parameter is not None
+                and parameter.group == "parameters"
+                and parameter.declares_value
+            ):
+                params[key] = str(parameter.schema_value)
+            else:
+                del params[key]
+
+    def _drop_unset_start_keys(self, params: dict[str, str | float]) -> None:
+        """Leave out of a laundry start every parameter that has no value. Issue #133.
+
+        The app's new screen passes the parameters through `_normalize`
+        (apk2 decomp.txt:2632008-2632067, called @2632296-2632304), which drops every
+        key whose value is null or ''. Here a parameter whose schema prescribes no
+        value, and that nothing wrote, still carries one this engine invented so reads
+        never come back empty (a range's min, a fixed or enum "0"); `is_unset` tells it
+        apart, and it stays out as the app's empty value does: an unset `dryTime` on a
+        washer-dryer, a `prStr` without `fixedValue`, a `remainingTimeMM` without
+        default. Only the `parameters` group counts, which leaves out the `program`
+        view (group "custom").
+        """
+        for key in list(params):
+            parameter = self._parameters.get(key)
+            if (
+                parameter is not None
+                and parameter.group == "parameters"
+                and parameter.is_unset
+            ):
+                del params[key]
+
+    def _add_dryer_duration(
+        self, params: dict[str, str | float], ancillary: Mapping[str, str | float]
+    ) -> None:
+        """Send a tumble dryer's estimated duration, as the app's builder does. Issue #133.
+
+        `getWmWdSendCommandPayload` (apk2 decomp.txt:1362586-1362668): on an HQD or CHG
+        model, for a TD with a duration and `Number(dryLevel) > 0 || Number(dryTime) > 0`,
+        `remainingTimeMM` and `dryTimeMM` both carry the minutes. The duration is the
+        one the app shows (`useCurrentCycleDuration`, @2632174-2632177), computed by
+        `programme_duration` on the parameters as they are before the dry-mode rule.
+        No duration, no key: the catalog's own `dryTimeMM` stays in the ancillaries.
+        """
+        if (
+            getattr(self._appliance, "appliance_type", "") != "TD"
+            or self._platform() not in _DURATION_PLATFORMS
+            or not (
+                _js_number(params.get("dryLevel")) > 0
+                or _js_number(params.get("dryTime")) > 0
+            )
+        ):
+            return
+        minutes = programme_duration(self._appliance, self, params, ancillary)
+        if minutes is not None:
+            params["remainingTimeMM"] = params["dryTimeMM"] = _minutes_text(minutes)
+
+    def _apply_dry_mode(self, params: dict[str, str | float]) -> None:
+        """A dry level and a drying time together become the app's level mode. Issue #133.
+
+        `checkDryAndAutodoseOptions` (apk2 decomp.txt:1363771-1363818): when
+        `Number(dryTime) > 0 && Number(dryLevel) > 0`, `dryTime` goes as '0' and
+        `dryProgFlag` as '1'. The new screen runs it after the builder, unless the
+        category's `programType` is 'D' (@2632516-2632523), so a drying-only programme
+        keeps both. programType is matched on its raw value, as the app reads
+        `fixedValue`: an enum reads back lower-cased (`clean_value`), so `value` would
+        never equal 'D'.
+        """
+        program_type = self._parameters.get("programType")
+        if program_type is not None and program_type.intern_value == "D":
+            return
+        if _js_number(params.get("dryTime")) > 0 and _js_number(params.get("dryLevel")) > 0:
+            params["dryTime"] = "0"
+            params["dryProgFlag"] = "1"
+
     async def send_specific(self, param_names: list[str]) -> bool:
         params: dict[str, str | float] = {}
         for key, parameter in self._parameters.items():
@@ -528,6 +595,15 @@ class HonCommand:
         program_label: str | None = None,
     ) -> bool:
         """Transmit `params`; `program_name` overrides the category on the wire.
+
+        A washer, washer-dryer or tumble-dryer start (`_is_laundry_start`) goes out
+        as the app's new programme screen sends it (issue #133, `usePrepareSendCommand`
+        apk2 decomp.txt:2632069): `_normalize`, then the builder, then
+        `checkDryAndAutodoseOptions` (@2632296-2632304, @2632501, @2632516-2632523).
+        Here: keys we compute reset (`_reset_computed_start_keys`), keys without a
+        value dropped (`_drop_unset_start_keys`), the washer label and delay as before,
+        a dryer's energyLabel '0' and duration (`_add_dryer_duration`), the dry-mode
+        rule last (`_apply_dry_mode`). Every other body is unchanged.
 
         `program_label` is the translated programme name for a washer start's
         `prStr` (see `_program_label_to_send`); ignored by every other send.
@@ -552,7 +628,16 @@ class HonCommand:
         that can set its `onOffStatus`. Every other caller passes nothing and is
         unaffected.
         """
-        if not (
+        laundry_start = self._is_laundry_start()
+        if laundry_start:
+            # Issue #133: reshaped on an own copy, even of a payload already
+            # canonical, so a caller that keeps it (the dispatcher's `send_exact`)
+            # keeps what it handed in. First what `_normalize` does (apk2
+            # decomp.txt:2632296-2632304), then the keys we compute start from nothing.
+            params = self.canonical_exact_payload(params)
+            self._reset_computed_start_keys(params)
+            self._drop_unset_start_keys(params)
+        elif not (
             isinstance(params, _CanonicalExactPayload)
             and params.command is self
         ):
@@ -587,6 +672,16 @@ class HonCommand:
             # ecoDelayStart '0' (seen in each delayed command of the reporters'
             # histories); '1' belongs to its Eco Delay configuration, which we lack.
             ancillary["ecoDelayStart"] = "0"
+        if laundry_start:
+            # Issue #133, the rest of the app's order: the builder (call @2632501)
+            # has seen the cleaned parameters above, for the label and the delay; it
+            # sends a dryer's energyLabel as '0', in the ancillaries too, whatever the
+            # catalog holds (@1362546, @1363028), and adds its duration; the dry-mode
+            # rule comes last (@2632516-2632523).
+            if getattr(self._appliance, "appliance_type", "") == "TD":
+                ancillary["energyLabel"] = "0"
+            self._add_dryer_duration(params, ancillary)
+            self._apply_dry_mode(params)
         # Only a washer start names its programme; every other body keeps its shape.
         extra: dict[str, str] = {}
         if self._is_washer_start() and (
@@ -656,8 +751,16 @@ class HonCommand:
         self,
         params: Mapping[str, str | float],
     ) -> dict[str, str | float]:
+        """`params` as this command's own payload, `prStr` set to the category key.
+
+        The rewrite comes from pyhOn (v2.7.0, `678d0a1`) and stays for every body but a
+        laundry start's (issue #133): the app's new screen sends a `prStr` the
+        schema gives a value as that value and drops one without (`_normalize`, apk2
+        decomp.txt:2632008-2632067), as `_reset_computed_start_keys` and
+        `_drop_unset_start_keys` do.
+        """
         payload = _CanonicalExactPayload(self, params)
-        if "prStr" in payload:
+        if "prStr" in payload and not self._is_laundry_start():
             payload["prStr"] = self._category_name.upper()
         return payload
 
