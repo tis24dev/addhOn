@@ -96,6 +96,7 @@ class HonParameterEnum(HonParameter):
         # self.values), so a raw cloud-cased incoming value is accepted correctly.
         if clean_value(value) in self.values:
             self._value = value
+            self._written = True
             self.check_trigger(value)
         else:
             raise ValueError(f"Allowed values: {self._values} But was: {value}")

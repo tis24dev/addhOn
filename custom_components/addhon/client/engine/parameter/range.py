@@ -33,7 +33,6 @@ class HonParameterRange(HonParameter):
         self._step: float = 0
         self._default: float = 0
         self._value: float = 0
-        self._written: bool = False
         self._set_attributes()
 
     def _set_attributes(self) -> None:
@@ -43,22 +42,6 @@ class HonParameterRange(HonParameter):
         self._step = str_to_float(self._attributes.get("incrementValue", 0))
         self._default = str_to_float(self._attributes.get("defaultValue", self.min))
         self._value = self._default
-        self._written = False
-
-    @property
-    def is_unset(self) -> bool:
-        """True when neither the schema nor anyone since the last build/reset gave a value.
-
-        Without a `defaultValue`, `_set_attributes` seeds the range with its `min`, a value
-        this engine invents so reads never come back empty. The hOn app has nothing to
-        invent it from: its `setValue` falls through `fixedValue` and `defaultValue` to
-        `null` (decomp.txt:1778757-1778816), which none of its send paths lets reach the
-        wire. This tells the two apart for the payload builder, see
-        `HonCommand._dry_time_to_send`. Any write through the setter -- a user option, a
-        rule, the command-history recovery, a favourite -- counts, as the app's own
-        last-program and favourite slots outrank the schema; `reset()` clears it.
-        """
-        return not self._written and self.schema_value is None
 
     def __repr__(self) -> str:
         return f"{self.__class__} (<{self.key}> [{self.min} - {self.max}])"

@@ -720,5 +720,46 @@ class RangeValuesDriftF3Test(unittest.TestCase):
         self.assertEqual(p.values, ["0.0", "5.5", "11.0", "16.5", "22.0"])
 
 
+class UnsetParameterTest(unittest.TestCase):
+    """`is_unset` on every typology: the schema prescribes nothing and nobody wrote a value."""
+
+    def test_a_fixed_without_fixed_value_is_unset_until_written(self):
+        p = NaFixed("prStr", {"typology": "fixed", "category": "command", "mandatory": 1}, "parameters")
+        self.assertTrue(p.is_unset)
+        self.assertEqual("0", p.value)  # reads still see the fallback
+        p.value = "PROGRAMS.TD.MIX_AND_DRY"
+        self.assertFalse(p.is_unset)
+        p.reset()
+        self.assertTrue(p.is_unset)
+
+    def test_a_fixed_with_fixed_value_is_never_unset(self):
+        p = NaFixed("prCode", {"typology": "fixed", "fixedValue": "17"}, "parameters")
+        self.assertFalse(p.is_unset)
+
+    def test_an_enum_without_default_is_unset_until_written(self):
+        p = NaEnum("mode", {"typology": "enum", "enumValues": ["0", "1"]}, "parameters")
+        self.assertTrue(p.is_unset)
+        p.value = "0"  # a real choice of the fallback value counts
+        self.assertFalse(p.is_unset)
+        p.reset()
+        self.assertTrue(p.is_unset)
+
+    def test_an_enum_with_default_is_never_unset(self):
+        p = NaEnum("mode", {"typology": "enum", "defaultValue": "1", "enumValues": ["0", "1"]}, "parameters")
+        self.assertFalse(p.is_unset)
+
+    def test_a_range_keeps_its_meaning(self):
+        p = NaRange(
+            "dryTime",
+            {"typology": "range", "minimumValue": "1", "maximumValue": "4", "incrementValue": "1"},
+            "parameters",
+        )
+        self.assertTrue(p.is_unset)
+        p.value = 2
+        self.assertFalse(p.is_unset)
+        p.reset()
+        self.assertTrue(p.is_unset)
+
+
 if __name__ == "__main__":
     unittest.main()

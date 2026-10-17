@@ -33,4 +33,5 @@ class HonParameterFixed(HonParameter):
     @value.setter
     def value(self, value: str | float) -> None:
         self._value = value
+        self._written = True
         self.check_trigger(value)
