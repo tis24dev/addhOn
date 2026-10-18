@@ -792,7 +792,9 @@ class HonCommandLoader:
         for a start followed at runtime, whose category may still hold an earlier
         cycle's values, so a key the row leaves out shows its default as after a load
         (PR #127 review). A catalog load builds fresh categories and needs none.
-        The keys `_NOT_RECOVERED` names for the appliance's type keep the value they hold.
+        The keys `_NOT_RECOVERED` names for the appliance's type keep the value they hold:
+        after a rebuild, the schema's, since the row only carries what was computed from
+        them (a dryer's `dryTimeMM` is the duration, not the timer).
         """
         if (last_index := self._get_last_command_index(name)) is None:
             return
