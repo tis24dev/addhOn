@@ -10,6 +10,7 @@ entity tests of the later tasks. Stdlib unittest on the shared conftest stubs.
 from __future__ import annotations
 
 import dataclasses
+import enum
 import sys
 import types
 import unittest
@@ -75,6 +76,54 @@ def _install_platform_stubs() -> None:
     button_mod.ButtonEntity = getattr(
         button_mod, "ButtonEntity", type("ButtonEntity", (), {})
     )
+
+    climate_mod = _mod("homeassistant.components.climate")
+    components.climate = climate_mod
+    climate_mod.ClimateEntity = getattr(
+        climate_mod, "ClimateEntity", type("ClimateEntity", (), {})
+    )
+    climate_const = _mod("homeassistant.components.climate.const")
+    climate_mod.const = climate_const
+    climate_const.ClimateEntityFeature = getattr(
+        climate_const,
+        "ClimateEntityFeature",
+        enum.IntFlag(
+            "ClimateEntityFeature",
+            {"TARGET_TEMPERATURE": 1, "FAN_MODE": 2, "TURN_ON": 4, "TURN_OFF": 8},
+        ),
+    )
+    climate_const.HVACMode = getattr(
+        climate_const,
+        "HVACMode",
+        enum.Enum(
+            "HVACMode",
+            {"OFF": "off", "AUTO": "auto", "COOL": "cool", "DRY": "dry", "HEAT": "heat",
+             "FAN_ONLY": "fan_only"},
+            type=str,
+        ),
+    )
+
+    water_heater_mod = _mod("homeassistant.components.water_heater")
+    components.water_heater = water_heater_mod
+    water_heater_mod.WaterHeaterEntity = getattr(
+        water_heater_mod, "WaterHeaterEntity", type("WaterHeaterEntity", (), {})
+    )
+    water_heater_mod.WaterHeaterEntityFeature = getattr(
+        water_heater_mod,
+        "WaterHeaterEntityFeature",
+        enum.IntFlag(
+            "WaterHeaterEntityFeature",
+            {"TARGET_TEMPERATURE": 1, "OPERATION_MODE": 2, "AWAY_MODE": 4, "ON_OFF": 8},
+        ),
+    )
+    for name, value in (
+        ("STATE_ECO", "eco"), ("STATE_ELECTRIC", "electric"),
+        ("STATE_HEAT_PUMP", "heat_pump"), ("STATE_OFF", "off"),
+    ):
+        setattr(water_heater_mod, name, getattr(water_heater_mod, name, value))
+
+    ha_const = _mod("homeassistant.const")
+    ha_const.ATTR_TEMPERATURE = getattr(ha_const, "ATTR_TEMPERATURE", "temperature")
 
     entity_platform = _mod("homeassistant.helpers.entity_platform")
     sys.modules["homeassistant.helpers"].entity_platform = entity_platform
@@ -170,6 +219,62 @@ def _engine_attributes(gone: str) -> dict:
     attrs = {k: v for k, v in LC_ATTRIBUTES.items() if not _belongs_to_unit(k, gone)}
     attrs.update({k: v for k, v in derived.items() if k.endswith("programName")})
     return attrs
+
+
+def _lc_appliance():
+    """A fake LC appliance whose commands carry everything a command builder looks for."""
+    from custom_components.addhon.client.engine.commands import HonCommand
+
+    def rng(low, high, step=1, default=None):
+        return {
+            "typology": "range", "category": "command", "mandatory": 0,
+            "minimumValue": str(low), "maximumValue": str(high),
+            "incrementValue": str(step), "defaultValue": str(default if default is not None else low),
+        }
+
+    def enum(values, default=None):
+        return {
+            "typology": "enum", "category": "command", "mandatory": 0,
+            "enumValues": [str(v) for v in values],
+            "defaultValue": str(default if default is not None else values[0]),
+        }
+
+    def fixed(value):
+        return {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": str(value)}
+
+    appliance = types.SimpleNamespace(
+        commands={}, unique_id="mac-1", options={}, attributes={"parameters": {}},
+        model_attributes={}, connection=True, appliance_type="LC",
+        sync_command_to_params=lambda name: None,
+    )
+    settings = {
+        "machMode": enum([0, 1, 2, 3]),
+        "tempSel": rng(10, 40),
+        "spinSpeed": rng(0, 1400, 100),
+        "lockStatus": enum([0, 1]),
+        "delayTime": rng(0, 1440),
+        "onOffStatus": enum([0, 1]),
+        "windSpeed": rng(0, 5),
+        "lightStatus": enum([0, 1]),
+    }
+    appliance.commands["settings"] = HonCommand("settings", {"parameters": settings}, appliance)
+    start_params = {"onOffStatus": fixed(1), "program": enum(["a", "b"]), **settings}
+    categories: dict = {}
+    start = HonCommand(
+        "startProgram", {"parameters": start_params}, appliance,
+        categories=categories, category_name="iot_wash_rapid_30",
+    )
+    categories["iot_wash_rapid_30"] = start
+    categories["hqd_td_smart_ai"] = HonCommand(
+        "startProgram", {"parameters": dict(start_params)}, appliance,
+        categories=categories, category_name="hqd_td_smart_ai",
+    )
+    appliance.commands["startProgram"] = start
+    for name in ("stopProgram", "pauseProgram", "resumeProgram"):
+        appliance.commands[name] = HonCommand(
+            name, {"parameters": {"onOffStatus": fixed(0)}}, appliance
+        )
+    return appliance
 
 
 class RefreshingCoordinator:
@@ -587,8 +692,21 @@ class LcDiagnosticsTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_no_command_entity_for_the_lc(self) -> None:
+        """Nine command platforms walk their builders over a snapshot that has commands."""
+        data = {"mac-1": _lc(dict(LC_ATTRIBUTES), appliance=_lc_appliance())}
+        platforms = (
+            "select", "button", "switch", "number", "climate", "fan", "water_heater",
+            "date", "time",
+        )
+        for platform in platforms:
+            with self.subTest(platform):
+                self.assertEqual([], await _build(platform, data), platform)
+        # Control: the same commands on a washer do give command entities, so the
+        # emptiness above is the LC's, not the fake's.
+        washer = {"mac-1": _lc(dict(LC_ATTRIBUTES), appliance=_lc_appliance(), type="WM")}
         for platform in ("select", "button", "switch", "number"):
-            self.assertEqual([], await _build(platform, DATA), platform)
+            with self.subTest(control=platform):
+                self.assertTrue(await _build(platform, washer), platform)
 
 
 if __name__ == "__main__":
