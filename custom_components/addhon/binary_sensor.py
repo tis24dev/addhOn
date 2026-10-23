@@ -12,7 +12,7 @@ here are direct 0/1 attributes, confirmed live on HW80 (washer) / HD100 (dryer).
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 
 from homeassistant.components.binary_sensor import (
@@ -36,6 +36,7 @@ from .const import (
     APPLIANCE_HOB,
     APPLIANCE_HW,
     APPLIANCE_IH,
+    APPLIANCE_LC,
     APPLIANCE_OV,
     APPLIANCE_REF,
     APPLIANCE_TD,
@@ -90,6 +91,9 @@ class HonBinarySensorEntityDescription(BinarySensorEntityDescription):
     # (value_fn returned None). For an alarm whose all-clear value is unknown,
     # reporting "off" would assert an absence that no evidence supports.
     unavailable_when_unmapped: bool = False
+    # Laundry Centre unit (`"WM"` / `"TD"`) the entity belongs to (#124): it sits on that
+    # unit's child device and its unique_id carries the unit. None everywhere else.
+    unit: str | None = None
 
 
 _DOOR_OPEN = HonBinarySensorEntityDescription(
@@ -632,6 +636,34 @@ _AIR_PURIFIER_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
     ),
 )
 
+def _lc_binary(
+    base: HonBinarySensorEntityDescription, unit: str, attr_key: str
+) -> HonBinarySensorEntityDescription:
+    """A Laundry Centre row: the washer/dryer description, re-pointed at the LC key (#124)."""
+    return replace(base, unit=unit, attr_key=attr_key)
+
+
+# Laundry Centre (LC, #124): read-only; the unit rows sit on the unit's child device.
+# The dosing flags are unprefixed on the shadow: the dosing system is the washer's.
+_LC_BINARY: tuple[HonBinarySensorEntityDescription, ...] = (
+    _lc_binary(_REMOTE_CONTROL, "WM", "WMremoteCtrValid"),
+    _lc_binary(_DOOR_OPEN, "WM", "WMdoorStatus"),
+    _lc_binary(_DOOR_LOCK, "WM", "WMdoorLockStatus"),
+    HonBinarySensorEntityDescription(
+        key="pause", icon="mdi:pause", attr_key="WMpause", unit="WM",
+    ),
+    HonBinarySensorEntityDescription(
+        key="auto_detergent", icon="mdi:cup-water", attr_key="autoDetergentStatus", unit="WM",
+    ),
+    HonBinarySensorEntityDescription(
+        key="auto_softener", icon="mdi:cup-water", attr_key="autoSoftenerStatus", unit="WM",
+    ),
+    _lc_binary(_REMOTE_CONTROL, "TD", "TDremoteCtrValid"),
+    HonBinarySensorEntityDescription(
+        key="pause", icon="mdi:pause", attr_key="TDpause", unit="TD",
+    ),
+)
+
 BINARY_SENSORS: dict[str, tuple[HonBinarySensorEntityDescription, ...]] = {
     APPLIANCE_AP: _AIR_PURIFIER_BINARY,
     APPLIANCE_WM: _WASH_BINARY,
@@ -650,6 +682,7 @@ BINARY_SENSORS: dict[str, tuple[HonBinarySensorEntityDescription, ...]] = {
     APPLIANCE_HO: _HOOD_BINARY,
     APPLIANCE_WH: _WATER_HEATER_BINARY,
     APPLIANCE_HW: _HEAT_PUMP_WATER_HEATER_BINARY,
+    APPLIANCE_LC: _LC_BINARY,
 }
 
 
@@ -742,6 +775,11 @@ class HonBinarySensor(HonBaseEntity, BinarySensorEntity):
         self.entity_description = description
         self._attr_translation_key = description.translation_key or description.key
         self._attr_unique_id = f"{appliance_id}_{description.key}"
+        if description.unit is not None:
+            # A Laundry Centre unit: its own child device and a unique_id that names it,
+            # since the washer and the dryer share every key (#124).
+            self._unit = description.unit
+            self._attr_unique_id = f"{appliance_id}_{description.unit}_{description.key}"
         # Set only when this DEVICE also got a control for the same register (#93).
         # Assigned on the instance rather than declared on the description because the
         # answer is per appliance: the same row is a duplicate on a fridge whose

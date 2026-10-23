@@ -103,6 +103,14 @@ LC_ATTRIBUTES = {
     "TDprPhase": 7,
     "TDerrors": 0,
     "TDantiCreaseTime": 117,
+    "WMremoteCtrValid": 0,
+    "WMdoorStatus": 0,
+    "WMdoorLockStatus": 1,
+    "WMpause": 0,
+    "autoDetergentStatus": 1,
+    "autoSoftenerStatus": 1,
+    "TDremoteCtrValid": 0,
+    "TDpause": 1,
     # Derived by the engine's LC layer (Task 1).
     "WMprogramName": "hqd_wm_smart",
     "TDprogramName": "hqd_td_smart_ai",
@@ -425,6 +433,60 @@ class LcSensorsTest(unittest.IsolatedAsyncioTestCase):
             info = entity.device_info
             self.assertEqual({(DOMAIN, "wm_TD")}, info["identifiers"])
             self.assertNotIn("via_device", info)
+
+
+class LcBinarySensorsTest(unittest.IsolatedAsyncioTestCase):
+    async def _by_id(self, data=None) -> dict:
+        return {e._attr_unique_id: e for e in await _build("binary_sensor", data or DATA)}
+
+    async def test_the_lc_gets_exactly_these_binary_sensors(self) -> None:
+        ids = {e._attr_unique_id for e in await _build("binary_sensor", DATA)}
+        self.assertEqual(
+            {
+                "mac-1_connectivity",
+                "mac-1_WM_remote_control", "mac-1_WM_door_open", "mac-1_WM_door_lock",
+                "mac-1_WM_pause", "mac-1_WM_auto_detergent", "mac-1_WM_auto_softener",
+                "mac-1_TD_remote_control", "mac-1_TD_pause",
+            },
+            ids,
+        )
+
+    async def test_binary_values_on_the_dump(self) -> None:
+        by_id = await self._by_id()
+        expected = {
+            "mac-1_WM_remote_control": False,
+            "mac-1_WM_door_open": False,
+            "mac-1_WM_door_lock": True,
+            "mac-1_WM_pause": False,
+            "mac-1_WM_auto_detergent": True,
+            "mac-1_WM_auto_softener": True,
+            "mac-1_TD_remote_control": False,
+            "mac-1_TD_pause": True,
+            "mac-1_connectivity": True,
+        }
+        for unique_id, value in expected.items():
+            with self.subTest(unique_id):
+                self.assertIs(value, by_id[unique_id].is_on)
+
+    async def test_unit_binaries_sit_on_the_child_devices(self) -> None:
+        for unique_id, entity in (await self._by_id()).items():
+            if unique_id.startswith("mac-1_WM_"):
+                expected = {(DOMAIN, "mac-1_WM")}
+            elif unique_id.startswith("mac-1_TD_"):
+                expected = {(DOMAIN, "mac-1_TD")}
+            else:
+                expected = {(DOMAIN, "mac-1")}
+            with self.subTest(unique_id):
+                self.assertEqual(expected, entity.device_info["identifiers"])
+
+    async def test_the_universal_remote_control_stays_absent_on_the_lc(self) -> None:
+        self.assertNotIn("mac-1_remote_control", await self._by_id())
+
+    async def test_a_missing_unit_creates_no_binary_for_it(self) -> None:
+        attrs = {k: v for k, v in LC_ATTRIBUTES.items() if not k.startswith("TD")}
+        ids = {e._attr_unique_id for e in await _build("binary_sensor", {"mac-1": _lc(attrs)})}
+        self.assertFalse([i for i in ids if i.startswith("mac-1_TD_")])
+        self.assertIn("mac-1_WM_pause", ids)
 
 
 if __name__ == "__main__":

@@ -674,6 +674,15 @@
       "door_lock": {
         "name": "Door locked"
       },
+      "pause": {
+        "name": "Paused"
+      },
+      "auto_detergent": {
+        "name": "Automatic detergent dosing"
+      },
+      "auto_softener": {
+        "name": "Automatic softener dosing"
+      },
       "child_lock": {
         "name": "Child lock"
       },

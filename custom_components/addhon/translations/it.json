@@ -674,6 +674,15 @@
       "door_lock": {
         "name": "Oblò Bloccato"
       },
+      "pause": {
+        "name": "In pausa"
+      },
+      "auto_detergent": {
+        "name": "Dosaggio automatico detersivo"
+      },
+      "auto_softener": {
+        "name": "Dosaggio automatico ammorbidente"
+      },
       "child_lock": {
         "name": "Blocco Comandi"
       },

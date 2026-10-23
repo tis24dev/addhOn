@@ -625,6 +625,15 @@
       "door_lock": {
         "name": "Porta travada"
       },
+      "pause": {
+        "name": "Em pausa"
+      },
+      "auto_detergent": {
+        "name": "Dosagem automática de detergente"
+      },
+      "auto_softener": {
+        "name": "Dosagem automática de amaciador"
+      },
       "child_lock": {
         "name": "Trava infantil"
       },
