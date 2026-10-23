@@ -133,6 +133,45 @@ DATA = {
 }
 
 
+# Washer-only shadow keys that carry no `WM` prefix (the dosing unit).
+_UNPREFIXED_WASHER_KEYS = frozenset(
+    {
+        "detergentPercent", "haier_DetergentWeight", "haier_SoftenerWeight",
+        "autoDetergentStatus", "autoSoftenerStatus",
+    }
+)
+
+
+def _belongs_to_unit(key: str, unit: str) -> bool:
+    return key.startswith(unit) or (unit == "WM" and key in _UNPREFIXED_WASHER_KEYS)
+
+
+def _engine_attributes(gone: str) -> dict:
+    """The attributes the real LC layer derives for a shadow that lacks one whole unit.
+
+    Only SHADOW keys of the unit are stripped; the derived `<U>programName` is left to
+    the engine, so the test fails if the layer invents a name for a unit that is not there.
+    """
+    from types import SimpleNamespace
+
+    from custom_components.addhon.client.engine.appliances import lc
+    from custom_components.addhon.client.engine.attributes import HonAttribute
+
+    shadow = {
+        k: HonAttribute({"parNewVal": v})
+        for k, v in LC_ATTRIBUTES.items()
+        if not k.endswith("programName") and not _belongs_to_unit(k, gone)
+    }
+    shadow["WMprCode"] = HonAttribute({"parNewVal": "0"}) if gone != "WM" else None
+    shadow["TDprCode"] = HonAttribute({"parNewVal": "0"}) if gone != "TD" else None
+    shadow = {k: v for k, v in shadow.items() if v is not None}
+    parent = SimpleNamespace(settings={}, connection=True, appliance_type="LC")
+    derived = lc.Appliance(parent).attributes({"parameters": shadow})
+    attrs = {k: v for k, v in LC_ATTRIBUTES.items() if not _belongs_to_unit(k, gone)}
+    attrs.update({k: v for k, v in derived.items() if k.endswith("programName")})
+    return attrs
+
+
 class RefreshingCoordinator:
     def __init__(self, data: dict) -> None:
         self.data = data
@@ -415,10 +454,18 @@ class LcSensorsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(sensor_module.lc_dry_phase(1))
 
     async def test_a_missing_unit_creates_no_entity_for_it(self) -> None:
-        attrs = {k: v for k, v in LC_ATTRIBUTES.items() if not k.startswith("TD")}
-        ids = {e._attr_unique_id for e in await _build("sensor", {"mac-1": _lc(attrs)})}
-        self.assertFalse([i for i in ids if i.startswith("mac-1_TD_")])
-        self.assertIn("mac-1_WM_state", ids)
+        for gone, kept in (("TD", "WM"), ("WM", "TD")):
+            attrs = _engine_attributes(gone)
+            data = {"mac-1": _lc(attrs)}
+            ids = {e._attr_unique_id for e in await _build("sensor", data)}
+            with self.subTest(gone=gone):
+                self.assertFalse([i for i in ids if i.startswith(f"mac-1_{gone}_")])
+                self.assertIn(f"mac-1_{kept}_state", ids)
+                devices = {
+                    next(iter(e.device_info["identifiers"]))[1]
+                    for e in await _build("sensor", data)
+                }
+                self.assertNotIn(f"mac-1_{gone}", devices)
 
     async def test_existing_washer_ids_and_device_are_unchanged(self) -> None:
         data = {
@@ -489,10 +536,15 @@ class LcBinarySensorsTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("mac-1_remote_control", await self._by_id())
 
     async def test_a_missing_unit_creates_no_binary_for_it(self) -> None:
-        attrs = {k: v for k, v in LC_ATTRIBUTES.items() if not k.startswith("TD")}
-        ids = {e._attr_unique_id for e in await _build("binary_sensor", {"mac-1": _lc(attrs)})}
-        self.assertFalse([i for i in ids if i.startswith("mac-1_TD_")])
-        self.assertIn("mac-1_WM_pause", ids)
+        for gone, kept in (("TD", "WM"), ("WM", "TD")):
+            data = {"mac-1": _lc(_engine_attributes(gone))}
+            entities = await _build("binary_sensor", data)
+            ids = {e._attr_unique_id for e in entities}
+            with self.subTest(gone=gone):
+                self.assertFalse([i for i in ids if i.startswith(f"mac-1_{gone}_")])
+                self.assertIn(f"mac-1_{kept}_pause", ids)
+                devices = {next(iter(e.device_info["identifiers"]))[1] for e in entities}
+                self.assertNotIn(f"mac-1_{gone}", devices)
 
 
 class LcDiagnosticsTest(unittest.IsolatedAsyncioTestCase):

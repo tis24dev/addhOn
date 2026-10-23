@@ -21,8 +21,17 @@ class Appliance(ApplianceExtra):
     def attributes(self, data: dict[str, Any]) -> dict[str, Any]:
         params = data.get("parameters", {})
         start_cmd = self.parent.settings.get("startProgram.program")
-        data["WMprogramName"] = self._unit_program(params, start_cmd, "WMprCode")
-        data["TDprogramName"] = self._unit_program(params, start_cmd, "TDprCode")
+        # A unit's name is written only when the shadow carries that unit's code: with
+        # no key at all there is no unit, and a name would conjure its device. A stale
+        # value from an earlier derivation must not survive either.
+        if "WMprCode" in params:
+            data["WMprogramName"] = self._unit_program(params, start_cmd, "WMprCode")
+        else:
+            data.pop("WMprogramName", None)
+        if "TDprCode" in params:
+            data["TDprogramName"] = self._unit_program(params, start_cmd, "TDprCode")
+        else:
+            data.pop("TDprogramName", None)
         data["available"] = bool(self.parent.connection)
         return data
 

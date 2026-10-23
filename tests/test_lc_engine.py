@@ -107,7 +107,9 @@ class LcLayerTest(unittest.TestCase):
         self.assertTrue(data["available"])
 
     def test_a_zero_or_missing_code_is_no_program(self):
-        data = lc.Appliance(self.parent).attributes({"parameters": _params(WMprCode="0")})
+        data = lc.Appliance(self.parent).attributes(
+            {"parameters": _params(WMprCode="0", TDprCode="0")}
+        )
         self.assertEqual("No Program", data["WMprogramName"])
         self.assertEqual("No Program", data["TDprogramName"])
 
@@ -117,6 +119,31 @@ class LcLayerTest(unittest.TestCase):
         )
         self.assertEqual("No Program", data["WMprogramName"])
         self.assertEqual("No Program", data["TDprogramName"])
+
+    def test_a_unit_without_its_code_gets_no_programme_key(self):
+        data = lc.Appliance(self.parent).attributes({"parameters": {}})
+        self.assertNotIn("WMprogramName", data)
+        self.assertNotIn("TDprogramName", data)
+        self.assertTrue(data["available"])
+
+    def test_only_the_absent_unit_loses_its_programme_key(self):
+        washer_only = lc.Appliance(self.parent).attributes(
+            {"parameters": _params(WMprCode="97")}
+        )
+        self.assertEqual("hqd_wm_smart", washer_only["WMprogramName"])
+        self.assertNotIn("TDprogramName", washer_only)
+        dryer_only = lc.Appliance(self.parent).attributes(
+            {"parameters": _params(TDprCode="56")}
+        )
+        self.assertNotIn("WMprogramName", dryer_only)
+        self.assertEqual("hqd_td_smart_ai", dryer_only["TDprogramName"])
+
+    def test_a_stale_programme_key_does_not_survive_a_missing_code(self):
+        data = lc.Appliance(self.parent).attributes(
+            {"parameters": {}, "WMprogramName": "stale", "TDprogramName": "stale"}
+        )
+        self.assertNotIn("WMprogramName", data)
+        self.assertNotIn("TDprogramName", data)
 
     def test_the_registry_knows_the_lc(self):
         self.assertIsInstance(registry.get_extra(self.parent), lc.Appliance)
