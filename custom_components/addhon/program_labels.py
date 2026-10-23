@@ -91,6 +91,21 @@ STORAGE_KEY = "addhon_program_labels"
 STORAGE_VERSION = 1
 
 
+def lc_label_target(slug: str) -> tuple[str, str]:
+    """(appliance type, catalogue slug) for a Laundry Centre unit's programme slug (#124).
+
+    The app's `remapProgramTitleLc` (apk2 decomp.txt:1003004-1003081): the LC names its
+    programmes `hqd_wm_<x>` / `hqd_td_<x>`, which the catalogue keeps as `hqd_<x>` under
+    the washer / dryer namespace; any other slug is a washer one if it says "wash", a
+    dryer one otherwise.
+    """
+    if slug.startswith("hqd_wm_"):
+        return APPLIANCE_WM, "hqd_" + slug[len("hqd_wm_"):]
+    if slug.startswith("hqd_td_"):
+        return APPLIANCE_TD, "hqd_" + slug[len("hqd_td_"):]
+    return (APPLIANCE_WM if "wash" in slug else APPLIANCE_TD), slug
+
+
 class ProgramLabels:
     """Immutable `{namespace: {KEY: label}}` catalog with a slug -> label lookup."""
 

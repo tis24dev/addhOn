@@ -804,6 +804,15 @@ class ProgramNameSensorTest(unittest.IsolatedAsyncioTestCase):
 
 
 
+class LcLabelTargetTest(unittest.TestCase):
+    def test_lc_label_target(self) -> None:
+        lc_label_target = program_labels.lc_label_target
+        self.assertEqual(("WM", "hqd_smart"), lc_label_target("hqd_wm_smart"))
+        self.assertEqual(("TD", "hqd_smart_ai"), lc_label_target("hqd_td_smart_ai"))
+        self.assertEqual(("WM", "iot_wash_bed_linen"), lc_label_target("iot_wash_bed_linen"))
+        self.assertEqual(("TD", "iot_dry_bed_linen"), lc_label_target("iot_dry_bed_linen"))
+
+
 class DiscoveryLogPrivacyTest(unittest.TestCase):
     """The prPosition discovery line must not carry user-typed names.
 

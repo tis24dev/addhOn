@@ -181,6 +181,9 @@
       "errors": {
         "name": "Erros"
       },
+      "anti_crease_time": {
+        "name": "Tempo antirrugas"
+      },
       "delay_time": {
         "name": "Atraso de início"
       },

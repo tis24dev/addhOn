@@ -181,6 +181,9 @@
       "errors": {
         "name": "Erros"
       },
+      "anti_crease_time": {
+        "name": "Tempo antivincos"
+      },
       "delay_time": {
         "name": "Atraso de início"
       },

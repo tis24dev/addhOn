@@ -82,6 +82,42 @@ _install_platform_stubs()
 from custom_components.addhon import const, laundry_centre  # noqa: E402
 from custom_components.addhon.const import APPLIANCE_LC, DOMAIN  # noqa: E402
 
+LC_ATTRIBUTES = {
+    "available": True,
+    "totalElectricityUsed": 43.17,
+    "currentElectricityUsed": 1.12,
+    "detergentPercent": 70,
+    "haier_DetergentWeight": 35,
+    "haier_SoftenerWeight": 1,
+    "WMmachMode": 2,
+    "WMremainingTimeMM": 31,
+    "WMremainingTimeHH": 0,
+    "WMprPhase": 5,
+    "WMerrors": 0,
+    "WMtotalWashCycle": 18,
+    "WMtotalWaterUsed": 3192,
+    "WMcurrentWaterUsed": 31,
+    "WMcurrentWashCycle": 11,
+    "TDmachMode": 3,
+    "TDremainingTimeMM": 1,
+    "TDprPhase": 7,
+    "TDerrors": 0,
+    "TDantiCreaseTime": 117,
+    # Derived by the engine's LC layer (Task 1).
+    "WMprogramName": "hqd_wm_smart",
+    "TDprogramName": "hqd_td_smart_ai",
+}
+DATA = {
+    "mac-1": {
+        "type": "LC",
+        "name": "CLC108GNU1",
+        "model": "CLC108GNU1",
+        "attributes": LC_ATTRIBUTES,
+        "settings": {},
+        "statistics": {},
+    }
+}
+
 
 class RefreshingCoordinator:
     def __init__(self, data: dict) -> None:
@@ -250,6 +286,145 @@ class PhaseTablesTest(unittest.TestCase):
         self.assertEqual("drying", td["11"])
         self.assertNotIn("1", td)
         self.assertEqual({"0", "2", "3", "4", "5", "7", "8", "9", "10", "11"}, set(td))
+
+
+class LcSensorsTest(unittest.IsolatedAsyncioTestCase):
+    async def _by_id(self, data=None) -> dict:
+        return {e._attr_unique_id: e for e in await _build("sensor", data or DATA)}
+
+    async def test_the_lc_gets_exactly_these_sensors(self) -> None:
+        ids = {e._attr_unique_id for e in await _build("sensor", DATA)}
+        self.assertEqual(
+            {
+                "mac-1_total_energy", "mac-1_current_energy",
+                "mac-1_WM_state", "mac-1_WM_remaining_time", "mac-1_WM_program_name",
+                "mac-1_WM_program_phase", "mac-1_WM_errors", "mac-1_WM_total_washes",
+                "mac-1_WM_total_water", "mac-1_WM_current_water",
+                "mac-1_WM_current_wash_cycle", "mac-1_WM_detergent_level",
+                "mac-1_WM_detergent_weight", "mac-1_WM_softener_weight",
+                "mac-1_TD_state", "mac-1_TD_remaining_time", "mac-1_TD_program_name",
+                "mac-1_TD_program_phase", "mac-1_TD_errors", "mac-1_TD_anti_crease_time",
+            },
+            ids,
+        )
+
+    async def test_values_on_the_dump(self) -> None:
+        by_id = await self._by_id()
+        expected = {
+            "mac-1_WM_state": "running",
+            "mac-1_WM_remaining_time": 31,
+            "mac-1_WM_program_phase": "washing",
+            "mac-1_WM_errors": "0",
+            "mac-1_WM_total_water": 3192,
+            "mac-1_WM_current_water": 31,
+            "mac-1_WM_total_washes": 18,
+            "mac-1_WM_current_wash_cycle": 11,
+            "mac-1_WM_detergent_level": 70,
+            "mac-1_WM_detergent_weight": 35,
+            "mac-1_WM_softener_weight": 1,
+            "mac-1_TD_state": "paused",
+            "mac-1_TD_remaining_time": 1,
+            "mac-1_TD_program_phase": "cooling",
+            "mac-1_TD_errors": "0",
+            "mac-1_TD_anti_crease_time": 117,
+            "mac-1_total_energy": 43.17,
+            "mac-1_current_energy": 1.12,
+        }
+        for unique_id, value in expected.items():
+            with self.subTest(unique_id):
+                self.assertEqual(value, by_id[unique_id].native_value)
+
+    async def test_unit_entities_sit_on_the_child_devices(self) -> None:
+        for unique_id, entity in (await self._by_id()).items():
+            if unique_id.startswith("mac-1_WM_"):
+                expected = {(DOMAIN, "mac-1_WM")}
+            elif unique_id.startswith("mac-1_TD_"):
+                expected = {(DOMAIN, "mac-1_TD")}
+            else:
+                expected = {(DOMAIN, "mac-1")}
+            with self.subTest(unique_id):
+                self.assertEqual(expected, entity.device_info["identifiers"])
+
+    def _with_catalogue(self, entities, catalog):
+        from custom_components.addhon import program_labels
+
+        for entity in entities:
+            setattr(
+                entity.coordinator,
+                program_labels.COORDINATOR_ATTR,
+                program_labels.ProgramLabels(catalog),
+            )
+
+    async def test_program_names_are_translated_through_the_remap(self) -> None:
+        entities = await _build("sensor", DATA)
+        by_id = {e._attr_unique_id: e for e in entities}
+        wm, td = by_id["mac-1_WM_program_name"], by_id["mac-1_TD_program_name"]
+        self.assertEqual("hqd_wm_smart", wm.native_value)
+        self.assertEqual("hqd_td_smart_ai", td.native_value)
+        self._with_catalogue(
+            entities, {"WM_WD": {"HQD_SMART": "Smart"}, "TD": {"HQD_SMART_AI": "Smart A.I."}}
+        )
+        self.assertEqual("Smart", wm.native_value)
+        self.assertEqual("Smart A.I.", td.native_value)
+        wm.coordinator.data["mac-1"]["attributes"]["WMprogramName"] = "No Program"
+        self.assertEqual("No Program", wm.native_value)
+
+    async def test_remaining_time_tolerates_partial_and_garbage_halves(self) -> None:
+        data = {"mac-1": _lc(dict(LC_ATTRIBUTES))}
+        entities = await _build("sensor", data)
+        sensor = {e._attr_unique_id: e for e in entities}["mac-1_WM_remaining_time"]
+        attrs = data["mac-1"]["attributes"]
+        for hours, minutes, expected in (
+            (1, 5, 65),
+            (2, None, 120),
+            ("", None, None),
+            (None, "x", None),
+            (0, 31, 31),
+        ):
+            attrs.pop("WMremainingTimeHH", None)
+            attrs.pop("WMremainingTimeMM", None)
+            if hours is not None:
+                attrs["WMremainingTimeHH"] = hours
+            if minutes is not None:
+                attrs["WMremainingTimeMM"] = minutes
+            with self.subTest(hours=hours, minutes=minutes):
+                self.assertEqual(expected, sensor.native_value)
+
+    def test_the_lc_phase_functions(self) -> None:
+        from custom_components.addhon import sensor as sensor_module
+
+        self.assertEqual("washing", sensor_module.lc_wash_phase(5))
+        self.assertIsNone(sensor_module.lc_wash_phase("27"))
+        self.assertIsNone(sensor_module.lc_wash_phase(None))
+        self.assertIsNone(sensor_module.lc_wash_phase("x"))
+        self.assertEqual("heating", sensor_module.lc_dry_phase(3))
+        self.assertIsNone(sensor_module.lc_dry_phase(1))
+
+    async def test_a_missing_unit_creates_no_entity_for_it(self) -> None:
+        attrs = {k: v for k, v in LC_ATTRIBUTES.items() if not k.startswith("TD")}
+        ids = {e._attr_unique_id for e in await _build("sensor", {"mac-1": _lc(attrs)})}
+        self.assertFalse([i for i in ids if i.startswith("mac-1_TD_")])
+        self.assertIn("mac-1_WM_state", ids)
+
+    async def test_existing_washer_ids_and_device_are_unchanged(self) -> None:
+        data = {
+            "wm_TD": {
+                "type": "WM",
+                "name": "Washer",
+                "model": "HW80",
+                "attributes": {"machMode": 2, "remainingTimeMM": 5},
+                "settings": {},
+                "statistics": {},
+            }
+        }
+        entities = await _build("sensor", data)
+        by_id = {e._attr_unique_id: e for e in entities}
+        self.assertIn("wm_TD_state", by_id)
+        self.assertIn("wm_TD_remaining_time", by_id)
+        for entity in entities:
+            info = entity.device_info
+            self.assertEqual({(DOMAIN, "wm_TD")}, info["identifiers"])
+            self.assertNotIn("via_device", info)
 
 
 if __name__ == "__main__":

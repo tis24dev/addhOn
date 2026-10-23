@@ -203,6 +203,9 @@
       "errors": {
         "name": "Errori"
       },
+      "anti_crease_time": {
+        "name": "Tempo antipiega"
+      },
       "delay_time": {
         "name": "Ritardo Avvio"
       },

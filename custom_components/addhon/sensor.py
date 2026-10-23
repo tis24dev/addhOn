@@ -16,7 +16,7 @@ NOT be changed, otherwise already-registered entities would be duplicated/orphan
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import math
 import time
@@ -56,6 +56,7 @@ from .const import (
     APPLIANCE_HO,
     APPLIANCE_HOB,
     APPLIANCE_HW,
+    APPLIANCE_LC,
     APPLIANCE_IH,
     APPLIANCE_KT,
     APPLIANCE_OV,
@@ -84,6 +85,8 @@ from .const import (
     RVC_STATE_MAP,
     STAIN_TYPE_MAP,
     TD_ATTR_CYCLES,
+    LC_TUMBLE_DRYER_PHASE_MAP,
+    LC_WASHING_PHASE_MAP,
     TUMBLE_DRYER_PHASE_MAP,
     WASHING_PHASE_MAP,
     WASHING_PHASE_MAP_HQD,
@@ -140,7 +143,7 @@ from .hon_commands import (
     param_range,
     param_values,
 )
-from .program_labels import for_coordinator
+from .program_labels import for_coordinator, lc_label_target
 from .ref_programs import model_zones as _model_zones, my_zone_code_for_value, my_zone_codes
 
 _LOGGER = logging.getLogger(__name__)
@@ -199,6 +202,9 @@ class HonSensorEntityDescription(SensorEntityDescription):
     # whose setpoint reads 0, which is a legitimate mode (#93). Defaults to None: no
     # existing entity changes behaviour.
     requires_zone: str | None = None
+    # Laundry Centre unit (`"WM"` / `"TD"`) the entity belongs to (#124): it sits on that
+    # unit's child device and its unique_id carries the unit. None everywhere else.
+    unit: str | None = None
 
 
 # State + remaining time: identical for washer/washer-dryer/tumble dryer.
@@ -295,6 +301,29 @@ def _phase_dry(raw) -> str | None:
     if raw is None:
         return None
     return TUMBLE_DRYER_PHASE_MAP.get(str(raw))
+
+
+def _lc_phase(raw, table: dict[str, str]) -> str | None:
+    """Look a phase number up in an LC table: None if missing, garbage or unlisted.
+
+    The LC tables carry no SKIP entry, so there is nothing to step back over (#124).
+    """
+    if raw is None:
+        return None
+    try:
+        return table.get(str(int(float(raw))))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def lc_wash_phase(raw) -> str | None:
+    """`WMprPhase` -> washing-phase ENUM key, on the Laundry Centre washer table."""
+    return _lc_phase(raw, LC_WASHING_PHASE_MAP)
+
+
+def lc_dry_phase(raw) -> str | None:
+    """`TDprPhase` -> dryer-phase ENUM key, on the Laundry Centre dryer table."""
+    return _lc_phase(raw, LC_TUMBLE_DRYER_PHASE_MAP)
 
 
 def _stain(raw) -> str | None:
@@ -1411,6 +1440,60 @@ _AIR_PURIFIER: tuple[HonSensorEntityDescription, ...] = (
     ),
 )
 
+def _by_key(
+    rows: tuple[HonSensorEntityDescription, ...], key: str
+) -> HonSensorEntityDescription:
+    return next(row for row in rows if row.key == key)
+
+
+def _lc_row(
+    base: HonSensorEntityDescription, unit: str | None, attr_key: str, **changes
+) -> HonSensorEntityDescription:
+    """A Laundry Centre row: the washer/dryer description, re-pointed at the LC key.
+
+    Everything but the attribute, the unit and the gate stays the existing row's, so
+    the translation key, the classes and the ENUM options are the WM / TD ones (#124).
+    """
+    return replace(base, unit=unit, attr_key=attr_key, gated=True, **changes)
+
+
+# Laundry Centre (LC, #124): one MAC carrying a washer and a dryer, read-only. The unit
+# rows sit on the unit's child device; the two energy totals are the machine's and stay
+# on the LC. Every row is created only where the shadow carries its key.
+_LC: tuple[HonSensorEntityDescription, ...] = (
+    _lc_row(_by_key(_WASH_CONSUMPTION, "total_energy"), None, "totalElectricityUsed"),
+    _lc_row(_by_key(_WASH_CONSUMPTION, "current_energy"), None, "currentElectricityUsed"),
+    _lc_row(_STATE, "WM", "WMmachMode"),
+    _lc_row(_REMAINING, "WM", "WMremainingTimeMM"),
+    _lc_row(_PROGRAM_NAME, "WM", "WMprogramName"),
+    _lc_row(_PHASE_WASH, "WM", "WMprPhase", value_fn=lc_wash_phase),
+    _lc_row(_ERRORS, "WM", "WMerrors"),
+    _lc_row(_by_key(_WASH_CONSUMPTION, "total_washes"), "WM", "WMtotalWashCycle"),
+    _lc_row(_by_key(_WASH_CONSUMPTION, "total_water"), "WM", "WMtotalWaterUsed"),
+    _lc_row(_by_key(_WASH_CONSUMPTION, "current_water"), "WM", "WMcurrentWaterUsed"),
+    _lc_row(_by_key(_WASH_DOSE, "current_wash_cycle"), "WM", "WMcurrentWashCycle"),
+    # Unprefixed on the shadow: the dosing system belongs to the machine's washer.
+    _lc_row(_by_key(_WASH_DOSE, "detergent_level"), "WM", "detergentPercent"),
+    _lc_row(_by_key(_WASH_DOSE, "detergent_weight"), "WM", "haier_DetergentWeight"),
+    _lc_row(_by_key(_WASH_DOSE, "softener_weight"), "WM", "haier_SoftenerWeight"),
+    _lc_row(_STATE, "TD", "TDmachMode"),
+    _lc_row(_REMAINING, "TD", "TDremainingTimeMM"),
+    _lc_row(_PROGRAM_NAME, "TD", "TDprogramName"),
+    _lc_row(_PHASE_DRY, "TD", "TDprPhase", value_fn=lc_dry_phase),
+    _lc_row(_ERRORS, "TD", "TDerrors"),
+    # Neutral name on purpose: whether this is the time left or the set duration is not
+    # known (117 on the dump, during the anti-crease); the app never reads it.
+    HonSensorEntityDescription(
+        key="anti_crease_time",
+        attr_key="TDantiCreaseTime",
+        unit="TD",
+        gated=True,
+        icon="mdi:tshirt-crew",
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        device_class=SensorDeviceClass.DURATION,
+    ),
+)
+
 SENSORS: dict[str, tuple[HonSensorEntityDescription, ...]] = {
     APPLIANCE_AC: _AC,
     APPLIANCE_AP: _AIR_PURIFIER,
@@ -1432,6 +1515,7 @@ SENSORS: dict[str, tuple[HonSensorEntityDescription, ...]] = {
     APPLIANCE_WH: _WATER_HEATER,
     APPLIANCE_HW: _HEAT_PUMP_WATER_HEATER,
     APPLIANCE_RVC: _VACUUM,
+    APPLIANCE_LC: _LC,
 }
 
 
@@ -1493,7 +1577,16 @@ async def async_setup_entry(
                 and not any(k in attributes for k in description.attr_fallbacks)
             ):
                 continue
-            if description.key == PROGRAM_NAME_KEY:
+            if description.unit is not None and description.key == PROGRAM_NAME_KEY:
+                # A Laundry Centre unit's name is an engine slug in the LC namespace
+                # scheme, which only the LC remap can turn into a label (#124).
+                entity_class = HonLcProgramNameSensor
+            elif description.unit is not None and description.key == "remaining_time":
+                # The LC reports the time as an hour half and a minute half (#124).
+                entity_class = HonLcRemainingTimeSensor
+            elif description.unit is not None:
+                entity_class = HonSensor
+            elif description.key == PROGRAM_NAME_KEY:
                 # Needs the appliance type + the coordinator's catalog to resolve the
                 # i18n key, neither of which a value_fn can see (#71).
                 entity_class = HonProgramNameSensor
@@ -1644,6 +1737,11 @@ class HonSensor(HonBaseEntity, SensorEntity):
         self.entity_description = description
         self._attr_translation_key = description.translation_key or description.key
         self._attr_unique_id = f"{appliance_id}_{description.key}"
+        if description.unit is not None:
+            # A Laundry Centre unit: its own child device and a unique_id that names it,
+            # since the washer and the dryer share every key (#124).
+            self._unit = description.unit
+            self._attr_unique_id = f"{appliance_id}_{description.unit}_{description.key}"
 
     @property
     def native_value(self):
@@ -1688,6 +1786,45 @@ class HonProgramNameSensor(HonSensor):
             self._appliance_data.get("type"), raw
         )
         return label or raw
+
+
+class HonLcProgramNameSensor(HonSensor):
+    """Program name of a Laundry Centre unit, through the app's LC remap (#124).
+
+    `WMprogramName` / `TDprogramName` are slugs such as `hqd_wm_smart`, which the catalog
+    knows as `HQD_SMART` under the washer (or dryer) namespace; `lc_label_target` is the
+    app's `remapProgramTitleLc`. Falls back to the raw slug, like the single-unit sensor.
+    """
+
+    @property
+    def native_value(self):
+        raw = super().native_value
+        if not isinstance(raw, str):
+            return raw
+        label = for_coordinator(self.coordinator).label(*lc_label_target(raw))
+        return label or raw
+
+
+class HonLcRemainingTimeSensor(HonSensor):
+    """Remaining minutes of a Laundry Centre unit: an hour half plus a minute half (#124).
+
+    A missing half counts as zero; with both missing, or either present but not a
+    number, there is no duration to report.
+    """
+
+    @property
+    def native_value(self):
+        raw = (
+            self._get_attr(f"{self._unit}remainingTimeHH"),
+            self._get_attr(self.entity_description.attr_key),
+        )
+        if all(half is None for half in raw):
+            return None
+        try:
+            hours, minutes = (0.0 if half is None else float(half) for half in raw)
+        except (TypeError, ValueError):
+            return None
+        return hours * 60 + minutes
 
 
 class HonWashPhaseSensor(HonSensor):
