@@ -70,6 +70,12 @@ def _install_platform_stubs() -> None:
         binary_mod, "BinarySensorEntity", type("BinarySensorEntity", (), {})
     )
 
+    button_mod = _mod("homeassistant.components.button")
+    components.button = button_mod
+    button_mod.ButtonEntity = getattr(
+        button_mod, "ButtonEntity", type("ButtonEntity", (), {})
+    )
+
     entity_platform = _mod("homeassistant.helpers.entity_platform")
     sys.modules["homeassistant.helpers"].entity_platform = entity_platform
     entity_platform.AddEntitiesCallback = getattr(
@@ -487,6 +493,33 @@ class LcBinarySensorsTest(unittest.IsolatedAsyncioTestCase):
         ids = {e._attr_unique_id for e in await _build("binary_sensor", {"mac-1": _lc(attrs)})}
         self.assertFalse([i for i in ids if i.startswith("mac-1_TD_")])
         self.assertIn("mac-1_WM_pause", ids)
+
+
+class LcDiagnosticsTest(unittest.IsolatedAsyncioTestCase):
+    def test_coverage_maps_the_lc_keys(self) -> None:
+        from custom_components.addhon import diagnostics
+
+        mapped_attrs, _params, sources, missing = diagnostics._mapped_sets("LC")
+        self.assertFalse(missing)
+        for key in (
+            "WMmachMode", "WMremainingTimeMM", "WMremainingTimeHH", "TDprPhase",
+            "TDantiCreaseTime", "totalElectricityUsed", "autoDetergentStatus",
+        ):
+            self.assertIn(key, mapped_attrs)
+        for row in (
+            "sensor.WM_state", "sensor.TD_state", "sensor.total_energy",
+            "binary_sensor.WM_pause", "binary_sensor.TD_pause",
+            "binary_sensor.connectivity",
+        ):
+            self.assertIn(row, sources)
+        self.assertNotIn("sensor.state", sources)
+        self.assertFalse(
+            [r for r in sources if r.split(".")[0] in {"select", "switch", "number", "button"}]
+        )
+
+    async def test_no_command_entity_for_the_lc(self) -> None:
+        for platform in ("select", "button", "switch", "number"):
+            self.assertEqual([], await _build(platform, DATA), platform)
 
 
 if __name__ == "__main__":

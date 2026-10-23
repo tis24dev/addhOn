@@ -2727,13 +2727,21 @@ def _mapped_sets(
     # question and a different one.
     for desc in SENSORS.get(app_type, ()):
         declared = [desc.attr_key, *(getattr(desc, "attr_fallbacks", ()) or ())]
+        # A Laundry Centre unit row (#124) is keyed like its unique_id suffix,
+        # `<unit>_<key>`; its remaining time also reads the hour half.
+        unit = getattr(desc, "unit", None)
+        if unit is not None and desc.key == "remaining_time":
+            declared.append(f"{unit}remainingTimeHH")
         mapped_attrs.update(declared)
-        sources[f"sensor.{desc.key}"] = _source_row(
+        row = f"{unit}_{desc.key}" if unit is not None else desc.key
+        sources[f"sensor.{row}"] = _source_row(
             read=[key for name in declared for key in _read_chain(name)]
         )
     for desc in BINARY_SENSORS.get(app_type, ()):
         mapped_attrs.add(desc.attr_key)
-        sources[f"binary_sensor.{desc.key}"] = _source_row(
+        unit = getattr(desc, "unit", None)
+        row = f"{unit}_{desc.key}" if unit is not None else desc.key
+        sources[f"binary_sensor.{row}"] = _source_row(
             read=_read_chain(desc.attr_key)
         )
     # The only row in this walk with no type gate and no table to be empty, so
