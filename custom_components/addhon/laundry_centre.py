@@ -53,6 +53,20 @@ def _lc_ids(coord_data) -> list[str]:
     ]
 
 
+def lc_parent_id(identifier: str, coord_data: Mapping | None) -> str | None:
+    """The LC a unit device identifier belongs to, or None.
+
+    `<id>_WM` / `<id>_TD` name the child device of the LC `<id>`; any other identifier,
+    or one whose `<id>` is absent or not an LC, belongs to no LC.
+    """
+    if not isinstance(identifier, str):
+        return None
+    appliance_id, _, unit = identifier.rpartition("_")
+    if unit not in LC_UNITS or appliance_id not in _lc_ids(coord_data):
+        return None
+    return appliance_id
+
+
 def live_unit_device_ids(coord_data: Mapping | None) -> set[str]:
     """The child device ids that exist while their LC is in the snapshot."""
     return {

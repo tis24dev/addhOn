@@ -1019,6 +1019,40 @@ class CommandHistoryRefreshTest(unittest.TestCase):
         self.assertEqual("WD", result["appliance"]["type"])
 
 
+class LaundryCentreUnitDiagnosticsTest(unittest.TestCase):
+    """A unit device of a Laundry Centre downloads the dump of its LC (#124)."""
+
+    def _hass(self):
+        coord = _build_coordinator()
+        coord.data["mac-1"] = {
+            "type": "LC", "name": "LC", "model": "CLC108GNU1",
+            "attributes": {"WMmachMode": 2}, "statistics": {},
+        }
+        coord.data["x"] = {
+            "type": "WM", "name": "Plain", "model": "HW", "attributes": {}, "statistics": {},
+        }
+        return FakeHass(coord)
+
+    def _dump(self, hass, identifier):
+        device = FakeDevice(identifiers={(DOMAIN, identifier)})
+        return _run(diagnostics.async_get_device_diagnostics(hass, FakeEntry(), device))
+
+    def test_a_unit_device_returns_the_dump_of_its_lc(self):
+        hass = self._hass()
+        parent = self._dump(hass, "mac-1")
+        for unit in ("mac-1_WM", "mac-1_TD"):
+            with self.subTest(unit):
+                result = self._dump(hass, unit)
+                self.assertEqual(set(parent), set(result))
+                self.assertIn("appliance", result)
+                self.assertEqual("LC", result["appliance"]["type"])
+
+    def test_a_non_lc_prefix_keeps_the_empty_result(self):
+        hass = self._hass()
+        self.assertEqual(["generated_at"], list(self._dump(hass, "x_WM")))
+        self.assertEqual(["generated_at"], list(self._dump(hass, "absent_WM")))
+
+
 class DiagnosticsDeviceTest(unittest.TestCase):
     def test_device_diagnostics_returns_single_matching_appliance(self):
         coord = _build_coordinator()

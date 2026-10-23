@@ -120,6 +120,7 @@ from .hpwh import (
     lifetime_as_dict,
     lifetime_from_dict,
 )
+from .laundry_centre import lc_parent_id
 from .ref_programs import favourite_names, program_categories
 
 _LOGGER = logging.getLogger(__name__)
@@ -5936,7 +5937,13 @@ async def async_get_device_diagnostics(
         return {"generated_at": _stamp_text(now)}
     data = coord_data.get(appliance_id)
     if not isinstance(data, Mapping):
-        return {"generated_at": _stamp_text(now)}
+        # A unit device of a Laundry Centre (`<id>_WM` / `<id>_TD`) is not a key of the
+        # snapshot; it answers with the dump of its LC. Only reached on a direct miss.
+        lc_id = lc_parent_id(appliance_id, coord_data)
+        data = coord_data.get(lc_id) if lc_id is not None else None
+        if not isinstance(data, Mapping):
+            return {"generated_at": _stamp_text(now)}
+        appliance_id = lc_id
     await _refresh_command_history(hass, entry, data.get("appliance"))
     # The inventory is built over EVERY appliance id, not just this one: attribution
     # is by unique_id prefix and those prefixes nest, so hiding the siblings would
