@@ -19,6 +19,7 @@ APPLIANCE_WM = "WM"       # Washing Machine
 APPLIANCE_TD = "TD"       # Tumble Dryer
 APPLIANCE_WD = "WD"       # Washer-dryer
 APPLIANCE_AP = "AP"       # Air purifier
+APPLIANCE_LC = "LC"       # Laundry Centre: a washer (WM) and a dryer (TD) under one MAC (#124)
 
 # --- Tier 2: read-only types --------------------------------------------------
 # Additional types exposed as read-only sensors. The parameters come from the
@@ -438,6 +439,53 @@ TUMBLE_DRYER_PHASE_MAP = {
     "18": "rotation",
     "19": "drying",
     "20": "drying",
+}
+# The Laundry Centre (#124) reads a pair of phase tables of its own: the app's
+# `prPhaseToLCWMPhase` (apk2 decomp.txt:1003605-1003687) for the washer and
+# `prPhaseToLCTDPhase` (@1003688-1003719) for the dryer. Both map onto the phase
+# names the existing tables already use; a number the app does not list is absent
+# here too, so the sensor reads unknown rather than inventing a phase. The app calls
+# the dryer's 3 `HEAT_STROKE`; it is "heating" here, the nearest name we have.
+LC_WASHING_PHASE_MAP = {
+    "0": "ready",
+    "1": "weighing",
+    "2": "weighing",
+    "3": "washing",
+    "4": "heating",
+    "5": "washing",
+    "6": "washing",
+    "7": "spinning",
+    "8": "rinsing",
+    "9": "rinsing",
+    "10": "spinning",
+    "11": "spinning",
+    "12": "drying",
+    "13": "drying",
+    "14": "ready",
+    "15": "scheduled",
+    "16": "tumbling",
+    "17": "drying",
+    "18": "ready",
+    "19": "ready",
+    "20": "steam",
+    "21": "washing",
+    "22": "washing",
+    "23": "washing",
+    "24": "washing",
+    "25": "drying",
+    "26": "washing",
+}
+LC_TUMBLE_DRYER_PHASE_MAP = {
+    "0": "ready",
+    "2": "cooling",
+    "3": "heating",
+    "4": "drying",
+    "5": "cooling",
+    "7": "cooling",
+    "8": "drying",
+    "9": "drying",
+    "10": "drying",
+    "11": "drying",
 }
 
 # --- value->machine-key maps for the Tier 2 types (read-only) -----------------

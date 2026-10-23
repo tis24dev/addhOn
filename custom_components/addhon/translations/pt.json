@@ -114,6 +114,12 @@
   "device": {
     "diagnostics": {
       "name": "Diagnóstico do addhOn"
+    },
+    "lc_washer": {
+      "name": "{name} Máquina de lavar"
+    },
+    "lc_dryer": {
+      "name": "{name} Máquina de secar"
     }
   },
   "entity": {

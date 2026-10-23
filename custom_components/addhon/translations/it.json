@@ -136,6 +136,12 @@
   "device": {
     "diagnostics": {
       "name": "addhOn diagnostica"
+    },
+    "lc_washer": {
+      "name": "{name} Lavatrice"
+    },
+    "lc_dryer": {
+      "name": "{name} Asciugatrice"
     }
   },
   "entity": {

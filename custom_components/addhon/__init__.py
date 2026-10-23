@@ -53,6 +53,7 @@ from .logging_utils import (
     silence_mqtt_noise,
 )
 from .debug_utils import redact_id, redact_mac
+from .laundry_centre import live_unit_device_ids, register_parent_devices
 from . import program_labels
 
 _LOGGER = logging.getLogger(__name__)
@@ -880,6 +881,9 @@ async def async_remove_config_entry_device(
     # construction, whatever the poll returned. `base_entity.account_device_info`
     # builds the same identifier from the same constant.
     live_ids = set(coord_data) | {f"{entry.entry_id}{ACCOUNT_DEVICE_SUFFIX}"}
+    # The washer and dryer devices of a Laundry Centre are not appliances of the
+    # snapshot, only their LC is; they live and die with it.
+    live_ids |= live_unit_device_ids(coord_data)
     ours = {ident for domain, ident in device.identifiers if domain == DOMAIN}
     return bool(ours) and not (ours & live_ids)
 
@@ -1135,6 +1139,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _remove_legacy_entities(hass, entry)
         except Exception as err:
             _LOGGER.debug("Legacy entity cleanup failed: %s", err)
+
+        # The parent device of each Laundry Centre, before the platforms hang the
+        # washer and dryer devices off it. Same rule: never block the setup.
+        try:
+            from homeassistant.helpers import device_registry as dr
+
+            register_parent_devices(
+                dr.async_get(hass), entry.entry_id, coordinator.data
+            )
+        except Exception as err:
+            _LOGGER.debug("Laundry Centre parent registration failed: %s", err)
 
         _LOGGER.debug("Setup debug: forwarding platforms %s", PLATFORMS)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

@@ -184,6 +184,19 @@ def _run(entries, coord_data=None, devices=(), issues=None, on_issue=None):
 
 
 class LegacyCleanupTest(unittest.TestCase):
+
+    def test_lc_unit_entities_survive_the_cleanup(self) -> None:
+        # The unit entities of a Laundry Centre carry `<id>_WM_` / `<id>_TD_`; the
+        # TD rule strips washer-only sensors from tumble dryers and must not read
+        # an LC as one.
+        entries = [
+            FakeRegEntry("sensor.lc_wm_state", "mac-1_WM_state"),
+            FakeRegEntry("sensor.lc_td_program_phase", "mac-1_TD_program_phase"),
+            FakeRegEntry("sensor.lc_total_energy", "mac-1_total_energy"),
+        ]
+        removed, _detached = _run(entries, coord_data={"mac-1": {"type": "LC"}})
+        self.assertEqual([], removed)
+
     # -- reading reconciliation (#93 / #94) ---------------------------------------
 
     def test_a_reading_whose_switch_vanished_is_re_enabled(self) -> None:
@@ -774,6 +787,15 @@ class RemoveConfigEntryDeviceTest(unittest.IsolatedAsyncioTestCase):
             FakeDevice("dev-z1", {(DOMAIN, "MAC_z1")}),
         )
         self.assertTrue(allowed)
+
+    async def test_lc_unit_devices_follow_their_lc(self) -> None:
+        # The washer and dryer devices are not keys of the snapshot, only the LC
+        # is: they must read as live while it is there and stale once it is gone.
+        unit = FakeDevice("dev-wm", {(DOMAIN, "mac-1_WM")})
+        live = self._hass({"mac-1": {"type": "LC"}})
+        self.assertFalse(await async_remove_config_entry_device(live, FakeEntry(), unit))
+        gone = self._hass({"mac-2": {"type": "WM"}})
+        self.assertTrue(await async_remove_config_entry_device(gone, FakeEntry(), unit))
 
     async def test_a_live_device_cannot_be_deleted(self) -> None:
         # Otherwise the user deletes an appliance the next poll recreates, which

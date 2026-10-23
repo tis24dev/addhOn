@@ -104,6 +104,10 @@ class HonBaseEntity(CoordinatorEntity):
 
     _attr_has_entity_name = True
 
+    # The unit ("WM" / "TD") of a Laundry Centre this entity belongs to; None on
+    # every other entity. Set, it moves the entity onto the unit's child device.
+    _unit: str | None = None
+
     def __init__(self, coordinator, appliance_id: str, client=None) -> None:
         super().__init__(coordinator)
         self._appliance_id = appliance_id
@@ -159,6 +163,10 @@ class HonBaseEntity(CoordinatorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         data = self._appliance_data
+        if self._unit is not None:
+            from .laundry_centre import unit_device_info
+
+            return unit_device_info(self._appliance_id, self._unit, data)
         return DeviceInfo(
             identifiers={(DOMAIN, self._appliance_id)},
             name=data.get("name", "Haier Appliance"),
