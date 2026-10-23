@@ -792,10 +792,17 @@ class RemoveConfigEntryDeviceTest(unittest.IsolatedAsyncioTestCase):
         # The washer and dryer devices are not keys of the snapshot, only the LC
         # is: they must read as live while it is there and stale once it is gone.
         unit = FakeDevice("dev-wm", {(DOMAIN, "mac-1_WM")})
-        live = self._hass({"mac-1": {"type": "LC"}})
+        live = self._hass({"mac-1": {"type": "LC", "attributes": {"WMmachMode": 2}}})
         self.assertFalse(await async_remove_config_entry_device(live, FakeEntry(), unit))
         gone = self._hass({"mac-2": {"type": "WM"}})
         self.assertTrue(await async_remove_config_entry_device(gone, FakeEntry(), unit))
+
+    async def test_a_silent_lc_unit_device_can_be_deleted(self) -> None:
+        # Its LC is still there, but the dryer reports no key of its own: its device
+        # has no entity left and must not be stuck in the registry.
+        dryer = FakeDevice("dev-td", {(DOMAIN, "mac-1_TD")})
+        lc = self._hass({"mac-1": {"type": "LC", "attributes": {"WMmachMode": 2, "TD": {}}}})
+        self.assertTrue(await async_remove_config_entry_device(lc, FakeEntry(), dryer))
 
     async def test_a_live_device_cannot_be_deleted(self) -> None:
         # Otherwise the user deletes an appliance the next poll recreates, which

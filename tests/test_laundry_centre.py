@@ -396,12 +396,26 @@ class LiveUnitDevicesTest(unittest.TestCase):
         self.assertIsNone(resolve(None, data))
 
     def test_unit_devices_are_live_only_with_their_lc(self) -> None:
+        both = {"WMmachMode": 2, "TDmachMode": 3}
         self.assertEqual(
             {"mac-1_WM", "mac-1_TD"},
             laundry_centre.live_unit_device_ids(
-                {"mac-1": {"type": "LC"}, "mac-2": {"type": "WM"}}
+                {"mac-1": {"type": "LC", "attributes": both}, "mac-2": {"type": "WM"}}
             ),
         )
+
+    def test_a_unit_without_keys_is_not_live(self) -> None:
+        # The bare `WM` / `TD` keys are the per-unit statistics, there whatever the
+        # shadow reports: they do not keep a silent unit's device alive.
+        wm_only = {"WMmachMode": 2, "WM": {}, "TD": {}, "totalElectricityUsed": 1}
+        self.assertEqual(
+            {"mac-1_WM"},
+            laundry_centre.live_unit_device_ids({"mac-1": {"type": "LC", "attributes": wm_only}}),
+        )
+        self.assertEqual(
+            set(), laundry_centre.live_unit_device_ids({"mac-1": {"type": "LC"}})
+        )
+        self.assertEqual(("TD",), laundry_centre.reported_units({"TDpause": 1, "WM": {}}))
 
     def test_no_snapshot_no_unit_devices(self) -> None:
         self.assertEqual(set(), laundry_centre.live_unit_device_ids(None))
@@ -528,7 +542,10 @@ class LcSensorsTest(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_program_names_are_translated_through_the_remap(self) -> None:
-        entities = await _build("sensor", DATA)
+        # A copy: the last step rewrites a programme name, and the shared fixture must
+        # read the same for every test, and for this one when it is run again.
+        data = {"mac-1": _lc(dict(LC_ATTRIBUTES))}
+        entities = await _build("sensor", data)
         by_id = {e._attr_unique_id: e for e in entities}
         wm, td = by_id["mac-1_WM_program_name"], by_id["mac-1_TD_program_name"]
         self.assertEqual("hqd_wm_smart", wm.native_value)
@@ -538,8 +555,9 @@ class LcSensorsTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual("Smart", wm.native_value)
         self.assertEqual("Smart A.I.", td.native_value)
-        wm.coordinator.data["mac-1"]["attributes"]["WMprogramName"] = "No Program"
+        data["mac-1"]["attributes"]["WMprogramName"] = "No Program"
         self.assertEqual("No Program", wm.native_value)
+        self.assertEqual("hqd_wm_smart", LC_ATTRIBUTES["WMprogramName"])
 
     async def test_remaining_time_tolerates_partial_and_garbage_halves(self) -> None:
         data = {"mac-1": _lc(dict(LC_ATTRIBUTES))}
@@ -554,6 +572,8 @@ class LcSensorsTest(unittest.IsolatedAsyncioTestCase):
             ("nan", 5, None),
             (1, "inf", None),
             ("-inf", None, None),
+            (10**400, 5, None),
+            (1, 10**400, None),
             (0, 31, 31),
         ):
             attrs.pop("WMremainingTimeHH", None)
@@ -564,6 +584,14 @@ class LcSensorsTest(unittest.IsolatedAsyncioTestCase):
                 attrs["WMremainingTimeMM"] = minutes
             with self.subTest(hours=hours, minutes=minutes):
                 self.assertEqual(expected, sensor.native_value)
+
+    async def test_an_hour_half_alone_creates_the_remaining_time(self) -> None:
+        attributes = dict(LC_ATTRIBUTES)
+        attributes.pop("WMremainingTimeMM")
+        attributes["WMremainingTimeHH"] = 1
+        entities = await _build("sensor", {"mac-1": _lc(attributes)})
+        sensor = {e._attr_unique_id: e for e in entities}["mac-1_WM_remaining_time"]
+        self.assertEqual(60, sensor.native_value)
 
     def test_the_lc_phase_functions(self) -> None:
         from custom_components.addhon import sensor as sensor_module

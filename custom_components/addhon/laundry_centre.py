@@ -67,13 +67,35 @@ def lc_parent_id(identifier: str, coord_data: Mapping | None) -> str | None:
     return appliance_id
 
 
-def live_unit_device_ids(coord_data: Mapping | None) -> set[str]:
-    """The child device ids that exist while their LC is in the snapshot."""
-    return {
-        unit_device_id(appliance_id, unit)
-        for appliance_id in _lc_ids(coord_data)
+def reported_units(attributes) -> tuple[str, ...]:
+    """The units whose own keys are in an LC's attributes, in `LC_UNITS` order.
+
+    A unit's shadow keys carry its code as a prefix (`WMmachMode`, `TDprPhase`). The
+    bare code does not count: the per-unit statistics land in the attributes under
+    `WM` / `TD` whatever the shadow reports.
+    """
+    if not isinstance(attributes, Mapping):
+        return ()
+    keys = [str(key) for key in attributes]
+    return tuple(
+        unit
         for unit in LC_UNITS
-    }
+        if any(key.startswith(unit) and key != unit for key in keys)
+    )
+
+
+def live_unit_device_ids(coord_data: Mapping | None) -> set[str]:
+    """The child device ids that exist: their LC is in the snapshot and their unit
+    still reports keys of its own.
+
+    A unit that stopped reporting has no entity left, and its device would otherwise
+    stay in the registry, empty and impossible to delete.
+    """
+    live: set[str] = set()
+    for appliance_id in _lc_ids(coord_data):
+        attributes = coord_data[appliance_id].get("attributes")
+        live.update(unit_device_id(appliance_id, unit) for unit in reported_units(attributes))
+    return live
 
 
 def register_parent_devices(dev_reg, entry_id: str, coord_data: Mapping | None) -> int:

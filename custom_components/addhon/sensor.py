@@ -1464,7 +1464,9 @@ _LC: tuple[HonSensorEntityDescription, ...] = (
     _lc_row(_by_key(_WASH_CONSUMPTION, "total_energy"), None, "totalElectricityUsed"),
     _lc_row(_by_key(_WASH_CONSUMPTION, "current_energy"), None, "currentElectricityUsed"),
     _lc_row(_STATE, "WM", "WMmachMode"),
-    _lc_row(_REMAINING, "WM", "WMremainingTimeMM"),
+    # The hour half is a fallback for the creation gate only, so a unit reporting just
+    # the hours still gets its remaining time: the class itself reads both halves.
+    _lc_row(_REMAINING, "WM", "WMremainingTimeMM", attr_fallbacks=("WMremainingTimeHH",)),
     _lc_row(_PROGRAM_NAME, "WM", "WMprogramName"),
     _lc_row(_PHASE_WASH, "WM", "WMprPhase", value_fn=lc_wash_phase),
     _lc_row(_ERRORS, "WM", "WMerrors"),
@@ -1477,7 +1479,7 @@ _LC: tuple[HonSensorEntityDescription, ...] = (
     _lc_row(_by_key(_WASH_DOSE, "detergent_weight"), "WM", "haier_DetergentWeight"),
     _lc_row(_by_key(_WASH_DOSE, "softener_weight"), "WM", "haier_SoftenerWeight"),
     _lc_row(_STATE, "TD", "TDmachMode"),
-    _lc_row(_REMAINING, "TD", "TDremainingTimeMM"),
+    _lc_row(_REMAINING, "TD", "TDremainingTimeMM", attr_fallbacks=("TDremainingTimeHH",)),
     _lc_row(_PROGRAM_NAME, "TD", "TDprogramName"),
     _lc_row(_PHASE_DRY, "TD", "TDprPhase", value_fn=lc_dry_phase),
     _lc_row(_ERRORS, "TD", "TDerrors"),
@@ -1822,7 +1824,7 @@ class HonLcRemainingTimeSensor(HonSensor):
             return None
         try:
             hours, minutes = (0.0 if half is None else float(half) for half in raw)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         total = hours * 60 + minutes
         return total if math.isfinite(total) else None

@@ -2729,10 +2729,8 @@ def _mapped_sets(
     for desc in SENSORS.get(app_type, ()):
         declared = [desc.attr_key, *(getattr(desc, "attr_fallbacks", ()) or ())]
         # A Laundry Centre unit row (#124) is keyed like its unique_id suffix,
-        # `<unit>_<key>`; its remaining time also reads the hour half.
+        # `<unit>_<key>`; its remaining time declares the hour half as a fallback.
         unit = getattr(desc, "unit", None)
-        if unit is not None and desc.key == "remaining_time":
-            declared.append(f"{unit}remainingTimeHH")
         mapped_attrs.update(declared)
         row = f"{unit}_{desc.key}" if unit is not None else desc.key
         sources[f"sensor.{row}"] = _source_row(

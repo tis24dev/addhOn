@@ -882,7 +882,8 @@ async def async_remove_config_entry_device(
     # builds the same identifier from the same constant.
     live_ids = set(coord_data) | {f"{entry.entry_id}{ACCOUNT_DEVICE_SUFFIX}"}
     # The washer and dryer devices of a Laundry Centre are not appliances of the
-    # snapshot, only their LC is; they live and die with it.
+    # snapshot, only their LC is; each lives while its LC is there and its unit
+    # still reports keys of its own.
     live_ids |= live_unit_device_ids(coord_data)
     ours = {ident for domain, ident in device.identifiers if domain == DOMAIN}
     return bool(ours) and not (ours & live_ids)
@@ -1141,15 +1142,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Legacy entity cleanup failed: %s", err)
 
         # The parent device of each Laundry Centre, before the platforms hang the
-        # washer and dryer devices off it. Same rule: never block the setup.
+        # washer and dryer devices off it. Same rule: never block the setup. A
+        # failure is not silent, though: a child registered before its parent loses
+        # the link until an entity of it is registered again, at the latest on the
+        # next restart, so the user has to be able to see why.
         try:
             from homeassistant.helpers import device_registry as dr
 
-            register_parent_devices(
-                dr.async_get(hass), entry.entry_id, coordinator.data
-            )
+            dev_reg = dr.async_get(hass)
+            register_parent_devices(dev_reg, entry.entry_id, coordinator.data)
         except Exception as err:
-            _LOGGER.debug("Laundry Centre parent registration failed: %s", err)
+            _LOGGER.warning(
+                "Laundry Centre parent device registration failed (%s); the washer "
+                "and dryer devices may show without their parent until the next "
+                "restart",
+                err,
+            )
 
         _LOGGER.debug("Setup debug: forwarding platforms %s", PLATFORMS)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
