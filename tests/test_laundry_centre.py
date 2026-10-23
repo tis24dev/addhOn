@@ -276,6 +276,20 @@ class UnitDeviceTest(unittest.TestCase):
 
 
 class LiveUnitDevicesTest(unittest.TestCase):
+    def test_lc_parent_id_resolves_only_unit_devices_of_an_lc(self) -> None:
+        data = {"mac-1": _lc(), "x": {"type": "WM"}, "a_b": _lc()}
+        resolve = laundry_centre.lc_parent_id
+        self.assertEqual("mac-1", resolve("mac-1_WM", data))
+        self.assertEqual("mac-1", resolve("mac-1_TD", data))
+        self.assertEqual("a_b", resolve("a_b_TD", data))
+        self.assertIsNone(resolve("x_WM", data))
+        self.assertIsNone(resolve("mac-1", data))
+        self.assertIsNone(resolve("mac-1_XX", data))
+        self.assertIsNone(resolve("absent_WM", data))
+        self.assertIsNone(resolve("mac-1_WM", None))
+        self.assertIsNone(resolve("mac-1_WM", []))
+        self.assertIsNone(resolve(None, data))
+
     def test_unit_devices_are_live_only_with_their_lc(self) -> None:
         self.assertEqual(
             {"mac-1_WM", "mac-1_TD"},
@@ -432,6 +446,9 @@ class LcSensorsTest(unittest.IsolatedAsyncioTestCase):
             (2, None, 120),
             ("", None, None),
             (None, "x", None),
+            ("nan", 5, None),
+            (1, "inf", None),
+            ("-inf", None, None),
             (0, 31, 31),
         ):
             attrs.pop("WMremainingTimeHH", None)

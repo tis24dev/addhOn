@@ -1809,7 +1809,7 @@ class HonLcRemainingTimeSensor(HonSensor):
     """Remaining minutes of a Laundry Centre unit: an hour half plus a minute half (#124).
 
     A missing half counts as zero; with both missing, or either present but not a
-    number, there is no duration to report.
+    finite number, there is no duration to report.
     """
 
     @property
@@ -1824,7 +1824,8 @@ class HonLcRemainingTimeSensor(HonSensor):
             hours, minutes = (0.0 if half is None else float(half) for half in raw)
         except (TypeError, ValueError):
             return None
-        return hours * 60 + minutes
+        total = hours * 60 + minutes
+        return total if math.isfinite(total) else None
 
 
 class HonWashPhaseSensor(HonSensor):
