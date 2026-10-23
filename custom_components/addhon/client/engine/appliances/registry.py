@@ -11,12 +11,13 @@ from __future__ import annotations
 
 from typing import Any, Optional, Type
 
-from . import dw, ov, ref, td, wc, wd, wh, wm
+from . import dw, lc, ov, ref, td, wc, wd, wh, wm
 from .base import ApplianceExtra
 
 # key = appliance_type.lower()
 _REGISTRY: dict[str, Type[ApplianceExtra]] = {
     "dw": dw.Appliance,
+    "lc": lc.Appliance,
     "ov": ov.Appliance,
     "ref": ref.Appliance,
     "td": td.Appliance,

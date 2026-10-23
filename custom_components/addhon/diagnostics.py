@@ -578,7 +578,9 @@ _CUSTOM_ENTITY_SOURCES: tuple[dict, ...] = (
 #
 # Kept honest by `test_engine_derived_attrs_matches_the_engine` (test_diagnostics.py),
 # which parses `client/engine/` for the assignments rather than trusting this list.
-_ENGINE_DERIVED_ATTRS = frozenset({"programName", "available", "active", "pause"})
+_ENGINE_DERIVED_ATTRS = frozenset(
+    {"programName", "available", "active", "pause", "WMprogramName", "TDprogramName"}
+)
 
 _COVERAGE_META_ATTRS = frozenset(
     {

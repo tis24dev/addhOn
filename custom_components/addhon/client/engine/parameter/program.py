@@ -192,6 +192,55 @@ class HonParameterProgram(HonParameterEnum):
         return self.ids.get(code)
 
     @staticmethod
+    def _family_words(category: Any) -> frozenset[str]:
+        """The words of a category's `programFamily`, or an empty set.
+
+        Mirrors `select._family_words` (the HA layer is not imported from the engine):
+        each value, stripped of `[]`, split on `|` and `_`.
+        """
+        parameters = getattr(category, "parameters", None)
+        family = parameters.get("programFamily") if isinstance(parameters, dict) else None
+        values = getattr(family, "values", None)
+        if not isinstance(values, (list, tuple)):
+            return frozenset()
+        return frozenset(
+            word
+            for value in values
+            for word in str(value).strip().strip("[]").lower().replace("|", "_").split("_")
+            if word
+        )
+
+    def name_for_unit_code(self, code: int, code_key: str) -> str | None:
+        """Programme name for a unit's own code (`WMprCode` / `TDprCode`), or None.
+
+        The Laundry Centre (#124) puts a washer and a dryer under one MAC, and each
+        unit reports its own code. The candidates are the categories, in catalogue
+        order, whose `code_key` parameter reads `code`; categories of the other unit
+        never match, since they carry the other unit's key. Answer, in order:
+
+        1. the first candidate that is neither `iot_*` nor a favourite (the `ids` rule);
+        2. else the first candidate whose `programFamily` words contain `dashboard`
+           (the app's washer dashboard, P6);
+        3. else the first candidate.
+
+        It never reads `self._value`: the active category is not evidence of what runs
+        (P5, pending). And `ids`' "no prCode is claimed by iot_* alone" does not hold on
+        the LC catalogue (WM code 9 belongs to `iot_*` categories only), hence rule 2/3.
+        """
+        candidates = [
+            (name, category)
+            for name, category in self._programs.items()
+            if self._category_int(category, code_key) == code
+        ]
+        for name, category in candidates:
+            if "iot_" not in name and not self._is_favourite(category):
+                return name
+        for name, category in candidates:
+            if "dashboard" in self._family_words(category):
+                return name
+        return candidates[0][0] if candidates else None
+
+    @staticmethod
     def _is_favourite(category: Any) -> bool:
         """True if this category is a favourite, i.e. keyed by a USER-TYPED name.
 
