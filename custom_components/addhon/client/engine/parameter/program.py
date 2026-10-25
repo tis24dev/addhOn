@@ -86,8 +86,16 @@ class HonParameterProgram(HonParameterEnum):
 
         The flip side is a ceiling this map cannot break: it can only ever name the BASE
         program of a code. See `name_for_code` for the precise resolution.
+
+        When several base programs share a code, the first one whose `programFamily`
+        says `dashboard` wins, as on the app's washer dashboard (its card rebuilt from
+        the shadow takes the first `dashboard` category on the code, apk2 decomp.txt
+        @2591908-2591914). Without one, the last base program wins, as before. A
+        tumble-dryer's prCode 75 is claimed by `hqd_duvet` (`dashboard_auto`) and
+        `hqd_feather` (`hidden`): the dial programme, not the hidden one.
         """
         values: dict[int, str] = {}
+        dashboard: dict[int, str] = {}
         for name, parameter in self._programs.items():
             if "iot_" in name:
                 continue
@@ -95,8 +103,11 @@ class HonParameterProgram(HonParameterEnum):
                 continue
             if (fav := parameter.parameters.get("favourite")) and fav.value == "1":
                 continue
-            values[int(parameter.parameters["prCode"].value)] = name
-        return dict(sorted(values.items()))
+            code = int(parameter.parameters["prCode"].value)
+            values[code] = name
+            if code not in dashboard and "dashboard" in self._family_words(parameter):
+                dashboard[code] = name
+        return dict(sorted((values | dashboard).items()))
 
     @staticmethod
     def _category_int(category: Any, key: str) -> int | None:

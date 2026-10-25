@@ -359,6 +359,48 @@ class AmbiguousProgramCodeTest(unittest.TestCase):
         program = app.settings["startProgram.program"]
         self.assertEqual({115: "hqd_cottons", 124: "hqd_smart"}, program.ids)
 
+    @staticmethod
+    def _with_family(category, family):
+        category = json.loads(json.dumps(category))
+        category["ancillaryParameters"] = {
+            "programFamily": {
+                "typology": "enum", "category": "cluster", "mandatory": 1,
+                "defaultValue": f"[{family}]", "enumValues": [family],
+            }
+        }
+        return category
+
+    def _two_base_programmes(self, *order):
+        # A tumble-dryer's prCode 75 (apk2/analysis/issue112-wm/9-td-programma-in-corso.md):
+        # the dial programme `hqd_duvet` and the hidden `hqd_feather`, plus a download.
+        categories = {
+            "PROGRAMS.TD.HQD_DUVET": self._with_family(_prog("75"), "dashboard_auto"),
+            "PROGRAMS.TD.HQD_FEATHER": self._with_family(_prog("75"), "hidden"),
+            "PROGRAMS.TD.IOT_DRY_DOWN_JACKET": self._with_family(_prog("75"), "download"),
+        }
+        commands = dict(_WM_COMMANDS)
+        commands["startProgram"] = {key: categories[key] for key in order}
+        return self._build("75", commands=commands).settings["startProgram.program"]
+
+    def test_the_dashboard_base_programme_names_a_shared_code(self) -> None:
+        for order in (
+            ("PROGRAMS.TD.HQD_DUVET", "PROGRAMS.TD.HQD_FEATHER", "PROGRAMS.TD.IOT_DRY_DOWN_JACKET"),
+            ("PROGRAMS.TD.HQD_FEATHER", "PROGRAMS.TD.IOT_DRY_DOWN_JACKET", "PROGRAMS.TD.HQD_DUVET"),
+        ):
+            with self.subTest(order=order):
+                self.assertEqual({75: "hqd_duvet"}, self._two_base_programmes(*order).ids)
+
+    def test_without_a_dashboard_base_programme_the_last_one_still_wins(self) -> None:
+        commands = dict(_WM_COMMANDS)
+        commands["startProgram"] = {
+            "PROGRAMS.TD.HQD_DUVET": self._with_family(_prog("75"), "hidden"),
+            "PROGRAMS.TD.HQD_FEATHER": self._with_family(_prog("75"), "hidden"),
+            "PROGRAMS.TD.IOT_DRY_DOWN_JACKET": self._with_family(_prog("75"), "dashboard"),
+        }
+        program = self._build("75", commands=commands).settings["startProgram.program"]
+        # A download on the dashboard does not change it: `ids` names base programmes only.
+        self.assertEqual({75: "hqd_feather"}, program.ids)
+
     def test_a_running_downloaded_program_is_named_precisely(self) -> None:
         # THE fix. The appliance reports code 115 and the last started program was the
         # downloaded "Perfect White"; `ids` alone would answer "hqd_cottons", the base
