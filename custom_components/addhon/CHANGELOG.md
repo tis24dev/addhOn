@@ -19,6 +19,9 @@ the notes were generated automatically carry a link to their diff instead of a s
   (#138). A parameter the cloud had never listed used to wait for the next poll, up to a
   minute; it is now taken from the push itself, as the official app does. The cycle
   timeline marks such rows as `new`.
+- **A washer start with a stain now also says a stain was chosen, as the official app
+  does** (#138): beside the stain code it sends the flag the app adds, on washers and
+  washer-dryers whose schema has it. Starts without a stain are unchanged.
 - **New stain-type dropdown and anti-crease switch on washers whose schema offers them**
   (#138). Both are disabled by default: enable them by hand in the entity settings. They
   are experimental, added to measure what the machine does with them. The stain dropdown
