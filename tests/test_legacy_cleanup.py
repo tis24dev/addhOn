@@ -1005,6 +1005,23 @@ class CycleEntityTrackingTest(unittest.TestCase):
         )
         self.assertNotIn("nonna", json.dumps(self.log.snapshot()))
 
+    def test_only_the_programme_name_is_masked(self) -> None:
+        # The other six states are enums or on/off and cannot carry a favourite's name:
+        # a favourite called "Wash" must not blank the phase "washing".
+        from unittest import mock
+
+        from custom_components.addhon import ref_programs
+
+        with mock.patch.object(ref_programs, "favourite_names", lambda appliance: {"Wash"}):
+            self._track()
+            self._fire("sensor.wm_phase", "rinse", "washing")
+            self._fire("sensor.wm_programme", "Cottons", "Wash")
+        self.assertEqual(
+            [("program_phase", "rinse", "washing"),
+             ("program_name", "Cottons", "<favourite>")],
+            self._entity_events(),
+        )
+
     def test_without_favourites_readable_the_state_is_not_logged(self) -> None:
         from unittest import mock
 

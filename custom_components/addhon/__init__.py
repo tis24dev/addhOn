@@ -903,8 +903,10 @@ _CYCLE_LOG_ENTITIES = (
     ("sensor", "state"),
 )
 
-# What the cycle log keeps of a state that carries a favourite's name.
+# What the cycle log keeps of a state that carries a favourite's name, and the one
+# entity whose state can: the other six publish enums or on/off.
 _FAVOURITE_STATE = "<favourite>"
+_FAVOURITE_KEY = "program_name"
 
 
 def _cycle_state(state, favourites) -> str | None:
@@ -932,9 +934,9 @@ def _track_cycle_entities(hass: HomeAssistant, entry: ConfigEntry, coord_data) -
     After the platforms, so the registry names the entities' ids. Never raises into the
     setup, and the callback, on Home Assistant's loop, never into the state machine
     (the log's lock keeps it safe against the push thread). A change of the attributes
-    alone is not a new state and is not logged. A state that carries a favourite's
-    name is logged as `_FAVOURITE_STATE` (`_cycle_state`), and not at all while the
-    favourites cannot be read.
+    alone is not a new state and is not logged. A programme name that carries a
+    favourite's name is logged as `_FAVOURITE_STATE` (`_cycle_state`), and none at all
+    while the favourites cannot be read; the other states are logged as published.
     """
     try:
         from homeassistant.core import callback
@@ -975,12 +977,10 @@ def _track_cycle_entities(hass: HomeAssistant, entry: ConfigEntry, coord_data) -
                 )
                 if log is None or old == new:
                     return
-                favourites = ref_programs.favourite_names(appliance)
-                log.entity(
-                    key=key,
-                    old=_cycle_state(old, favourites),
-                    new=_cycle_state(new, favourites),
-                )
+                if key == _FAVOURITE_KEY:
+                    favourites = ref_programs.favourite_names(appliance)
+                    old, new = _cycle_state(old, favourites), _cycle_state(new, favourites)
+                log.entity(key=key, old=old, new=new)
             except Exception:  # noqa: BLE001 - the log must never cost a state write
                 _LOGGER.debug("Cycle log failed", exc_info=True)
 

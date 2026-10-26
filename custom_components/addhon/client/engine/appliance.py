@@ -241,6 +241,9 @@ class HonAppliance:
         # The last statistics the log was handed (`cycle_log.statistics_state`), None
         # before this object's first read: the next poll is compared with it.
         self._statistics_logged: Optional[dict] = None
+        # The last non-empty `/maintenance-cycle` answer, which stands in for an empty
+        # one in that comparison.
+        self._maintenance_logged: dict[str, Any] = {}
         if self.appliance_type in FOLLOWED_TYPES:
             try:
                 self._cycle_log = _cycle_log.attach(self.unique_id)
@@ -1092,19 +1095,27 @@ class HonAppliance:
 
     async def load_statistics(self) -> None:
         self._statistics = await self._read_statistics()
-        self._statistics |= await self.api.load_maintenance(self)
+        maintenance = await self.api.load_maintenance(self)
+        self._statistics |= maintenance
         if self._cycle_log is not None:
-            self._log_statistics(self._cycle_log)
+            self._log_statistics(self._cycle_log, maintenance)
 
-    def _log_statistics(self, log: _cycle_log.CycleLog) -> None:
+    def _log_statistics(self, log: _cycle_log.CycleLog, maintenance: Any) -> None:
         """What this poll's statistics added or moved since the last, in the cycle log
         (issue #138): a cycle's measured load lands here, and only here. The first read
         of this object seeds the comparison silently; an empty answer is no read (the
-        next one is compared with the last that said something). Never raises."""
+        next one is compared with the last that said something), and an empty
+        `maintenance` answer beside a full one leaves the maintenance keys last seen in
+        the comparison. Never raises."""
         try:
             if not self._statistics:
                 return
-            state = _cycle_log.statistics_state(self._statistics)
+            compared = self._statistics
+            if maintenance:
+                self._maintenance_logged = dict(maintenance)
+            elif self._maintenance_logged:
+                compared = self._statistics | self._maintenance_logged
+            state = _cycle_log.statistics_state(compared)
             previous, self._statistics_logged = self._statistics_logged, state
             if previous is not None:
                 new_rows, changed = _cycle_log.statistics_changes(previous, state)

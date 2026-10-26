@@ -193,6 +193,38 @@ class CycleLogTest(unittest.TestCase):
         _run(app.load_statistics())
         self.assertEqual([], self._events(app))
 
+    def test_an_empty_maintenance_answer_is_not_a_change(self) -> None:
+        # A one-off `{}` from `/maintenance-cycle` while the statistics answer: the
+        # maintenance keys last seen are kept for the comparison, so neither the gap
+        # nor their return is an event.
+        api = _Api()
+        maintenance = [{"drumCleaning": {"cycles": 12}}, {}, {"drumCleaning": {"cycles": 12}}]
+
+        async def load_statistics_v2(appliance):
+            # A new answer each poll, as the cloud's: the merge works on it in place.
+            return self._payload(4)
+
+        async def load_maintenance(appliance):
+            return maintenance.pop(0)
+
+        api.load_statistics_v2 = load_statistics_v2
+        api.load_maintenance = load_maintenance
+        app = _appliance(api)
+        for _ in range(3):
+            _run(app.load_statistics())
+        self.assertEqual([], self._events(app))
+        self.assertEqual({"cycles": 12}, app.statistics["drumCleaning"])
+
+    def test_a_key_that_disappears_is_logged_as_null(self) -> None:
+        api = _Api(v2=dict(self._payload(4), totalWashCycle=3))
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = self._payload(4)
+        _run(app.load_statistics())
+        [event] = self._events(app)
+        self.assertEqual({"totalWashCycle": {"before": "3", "after": None}}, event["changed"])
+        self.assertNotIn("new_rows", event)
+
     def test_a_raising_log_costs_nothing_to_the_poll(self) -> None:
         api = _Api(v2=self._payload(4))
         app = _appliance(api)
