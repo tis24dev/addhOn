@@ -93,6 +93,14 @@ class ShadowRowsTest(_LogTest):
             _rows(event),
         )
 
+    def test_a_held_number_is_logged_as_its_text_and_a_null_as_none(self) -> None:
+        # `HonAttribute.__str__` raises on a value that is not a string.
+        self.assertEqual("2", cycle_log.value_text(HonAttribute({"parNewVal": 2})))
+        self.assertEqual("40", cycle_log.value_text(HonAttribute({"parNewVal": "40"})))
+        self.assertIsNone(cycle_log.value_text(HonAttribute({"parNewVal": None})))
+        self.assertEqual("x", cycle_log.value_text("x"))
+        self.assertIsNone(cycle_log.value_text(None))
+
     def test_rest_rows_only_when_value_or_stamp_moved(self) -> None:
         self.log.shadow("rest", [
             ShadowRow("temp", "40", "40", True),
@@ -518,14 +526,13 @@ class EngineHooksTest(_Harness):
         self.assertEqual("0", str(app.attributes["parameters"]["stainType"]))
         first, second = _events(app.cycle_log, "shadow")
         self.assertEqual(
-            [{"key": "machMode", "before": "1", "after": None},
+            [{"key": "machMode", "before": "1", "after": "2"},
              {"key": "stainType", "before": "0", "after": None},
              {"key": "temp", "before": "40", "after": "30"}],
             _rows(first),
         )
         self.assertEqual(
-            [{"key": "machMode", "before": None, "after": "2"},
-             {"key": "stainType", "before": None, "after": "0"},
+            [{"key": "stainType", "before": None, "after": "0"},
              {"key": "temp", "before": "30", "after": "40"}],
             _rows(second),
         )

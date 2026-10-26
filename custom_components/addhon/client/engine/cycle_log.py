@@ -104,8 +104,9 @@ def _text(value: Any) -> Optional[str]:
 def value_text(value: Any) -> Optional[str]:
     """`value` as the log keeps it, None when it has no text. Never raises: a row the
     cloud sent with `parNewVal` null or a number leaves a held value whose `str()`
-    raises, and the hooks read the value held before and after each update with this."""
-    return _text(value)
+    raises, and the hooks read the value held before and after each update with this:
+    a held value is read raw (`_value`), not through `str()`."""
+    return _text(getattr(value, "_value", value))
 
 
 def _scalars(values: Any) -> dict[str, Optional[str]]:
