@@ -134,6 +134,27 @@ def _cloud_error(payload: Any) -> str | None:
     return _scrub_cloud_text(str(payload["errorType"]))
 
 
+def _note_command(
+    appliance: Any, data: dict[str, Any], outcome: str, *, code: Any = None,
+    error: str | None = None,
+) -> None:
+    """A command sent, and how the cloud answered, in the appliance's cycle log (issue
+    #138). The command's `timestamp` is the one `/history` keeps. Never raises."""
+    try:
+        log = getattr(appliance, "cycle_log", None)
+        if log is not None:
+            log.command(
+                name=data.get("commandName"),
+                programme=data.get("programName"),
+                sent=data.get("timestamp"),
+                outcome=outcome,
+                code=code,
+                error=error,
+            )
+    except Exception:  # noqa: BLE001 - diagnostics only
+        _LOGGER.debug("Cycle log failed", exc_info=True)
+
+
 def _command_timestamp() -> str:
     """Command UTC timestamp in milliseconds + "Z" (e.g. 2026-06-18T12:34:56.789Z).
 
@@ -627,6 +648,7 @@ class HonApi:
                 json_data = await response.json(content_type=None)
                 payload = json_data.get("payload") if isinstance(json_data, dict) else None
                 if isinstance(payload, dict) and payload.get("resultCode") == "0":
+                    _note_command(appliance, data, "accepted")
                     return True
                 # The request payload (data) carries macAddress, transactionId (= MAC)
                 # and device.mobileId; the response may echo them too. Log only the
@@ -634,6 +656,7 @@ class HonApi:
                 # full REDACTED payload/response at DEBUG (gated) for troubleshooting.
                 result_code = payload.get("resultCode") if isinstance(payload, dict) else None
                 cloud_error = _cloud_error(payload)
+                _note_command(appliance, data, "rejected", code=result_code, error=cloud_error)
                 if cloud_error is None:
                     _LOGGER.error(
                         "hOn send_command failed: command=%s resultCode=%s",
@@ -652,7 +675,8 @@ class HonApi:
                     _redacted_body(data),
                     redact_identity(json_data),
                 )
-        except Exception:
+        except Exception as error:
+            _note_command(appliance, data, "raised", error=type(error).__name__)
             # A 5xx never reaches the resultCode branch: the connection raises first
             # (`_intercept`), and the caller logs the error without the body. Issue #99's
             # beta4 500 had to be pinned on `dryTime: null` by inference, because the

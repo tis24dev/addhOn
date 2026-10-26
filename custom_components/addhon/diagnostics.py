@@ -1348,6 +1348,186 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
         return None
 
 
+# The cycle log's own words (`client/engine/cycle_log.py`), printed as literals of this
+# module, and the bound on every other text it prints: the log cuts at the same length.
+_CYCLE_LOG_KINDS = frozenset({"session", "shadow", "context", "command", "cycle_read"})
+_CYCLE_LOG_ROADS = frozenset({"mqtt", "rest", "local"})
+_CYCLE_LOG_REASONS = frozenset({"load", "poll", "cycle_read"})
+_CYCLE_LOG_OUTCOMES = frozenset(
+    {"accepted", "rejected", "raised", "settled", "unsettled", "failed", "cancelled"}
+)
+_CYCLE_LOG_EDGES = frozenset({"start", "end"})
+_CYCLE_LOG_TEXT_MAX = 64
+# The cloud's instants among the keys a read of the context is summarised with.
+_CYCLE_LOG_CLOUD_KEYS = frozenset(
+    {"activityStarted", "activityEnded", "timestampAccepted", "timestampExecuted", "timestamp"}
+)
+
+
+def _log_at(value) -> str | None:
+    """Home Assistant's own epoch seconds, to the millisecond, as the dump writes them."""
+    if type(value) not in (int, float):
+        return None
+    try:
+        moment = datetime.fromtimestamp(value, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return _stamp_text(moment.replace(microsecond=moment.microsecond // 1000 * 1000))
+
+
+def _log_cloud(value) -> str | None:
+    """A cloud instant, parsed and re-rendered, never echoed (as `_conn_event_row`)."""
+    return _stamp_text(_as_utc(_parse_cloud_moment(value), True))
+
+
+def _log_text(value) -> str | None:
+    return _bounded_text(value, _CYCLE_LOG_TEXT_MAX)
+
+
+def _log_int(value) -> int | None:
+    return value if type(value) is int else None
+
+
+def _log_flag(value) -> bool | None:
+    return value if type(value) is bool else None
+
+
+def _log_summary(value, depth: int = 0) -> dict | None:
+    """A read of the context as the log summarised it: activity, slot, connection."""
+    if not isinstance(value, Mapping) or depth > 2:
+        return None
+    summary: dict = {}
+    for key, item in value.items():
+        if (name := _log_text(key)) is None:
+            continue
+        if isinstance(item, Mapping):
+            summary[name] = _log_summary(item, depth + 1)
+        elif name in _CYCLE_LOG_CLOUD_KEYS:
+            summary[name] = _log_cloud(item)
+        else:
+            summary[name] = _log_text(item)
+    return summary
+
+
+def _log_row(row) -> dict | None:
+    if not isinstance(row, Mapping):
+        return None
+    rendered = {key: _log_text(row.get(key)) for key in ("key", "before", "after")}
+    rendered |= {mark: True for mark in ("refused", "same") if row.get(mark) is True}
+    if "cloud_from" in row:
+        rendered["cloud_from"] = _log_text(row["cloud_from"])
+    if "stamp" in row:
+        rendered["stamp"] = _log_cloud(row["stamp"])
+    return rendered
+
+
+def _log_rows(rows) -> list:
+    return [r for r in map(_log_row, rows if isinstance(rows, list) else ()) if r is not None]
+
+
+def _log_reads(reads) -> list:
+    return [
+        {
+            key: _log_cloud(item) if key == "at" else
+            _log_text(item) if key == "error" else _log_flag(item)
+            for key, item in read.items()
+            if key in ("at", "settled", "dropped", "error")
+        }
+        for read in (reads if isinstance(reads, list) else ())
+        if isinstance(read, Mapping)
+    ]
+
+
+def _log_token(allowed: frozenset):
+    return lambda value: _closed_token(value, allowed)
+
+
+# What each kind of event prints, field by field, and how; a field the event lacks is
+# left out, and so is any field not named here.
+_CYCLE_LOG_FIELDS = {
+    "session": {"session": _log_int},
+    "shadow": {
+        "road": _log_token(_CYCLE_LOG_ROADS), "resumed": _log_flag, "cloud_at": _log_cloud,
+        "event_id": _log_text, "until": _log_at, "steps": _log_int,
+        "last_event_id": _log_text, "rows": _log_rows,
+        "unseeded": lambda names: [
+            _log_text(name) for name in (names if isinstance(names, list) else ())
+        ],
+        "truncated": _log_int,
+    },
+    "context": {
+        "reason": _log_token(_CYCLE_LOG_REASONS), "order": _log_int, "asked": _log_at,
+        "applied": _log_flag, "summary": _log_summary, "unchanged": _log_int,
+        "last_at": _log_at,
+    },
+    "command": {
+        "name": _log_text, "programme": _log_text, "sent": _log_cloud,
+        "outcome": _log_token(_CYCLE_LOG_OUTCOMES), "result_code": _log_text,
+        "error": _log_text,
+    },
+    "cycle_read": {
+        "edge": _log_token(_CYCLE_LOG_EDGES), "asked_at": _log_cloud, "reads": _log_reads,
+        "outcome": _log_token(_CYCLE_LOG_OUTCOMES),
+    },
+}
+
+
+def _log_event(raw) -> dict | None:
+    if not isinstance(raw, Mapping):
+        return None
+    kind = _closed_token(raw.get("kind"), _CYCLE_LOG_KINDS)
+    event = {"seq": _log_int(raw.get("seq")), "at": _log_at(raw.get("at")), "kind": kind}
+    for field, render in _CYCLE_LOG_FIELDS.get(kind, {}).items():
+        if field in raw:
+            event[field] = render(raw[field])
+    return event
+
+
+def _cycle_log_section(appliance) -> dict | None:
+    """What the cycles did over time (issue #138): `HonAppliance.cycle_log`.
+
+    The pushes, every row kept and marked (`refused` by the shield of our own write,
+    `same`, `cloud_from`), the reads of the context that moved something, the commands
+    sent and how the cloud answered, the reads a cycle's edge asked for, and the
+    sessions; the events in `seq` order, what the ring dropped counted by kind. The
+    `programme_name` below is the last state of the same story. Home Assistant's
+    instants by `_stamp_text`; the cloud's parsed and re-rendered, never echoed; every
+    other text bounded and masked by `_bounded_text`, then `_redact` like the block.
+
+    None for an engine without the log, a type whose cycles are not followed, or a log
+    that raises.
+    """
+    try:
+        log = getattr(appliance, "cycle_log", None)
+        if log is None:
+            return None
+        raw = log.snapshot()
+        if not isinstance(raw, Mapping):
+            return None
+        limits = raw.get("limits") if isinstance(raw.get("limits"), Mapping) else {}
+        dropped = raw.get("dropped") if isinstance(raw.get("dropped"), Mapping) else {}
+        return {
+            "since": _log_at(raw.get("since")),
+            "sessions": _log_int(raw.get("sessions")),
+            "limits": {
+                key: limits.get(key) for key in ("events", "rows", "text")
+                if type(limits.get(key)) is int
+            },
+            "dropped": {
+                _closed_token(kind, _CYCLE_LOG_KINDS): count
+                for kind, count in dropped.items()
+                if type(count) is int
+            },
+            "events": [
+                event for event in map(_log_event, raw.get("events") or ())
+                if event is not None
+            ],
+        }
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: cycle log unreadable", exc_info=True)
+        return None
+
+
 def _history_recovery(appliance) -> dict | None:
     """{command name: how the last catalog load chose the category it restored}.
 
@@ -4418,6 +4598,13 @@ def _appliance_block(
         # and is always present -- `{}` is the finding "no key had two sources".
         "statistics": dict(statistics),
         "attributes_overridden": overrides,
+        # What the cycles did over time, the story `programme_name` below tells the end
+        # of; omitted for the types that are not followed (issue #138).
+        **(
+            {"cycle_log": cycle_log}
+            if (cycle_log := _cycle_log_section(appliance)) is not None
+            else {}
+        ),
         # Why `programName` says what it says, beside how the category it may name was
         # recovered; omitted for the types that are not followed.
         **(

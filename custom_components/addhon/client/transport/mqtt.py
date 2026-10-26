@@ -38,6 +38,7 @@ from awscrt import mqtt5
 from awsiot import mqtt5_client_builder  # type: ignore[import-untyped]
 
 from ..budget import CYCLE_READ, budgeted
+from ..engine.cycle_log import ShadowRow
 from .device import MOBILE_ID
 from .values import AWS_AUTHORIZER, AWS_ENDPOINT
 from ...command_diagnostics import observe_mqtt_update
@@ -77,6 +78,24 @@ _RECONNECT_BACKOFF_CAP = 60
 # activity opened and closed with the shadow, readable 2 s after the change.
 _CYCLE_READ_DELAY = 3  # seconds
 _CYCLE_READ_RETRY = 10  # seconds
+
+
+def _note_push(log: Any, rows: list, unseeded: list, payload: dict) -> None:
+    """Hand what a push carried to the appliance's cycle log (issue #138).
+
+    Runs on the awscrt thread: the log takes its own lock and does no I/O. Never raises,
+    so a broken log cannot cost the push it describes.
+    """
+    try:
+        log.shadow(
+            "mqtt",
+            rows,
+            cloud_at=payload.get("timestamp"),
+            event_id=payload.get("eventId"),
+            unseeded=unseeded,
+        )
+    except Exception:  # noqa: BLE001 - diagnostics only
+        _LOGGER.debug("MQTT: cycle log failed", exc_info=True)
 
 
 def _utc_now() -> str:
@@ -569,6 +588,12 @@ class NativeMqttClient:
                         )
                     raw_params = []
                 observed_values: dict[str, object] = {}
+                # Every row of this push, for the cycle log of the followed types (issue
+                # #138): held before and after, whether the shield of our own write
+                # refused it, and the keys the shadow does not hold yet.
+                log = getattr(appliance, "cycle_log", None)
+                rows: list[ShadowRow] = []
+                unseeded: list[str] = []
                 for parameter in raw_params:
                     # Skip a single malformed element (e.g. a null in the list) so the
                     # valid parameters in the same batch are still applied (and notify
@@ -591,7 +616,22 @@ class NativeMqttClient:
                     # parName is recovered at the next HTTP poll; creating it here would
                     # couple this transport module to the engine's HonAttribute.
                     if name in params:
-                        params[name].update(parameter)
+                        held = params[name]
+                        before = str(held) if log is not None else None
+                        # False only when the shield refused it; a double answers None.
+                        applied = held.update(parameter) is not False
+                        if log is not None:
+                            rows.append(ShadowRow(
+                                name,
+                                before,
+                                str(held) if applied else parameter.get("parNewVal"),
+                                applied,
+                                parameter.get("parOldVal"),
+                            ))
+                    elif log is not None and isinstance(name, str):
+                        unseeded.append(name)
+                if log is not None:
+                    _note_push(log, rows, unseeded, payload)
                 appliance.sync_params_to_command("settings")
                 # The fields derived from the parameters (programName above all) follow
                 # the pushed values now, not at the next poll.

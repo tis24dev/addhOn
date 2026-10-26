@@ -60,6 +60,9 @@ def _install_stubs() -> None:
 
 _install_stubs()
 
+from custom_components.addhon.client.engine.attributes import HonAttribute  # noqa: E402
+from custom_components.addhon.client.engine.cycle_log import CycleLog  # noqa: E402
+from custom_components.addhon.client.transport import mqtt as mqtt_module  # noqa: E402
 from custom_components.addhon.client.transport.mqtt import NativeMqttClient  # noqa: E402
 from custom_components.addhon.command_diagnostics import (  # noqa: E402
     observe_mqtt_update,
@@ -1580,6 +1583,98 @@ class PublishReceivedRobustnessTest(unittest.TestCase):
         with self.assertLogs(self._LOGGER_NAME, level="WARNING") as cm:
             m._on_message(_packet(topic, {}))  # must NOT raise
         self.assertTrue(any("handler failed" in r.getMessage() for r in cm.records))
+
+
+class _LoggedAppliance(FakeAppliance):
+    """A washer with real shadow values and a cycle log (issue #138), whose push starts
+    a cycle: the read it asks for answers at once and settles."""
+
+    def __init__(self, topic: str, log=None) -> None:
+        super().__init__(topic)
+        self.attributes = {"parameters": {
+            "machMode": HonAttribute({"parNewVal": "1", "lastUpdate": "2026-10-26T08:00:00Z"}),
+            "stainType": HonAttribute({"parNewVal": "0", "lastUpdate": "2026-10-26T08:00:00Z"}),
+        }}
+        self.cycle_log = CycleLog() if log is None else log
+        self.mach_mode = 1
+
+    def cycle_edge(self, before):
+        return "start"
+
+    def note_cycle_read(self, record):
+        self.cycle_log.cycle_read(record)
+
+    def cycle_edge_settled(self, edge, before=None):
+        return True
+
+    async def update(self, force=False):
+        return True
+
+
+@patch.object(mqtt_module, "_CYCLE_READ_DELAY", 0)
+@patch.object(mqtt_module, "_CYCLE_READ_RETRY", 0)
+class CycleLogPushTest(unittest.TestCase):
+    """Every row of a push reaches the cycle log, before the read it asks for (#138)."""
+
+    _TOPIC = "haier/things/MAC/event/appliancestatus/update"
+
+    def setUp(self) -> None:
+        self.loop = asyncio.new_event_loop()
+        self.addCleanup(self.loop.close)
+
+    def _push(self, app, parameters, **payload):
+        hon = FakeHon([app])
+        client = NativeMqttClient(hon, "MID")
+        client._loop = self.loop  # what create() records
+        client._on_message(_packet(self._TOPIC, {"parameters": parameters, **payload}))
+        self.loop.run_until_complete(asyncio.sleep(0.05))  # the read it asked for
+        return hon
+
+    def test_a_push_reaches_the_cycle_log_before_the_cycle_read(self) -> None:
+        app = _LoggedAppliance(self._TOPIC)
+        # The start's echo inside the shield of our own write: refused, and kept.
+        app.attributes["parameters"]["stainType"].update("19", shield=True)
+        self._push(app, [
+            {"parName": "machMode", "parOldVal": "1", "parNewVal": "2"},
+            {"parName": "stainType", "parOldVal": "0", "parNewVal": "19"},
+            {"parName": "unknownKey", "parNewVal": "x"},
+        ], timestamp="2026-10-26T08:00:03.5Z", eventId="7")
+        shadow, read = app.cycle_log.snapshot()["events"]
+        self.assertEqual(("shadow", "cycle_read"), (shadow["kind"], read["kind"]))
+        self.assertLess(shadow["seq"], read["seq"])
+        self.assertEqual(("mqtt", "2026-10-26T08:00:03.5Z", "7"),
+                         (shadow["road"], shadow["cloud_at"], shadow["event_id"]))
+        self.assertEqual(
+            [{"key": "machMode", "before": "1", "after": "2"},
+             {"key": "stainType", "before": "19", "after": "19", "refused": True,
+              "cloud_from": "0"}],
+            shadow["rows"],
+        )
+        self.assertEqual(["unknownKey"], shadow["unseeded"])
+        self.assertEqual("settled", read["outcome"])
+
+    def test_a_raising_cycle_log_does_not_stop_the_push(self) -> None:
+        class _Broken:
+            def shadow(self, *args, **kwargs):
+                raise RuntimeError("broken log")
+
+            def cycle_read(self, record):  # the engine guards its own call
+                pass
+
+        app = _LoggedAppliance(self._TOPIC, log=_Broken())
+        hon = self._push(app, [{"parName": "machMode", "parNewVal": "2"}])
+        self.assertEqual("2", str(app.attributes["parameters"]["machMode"]))
+        self.assertEqual(["settings"], app.synced)
+        self.assertEqual(1, app.derived)
+        self.assertEqual(2, hon.notified)  # the push, then the read it asked for
+
+    def test_an_appliance_without_a_cycle_log_is_pushed_as_before(self) -> None:
+        app = FakeAppliance(self._TOPIC)
+        self.assertFalse(hasattr(app, "cycle_log"))
+        hon = self._push(app, [{"parName": "temp", "parNewVal": "5"}])
+        self.assertEqual({"parName": "temp", "parNewVal": "5"},
+                         app.attributes["parameters"]["temp"].updated)
+        self.assertEqual(1, hon.notified)
 
 
 class StartGenerationWiringTest(unittest.TestCase):

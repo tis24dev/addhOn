@@ -25,6 +25,7 @@ from typing import Any, Optional
 from ...command_diagnostics import observe_shadow_read
 from ..catalog_repository import CommandCatalogRepository
 from ..helpers import parse_cloud_timestamp
+from . import cycle_log as _cycle_log
 from .appliances import registry as _native_appliances
 from .attributes import HonAttribute
 from .command_loader import HonCommandLoader, command_identity, start_identity
@@ -221,6 +222,16 @@ class HonAppliance:
         # datetime.now() would distort. Distinct from _last_realtime_ts, which is the CLOUD
         # timestamp used for ordering against the cloud-stamped lastConnEvent.
         self._last_realtime_local: Optional[float] = None
+        # What the cycles did over time, for the dump (issue #138): the followed types
+        # only, one log per appliance id that a reload takes up again. The first read of
+        # this object seeds it (`load_attributes`).
+        self._cycle_log: Optional[_cycle_log.CycleLog] = None
+        self._cycle_log_seeded = False
+        if self.appliance_type in FOLLOWED_TYPES:
+            try:
+                self._cycle_log = _cycle_log.attach(self.unique_id)
+            except Exception:  # noqa: BLE001 - the log must never cost the appliance
+                _LOGGER.debug("Cycle log unavailable", exc_info=True)
         # Per-type layer (resolved via the static registry).
         self._extra = _native_appliances.get_extra(self)
 
@@ -466,7 +477,9 @@ class HonAppliance:
         The activity carries the start's parameters next to what the app adds
         (`principalUserId`, `deviceModel`, `prStrDisp`): only the keys of the
         `startProgram` command are kept, and only the scalar values, as the text the
-        shadow holds (a number arrives as `19` or `"19"`). Read-only: a push reads it.
+        shadow holds (a number arrives as `19` or `"19"`). A schema that declares the
+        start's title (`prStr`, a favourite's name) or another key of who started it
+        still gives none of them (`cycle_log.IDENTITY_KEYS`). Read-only: a push reads it.
         """
         command = self._commands.get("startProgram")
         keys = set(getattr(command, "setting_keys", None) or ())
@@ -474,6 +487,7 @@ class HonAppliance:
             key: str(value)
             for key, value in details.items()
             if key in keys
+            and not _cycle_log.is_identity_key(key)
             and isinstance(value, (str, int, float))
             and not isinstance(value, bool)
         })
@@ -532,6 +546,17 @@ class HonAppliance:
         and outcome. Read by the diagnostics dump only.
         """
         self._cycle_read = record
+        if self._cycle_log is not None:
+            try:
+                self._cycle_log.cycle_read(record)
+            except Exception:  # noqa: BLE001 - the log must never cost the read
+                _LOGGER.debug("Cycle log failed", exc_info=True)
+
+    @property
+    def cycle_log(self) -> Optional[_cycle_log.CycleLog]:
+        """The log of the cycles for the dump (issue #138); None for the types whose
+        cycles are not followed."""
+        return self._cycle_log
 
     @property
     def cycle_read(self) -> Optional[dict[str, Any]]:
@@ -858,28 +883,52 @@ class HonAppliance:
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 
-    async def load_attributes(self) -> bool:
+    async def load_attributes(self, *, reason: str = "load") -> bool:
         # Two reads of the context can overlap -- the poll, a read a cycle edge asked
         # for, the refresh after a command -- and answer out of order. An answer older
         # than one already applied is dropped whole, and a parameter a push delivered
         # after this read started keeps the pushed value: the answer was taken before it
         # (review of PR #139, S1). Every read runs on the client loop, so the counters
-        # need no lock.
+        # need no lock. `reason` names the read in the cycle log (issue #138): "load"
+        # at setup, "poll", or "cycle_read" for the one a cycle's edge asked for.
         self._context_reads_started += 1
         order = self._context_reads_started
         asked = datetime.now(timezone.utc)
         attributes = await self.api.load_attributes(self)
+        log = self._cycle_log
         if order < self._context_read_applied:
             _LOGGER.debug("Context read answered after a newer one: dropped")
+            if log is not None:
+                try:
+                    log.context(
+                        reason=reason, order=order, asked=asked.timestamp(), applied=False
+                    )
+                except Exception:  # noqa: BLE001 - the log must never cost the read
+                    _LOGGER.debug("Cycle log failed", exc_info=True)
             return False
         self._context_read_applied = order
         activity = attributes.get("activity", _UNREAD)
+        rows: list[_cycle_log.ShadowRow] = []
         for name, values in attributes.pop("shadow", {}).get("parameters", {}).items():
             if name in self._attributes.get("parameters", {}):
                 held = self._attributes["parameters"][name]
                 if _pushed_since(held, asked):
                     continue
-                held.update(values)
+                if log is None:
+                    held.update(values)
+                    continue
+                before, stamped = str(held), held.last_update
+                applied = held.update(values)
+                offered = values.get("parNewVal") if isinstance(values, dict) else values
+                rows.append(_cycle_log.ShadowRow(
+                    name, before, str(held) if applied else offered, applied,
+                    # Only when `lastUpdate` moved: the value a push brought, read again.
+                    stamp=(
+                        values.get("lastUpdate")
+                        if isinstance(values, dict) and held.last_update != stamped
+                        else None
+                    ),
+                ))
             else:
                 self._attributes.setdefault("parameters", {})[name] = HonAttribute(values)
         self._attributes |= attributes
@@ -943,7 +992,44 @@ class HonAppliance:
             observe_shadow_read(self)
         except Exception:
             _LOGGER.debug("Delivery check failed", exc_info=True)
+        if log is not None:
+            self._log_read(log, rows, reason, order, asked, activity)
         return True
+
+    def _log_read(
+        self,
+        log: _cycle_log.CycleLog,
+        rows: list[_cycle_log.ShadowRow],
+        reason: str,
+        order: int,
+        asked: datetime,
+        activity: Any,
+    ) -> None:
+        """An applied read of the context in the cycle log (issue #138). Never raises.
+
+        The first read of this object seeds the log with the whole shadow instead of
+        rows: a log a reload took up again logs only what moved meanwhile.
+        """
+        try:
+            if self._cycle_log_seeded:
+                log.shadow("rest", rows)
+            else:
+                self._cycle_log_seeded = True
+                log.seed({
+                    name: str(value)
+                    for name, value in self._attributes.get("parameters", {}).items()
+                })
+            log.context(
+                reason=reason,
+                order=order,
+                asked=asked.timestamp(),
+                applied=True,
+                summary=_cycle_log.context_summary(
+                    self._attributes, None if activity is _UNREAD else activity
+                ),
+            )
+        except Exception:  # noqa: BLE001 - the log must never cost the read
+            _LOGGER.debug("Cycle log failed", exc_info=True)
 
     def derive_attributes(self) -> None:
         """Re-run the per-type derivations (programName, active, pause, available).
@@ -974,7 +1060,7 @@ class HonAppliance:
         follow = self.appliance_type in self._FOLLOWED_TYPES
         if follow:
             self._apply_followed_list()
-        applied = await self.load_attributes()
+        applied = await self.load_attributes(reason="cycle_read" if force else "poll")
         self.sync_params_to_command("settings")
         if follow:
             self._follow_new_cycle()
@@ -1031,10 +1117,22 @@ class HonAppliance:
         shadow = self.attributes.get("parameters", {})
         if not isinstance(shadow, dict):
             return
+        # getattr: the air purifier's contract tests borrow this method for a double.
+        log = getattr(self, "_cycle_log", None)
+        rows: list[_cycle_log.ShadowRow] = []
         for key, value in params.items():
             current = shadow.get(key)
             if current is not None and hasattr(current, "update"):
+                before = str(current) if log is not None else None
                 current.update(str(value), shield=True)
+                if log is not None:
+                    rows.append(_cycle_log.ShadowRow(key, before, str(current), True))
+        if rows:
+            # Our own write after an accepted command, in the cycle log (issue #138).
+            try:
+                log.shadow("local", rows)
+            except Exception:  # noqa: BLE001 - the log must never cost the write
+                _LOGGER.debug("Cycle log failed", exc_info=True)
 
     def sync_params_to_command(self, command_name: str) -> None:
         if not (command := self.commands.get(command_name)):

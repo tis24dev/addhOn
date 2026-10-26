@@ -10709,6 +10709,150 @@ class ProgrammeNameSectionTest(unittest.TestCase):
         )
 
 
+class CycleLogSectionTest(unittest.TestCase):
+    """`cycle_log`: what the washer did over its last cycles (issue #138).
+
+    On the engine's own appliance, whose start schema carries the title keys a
+    favourite's name rides in (`prStr`, `prStrDisp`).
+    """
+
+    _MAC = "AA:BB:CC:12:34:56"
+
+    def setUp(self) -> None:
+        from custom_components.addhon.client.engine import cycle_log
+
+        cycle_log.forget_all()
+
+    def _washer(self, kind="WM"):
+        from custom_components.addhon.client import factory
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from test_follow_started_elsewhere import CloudDouble, _fixed, _programme
+
+        programme = _programme("115")
+        programme["parameters"] |= {"prStr": _fixed("x"), "prStrDisp": _fixed("x")}
+        commands = {
+            "applianceModel": {"options": {}},
+            "startProgram": {"PROGRAMS.WM_WD.HQD_COTTONS": programme},
+            "dictionaryId": 1,
+        }
+        context = {"shadow": {"parameters": {
+            "prCode": {"parNewVal": "115", "lastUpdate": "2026-10-16T12:20:00Z"},
+            "machMode": {"parNewVal": "1", "lastUpdate": "2026-10-16T12:20:00Z"}}},
+            "activity": {}, "commandHistory": None,
+            "lastConnEvent": {"macAddress": self._MAC, "category": "CONNECTED"}}
+        self.cloud = CloudDouble(commands, [], context)
+        app = factory._native_engine_appliance_cls()(
+            self.cloud,
+            {"applianceTypeName": kind, "applianceModelId": 1, "macAddress": self._MAC},
+            zone=0,
+        )
+        self.loop = asyncio.new_event_loop()
+        self.addCleanup(self.loop.close)
+        self.loop.run_until_complete(app.load_commands())
+        self.loop.run_until_complete(app.load_attributes())
+        return app
+
+    def _block(self, app, kind="WM"):
+        return diagnostics._appliance_block(
+            "id1",
+            {"appliance": app, "type": kind, "attributes": dict(app.attributes), "statistics": {}},
+        )
+
+    def _cycle(self, app):
+        """A start from the app, with a favourite's title and the account in its activity."""
+        self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = "2"
+        self.cloud.context["activity"] = {
+            "activityStarted": "2026-10-16T12:25:03Z", "macAddress": self._MAC,
+            "attributes": {"programName": "HQD_COTTONS", "channel": "mobileApp",
+                           "prCode": "115", "temp": "40", "prStr": "My own title",
+                           "prStrDisp": "My%20own%20title", "principalUserId": "acct-0000-test",
+                           "mobileId": "phone-0000-test"}}
+        self.loop.run_until_complete(app.load_attributes(reason="cycle_read"))
+
+    def test_the_section_sits_right_before_programme_name(self) -> None:
+        keys = list(self._block(self._washer()))
+        self.assertEqual("programme_name", keys[keys.index("cycle_log") + 1])
+
+    def test_the_types_not_followed_print_nothing(self) -> None:
+        for kind in ("AC", "REF"):
+            with self.subTest(kind=kind):
+                self.assertNotIn("cycle_log", self._block(self._washer(kind), kind))
+        self.assertNotIn(
+            "cycle_log", _option_block(OptionAppliance(options={}, additional_data={}))
+        )
+
+    def test_a_snapshot_that_raises_omits_the_section(self) -> None:
+        app = self._washer()
+
+        def boom():
+            raise RuntimeError("broken log")
+
+        app.cycle_log.snapshot = boom
+        block = self._block(app)
+        self.assertNotIn("cycle_log", block)
+        self.assertIn("programme_name", block)
+
+    def test_the_events_are_rendered(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import ShadowRow
+
+        app = self._washer()
+        self._cycle(app)
+        app.cycle_log.shadow("mqtt", [ShadowRow("stainType", "19", "19", False, "0")],
+                             cloud_at="2026-10-16T12:25:07.5Z", event_id=9)
+        app.cycle_log.command(name="startProgram", programme="HQD_COTTONS",
+                              sent="2026-10-16T12:25:01.000Z", outcome="rejected", code="7")
+        section = self._block(app)["cycle_log"]
+        self.assertEqual(1, section["sessions"])
+        self.assertEqual({}, section["dropped"])
+        kinds = [event["kind"] for event in section["events"]]
+        self.assertEqual(["session", "context", "shadow", "context", "shadow", "command"], kinds)
+        context = section["events"][3]
+        self.assertEqual("cycle_read", context["reason"])
+        activity = context["summary"]["activity"]
+        self.assertEqual("2026-10-16T12:25:03+00:00", activity["activityStarted"])
+        self.assertEqual({"programName": "HQD_COTTONS", "channel": "mobileApp",
+                          "prCode": "115", "temp": "40"}, activity["attributes"])
+        push = section["events"][4]
+        self.assertEqual(
+            {"road": "mqtt", "cloud_at": "2026-10-16T12:25:07.500000+00:00", "event_id": "9",
+             "rows": [{"key": "stainType", "before": "19", "after": "19", "refused": True,
+                       "cloud_from": "0"}]},
+            {k: push[k] for k in ("road", "cloud_at", "event_id", "rows")},
+        )
+        # HA's own instants, to the millisecond.
+        self.assertRegex(push["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{3}000)?\+00:00$")
+        command = section["events"][5]
+        self.assertEqual(
+            {"name": "startProgram", "programme": "HQD_COTTONS",
+             "sent": "2026-10-16T12:25:01+00:00", "outcome": "rejected", "result_code": "7"},
+            {k: command[k] for k in ("name", "programme", "sent", "outcome", "result_code")},
+        )
+
+    def test_no_mac_account_or_favourite_name_in_the_block(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import ShadowRow
+
+        app = self._washer()
+        self._cycle(app)
+        # Neither in the options the cycle was started with...
+        self.assertEqual({"prCode": "115", "temp": "40"}, dict(app.cycle_activity.options))
+        app.cycle_log.shadow("mqtt", [ShadowRow("machMode", "2", f"x{self._MAC}", True)])
+        block = self._block(app)
+        blob = json.dumps(block)
+        self.assertIn('"cycle_log"', blob)
+        # ...nor the MAC, the account or the phone anywhere in the dump...
+        for text in ("12:34:56", "acct-0000", "phone-0000"):
+            with self.subTest(text=text):
+                self.assertNotIn(text, blob)
+        # ...nor the title in the log or the programme's section. (`attributes.activity`
+        # prints the activity whole, as before this log; `_mask_favourites` covers the
+        # title there only when it is spelled as the favourite is.)
+        section = json.dumps([block["cycle_log"], block["programme_name"]])
+        for text in ("My own title", "My%20own"):
+            with self.subTest(text=text):
+                self.assertNotIn(text, section)
+
+
 def _history_entry(timestamp=None, accepted=None, name="startProgram", **parameters):
     """One `/history` row in the shape the cloud sends (tests/fixtures/ref_10136)."""
     command = {"commandName": name, "parameters": dict(parameters)}
