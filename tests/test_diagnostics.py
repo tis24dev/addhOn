@@ -10972,6 +10972,18 @@ class CycleLogSectionTest(unittest.TestCase):
             with self.subTest(piece=piece):
                 self.assertNotIn(piece, blob)
 
+    def test_the_section_carries_the_phases(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import ShadowRow
+
+        app = self._washer()
+        app.cycle_log.shadow("mqtt", [ShadowRow("machMode", "1", "2", True),
+                                      ShadowRow("prPhase", "0", "1", True)])
+        section = self._block(app)["cycle_log"]
+        self.assertEqual([("2", "1")],
+                         [(row["machMode"], row["prPhase"]) for row in section["phases"]])
+        self.assertEqual(["phases", "events"], list(section)[-2:])
+        json.dumps(section)
+
     def test_a_row_named_like_an_identity_key_is_blanked(self) -> None:
         # `_redact` works on dict keys, and a shadow row prints the parameter's name as a
         # VALUE: the rows must blank what an identity-named parameter holds themselves.
@@ -11022,6 +11034,71 @@ class CycleLogSectionTest(unittest.TestCase):
         for text in ("My own title", "My%20own"):
             with self.subTest(text=text):
                 self.assertNotIn(text, section)
+
+
+class CyclePhasesTest(unittest.TestCase):
+    """`cycle_log.phases`: one row each time `machMode` or `prPhase` moved, rebuilt from
+    the shadow events at dump time, with what the other keys held then (issue #138: the
+    phase after the end is named by `prPhase`, never by `machMode` 7)."""
+
+    _AT = 1_793_000_000.0
+    _KEYS = ("remainingTimeMM", "currentWaterUsed", "currentElectricityUsed", "temp",
+             "freshAirStatus", "doorLockStatus", "loosenStatus", "antiCreaseStatus",
+             "stainType")
+
+    def _events(self):
+        def shadow(seq, *rows, **fields):
+            return {"seq": seq, "at": self._AT + seq, "kind": "shadow", "road": "mqtt",
+                    "rows": [dict(zip(("key", "before", "after"), row[:3]), **row[3])
+                             if len(row) > 3 else dict(zip(("key", "before", "after"), row))
+                             for row in rows], **fields}
+
+        return [
+            {"seq": 1, "at": self._AT + 1, "kind": "session", "session": 1},
+            shadow(2, ("machMode", "1", "2"), ("prPhase", "0", "1"),
+                   ("remainingTimeMM", "60", "59"), ("temp", "40", "40", {"same": True})),
+            {"seq": 3, "at": self._AT + 3, "kind": "command", "name": "startProgram"},
+            # A run of counter steps: what it ended on is what the next phase sees.
+            shadow(4, ("currentWaterUsed", "0", "5"), ("remainingTimeMM", "59", "30"),
+                   until=self._AT + 40, steps=3),
+            # Refused by the shield of our own write: the shadow did not take it.
+            shadow(5, ("stainType", "0", "19", {"refused": True})),
+            # The same phase pushed again is not a new phase.
+            shadow(6, ("prPhase", "1", "1", {"same": True})),
+            shadow(7, ("freshAirStatus", None, "1"), resumed=True, road="rest"),
+            shadow(8, ("machMode", "2", "7"), ("prPhase", "1", "24"),
+                   ("antiCreaseStatus", "0", "1")),
+            "not an event",
+            {"seq": 9, "kind": "shadow", "rows": "not rows"},
+        ]
+
+    def test_one_row_per_phase_with_what_the_shadow_held(self) -> None:
+        nulls = dict.fromkeys(self._KEYS)
+        expected = [
+            {"seq": 2, "at": diagnostics._log_at(self._AT + 2), "machMode": "2",
+             "prPhase": "1", **nulls, "remainingTimeMM": "59", "temp": "40"},
+            {"seq": 8, "at": diagnostics._log_at(self._AT + 8), "machMode": "7",
+             "prPhase": "24", **nulls, "remainingTimeMM": "30", "currentWaterUsed": "5",
+             "temp": "40", "freshAirStatus": "1", "antiCreaseStatus": "1"},
+        ]
+        self.assertEqual(expected, diagnostics._log_phases(self._events()))
+        # In `seq` order whatever order the list came in.
+        self.assertEqual(expected, diagnostics._log_phases(list(reversed(self._events()))))
+        json.dumps(diagnostics._log_phases(self._events()))
+
+    def test_the_first_value_seen_opens_a_row(self) -> None:
+        events = [{"seq": 1, "at": self._AT, "kind": "shadow", "road": "mqtt",
+                   "rows": [{"key": "machMode", "before": "1", "after": "1", "same": True}]}]
+        [row] = diagnostics._log_phases(events)
+        self.assertEqual(("1", None), (row["machMode"], row["prPhase"]))
+
+    def test_values_are_bounded_text(self) -> None:
+        events = [{"seq": 1, "at": self._AT, "kind": "shadow", "road": "mqtt",
+                   "rows": [{"key": "machMode", "before": "1", "after": "2"},
+                            {"key": "temp", "before": None, "after": "9" * 200}]}]
+        [row] = diagnostics._log_phases(events)
+        self.assertEqual(64, len(row["temp"]))
+        self.assertEqual([], diagnostics._log_phases(None))
 
 
 def _history_entry(timestamp=None, accepted=None, name="startProgram", **parameters):

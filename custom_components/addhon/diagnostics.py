@@ -1525,6 +1525,52 @@ def _log_event(raw) -> dict | None:
     return event
 
 
+# The two keys a phase row opens on, and what each row says the shadow held then
+# (issue #138): the app names the phase after the end from `prPhase` (HQD 20 TUMBLING,
+# 24 REFRESH) and times it from its `lastUpdate`; `machMode` 7 is never a phase.
+_PHASE_KEYS = ("machMode", "prPhase")
+_PHASE_VALUES = (
+    "remainingTimeMM", "currentWaterUsed", "currentElectricityUsed", "temp",
+    "freshAirStatus", "doorLockStatus", "loosenStatus", "antiCreaseStatus", "stainType",
+)
+
+
+def _log_phases(events) -> list:
+    """The cycle log's phases, rebuilt from its `shadow` events in `seq` order: a row
+    each time `machMode` or `prPhase` takes a value other than the last one (the first
+    value seen included), with the event's `seq` and instant and the last value then
+    held by each of `_PHASE_VALUES`, null when never seen. Only the rows the shadow
+    applied count (not `refused`); a `resumed` event counts like any other, and a run
+    of counter steps by the values it ended on. Pure; bounded text."""
+    shadows = sorted(
+        (
+            event for event in (events if isinstance(events, (list, tuple)) else ())
+            if isinstance(event, Mapping) and event.get("kind") == "shadow"
+            and type(event.get("seq")) is int
+        ),
+        key=lambda event: event["seq"],
+    )
+    held: dict = {}
+    phases: list = []
+    for event in shadows:
+        moved = False
+        rows = event.get("rows")
+        for row in rows if isinstance(rows, list) else ():
+            if not isinstance(row, Mapping) or row.get("refused") is True:
+                continue
+            key, value = row.get("key"), _log_text(row.get("after"))
+            if key in _PHASE_KEYS and held.get(key, ...) != value:
+                moved = True
+            if key in _PHASE_KEYS or key in _PHASE_VALUES:
+                held[key] = value
+        if moved:
+            phases.append({
+                "seq": event["seq"], "at": _log_at(event.get("at")),
+                **{key: held.get(key) for key in (*_PHASE_KEYS, *_PHASE_VALUES)},
+            })
+    return phases
+
+
 _STATISTICS_VERSIONS = frozenset({"v1", "v2"})
 
 
@@ -1554,7 +1600,8 @@ def _cycle_log_section(appliance) -> dict | None:
     The pushes, every row kept and marked (`refused` by the shield of our own write,
     `same`, `cloud_from`), the reads of the context that moved something, the commands
     sent and how the cloud answered, the reads a cycle's edge asked for, and the
-    sessions; the events in `seq` order, what the ring dropped counted by kind. The
+    sessions; the events in `seq` order, what the ring dropped counted by kind, and
+    before them the `phases` those events show (`_log_phases`). The
     `programme_name` below is the last state of the same story. Home Assistant's
     instants by `_stamp_text`; the cloud's parsed and re-rendered, never echoed; every
     other text bounded and masked by `_bounded_text`, then `_redact` like the block.
@@ -1583,6 +1630,7 @@ def _cycle_log_section(appliance) -> dict | None:
                 for kind, count in dropped.items()
                 if type(count) is int
             },
+            "phases": _log_phases(raw.get("events")),
             "events": [
                 event for event in map(_log_event, raw.get("events") or ())
                 if event is not None
