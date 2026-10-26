@@ -1415,7 +1415,7 @@ def _log_row(row) -> dict | None:
     if not isinstance(row, Mapping):
         return None
     rendered = {key: _log_text(row.get(key)) for key in ("key", "before", "after")}
-    rendered |= {mark: True for mark in ("refused", "same") if row.get(mark) is True}
+    rendered |= {mark: True for mark in ("refused", "same", "new") if row.get(mark) is True}
     if "cloud_from" in row:
         rendered["cloud_from"] = _log_text(row["cloud_from"])
     # `_redact` reads dict keys, and a row prints the parameter's name as a value: a

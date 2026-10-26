@@ -352,6 +352,24 @@ class HonAppliance:
     def statistics(self) -> dict[str, Any]:
         return self._statistics
 
+    def adopt_pushed_parameter(self, name: str, data: Mapping[str, Any]) -> HonAttribute:
+        """Hold a parameter a push named before any read seeded it (issue #138).
+
+        The app's shadow takes every parameter of a push, known or not
+        (`Object.assign({}, lastShadow.parameters, data)`, apk2 decomp.txt
+        @3217930-3217960); here a new name waited for the next poll. The attribute is
+        built from the push itself: the pushed value, received by MQTT now, and no
+        cloud instant (the push carries none, and `attributes_received` says when HA
+        got it). Called by the MQTT transport on the awscrt thread. A name already
+        held is left as it is and returned.
+        """
+        parameters = self._attributes.setdefault("parameters", {})
+        held = parameters.get(name)
+        if held is None:
+            held = HonAttribute(dict(data))
+            parameters[name] = held
+        return held
+
     @property
     def statistics_source(self) -> Optional[dict[str, Any]]:
         """`{"version": "v2" | "v1", "fallback": None | reason}` of the last statistics

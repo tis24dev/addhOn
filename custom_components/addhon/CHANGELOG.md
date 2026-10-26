@@ -15,6 +15,10 @@ the notes were generated automatically carry a link to their diff instead of a s
   the official app uses** (#138): `/commands/v2/statistics` is tried first and, when it
   fails or answers nothing, the previous `/commands/v1/statistics` answers instead until
   the integration is reloaded. The diagnostics file says which one answered and why.
+- **A value the appliance reports for the first time is shown as soon as it is pushed**
+  (#138). A parameter the cloud had never listed used to wait for the next poll, up to a
+  minute; it is now taken from the push itself, as the official app does. The cycle
+  timeline marks such rows as `new`.
 - **New stain-type dropdown and anti-crease switch on washers whose schema offers them**
   (#138). Both are disabled by default: enable them by hand in the entity settings. They
   are experimental, added to measure what the machine does with them. The stain dropdown

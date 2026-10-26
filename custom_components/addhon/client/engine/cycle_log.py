@@ -13,7 +13,8 @@ This log keeps it, in memory, bounded, per appliance. Events, by `kind`:
   marked `refused` by the 10 s shield of our own write (the start's echo of
   `stainType`/`antiCreaseStatus` lands inside it), `same` as the value held, or
   `cloud_from` when the cloud's old value is not the one held (a push missed); the keys
-  absent from the shadow are listed as `unseeded`. A read keeps the rows refused,
+  the shadow did not hold are created from the push and marked `new`; a name the
+  appliance cannot adopt is listed as `unseeded`. A read keeps the rows refused,
   changed, or whose `lastUpdate` moved (`stamp`); a write of ours the rows it changed.
   Pushes that only step the countdown and consumption counters, with nothing between,
   are one event (`until`, `steps`);
@@ -83,6 +84,8 @@ class ShadowRow(NamedTuple):
     applied: bool
     cloud_old: str | None = None
     stamp: str | None = None
+    # The key was created by this push (the shadow had not seeded it).
+    new: bool = False
 
 
 def is_identity_key(key: Any) -> bool:
@@ -162,7 +165,9 @@ def _row(road: str, row: ShadowRow) -> Optional[dict]:
         return None
     before, after, applied = _text(row.before), _text(row.after), bool(row.applied)
     entry: dict[str, Any] = {"key": key, "before": before, "after": after}
-    if not applied:
+    if row.new:
+        entry["new"] = True
+    elif not applied:
         entry["refused"] = True
     elif before == after:
         entry["same"] = True

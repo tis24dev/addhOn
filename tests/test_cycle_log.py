@@ -131,6 +131,11 @@ class ShadowRowsTest(_LogTest):
         self.log.shadow("local", [ShadowRow("temp", "40", "40", True)])
         self.assertEqual(1, len(_events(self.log, "shadow")))
 
+    def test_a_key_created_from_a_push_is_marked_new(self) -> None:
+        self.log.shadow("mqtt", [ShadowRow("loosenStatus", None, "1", True, new=True)])
+        row = self.log.snapshot()["events"][0]["rows"][0]
+        self.assertEqual({"key": "loosenStatus", "before": None, "after": "1", "new": True}, row)
+
     def test_an_unseeded_key_is_listed(self) -> None:
         self.log.shadow("mqtt", [], unseeded=["newKey"])
         self.log.shadow("mqtt", [ShadowRow("temp", "40", "30", True)], unseeded=["other"])

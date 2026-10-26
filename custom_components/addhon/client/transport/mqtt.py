@@ -612,9 +612,19 @@ class NativeMqttClient:
                     name = parameter.get("parName")
                     if isinstance(name, str) and "parValue" in parameter:
                         observed_values[name] = parameter["parValue"]
-                    # Only already-known parameters (seeded by load_attributes). A new
-                    # parName is recovered at the next HTTP poll; creating it here would
-                    # couple this transport module to the engine's HonAttribute.
+                    # A parName the shadow does not hold yet is created from the push,
+                    # as the app's shadow does (issue #138): the engine builds it
+                    # (`adopt_pushed_parameter`), so this module stays clear of
+                    # HonAttribute. A double without that method keeps the old way: the
+                    # name waits for the next HTTP poll and the cycle log lists it.
+                    if name not in params and isinstance(name, str):
+                        adopt = getattr(appliance, "adopt_pushed_parameter", None)
+                        if callable(adopt):
+                            held = adopt(name, parameter)
+                            params[name] = held
+                            if log is not None:
+                                rows.append(ShadowRow(name, None, value_text(held), True, new=True))
+                            continue
                     if name in params:
                         held = params[name]
                         # `value_text`, never `str()`: a value the cloud sent as null or
