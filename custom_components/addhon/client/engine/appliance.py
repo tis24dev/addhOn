@@ -455,7 +455,9 @@ class HonAppliance:
             return None
         try:
             return int(float(str(attribute)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: an infinite value ("inf"), unreadable like a NaN (review of
+            # PR #139, S5).
             return None
 
     @property

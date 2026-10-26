@@ -850,15 +850,16 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         """True when the shadow's `machMode` says no cycle runs (decision F2).
 
         For the types whose starts are followed alone, with the values the app takes
-        as a cycle in progress (`_SELECT_CYCLE_MODES`). An unreadable `machMode` is
-        not "at rest": the select then reads as before.
+        as a cycle in progress (`_SELECT_CYCLE_MODES`). An unreadable `machMode` -- a
+        NaN or an infinite value included -- is not "at rest": the select then reads
+        as before.
         """
         modes = _SELECT_CYCLE_MODES.get(self._appliance_data.get("type"))
         if modes is None:
             return False
         try:
             return int(float(str(self._get_attr("machMode")))) not in modes
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return False
 
     async def async_select_option(self, option: str) -> None:

@@ -295,6 +295,18 @@ class CycleModesTest(_Harness):
         activity = _activity("HQD_COTTONS", "appliance") | {"activityEnded": "2026-10-16T13:30:00Z"}
         self.assertEqual("iot_wash_denim_jeans", self._read(app, {"activity": activity}, machMode="2"))
 
+    def test_a_non_finite_machmode_is_unreadable(self) -> None:
+        # Review of PR #139 (S5): `int(float("inf"))` raises OverflowError.
+        for value in ("inf", "-inf", "nan"):
+            with self.subTest(machMode=value):
+                app = self._denim_last_started()
+                name = self._read(
+                    app, {"activity": _activity("HQD_COTTONS", "appliance")}, machMode=value
+                )
+                self.assertEqual("iot_wash_denim_jeans", name)
+                self.assertIsNone(app.mach_mode)
+                self.assertIsNone(app.cycle_edge(1))
+
     def test_without_machmode_nothing_changes(self) -> None:
         app = self._denim_last_started()
         del self.cloud.context["shadow"]["parameters"]["machMode"]

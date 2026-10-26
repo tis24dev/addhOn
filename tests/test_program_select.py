@@ -755,7 +755,9 @@ class ProgramSelectAtRestTest(unittest.TestCase):
         self.assertEqual("iot_wash_denim_jeans", self._entity("WM", machMode="4").current_option)
 
     def test_the_other_types_and_an_unreadable_mode_read_as_before(self) -> None:
-        for kind, mode in (("REF", "1"), ("OV", "1"), ("WM", None), ("WM", "x")):
+        for kind, mode in (
+            ("REF", "1"), ("OV", "1"), ("WM", None), ("WM", "x"), ("WM", "inf"), ("WM", "nan"),
+        ):
             with self.subTest(kind=kind, machMode=mode):
                 attributes = {} if mode is None else {"machMode": mode}
                 self.assertEqual("hqd_eco_40_60", self._entity(kind, **attributes).current_option)
