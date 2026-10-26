@@ -322,6 +322,15 @@ class CycleOptionEntityTest(_EntityHarness):
         self.assertEqual("NaN", app.cycle_option("stainType"))
         self.assertEqual("wine", self._stain_select(coordinator).current_option)
 
+    def test_a_raising_reader_falls_to_the_shadow(self) -> None:
+        app = self._washer(stainType="1")
+        self._read(app, {"activity": _start(stainType="19")}, machMode="2")
+        coordinator = self._coordinator(app)
+        self.assertEqual("sweat", self._stain_select(coordinator).current_option)
+        with mock.patch.object(type(app), "cycle_option", side_effect=RuntimeError("boom")):
+            self.assertIsNone(cycle_option_raw(coordinator.data["wm1"], "stainType"))
+            self.assertEqual("wine", self._stain_select(coordinator).current_option)
+
     def test_a_dryer_keep_fresh_reads_as_before(self) -> None:  # C2
         self.TYPE = "TD"
         app = self._cycle()
@@ -329,6 +338,13 @@ class CycleOptionEntityTest(_EntityHarness):
         self.assertEqual("1", app.cycle_option("permanentPressStatus"))
         self.assertIsNone(cycle_option_raw(coordinator.data["wm1"], "permanentPressStatus"))
         self.assertFalse(self._keep_fresh(coordinator).is_on)
+
+    def test_the_stain_sensor_falls_to_the_shadow_on_an_unmapped_cycle_code(self) -> None:
+        app = self._washer(stainType="0")
+        self._read(app, {"activity": _start(stainType="99")}, machMode="2")
+        coordinator = self._coordinator(app)
+        self.assertEqual("99", app.cycle_option("stainType"))
+        self.assertEqual("none", self._stain_sensor(coordinator).native_value)
 
     def test_the_stain_sensor_reads_the_cycle(self) -> None:
         app = self._cycle()

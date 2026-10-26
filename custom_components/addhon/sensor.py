@@ -1756,7 +1756,12 @@ class HonSensor(HonBaseEntity, SensorEntity):
         skip_zero = self.entity_description.zero_is_missing
         raw = None
         if self.entity_description.cycle_option:
-            raw = cycle_option_raw(self._appliance_data, self.entity_description.attr_key)
+            cycle = cycle_option_raw(self._appliance_data, self.entity_description.attr_key)
+            # A cycle code the description does not map would show unknown where the
+            # shadow has a value: it is used only when it renders.
+            value_fn = self.entity_description.value_fn
+            if cycle is not None and (value_fn is None or value_fn(cycle) is not None):
+                raw = cycle
         if raw is None:
             raw = self._get_attr(self.entity_description.attr_key)
         for fallback in self.entity_description.attr_fallbacks:
