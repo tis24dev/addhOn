@@ -711,6 +711,79 @@ class ProgramSelectTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("Inesistente", ctx.exception.translation_placeholders["program"])
 
 
+class ProgramSelectAtRestTest(unittest.TestCase):
+    """Issue #130, decision F2: at rest the select shows what Start would start.
+
+    Lajahome's washer after a cycle: the shadow sits on the resting code 136 ("Eco
+    40-60") while "Avvia programma" sends the category started last. The select showed
+    the first and Start sent the second.
+    """
+
+    _PROGRAMS = ["hqd_cottons", "iot_wash_denim_jeans", "hqd_eco_40_60"]
+
+    def _entity(self, kind="WM", **attributes):
+        from custom_components.addhon.select import HonProgramSelect
+
+        start = RecordingCommand({"program": Param(values=list(self._PROGRAMS))})
+        data = _washer({"startProgram": start}, attributes={
+            "programName": "hqd_eco_40_60",
+            "startProgram.program": "iot_wash_denim_jeans",
+            **attributes,
+        })
+        data["washer-1"]["type"] = kind
+        entity = HonProgramSelect(FakeCoordinator(data), "washer-1", FakeClient())
+        entity.hass = FakeHass()
+        return entity
+
+    def test_at_rest_the_start_target_is_shown(self) -> None:
+        for mode in ("0", "1", "6", "7", "8", "9"):
+            with self.subTest(machMode=mode):
+                self.assertEqual("iot_wash_denim_jeans", self._entity(machMode=mode).current_option)
+
+    def test_during_a_cycle_the_running_programme_is_shown(self) -> None:
+        for mode in ("2", "3", "5"):
+            with self.subTest(machMode=mode):
+                self.assertEqual("hqd_eco_40_60", self._entity(machMode=mode).current_option)
+
+    def test_a_pending_choice_still_comes_first(self) -> None:
+        entity = self._entity(machMode="1")
+        entity.coordinator.pending_programs = {"washer-1": "hqd_cottons"}
+        self.assertEqual("hqd_cottons", entity.current_option)
+
+    def test_the_select_reads_the_engine_s_cycle_set(self) -> None:
+        # Review of PR #139 (S4): one set for the name, the cycle edges and the select.
+        from unittest.mock import patch
+
+        from custom_components.addhon import select
+
+        with patch.object(select, "cycle_modes", return_value=frozenset({1})):
+            self.assertEqual("hqd_eco_40_60", self._entity(machMode="1").current_option)
+
+    def test_mach_mode_4_runs_on_the_dishwasher_alone(self) -> None:
+        self.assertEqual("hqd_eco_40_60", self._entity("DW", machMode="4").current_option)
+        self.assertEqual("iot_wash_denim_jeans", self._entity("WM", machMode="4").current_option)
+
+    def test_the_other_types_and_an_unreadable_mode_read_as_before(self) -> None:
+        for kind, mode in (
+            ("REF", "1"), ("OV", "1"), ("WM", None), ("WM", "x"), ("WM", "inf"), ("WM", "nan"),
+        ):
+            with self.subTest(kind=kind, machMode=mode):
+                attributes = {} if mode is None else {"machMode": mode}
+                self.assertEqual("hqd_eco_40_60", self._entity(kind, **attributes).current_option)
+
+    def test_a_start_target_the_list_lacks_falls_back_to_the_name(self) -> None:
+        # Review of PR #139 (S6): the same rest state twice, with a running name that is
+        # neither start target, so only the at-rest rule can tell the two answers apart.
+        listed = self._entity(machMode="1", programName="hqd_cottons")
+        self.assertEqual("iot_wash_denim_jeans", listed.current_option)
+        unlisted = self._entity(
+            machMode="1",
+            programName="hqd_cottons",
+            **{"startProgram.program": "iot_hidden_programme"},
+        )
+        self.assertEqual("hqd_cottons", unlisted.current_option)
+
+
 _FAMILIES = REPO_ROOT / "tests" / "fixtures" / "program_families.json"
 
 

@@ -30,6 +30,7 @@ from .air_purifier import (
     reports_attribute,
 )
 from .base_entity import HonBaseEntity, coordinator_data_map
+from .client.engine.appliance import cycle_modes
 from .command_dispatch import CommandPatch, async_dispatch_patch
 from .const import (
     AC_ATTR_SWING_H,
@@ -116,6 +117,7 @@ REF_PROGRAM_OFF = "off"
 # and the entities that replace it disagree about which flags exist. The local name
 # stays because it reads as this class's own vocabulary at the two sites below.
 _REF_MODE_FLAG_TO_PROGRAM: dict[str, str] = dict(REF_PARAM_TO_FLAG)
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -784,7 +786,7 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         #    prCode not present in the per-name map, resolution happens directly on
         #    the name without generating DEBUG noise "not mapped" for a code that
         #    would not be mappable anyway.
-        for key in (
+        keys: tuple[str, ...] = (
             "programName",
             "settings.program",
             "startProgram.program",
@@ -792,7 +794,18 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
             "settings.prCode",
             "startProgram.prCode",
             "prCode",
-        ):
+        )
+        if self._at_rest():
+            # At rest nothing runs, so the select shows what "Avvia programma" would
+            # start: the selected category (issue #130, decision F2). The running name
+            # follows the shadow's prCode -- the dial, or the machine's resting code
+            # after a cycle (136, "Eco 40-60", on Lajahome's washer) -- while Start
+            # sends the category, and the two disagreed. The app too shows no running
+            # programme at rest (apk2 decomp.txt @2591529-2591560).
+            keys = ("startProgram.program",) + tuple(
+                key for key in keys if key != "startProgram.program"
+            )
+        for key in keys:
             val = self._get_attr(key)
             if val is None:
                 _LOGGER.debug("Select debug: current_option key '%s' absent", key)
@@ -823,6 +836,23 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
             )
         _LOGGER.debug("Select debug: current_option not available for id=%s", redact_id(self._appliance_id))
         return None
+
+    def _at_rest(self) -> bool:
+        """True when the shadow's `machMode` says no cycle runs (decision F2).
+
+        For the types whose starts are followed alone, with the values the app takes
+        as a cycle in progress: the engine's `cycle_modes`, the set the programme name
+        and the cycle edges read too (review of PR #139, S4). An unreadable `machMode`
+        -- a NaN or an infinite value included -- is not "at rest": the select then
+        reads as before.
+        """
+        modes = cycle_modes(self._appliance_data.get("type"))
+        if modes is None:
+            return False
+        try:
+            return int(float(str(self._get_attr("machMode")))) not in modes
+        except (TypeError, ValueError, OverflowError):
+            return False
 
     async def async_select_option(self, option: str) -> None:
         code = self._program_reverse.get(option)

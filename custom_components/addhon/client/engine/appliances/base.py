@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..parameter.program import HonParameterProgram
+from ..parameter.program import CycleActivity, HonParameterProgram
 
 
 class ApplianceExtra:
@@ -81,8 +81,16 @@ class ApplianceExtra:
         # Resolution goes through `name_for_code`, NOT the raw `ids` map: prCode is
         # ambiguous (up to 35 categories share one code), so `ids` can only ever name a
         # code's base program -- it would report "Cottons" while a downloaded "Perfect
-        # White" runs. `name_for_code` answers with the active category when its own
-        # prCode agrees with the reported one, and falls back to `ids` otherwise.
+        # White" runs. `name_for_code` answers, in order:
+        #
+        # 1. with the cycle the cloud's activity describes, when it is on the reported
+        #    code (issue #130): the programme it names, or the favourite of it that its
+        #    title or the selection names; a panel cycle that names nothing usable gives
+        #    the code's own programme. The appliance keeps the cycle for the types whose
+        #    starts are followed (WM, WD, TD, DW); for the others it is None;
+        # 2. with the active category -- recovered from `/history` or selected -- when
+        #    its own prCode agrees with the reported one;
+        # 3. with `ids`, the code's own programme.
         #
         # Robustness: `_raw(...) or "0"` handles an empty/absent prCode -> "No Program"
         # instead of `int("")` -> ValueError.
@@ -92,7 +100,12 @@ class ApplianceExtra:
             start_cmd = self.parent.settings.get("startProgram.program")
             if isinstance(start_cmd, HonParameterProgram):
                 program_name = (
-                    start_cmd.name_for_code(program, self._int_or_none(params, "prPosition"))
+                    start_cmd.name_for_code(
+                        program,
+                        self._int_or_none(params, "prPosition"),
+                        # Step 1 of the order above: decides before the active category.
+                        cycle=self._cycle_activity(),
+                    )
                     or program_name
                 )
         data["programName"] = program_name
@@ -101,6 +114,11 @@ class ApplianceExtra:
         # the parameters. (See apk/analysis/per-type-derivations.md #5.)
         data["available"] = bool(self.parent.connection)
         return data
+
+    def _cycle_activity(self) -> CycleActivity | None:
+        """The parent's `cycle_activity` (see `HonAppliance`), None on any other parent."""
+        cycle = getattr(self.parent, "cycle_activity", None)
+        return cycle if isinstance(cycle, CycleActivity) else None
 
     def settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         return settings

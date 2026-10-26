@@ -30,6 +30,7 @@ from .command_loader import HonCommandLoader, command_identity, start_identity
 from .commands import HonCommand
 from .exceptions import NoAuthenticationException
 from .parameter.base import HonParameter
+from .parameter.program import CycleActivity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +38,37 @@ _LOGGER = logging.getLogger(__name__)
 # Marks an activity not looked at yet: the first poll after a load records the cycle
 # already running, which the `/history` just read describes (or cannot describe).
 _UNSEEN = object()
+# A context read whose payload carried no `activity` key: it says nothing on the cycle.
+_UNREAD = object()
+# The `machMode` values under which the context's activity is the running cycle (issue
+# #130, decision 6): execution 2, pause 3, delayed start 5, the ones the app's washer
+# dashboard shows a cycle for (apk2 decomp.txt @2588640-2588665); the dishwasher's adds
+# 4. The app's context read also takes test 8 (@3398666-3398745), left out so that one
+# set rules the name, the select and the cycle edges alike (review of PR #139, S4).
+_CYCLE_MODES = frozenset({2, 3, 5})
+_CYCLE_MODES_BY_TYPE = {"DW": _CYCLE_MODES | {4}}
+# The types whose starts are followed when a cycle begins elsewhere (issue #112, decision
+# D4 of 2026-10-06): the four the app's dashboard shows a running programme for.
+FOLLOWED_TYPES = frozenset({"WM", "WD", "TD", "DW"})
+# A push that moves `machMode` into a cycle from outside one, or out of one into the end 7
+# or selection 1, asks for a read of the context (issue #130, decision C1): the activity
+# that names the cycle comes only with it. The cycle is `cycle_modes`' set, the one the
+# name and the select read too (review of PR #139, S4); entering it at the pause 3 is a
+# resume, not a start.
+_PAUSE = 3
+_EDGE_END = frozenset({7, 1})
+
+
+def cycle_modes(appliance_type: Any) -> Optional[frozenset[int]]:
+    """The `machMode` values of a running cycle for `appliance_type`, None if not followed.
+
+    One set for the three things that ask whether a cycle runs: the activity that names
+    it (`HonAppliance._watch_cycle`), the push that starts or ends it
+    (`HonAppliance.cycle_edge`) and the programme select at rest (`select.py`).
+    """
+    if appliance_type not in FOLLOWED_TYPES:
+        return None
+    return _CYCLE_MODES_BY_TYPE.get(appliance_type, _CYCLE_MODES)
 
 
 def _programme_key(name: Any) -> Optional[str]:
@@ -50,6 +82,23 @@ def _programme_key(name: Any) -> Optional[str]:
     return name.strip().rsplit(".", 1)[-1].upper()
 
 
+def _open_started(activity: Any) -> Any:
+    """`activityStarted` of `activity` when it is open (started, not ended), else None."""
+    if not isinstance(activity, dict) or activity.get("activityEnded"):
+        return None
+    return activity.get("activityStarted") or None
+
+
+def _pushed_since(attribute: Any, instant: datetime) -> bool:
+    """Whether a push delivered `attribute`'s value after `instant` (HA's clock)."""
+    received = getattr(attribute, "received_at", None)
+    return (
+        getattr(attribute, "received_via", None) == "mqtt"
+        and isinstance(received, datetime)
+        and received > instant
+    )
+
+
 def _newest_start(history: Any) -> dict[str, Any]:
     """The newest `startProgram` body a `/history` list holds, {} without one."""
     for entry in history if isinstance(history, list) else ():
@@ -61,9 +110,8 @@ def _newest_start(history: Any) -> dict[str, Any]:
 
 class HonAppliance:
     _MINIMAL_UPDATE_INTERVAL = 5  # seconds
-    # Types whose start is followed when a cycle begins elsewhere (issue #112, decision
-    # D4 of 2026-10-06): the four the app's dashboard shows a running programme for.
-    _FOLLOWED_TYPES = frozenset({"WM", "WD", "TD", "DW"})
+    # Types whose start is followed when a cycle begins elsewhere (see FOLLOWED_TYPES).
+    _FOLLOWED_TYPES = FOLLOWED_TYPES
     # Reads of `/history` for one new cycle, one per poll, before giving up (decision of
     # 2026-10-06): a read that failed, or a list without the start just announced.
     _FOLLOW_ATTEMPTS = 3
@@ -126,6 +174,17 @@ class HonAppliance:
         self._follow_task: Optional[asyncio.Task] = None
         self._follow_list: Optional[list[dict[str, Any]]] = None
         self._followed_starts = 0
+        # The cycle the context's activity last described (issue #130, see
+        # `_watch_cycle`). Written by the context read alone, on the client loop; a push
+        # only reads it.
+        self._cycle_activity: Optional[CycleActivity] = None
+        # The last read a push at the start or end of a cycle asked for, as the MQTT
+        # transport records it (see `note_cycle_read`); None until the first.
+        self._cycle_read: Optional[dict[str, Any]] = None
+        # Context reads by start order: the last one started, and the last one whose
+        # answer was applied (see `load_attributes`).
+        self._context_reads_started = 0
+        self._context_read_applied = 0
         self._command_payload: dict[str, str] = {}
         self._history_recovery: dict[str, str] = {}
         # (key, shadow value) pairs already reported as unsyncable: sync runs on every
@@ -317,6 +376,151 @@ class HonAppliance:
         self._command_history_at = datetime.now(timezone.utc)
         self._command_history_refresh = "ok"
         return history
+
+    @property
+    def cycle_activity(self) -> Optional[CycleActivity]:
+        """The cycle the context's activity last described, or None (issue #130).
+
+        Read by the programme name (`ApplianceExtra.attributes`) on every poll and
+        push; see `_watch_cycle` for when it is set and dropped.
+        """
+        return self._cycle_activity
+
+    def _watch_cycle(self, activity: Any) -> None:
+        """Keep `cycle_activity` in step with the context just read (issue #130).
+
+        Lajahome, 2026-10-16: the app had last started Denim (prCode 115), Cottons
+        (also 115) was started on the panel, and Home Assistant named Denim for the
+        whole cycle, though the activity said `HQD_COTTONS`. A panel start never
+        reaches `/history` (T1), so only the activity can name it. On every read of
+        the context:
+
+        - an open activity read while the shadow's `machMode` says a cycle runs, as
+          the app requires (decision 6), is the cycle: it replaces the one kept;
+        - otherwise the cycle kept stays while the shadow keeps its code, so the
+          programme that ran is still named when the cycle ends and the activity
+          empties (decision S1), and is dropped once the shadow has left the code (the
+          next programme, prCode 0, the machine's resting code: 136 on Lajahome's 3
+          idle dumps out of 3).
+
+        Runs on the client loop only, from `load_attributes`, before the name is
+        derived. Nothing else writes `_cycle_activity`.
+        """
+        if activity is _UNREAD:
+            return
+        activity = activity if isinstance(activity, dict) else {}
+        details = activity.get("attributes")
+        details = details if isinstance(details, dict) else {}
+        code = self._live_int("prCode")
+        # The same reading of "open" as the check a cycle's start read is settled by
+        # (`cycle_edge_settled`): what is kept and what is compared are one thing
+        # (review of PR #139, S2).
+        started = _open_started(activity)
+        modes = cycle_modes(self.appliance_type) or _CYCLE_MODES
+        # An activity that began before the cycle kept is an answer older than the one
+        # that brought it, whatever read it came with: it says nothing on what runs
+        # (review of PR #139, S1).
+        if (
+            started is not None
+            and self._live_int("machMode") in modes
+            and not self._older_than_kept(started)
+        ):
+            self._cycle_activity = CycleActivity(
+                programme=details.get("programName"),
+                # The app reads it on the dishwasher alone (`mapLastActivity`).
+                functional_id=(
+                    details.get("functionalId") if self.appliance_type == "DW" else None
+                ),
+                channel=details.get("channel"),
+                label=details.get("prStrDisp"),
+                code=code,
+                started=started,
+            )
+            return
+        # No open activity to take (none, ended, read at rest, or older than the cycle
+        # kept): the cycle kept stays while the shadow keeps its code (decision S1 of
+        # 2026-10-25) and goes once it has left it. The previous cycle's activity is not
+        # dropped at a new start: the start read settles only on another one (S2).
+        if self._cycle_activity is not None and self._cycle_activity.code != code:
+            self._cycle_activity = None
+
+    def _older_than_kept(self, started: Any) -> bool:
+        """Whether an activity that began at `started` began before the cycle kept.
+
+        Both are the cloud's own `activityStarted`, so one clock; when either cannot be
+        read the activity is taken, as before.
+        """
+        kept = self._cycle_activity
+        if kept is None:
+            return False
+        new, old = parse_cloud_timestamp(started), parse_cloud_timestamp(kept.started)
+        return new is not None and old is not None and new < old
+
+    def note_cycle_read(self, record: dict[str, Any]) -> None:
+        """Keep the record of the read a push just asked for (issue #130, decision 9).
+
+        The MQTT transport hands the record over when it asks for the read and fills
+        it in as the reads run: the edge, when it was asked, and each read's instant
+        and outcome. Read by the diagnostics dump only.
+        """
+        self._cycle_read = record
+
+    @property
+    def cycle_read(self) -> Optional[dict[str, Any]]:
+        """The record `note_cycle_read` keeps, None before the first read asked."""
+        return self._cycle_read
+
+    @property
+    def mach_mode(self) -> Optional[int]:
+        """The shadow's `machMode` as an int, None if absent or unreadable."""
+        return self._live_int("machMode")
+
+    def cycle_edge(self, before: Optional[int]) -> Optional[str]:
+        """"start" or "end" when `machMode` moved from `before` into or out of a cycle.
+
+        Called by the MQTT transport after a push applied its parameters (issue #130,
+        decision C1): the start of a cycle, or its end, is when the context's activity
+        changes, and a push never carries the activity. None for any other move, a
+        push that left `machMode` alone, and the types whose starts are not followed.
+        """
+        if self.appliance_type not in self._FOLLOWED_TYPES:
+            return None
+        after = self.mach_mode
+        if after is None or after == before:
+            return None
+        running = cycle_modes(self.appliance_type) or _CYCLE_MODES
+        if after in running and after != _PAUSE and before not in running:
+            return "start"
+        if after in _EDGE_END and before in running:
+            return "end"
+        return None
+
+    @property
+    def activity_started(self) -> Any:
+        """`activityStarted` of the open activity the context last read, else None."""
+        return _open_started(self._attributes.get("activity"))
+
+    def cycle_edge_settled(self, edge: str, before: Any = None) -> bool:
+        """Whether the context last read already shows `edge` (decision C3: otherwise
+        it is read once more): at the start an open activity other than `before`, the
+        one open when the push came; at the end none. An activity the cloud has not
+        replaced yet is the previous cycle's, not this one (review of PR #139, S2)."""
+        started = self.activity_started
+        if edge == "start":
+            return started is not None and started != before
+        return started is None
+
+    def _live_int(self, key: str) -> Optional[int]:
+        """A shadow parameter as an int, None if absent or unreadable."""
+        attribute = self._attributes.get("parameters", {}).get(key)
+        if attribute is None:
+            return None
+        try:
+            return int(float(str(attribute)))
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: an infinite value ("inf"), unreadable like a NaN (review of
+            # PR #139, S5).
+            return None
 
     @property
     def followed_starts(self) -> int:
@@ -586,11 +790,28 @@ class HonAppliance:
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 
-    async def load_attributes(self) -> None:
+    async def load_attributes(self) -> bool:
+        # Two reads of the context can overlap -- the poll, a read a cycle edge asked
+        # for, the refresh after a command -- and answer out of order. An answer older
+        # than one already applied is dropped whole, and a parameter a push delivered
+        # after this read started keeps the pushed value: the answer was taken before it
+        # (review of PR #139, S1). Every read runs on the client loop, so the counters
+        # need no lock.
+        self._context_reads_started += 1
+        order = self._context_reads_started
+        asked = datetime.now(timezone.utc)
         attributes = await self.api.load_attributes(self)
+        if order < self._context_read_applied:
+            _LOGGER.debug("Context read answered after a newer one: dropped")
+            return False
+        self._context_read_applied = order
+        activity = attributes.get("activity", _UNREAD)
         for name, values in attributes.pop("shadow", {}).get("parameters", {}).items():
             if name in self._attributes.get("parameters", {}):
-                self._attributes["parameters"][name].update(values)
+                held = self._attributes["parameters"][name]
+                if _pushed_since(held, asked):
+                    continue
+                held.update(values)
             else:
                 self._attributes.setdefault("parameters", {})[name] = HonAttribute(values)
         self._attributes |= attributes
@@ -642,6 +863,9 @@ class HonAppliance:
         # `available` UNIVERSAL (even for types without a per-type layer, e.g. AC):
         # connectivity is first-class as in the app. The per-type layer re-sets it (same value).
         self._attributes["available"] = self._connection
+        if self.appliance_type in self._FOLLOWED_TYPES:
+            # Before the derivation, so the name of this read already sees it.
+            self._watch_cycle(activity)
         self.derive_attributes()
         # A command the cloud accepted but the device never applied shows up only
         # here, in the next cloud read (issue #115, O4). Whoever asked for the read
@@ -651,6 +875,7 @@ class HonAppliance:
             observe_shadow_read(self)
         except Exception:
             _LOGGER.debug("Delivery check failed", exc_info=True)
+        return True
 
     def derive_attributes(self) -> None:
         """Re-run the per-type derivations (programName, active, pause, available).
@@ -667,18 +892,25 @@ class HonAppliance:
         self._statistics = await self.api.load_statistics(self)
         self._statistics |= await self.api.load_maintenance(self)
 
-    async def update(self, force: bool = False) -> None:
+    async def update(self, force: bool = False) -> Optional[bool]:
+        """Read the context, unless the last read is under 5 s old and not `force`d.
+
+        Returns whether the answer was applied (False: a newer read's answer already
+        was, see `load_attributes`), None when nothing was read.
+        """
         now = datetime.now()
         min_age = now - timedelta(seconds=self._MINIMAL_UPDATE_INTERVAL)
-        if force or not self._last_update or self._last_update < min_age:
-            self._last_update = now
-            follow = self.appliance_type in self._FOLLOWED_TYPES
-            if follow:
-                self._apply_followed_list()
-            await self.load_attributes()
-            self.sync_params_to_command("settings")
-            if follow:
-                self._follow_new_cycle()
+        if not (force or not self._last_update or self._last_update < min_age):
+            return None
+        self._last_update = now
+        follow = self.appliance_type in self._FOLLOWED_TYPES
+        if follow:
+            self._apply_followed_list()
+        applied = await self.load_attributes()
+        self.sync_params_to_command("settings")
+        if follow:
+            self._follow_new_cycle()
+        return applied
 
     # --- derived views ---
     @property

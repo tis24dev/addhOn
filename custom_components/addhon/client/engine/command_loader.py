@@ -43,7 +43,7 @@ from .command_hydration import (
 from .commands import HonCommand
 from .exceptions import NoAuthenticationException
 from .parameter.fixed import HonParameterFixed
-from .parameter.program import HonParameterProgram
+from .parameter.program import HonParameterProgram, favourite_label
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -703,12 +703,35 @@ class HonCommandLoader:
             return None
         return key
 
+    def _favourite_of(self, command: HonCommand, base: str, label: Any) -> Optional[str]:
+        """The favourite of programme `base` the start's title names, or None.
+
+        Issue #130, decision 7: a favourite's start records its base programme as
+        `programName` and the favourite's name as `prStr`, from the app and from Home
+        Assistant alike (paps42's 5 favourite rows out of 5). A favourite of another
+        programme with the same name is not it.
+        """
+        wanted = favourite_label(label)
+        if not wanted:
+            return None
+        return next(
+            (
+                key
+                for key, category in command.categories.items()
+                if category.is_favourite
+                and favourite_label(category.favourite_name) == wanted
+                and self._clean_name(category.category) == base
+            ),
+            None,
+        )
+
     def _set_last_category(
         self,
         command: HonCommand,
         name: str,
         parameters: dict[str, Any],
         program_name: Any = None,
+        label: Any = None,
     ) -> Optional[HonCommand]:
         """Point `name` at the category the last accepted command used.
 
@@ -734,6 +757,9 @@ class HonCommandLoader:
         of whichever mode the catalog listed first (issue #115).
 
         How the category was chosen is recorded in `_history_recovery`, for the dump.
+        A start whose title (`label`, the row's `prStr`) is the name of a favourite of
+        the programme chosen recovers that favourite instead, recorded as `favourite`
+        (issue #130, decision 7).
         """
         if not command.categories:
             return command
@@ -761,6 +787,8 @@ class HonCommandLoader:
         else:
             self._history_recovery[name] = "default"
             return command
+        if (favourite := self._favourite_of(command, category, label)) is not None:
+            category, how = favourite, "favourite"
         # Same guard as the category setter: an unknown category leaves the default in
         # place instead of raising on a stale/renamed program in the history.
         self._history_recovery[name] = how if category in command.categories else "default"
@@ -801,8 +829,13 @@ class HonCommandLoader:
         last_command = self._command_history[last_index].get("command", {})
         raw_parameters = last_command.get("parameters", {})
         parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
+        details = last_command.get("attributes")
         target = self._set_last_category(
-            command, name, parameters, last_command.get("programName")
+            command,
+            name,
+            parameters,
+            last_command.get("programName"),
+            details.get("prStr") if isinstance(details, dict) else None,
         )
         if target is None:
             return
