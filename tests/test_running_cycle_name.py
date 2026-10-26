@@ -17,8 +17,9 @@ Denim and Bed linen. The decisions of 2026-10-25:
 - 4: an activity from the panel that names nothing usable (no name, a name the catalog
   lacks, a programme on another code) leaves the code's own programme, not the category
   the app or Home Assistant started last;
-- 6: the activity counts only while the shadow's `machMode` says a cycle runs (2, 3, 5,
-  8; the dishwasher 4 too), as the app reads it (@3398666-3398745);
+- 6: the activity counts only while the shadow's `machMode` says a cycle runs (2, 3, 5;
+  the dishwasher 4 too), as the app's washer dashboard shows one (@2588640-2588665;
+  test 8 left out, review of PR #139);
 - 8: a programme the activity names skips the prPosition check, as D5;
 - S1: when the cycle ends the programme that ran stays named while the shadow keeps its
   code.
@@ -282,7 +283,7 @@ class CycleModesTest(_Harness):
     """Decision 6: the activity counts only while the shadow says a cycle runs."""
 
     def test_an_activity_read_at_rest_is_not_the_cycle(self) -> None:
-        for mode in ("0", "1", "4", "6", "7", "9"):
+        for mode in ("0", "1", "4", "6", "7", "8", "9"):
             with self.subTest(machMode=mode):
                 app = self._denim_last_started(mach_mode=mode)
                 name = self._read(app, {"activity": _activity("HQD_COTTONS", "appliance")})

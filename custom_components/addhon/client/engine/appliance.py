@@ -40,11 +40,12 @@ _LOGGER = logging.getLogger(__name__)
 _UNSEEN = object()
 # A context read whose payload carried no `activity` key: it says nothing on the cycle.
 _UNREAD = object()
-# The `machMode` values under which the app takes the context's activity as the running
-# cycle (`getDiscoveryDispatchActions`, apk2 decomp.txt @3398666-3398745): delayed start
-# 5, execution 2, pause 3, test 8. The dishwasher's dashboard adds 4 (issue #130,
-# decision 6).
-_CYCLE_MODES = frozenset({2, 3, 5, 8})
+# The `machMode` values under which the context's activity is the running cycle (issue
+# #130, decision 6): execution 2, pause 3, delayed start 5, the ones the app's washer
+# dashboard shows a cycle for (apk2 decomp.txt @2588640-2588665); the dishwasher's adds
+# 4. The app's context read also takes test 8 (@3398666-3398745), left out so that one
+# set rules the name, the select and the cycle edges alike (review of PR #139, S4).
+_CYCLE_MODES = frozenset({2, 3, 5})
 _CYCLE_MODES_BY_TYPE = {"DW": _CYCLE_MODES | {4}}
 # A push that moves `machMode` into a cycle (execution 2, delayed start 5; the
 # dishwasher's 4 too) from outside one (pause 3 counts as inside: a resume is not a new
