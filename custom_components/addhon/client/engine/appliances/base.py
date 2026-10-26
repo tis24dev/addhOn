@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..parameter.program import HonParameterProgram
+from ..parameter.program import CycleActivity, HonParameterProgram
 
 
 class ApplianceExtra:
@@ -86,13 +86,22 @@ class ApplianceExtra:
         #
         # Robustness: `_raw(...) or "0"` handles an empty/absent prCode -> "No Program"
         # instead of `int("")` -> ValueError.
+        #
+        # The cycle the cloud's activity describes goes in too (issue #130): it names
+        # the programme wherever the cycle was started. The appliance keeps it for the
+        # types whose starts are followed (WM, WD, TD, DW); for the others it is None
+        # and the name is resolved as before.
         program_name = "No Program"
         params = data.get("parameters", {})
         if program := int(self._raw(params, "prCode") or "0"):
             start_cmd = self.parent.settings.get("startProgram.program")
             if isinstance(start_cmd, HonParameterProgram):
                 program_name = (
-                    start_cmd.name_for_code(program, self._int_or_none(params, "prPosition"))
+                    start_cmd.name_for_code(
+                        program,
+                        self._int_or_none(params, "prPosition"),
+                        self._cycle_activity(),
+                    )
                     or program_name
                 )
         data["programName"] = program_name
@@ -101,6 +110,11 @@ class ApplianceExtra:
         # the parameters. (See apk/analysis/per-type-derivations.md #5.)
         data["available"] = bool(self.parent.connection)
         return data
+
+    def _cycle_activity(self) -> CycleActivity | None:
+        """The parent's `cycle_activity` (see `HonAppliance`), None on any other parent."""
+        cycle = getattr(self.parent, "cycle_activity", None)
+        return cycle if isinstance(cycle, CycleActivity) else None
 
     def settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         return settings

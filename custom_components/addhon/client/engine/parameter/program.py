@@ -16,11 +16,36 @@ program counts as an enum.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 from .enum import HonParameterEnum
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class CycleActivity(NamedTuple):
+    """The cycle the cloud's `activity` describes, as a context read found it.
+
+    Issue #130: the activity names the running programme exactly, wherever the cycle
+    was started -- `programName` `HQD_COTTONS` with `channel` `appliance` for a panel
+    start, `IOT_WASH_DARK` with `mobileApp` for an app start -- while the shadow's
+    prCode is shared by several programmes (115: Cottons, Perfect White, Denim). The
+    app names its running card from it (`mapLastActivity`, apk2 decomp.txt @1551831).
+
+    `programme` is `programName` as sent, `functional_id` the dishwasher's
+    `functionalId` (its activity may name the programme by that alone), `channel`
+    where the cycle was started, `label` the start's `prStrDisp`, `code` the shadow's
+    prCode in the same read and `started` its `activityStarted`. Kept by the appliance
+    for the types whose starts are followed (`HonAppliance.cycle_activity`), read by
+    `HonParameterProgram.name_for_code`.
+    """
+
+    programme: Any
+    functional_id: Any
+    channel: Any
+    label: Any
+    code: int | None
+    started: Any
 
 
 class HonParameterProgram(HonParameterEnum):
@@ -137,7 +162,12 @@ class HonParameterProgram(HonParameterEnum):
         """
         return cls._category_int(category, "prPosition")
 
-    def name_for_code(self, code: int, position: int | None = None) -> str | None:
+    def name_for_code(
+        self,
+        code: int,
+        position: int | None = None,
+        cycle: CycleActivity | None = None,
+    ) -> str | None:
         """Program name for the live `prCode`, preferring the ACTIVE category.
 
         `ids` alone can only name the base program of a code (see its docstring), so
@@ -169,10 +199,35 @@ class HonParameterProgram(HonParameterEnum):
         the real WM/TD/REF dumps in diagnostics/live-2026-06-22/), so this path is
         currently dead code kept deliberately -- see `_log_position_discovery`.
         Full analysis: apk/analysis/program-identity-prcode.md.
+
+        `cycle` is the cycle the cloud's activity describes (see `CycleActivity`), None
+        for the types whose starts are not followed. On the live code it comes first
+        (issue #130): it names the programme wherever the cycle was started, and the
+        active category only says what Home Assistant or the app started last -- on
+        2026-10-16 Denim from the app, while Cottons, on the same prCode 115, ran from
+        the panel. Its programme is taken when the catalog places it on the code,
+        without the prPosition check, which the dishwasher's shadow fails (decision 8,
+        as D5). An activity from the panel that names nothing usable leaves the code's
+        own programme: the active category was certainly not started there (decision
+        4). Any other activity that names nothing usable falls through to the rules
+        below. Pure: the appliance keeps `cycle`, so a push and a poll can both call it.
         """
         if position is not None:
             self._log_position_discovery(code, position)
         active = self._programs.get(str(self._value))
+        if cycle is not None and cycle.code == code:
+            if (named := self._cycle_programme(cycle, code)) is not None:
+                # A favourite is a copy of its base programme under the user's name: the
+                # activity names the base, so a selected favourite of it keeps its name.
+                if (
+                    active is not None
+                    and self._is_favourite(active)
+                    and self._category_key(getattr(active, "category", "")) == named
+                ):
+                    return str(self._value)
+                return named
+            if cycle.channel == "appliance":
+                return self.ids.get(code)
         # The active category is trusted ONLY when it was deliberately selected -- the
         # last-started program recovered from the command history, or one set through the
         # program parameter. On a fresh load with no history `_value` is merely the
@@ -201,6 +256,55 @@ class HonParameterProgram(HonParameterEnum):
             if len(exact) == 1:
                 return exact[0]
         return self.ids.get(code)
+
+    @staticmethod
+    def _category_key(name: Any) -> str:
+        """A programme's category key from the name a cloud record spells.
+
+        The categories are keyed as `command_loader._clean_name` cleans them: the last
+        dotted part, lowercased (`PROGRAMS.WM_WD.HQD_COTTONS` -> `hqd_cottons`); an
+        activity spells the bare name (`HQD_COTTONS`), cut the same way.
+        """
+        return str(name).strip().rsplit(".", 1)[-1].lower()
+
+    @staticmethod
+    def _fixed(category: Any, key: str) -> str:
+        """A category parameter's value as a stripped string, "" when it has none."""
+        parameters = getattr(category, "parameters", None)
+        parameter = parameters.get(key) if isinstance(parameters, dict) else None
+        return str(getattr(parameter, "value", "") or "").strip()
+
+    def _cycle_programme(self, cycle: CycleActivity, code: int) -> str | None:
+        """The category `cycle` names, when the catalog places it on `code`.
+
+        By `programName`, or, for a dishwasher activity without one, by `functionalId`:
+        the first programme declaring it, as the app's `mapLastActivity` takes it (apk2
+        decomp.txt @1551897-1551988). A favourite is keyed by text the user typed,
+        which no activity spells. A programme filed under another code disagrees with
+        the shadow read with it, so it names nothing.
+        """
+        key: str | None = None
+        if isinstance(cycle.programme, str) and cycle.programme.strip():
+            key = self._category_key(cycle.programme)
+        elif cycle.functional_id not in (None, ""):
+            wanted = str(cycle.functional_id).strip()
+            key = next(
+                (
+                    name
+                    for name, category in self._programs.items()
+                    if not self._is_favourite(category)
+                    and self._fixed(category, "functionalId") == wanted
+                ),
+                None,
+            )
+        category = self._programs.get(key) if key is not None else None
+        if (
+            category is None
+            or self._is_favourite(category)
+            or self._category_code(category) != code
+        ):
+            return None
+        return key
 
     @staticmethod
     def _family_words(category: Any) -> frozenset[str]:

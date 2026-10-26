@@ -30,6 +30,7 @@ from .command_loader import HonCommandLoader, command_identity, start_identity
 from .commands import HonCommand
 from .exceptions import NoAuthenticationException
 from .parameter.base import HonParameter
+from .parameter.program import CycleActivity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +38,14 @@ _LOGGER = logging.getLogger(__name__)
 # Marks an activity not looked at yet: the first poll after a load records the cycle
 # already running, which the `/history` just read describes (or cannot describe).
 _UNSEEN = object()
+# A context read whose payload carried no `activity` key: it says nothing on the cycle.
+_UNREAD = object()
+# The `machMode` values under which the app takes the context's activity as the running
+# cycle (`getDiscoveryDispatchActions`, apk2 decomp.txt @3398666-3398745): delayed start
+# 5, execution 2, pause 3, test 8. The dishwasher's dashboard adds 4 (issue #130,
+# decision 6).
+_CYCLE_MODES = frozenset({2, 3, 5, 8})
+_CYCLE_MODES_BY_TYPE = {"DW": _CYCLE_MODES | {4}}
 
 
 def _programme_key(name: Any) -> Optional[str]:
@@ -126,6 +135,10 @@ class HonAppliance:
         self._follow_task: Optional[asyncio.Task] = None
         self._follow_list: Optional[list[dict[str, Any]]] = None
         self._followed_starts = 0
+        # The cycle the context's activity last described (issue #130, see
+        # `_watch_cycle`). Written by the context read alone, on the client loop; a push
+        # only reads it.
+        self._cycle_activity: Optional[CycleActivity] = None
         self._command_payload: dict[str, str] = {}
         self._history_recovery: dict[str, str] = {}
         # (key, shadow value) pairs already reported as unsyncable: sync runs on every
@@ -317,6 +330,68 @@ class HonAppliance:
         self._command_history_at = datetime.now(timezone.utc)
         self._command_history_refresh = "ok"
         return history
+
+    @property
+    def cycle_activity(self) -> Optional[CycleActivity]:
+        """The cycle the context's activity last described, or None (issue #130).
+
+        Read by the programme name (`ApplianceExtra.attributes`) on every poll and
+        push; see `_watch_cycle` for when it is set and dropped.
+        """
+        return self._cycle_activity
+
+    def _watch_cycle(self, activity: Any) -> None:
+        """Keep `cycle_activity` in step with the context just read (issue #130).
+
+        Lajahome, 2026-10-16: the app had last started Denim (prCode 115), Cottons
+        (also 115) was started on the panel, and Home Assistant named Denim for the
+        whole cycle, though the activity said `HQD_COTTONS`. A panel start never
+        reaches `/history` (T1), so only the activity can name it. On every read of
+        the context:
+
+        - an open activity read while the shadow's `machMode` says a cycle runs, as
+          the app requires (decision 6), is the cycle: it replaces the one kept;
+        - otherwise the cycle kept stays while the shadow keeps its code, so the
+          programme that ran is still named when the cycle ends and the activity
+          empties (decision S1), and is dropped once the shadow has left the code (the
+          next programme, prCode 0, the machine's resting code: 136 on Lajahome's 3
+          idle dumps out of 3).
+
+        Runs on the client loop only, from `load_attributes`, before the name is
+        derived. Nothing else writes `_cycle_activity`.
+        """
+        if activity is _UNREAD:
+            return
+        activity = activity if isinstance(activity, dict) else {}
+        details = activity.get("attributes")
+        details = details if isinstance(details, dict) else {}
+        code = self._live_int("prCode")
+        started = activity.get("activityStarted")
+        modes = _CYCLE_MODES_BY_TYPE.get(self.appliance_type, _CYCLE_MODES)
+        if started and not activity.get("activityEnded") and self._live_int("machMode") in modes:
+            self._cycle_activity = CycleActivity(
+                programme=details.get("programName"),
+                # The app reads it on the dishwasher alone (`mapLastActivity`).
+                functional_id=(
+                    details.get("functionalId") if self.appliance_type == "DW" else None
+                ),
+                channel=details.get("channel"),
+                label=details.get("prStrDisp"),
+                code=code,
+                started=started,
+            )
+        elif self._cycle_activity is not None and self._cycle_activity.code != code:
+            self._cycle_activity = None
+
+    def _live_int(self, key: str) -> Optional[int]:
+        """A shadow parameter as an int, None if absent or unreadable."""
+        attribute = self._attributes.get("parameters", {}).get(key)
+        if attribute is None:
+            return None
+        try:
+            return int(float(str(attribute)))
+        except (TypeError, ValueError):
+            return None
 
     @property
     def followed_starts(self) -> int:
@@ -588,6 +663,7 @@ class HonAppliance:
 
     async def load_attributes(self) -> None:
         attributes = await self.api.load_attributes(self)
+        activity = attributes.get("activity", _UNREAD)
         for name, values in attributes.pop("shadow", {}).get("parameters", {}).items():
             if name in self._attributes.get("parameters", {}):
                 self._attributes["parameters"][name].update(values)
@@ -642,6 +718,9 @@ class HonAppliance:
         # `available` UNIVERSAL (even for types without a per-type layer, e.g. AC):
         # connectivity is first-class as in the app. The per-type layer re-sets it (same value).
         self._attributes["available"] = self._connection
+        if self.appliance_type in self._FOLLOWED_TYPES:
+            # Before the derivation, so the name of this read already sees it.
+            self._watch_cycle(activity)
         self.derive_attributes()
         # A command the cloud accepted but the device never applied shows up only
         # here, in the next cloud read (issue #115, O4). Whoever asked for the read

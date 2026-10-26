@@ -323,10 +323,19 @@ class FollowAStartMadeElsewhereTest(_Harness):
         reads = self.cloud.history_reads
         self.cloud.history_error = TimeoutError()
         self._app_starts_dark()
+        # The washer runs the cycle (machMode 2), as on every real dump with an activity.
+        self.cloud.context["shadow"]["parameters"]["machMode"] = {
+            "parNewVal": "2", "lastUpdate": _ACTIVITY_AT}
         self._poll(app, 6)
         self.assertEqual(reads + 3, self.cloud.history_reads)
         self.assertEqual("TimeoutError", app.command_history_refresh)
-        self.assertEqual("hqd_synthetic_and_coloured", app.attributes["programName"])
+        # Nothing was recovered: the category and its options are the spin of setup...
+        command = self._start_command(app)
+        self.assertEqual("PROGRAMS.WM_WD.HQD_SPIN", command.category)
+        self.assertEqual("0", str(command.parameters["temp"].value))
+        # ...but the name does not need the list: the running activity names
+        # IOT_WASH_DARK on the live code 116 (issue #130, decision 2).
+        self.assertEqual("iot_wash_dark", app.attributes["programName"])
 
     def test_a_read_that_works_on_a_retry_is_applied(self) -> None:
         app = self._at_setup()
