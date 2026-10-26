@@ -917,11 +917,13 @@ class HonAppliance:
                 if log is None:
                     held.update(values)
                     continue
-                before, stamped = str(held), held.last_update
+                # `value_text`, never `str()`: a value the cloud sent as null or a
+                # number makes `HonAttribute.__str__` raise, and the read must apply.
+                before, stamped = _cycle_log.value_text(held), held.last_update
                 applied = held.update(values)
                 offered = values.get("parNewVal") if isinstance(values, dict) else values
                 rows.append(_cycle_log.ShadowRow(
-                    name, before, str(held) if applied else offered, applied,
+                    name, before, _cycle_log.value_text(held) if applied else offered, applied,
                     # Only when `lastUpdate` moved: the value a push brought, read again.
                     stamp=(
                         values.get("lastUpdate")
@@ -1015,10 +1017,7 @@ class HonAppliance:
                 log.shadow("rest", rows)
             else:
                 self._cycle_log_seeded = True
-                log.seed({
-                    name: str(value)
-                    for name, value in self._attributes.get("parameters", {}).items()
-                })
+                log.seed(dict(self._attributes.get("parameters", {})))
             log.context(
                 reason=reason,
                 order=order,
@@ -1123,10 +1122,12 @@ class HonAppliance:
         for key, value in params.items():
             current = shadow.get(key)
             if current is not None and hasattr(current, "update"):
-                before = str(current) if log is not None else None
+                before = _cycle_log.value_text(current) if log is not None else None
                 current.update(str(value), shield=True)
                 if log is not None:
-                    rows.append(_cycle_log.ShadowRow(key, before, str(current), True))
+                    rows.append(
+                        _cycle_log.ShadowRow(key, before, _cycle_log.value_text(current), True)
+                    )
         if rows:
             # Our own write after an accepted command, in the cycle log (issue #138).
             try:

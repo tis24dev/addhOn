@@ -1668,6 +1668,30 @@ class CycleLogPushTest(unittest.TestCase):
         self.assertEqual(1, app.derived)
         self.assertEqual(2, hon.notified)  # the push, then the read it asked for
 
+    def test_a_dirty_held_value_does_not_stop_the_push(self) -> None:
+        # A row the cloud sent with `parNewVal: null` (or a number) leaves a value whose
+        # str() raises: the log must not cost the update, the later rows or the rest.
+        app = _LoggedAppliance(self._TOPIC)
+        app.attributes["parameters"]["machMode"] = HonAttribute({"parNewVal": None})
+        hon = self._push(app, [
+            {"parName": "machMode", "parNewVal": "2"},
+            {"parName": "stainType", "parNewVal": "19"},
+        ])
+        self.assertEqual("2", str(app.attributes["parameters"]["machMode"]))
+        self.assertEqual("19", str(app.attributes["parameters"]["stainType"]))
+        self.assertEqual((["settings"], 1, 2), (app.synced, app.derived, hon.notified))
+        shadow = app.cycle_log.snapshot()["events"][0]
+        self.assertEqual(
+            [{"key": "machMode", "before": None, "after": "2"},
+             {"key": "stainType", "before": "0", "after": "19"}],
+            shadow["rows"],
+        )
+        # The dirty value arrives by a push too, and the next push still lands.
+        self._push(app, [{"parName": "stainType", "parNewVal": None}])
+        self._push(app, [{"parName": "stainType", "parNewVal": 7}])
+        self._push(app, [{"parName": "stainType", "parNewVal": "3"}])
+        self.assertEqual("3", str(app.attributes["parameters"]["stainType"]))
+
     def test_an_appliance_without_a_cycle_log_is_pushed_as_before(self) -> None:
         app = FakeAppliance(self._TOPIC)
         self.assertFalse(hasattr(app, "cycle_log"))

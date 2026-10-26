@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_running_cycle_name import _Harness, _activity  # noqa: E402  (stubs first)
 
 from custom_components.addhon.client.engine import cycle_log  # noqa: E402
+from custom_components.addhon.client.engine.attributes import HonAttribute  # noqa: E402
 from custom_components.addhon.client.engine.cycle_log import (  # noqa: E402
     EVENT_LIMIT,
     TEXT_LIMIT,
@@ -499,6 +500,53 @@ class EngineHooksTest(_Harness):
         app.note_cycle_read({"edge": "end", "asked_at": _T0, "reads": []})
         [read] = _events(app.cycle_log, "cycle_read")
         self.assertEqual("end", read["edge"])
+
+    def test_a_dirty_held_value_does_not_stop_the_poll(self) -> None:
+        # `parNewVal: null` or a number leaves a value whose str() raises
+        # (tests/test_engine_attributes.py): the read must still apply every row, and
+        # the next one must still replace it. (`machMode` is read by the washer's
+        # derivation, which takes a number but not a null: the null rides `stainType`.)
+        app = self._appliance([], _context(temp="40"))
+        self.cloud.context = _context("1", temp="30")
+        self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = 2
+        self.cloud.context["shadow"]["parameters"]["stainType"]["parNewVal"] = None
+        self.assertTrue(self.loop.run_until_complete(app.load_attributes(reason="poll")))
+        self.assertEqual("30", str(app.attributes["parameters"]["temp"]))  # a later row
+        self.cloud.context = _context("2", temp="40")
+        self.assertTrue(self.loop.run_until_complete(app.load_attributes(reason="poll")))
+        self.assertEqual("2", str(app.attributes["parameters"]["machMode"]))
+        self.assertEqual("0", str(app.attributes["parameters"]["stainType"]))
+        first, second = _events(app.cycle_log, "shadow")
+        self.assertEqual(
+            [{"key": "machMode", "before": "1", "after": None},
+             {"key": "stainType", "before": "0", "after": None},
+             {"key": "temp", "before": "40", "after": "30"}],
+            _rows(first),
+        )
+        self.assertEqual(
+            [{"key": "machMode", "before": None, "after": "2"},
+             {"key": "stainType", "before": None, "after": "0"},
+             {"key": "temp", "before": "30", "after": "40"}],
+            _rows(second),
+        )
+        # A first read with a dirty value still seeds the log of a new object.
+        cycle_log.forget_all()
+        self.cloud.context["shadow"]["parameters"]["stainType"]["parNewVal"] = None
+        fresh = self._appliance([], self.cloud.context)
+        self.assertEqual(["session", "context"], [e["kind"] for e in _events(fresh.cycle_log)])
+
+    def test_a_dirty_held_value_does_not_stop_our_write(self) -> None:
+        app = self._washer()
+        app.attributes["parameters"]["machMode"] = HonAttribute({"parNewVal": None})
+        app.sync_payload_to_params({"machMode": "2", "stainType": "19"})
+        self.assertEqual("2", str(app.attributes["parameters"]["machMode"]))
+        self.assertEqual("19", str(app.attributes["parameters"]["stainType"]))
+        [local] = _events(app.cycle_log, "shadow")
+        self.assertEqual(
+            [{"key": "machMode", "before": None, "after": "2"},
+             {"key": "stainType", "before": "0", "after": "19"}],
+            _rows(local),
+        )
 
     def test_a_raising_log_costs_neither_the_read_nor_the_write(self) -> None:
         app = self._washer()

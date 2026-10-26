@@ -101,6 +101,13 @@ def _text(value: Any) -> Optional[str]:
     return _MAC_RE.sub("***", text)[:TEXT_LIMIT]
 
 
+def value_text(value: Any) -> Optional[str]:
+    """`value` as the log keeps it, None when it has no text. Never raises: a row the
+    cloud sent with `parNewVal` null or a number leaves a held value whose `str()`
+    raises, and the hooks read the value held before and after each update with this."""
+    return _text(value)
+
+
 def _scalars(values: Any) -> dict[str, Optional[str]]:
     """The scalar entries of `values` as text, the identity keys left out."""
     kept: dict[str, Optional[str]] = {}

@@ -38,7 +38,7 @@ from awscrt import mqtt5
 from awsiot import mqtt5_client_builder  # type: ignore[import-untyped]
 
 from ..budget import CYCLE_READ, budgeted
-from ..engine.cycle_log import ShadowRow
+from ..engine.cycle_log import ShadowRow, value_text
 from .device import MOBILE_ID
 from .values import AWS_AUTHORIZER, AWS_ENDPOINT
 from ...command_diagnostics import observe_mqtt_update
@@ -617,14 +617,17 @@ class NativeMqttClient:
                     # couple this transport module to the engine's HonAttribute.
                     if name in params:
                         held = params[name]
-                        before = str(held) if log is not None else None
+                        # `value_text`, never `str()`: a value the cloud sent as null or
+                        # a number makes `HonAttribute.__str__` raise, and the push must
+                        # still apply.
+                        before = value_text(held) if log is not None else None
                         # False only when the shield refused it; a double answers None.
                         applied = held.update(parameter) is not False
                         if log is not None:
                             rows.append(ShadowRow(
                                 name,
                                 before,
-                                str(held) if applied else parameter.get("parNewVal"),
+                                value_text(held) if applied else parameter.get("parNewVal"),
                                 applied,
                                 parameter.get("parOldVal"),
                             ))
