@@ -19,13 +19,13 @@ here: they use a handler without auth and do not enter the setup flow of our
 appliances; not implemented because not used.
 
 `appliance` is duck-typed (`Any`): we only read `.appliance_type`, `.appliance_model_id`,
-`.mac_address`, `.code`, `.info` (dict), `.options`. This way `transport/` stays
+`.mac_address`, `.code`, `.info` (dict), `.options`, and, when it has them, the cycle
+log's `.cycle_log` and `.start_estimate()` (issue #138). This way `transport/` stays
 decoupled from the engine, as the whole native layer is.
 """
 from __future__ import annotations
 
 import logging
-import math
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -41,7 +41,6 @@ from .connection import HonConnection
 from .parse import APPLIANCE_LIST_PATH, parse_appliance_list, probe_appliance_list
 from .tokens import token_person_account_id
 from .values import API_URL
-from ..engine.hqd_duration import start_duration
 from ...debug_utils import redact_identity, safe_key_names, structure_only
 from ...error_codes import APPLIANCE_LIST_EMPTY, classify
 
@@ -141,15 +140,21 @@ _ESTIMATED_TYPES = frozenset({"WM", "WD", "TD"})
 
 
 def _estimated_minutes(appliance: Any, data: dict[str, Any]) -> int | None:
-    """The minutes the engine expects the cycle of the start `data` to last, whole and
-    half up as the delay sensor rounds them (issue #138): `hqd_duration.start_duration`
-    on the body as it went out, the call the delay sensor makes on a `/history` start.
-    None when the engine has no estimate, or raises."""
+    """The minutes the appliance expects the cycle of the start `data` to last (issue
+    #138), asked of its `start_estimate` with the body as it went out: the engine's
+    `HonAppliance.start_estimate`. None when the appliance has no such method, answers
+    anything but a whole number, or raises."""
     try:
-        minutes = start_duration(appliance, data)
-        if minutes is None or not math.isfinite(minutes):
+        estimate = getattr(appliance, "start_estimate", None)
+        if not callable(estimate):
             return None
-        return math.floor(minutes + 0.5)
+        minutes = estimate(
+            data.get("commandName"),
+            data.get("programName"),
+            data.get("parameters"),
+            data.get("ancillaryParameters"),
+        )
+        return minutes if type(minutes) is int else None
     except Exception:  # noqa: BLE001 - diagnostics only
         _LOGGER.debug("Cycle log: no estimated duration", exc_info=True)
         return None
@@ -161,8 +166,8 @@ def _note_command(
 ) -> None:
     """A command sent, and how the cloud answered, in the appliance's cycle log (issue
     #138). The command's `timestamp` is the one `/history` keeps; a washer,
-    washer-dryer or dryer start adds the engine's estimate of its duration, worked out
-    here, before the log's lock. Never raises."""
+    washer-dryer or dryer start adds the appliance's estimate of its duration
+    (`_estimated_minutes`), asked before the log's lock. Never raises."""
     try:
         log = getattr(appliance, "cycle_log", None)
         if log is not None:

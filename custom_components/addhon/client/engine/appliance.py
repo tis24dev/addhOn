@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,7 @@ from .attributes import HonAttribute
 from .command_loader import HonCommandLoader, command_identity, start_identity
 from .commands import HonCommand
 from .exceptions import NoAuthenticationException
+from .hqd_duration import start_duration
 from .parameter.base import HonParameter
 from .parameter.program import CycleActivity
 
@@ -606,6 +608,29 @@ class HonAppliance:
     def cycle_read(self) -> Optional[dict[str, Any]]:
         """The record `note_cycle_read` keeps, None before the first read asked."""
         return self._cycle_read
+
+    def start_estimate(
+        self, command_name: Any, programme: Any, parameters: Any, ancillaries: Any
+    ) -> Optional[int]:
+        """The minutes this appliance's start is expected to last, for the cycle log
+        (issue #138): `hqd_duration.start_duration` on the body as it went out, the call
+        the delay sensor makes on a `/history` start, whole and half up as that sensor
+        rounds them. None for any command but `startProgram`, without an estimate, or on
+        any failure: the transport asks it after a send, and it never raises."""
+        if command_name != "startProgram":
+            return None
+        try:
+            minutes = start_duration(self, {
+                "programName": programme,
+                "parameters": parameters,
+                "ancillaryParameters": ancillaries,
+            })
+            if minutes is None or not math.isfinite(minutes):
+                return None
+            return math.floor(minutes + 0.5)
+        except Exception:  # noqa: BLE001 - diagnostics only
+            _LOGGER.debug("Start estimate failed", exc_info=True)
+            return None
 
     @property
     def mach_mode(self) -> Optional[int]:

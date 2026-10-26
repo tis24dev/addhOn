@@ -911,6 +911,7 @@ class SendCommandCycleLogTest(unittest.TestCase):
         """The HW90's bed-linen category as the engine holds it: the start schema of its
         dump (tests/fixtures/wm_haier_hw90_b14387tu1s), the catalogue's ancillaries and
         duration tables and the model's attributes (tests/fixtures/wm_hqd_duration)."""
+        from custom_components.addhon.client.engine.appliance import HonAppliance
         from custom_components.addhon.client.engine.commands import HonCommand
 
         root = Path(__file__).resolve().parent / "fixtures"
@@ -937,6 +938,8 @@ class SendCommandCycleLogTest(unittest.TestCase):
         app.commands = {
             "startProgram": types.SimpleNamespace(categories={"iot_wash_bed_linen": command})
         }
+        # The engine's own estimate, on this double: the transport only asks for it.
+        app.start_estimate = types.MethodType(HonAppliance.start_estimate, app)
         return app, command
 
     def test_a_washer_start_logs_the_estimated_duration(self) -> None:
@@ -959,21 +962,48 @@ class SendCommandCycleLogTest(unittest.TestCase):
             with self.subTest(name=event["name"]):
                 self.assertNotIn("estimated_min", event)
 
-    def test_an_engine_without_an_estimate_logs_none(self) -> None:
-        from unittest import mock
-
+    def test_an_appliance_without_an_estimate_logs_none(self) -> None:
         from custom_components.addhon.client.engine.cycle_log import CycleLog
+
+        def boom(*args):
+            raise RuntimeError("boom")
 
         log = CycleLog()
         conn = FakeConnection({"payload": {"resultCode": "0"}})
         app, command = self._hw90(log, conn)
-        with mock.patch.object(api_mod, "start_duration", side_effect=RuntimeError("boom")):
-            self.assertTrue(_run(command.send()))
-        app.commands = {}
-        self.assertTrue(_run(command.send()))
+        # An estimate that raises, one that is not a whole number, an appliance whose
+        # engine has none, and one without the method at all (a double).
+        for estimate in (boom, lambda *args: 86.0, lambda *args: None, None):
+            with self.subTest(estimate=estimate):
+                if estimate is None:
+                    del app.start_estimate
+                else:
+                    app.start_estimate = estimate
+                self.assertTrue(_run(command.send()))
         events = [e for e in log.snapshot()["events"] if e["kind"] == "command"]
-        self.assertEqual([("accepted", None), ("accepted", None)],
+        self.assertEqual([("accepted", None)] * 4,
                          [(e["outcome"], e["estimated_min"]) for e in events])
+
+    def test_the_transport_asks_the_appliance_with_the_body_sent(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import CycleLog
+
+        asked = []
+        app = self._appliance(CycleLog())
+        app.start_estimate = lambda *args: asked.append(args) or 71
+        conn = FakeConnection({"payload": {"resultCode": "0"}})
+        self.assertTrue(_run(_call(conn).send_command(
+            app, "startProgram", {"temp": "30"}, {"suggestedLoadW": "9"}, "hqd_cottons")))
+        self.assertEqual(
+            [("startProgram", "HQD_COTTONS", {"temp": "30"}, {"suggestedLoadW": "9"})], asked
+        )
+        [event] = app.cycle_log.snapshot()["events"]
+        self.assertEqual(71, event["estimated_min"])
+
+    def test_the_transport_does_not_import_the_engine(self) -> None:
+        source = Path(api_mod.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("engine", "".join(
+            line for line in source.splitlines() if line.startswith(("from ", "import "))
+        ))
 
     def test_a_raising_cycle_log_does_not_change_the_result(self) -> None:
         class _Broken:

@@ -308,5 +308,53 @@ class StartDurationTest(unittest.TestCase):
         )
 
 
+class StartEstimateTest(unittest.TestCase):
+    """Issue #138: `HonAppliance.start_estimate`, which the transport asks for the cycle
+    log beside a start it sends: whole minutes, half up, None rather than raising."""
+
+    HW90 = StartDurationTest.HW90
+
+    def _estimate(self, *args, appliance=None):
+        from custom_components.addhon.client.engine.appliance import HonAppliance
+
+        start = StartDurationTest._bed_linen(self)
+        if appliance is None:
+            appliance = StartDurationTest._appliance(self, start)
+        return HonAppliance.start_estimate(appliance, *args) if args else (
+            HonAppliance.start_estimate(
+                appliance, "startProgram", start["programName"], start["parameters"],
+                start["ancillaryParameters"],
+            )
+        )
+
+    def test_the_hw90_bed_linen_start_is_estimated_at_86_minutes(self) -> None:
+        self.assertEqual(86, self._estimate())
+        self.assertIs(int, type(self._estimate()))
+
+    def test_half_a_minute_rounds_up(self) -> None:
+        from unittest import mock
+
+        for minutes, whole in ((85.5, 86), (85.49, 85)):
+            with self.subTest(minutes=minutes), mock.patch.object(
+                hqd_duration, "programme_duration", return_value=minutes
+            ):
+                self.assertEqual(whole, self._estimate())
+
+    def test_none_for_another_command_no_estimate_or_a_failure(self) -> None:
+        from unittest import mock
+
+        start = StartDurationTest._bed_linen(self)
+        self.assertIsNone(self._estimate("settings", start["programName"],
+                                         start["parameters"], start["ancillaryParameters"]))
+        self.assertIsNone(self._estimate("startProgram", "PROGRAMS.WM_WD.UNKNOWN",
+                                         start["parameters"], None))
+        with mock.patch.object(hqd_duration, "programme_duration",
+                               side_effect=RuntimeError("boom")):
+            self.assertIsNone(self._estimate())
+        with mock.patch.object(hqd_duration, "programme_duration",
+                               return_value=float("nan")):
+            self.assertIsNone(self._estimate())
+
+
 if __name__ == "__main__":
     unittest.main()
