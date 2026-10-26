@@ -103,7 +103,8 @@ class ApplianceExtra:
                     start_cmd.name_for_code(
                         program,
                         self._int_or_none(params, "prPosition"),
-                        self._cycle_activity(),
+                        # Step 1 of the order above: decides before the active category.
+                        cycle=self._cycle_activity(),
                     )
                     or program_name
                 )
