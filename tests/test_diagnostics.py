@@ -10613,6 +10613,95 @@ class HistoryRecoverySectionTest(unittest.TestCase):
         self.assertEqual({}, _option_block(empty)["history_recovery"])
 
 
+class ProgrammeNameSectionTest(unittest.TestCase):
+    """`programme_name`: why `programName` says what it says (issue #130, decision 9).
+
+    On the engine's own appliance: Lajahome's case, Denim started last from the app and
+    Cottons, on the same prCode 115, started on the panel.
+    """
+
+    def _washer(self, kind="WM"):
+        from custom_components.addhon.client import factory
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from test_follow_started_elsewhere import CloudDouble, _programme
+
+        commands = {
+            "applianceModel": {"options": {}},
+            "startProgram": {
+                "PROGRAMS.WM_WD.HQD_COTTONS": _programme("115"),
+                "PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS": _programme("115"),
+            },
+            "dictionaryId": 1,
+        }
+        history = [{"command": {
+            "commandName": "startProgram", "programName": "PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS",
+            "timestamp": "2026-10-15T08:00:00.000Z", "parameters": {"prCode": "115"}}}]
+        shadow = {"shadow": {"parameters": {
+            "prCode": {"parNewVal": "115", "lastUpdate": "2026-10-16T12:20:00Z"},
+            "machMode": {"parNewVal": "1", "lastUpdate": "2026-10-16T12:20:00Z"}}},
+            "activity": {}, "commandHistory": None}
+        self.cloud = CloudDouble(commands, history, shadow)
+        app = factory._native_engine_appliance_cls()(
+            self.cloud, {"applianceTypeName": kind, "applianceModelId": 1, "macAddress": "aa"}, zone=0
+        )
+        self.loop = asyncio.new_event_loop()
+        self.addCleanup(self.loop.close)
+        self.loop.run_until_complete(app.load_commands())
+        self.loop.run_until_complete(app.load_attributes())
+        return app
+
+    def _block(self, app, kind="WM"):
+        return diagnostics._appliance_block(
+            "id1",
+            {"appliance": app, "type": kind, "attributes": dict(app.attributes), "statistics": {}},
+        )
+
+    def test_the_recovered_start_names_the_code_at_rest(self) -> None:
+        block = self._block(self._washer())
+        keys = list(block)
+        self.assertEqual("history_recovery", keys[keys.index("programme_name") + 1])
+        self.assertEqual(
+            {"name": "iot_wash_denim_jeans", "source": "history", "activity": None,
+             "cycle_read": None},
+            block["programme_name"],
+        )
+
+    def test_a_panel_cycle_says_the_activity_named_it(self) -> None:
+        app = self._washer()
+        self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = "2"
+        self.cloud.context["activity"] = {
+            "activityStarted": "2026-10-16T12:25:03Z",
+            "attributes": {"programName": "HQD_COTTONS", "channel": "appliance",
+                           "prStrDisp": "My own title"}}
+        self.loop.run_until_complete(app.load_attributes())
+        app.note_cycle_read({
+            "edge": "start", "asked_at": "2026-10-16T12:25:04+00:00",
+            "reads": [{"at": "2026-10-16T12:25:07+00:00", "settled": True}],
+            "outcome": "settled"})
+        section = self._block(app)["programme_name"]
+        self.assertEqual("hqd_cottons", section["name"])
+        self.assertEqual("activity", section["source"])
+        self.assertEqual(
+            {"programme": "HQD_COTTONS", "functional_id": None, "channel": "appliance",
+             "started": "2026-10-16T12:25:03Z", "prCode": 115},
+            section["activity"],
+        )
+        self.assertEqual("settled", section["cycle_read"]["outcome"])
+        # The start's title may be a favourite's name the user typed: never printed.
+        self.assertNotIn("My own title", json.dumps(section))
+
+    def test_the_types_not_followed_print_nothing(self) -> None:
+        for kind in ("REF", "OV", "AC"):
+            with self.subTest(kind=kind):
+                self.assertNotIn("programme_name", self._block(self._washer(kind), kind))
+
+    def test_an_engine_without_it_prints_nothing(self) -> None:
+        self.assertNotIn(
+            "programme_name", _option_block(OptionAppliance(options={}, additional_data={}))
+        )
+
+
 def _history_entry(timestamp=None, accepted=None, name="startProgram", **parameters):
     """One `/history` row in the shape the cloud sends (tests/fixtures/ref_10136)."""
     command = {"commandName": name, "parameters": dict(parameters)}

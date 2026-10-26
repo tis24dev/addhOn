@@ -81,6 +81,8 @@ class HonParameterProgram(HonParameterEnum):
         # attributes are re-derived on every poll, so without it a device that DOES
         # report the field would log on each refresh.
         self._position_logged = False
+        # Which rule answered the last `name_for_code` (see `name_source`).
+        self._name_source: str | None = None
 
     @property
     def value(self) -> str | float:
@@ -227,8 +229,28 @@ class HonParameterProgram(HonParameterEnum):
         as D5). An activity from the panel that names nothing usable leaves the code's
         own programme: the active category was certainly not started there (decision
         4). Any other activity that names nothing usable falls through to the rules
-        below. Pure: the appliance keeps `cycle`, so a push and a poll can both call it.
+        below. The appliance keeps `cycle`, so a push and a poll can both call it; the
+        only thing written is which rule answered, for the dump (`name_source`).
         """
+        name, self._name_source = self._resolve(code, position, cycle)
+        return name
+
+    @property
+    def name_source(self) -> str | None:
+        """Which rule named the programme at the last `name_for_code`, for the dump.
+
+        `activity` (the cloud's activity), `favourite` (a favourite of the programme
+        it names, or one recovered from `/history`), `history` (the category
+        `/history` recovered), `selection` (one selected in Home Assistant) or `code`
+        (the code's own programme). None before the first call. Issue #130, decision
+        9: the name has five sources, and a report could not tell which one answered.
+        """
+        return self._name_source
+
+    def _resolve(
+        self, code: int, position: int | None, cycle: CycleActivity | None
+    ) -> tuple[str | None, str]:
+        """`name_for_code`'s answer and the source `name_source` reports for it."""
         if position is not None:
             self._log_position_discovery(code, position)
         active = self._programs.get(str(self._value))
@@ -237,7 +259,7 @@ class HonParameterProgram(HonParameterEnum):
                 # A favourite is a copy of its base programme under the user's name: the
                 # activity names the base, and its title the favourite (decision 7)...
                 if (favourite := self.favourite_of(named, cycle.label)) is not None:
-                    return favourite
+                    return favourite, "favourite"
                 # ...or, without a title that says so, a selected favourite of it
                 # keeps its name.
                 if (
@@ -245,10 +267,10 @@ class HonParameterProgram(HonParameterEnum):
                     and self._is_favourite(active)
                     and self._category_key(getattr(active, "category", "")) == named
                 ):
-                    return str(self._value)
-                return named
+                    return str(self._value), "favourite"
+                return named, "activity"
             if cycle.channel == "appliance":
-                return self.ids.get(code)
+                return self.ids.get(code), "code"
         # The active category is trusted ONLY when it was deliberately selected -- the
         # last-started program recovered from the command history, or one set through the
         # program parameter. On a fresh load with no history `_value` is merely the
@@ -271,12 +293,14 @@ class HonParameterProgram(HonParameterEnum):
                 or self._category_position(active) == position
             )
         ):
-            return str(self._value)
+            if not getattr(active, "recovered_from_history", False):
+                return str(self._value), "selection"
+            return str(self._value), "favourite" if self._is_favourite(active) else "history"
         if position is not None:
             exact = self._categories_matching(code, position)
             if len(exact) == 1:
-                return exact[0]
-        return self.ids.get(code)
+                return exact[0], "code"
+        return self.ids.get(code), "code"
 
     @staticmethod
     def _category_key(name: Any) -> str:

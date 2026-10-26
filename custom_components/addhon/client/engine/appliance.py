@@ -148,6 +148,9 @@ class HonAppliance:
         # `_watch_cycle`). Written by the context read alone, on the client loop; a push
         # only reads it.
         self._cycle_activity: Optional[CycleActivity] = None
+        # The last read a push at the start or end of a cycle asked for, as the MQTT
+        # transport records it (see `note_cycle_read`); None until the first.
+        self._cycle_read: Optional[dict[str, Any]] = None
         self._command_payload: dict[str, str] = {}
         self._history_recovery: dict[str, str] = {}
         # (key, shadow value) pairs already reported as unsyncable: sync runs on every
@@ -391,6 +394,20 @@ class HonAppliance:
             )
         elif self._cycle_activity is not None and self._cycle_activity.code != code:
             self._cycle_activity = None
+
+    def note_cycle_read(self, record: dict[str, Any]) -> None:
+        """Keep the record of the read a push just asked for (issue #130, decision 9).
+
+        The MQTT transport hands the record over when it asks for the read and fills
+        it in as the reads run: the edge, when it was asked, and each read's instant
+        and outcome. Read by the diagnostics dump only.
+        """
+        self._cycle_read = record
+
+    @property
+    def cycle_read(self) -> Optional[dict[str, Any]]:
+        """The record `note_cycle_read` keeps, None before the first read asked."""
+        return self._cycle_read
 
     @property
     def mach_mode(self) -> Optional[int]:

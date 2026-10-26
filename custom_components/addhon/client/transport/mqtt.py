@@ -30,6 +30,7 @@ import functools
 import json
 import logging
 import secrets
+from datetime import datetime, timezone
 from typing import Any
 
 from awscrt import mqtt5
@@ -75,6 +76,11 @@ _RECONNECT_BACKOFF_CAP = 60
 # activity opened and closed with the shadow, readable 2 s after the change.
 _CYCLE_READ_DELAY = 3  # seconds
 _CYCLE_READ_RETRY = 10  # seconds
+
+
+def _utc_now() -> str:
+    """Home Assistant's UTC instant, as the cycle-read record keeps it."""
+    return datetime.now(timezone.utc).isoformat()
 # Consecutive in-place re-subscribe FAILURES (transport reports connected, but the
 # SUBACK keeps stalling) before the watchdog stops retrying the subscribe and escalates
 # to a full _start() rebuild. A half-open socket awscrt still believes is connected, or
@@ -335,7 +341,10 @@ class NativeMqttClient:
         key = id(appliance)
         if (pending := self._cycle_reads.get(key)) is not None:
             pending.cancel()
-        coro = self._cycle_read(appliance, edge)
+        record: dict[str, Any] = {"edge": edge, "asked_at": _utc_now(), "reads": []}
+        if callable(note := getattr(appliance, "note_cycle_read", None)):
+            note(record)
+        coro = self._cycle_read(appliance, edge, record)
         try:
             future = asyncio.run_coroutine_threadsafe(coro, loop)
         except RuntimeError:
@@ -351,13 +360,18 @@ class NativeMqttClient:
 
         future.add_done_callback(_forget)
 
-    async def _cycle_read(self, appliance: Any, edge: str) -> None:
+    async def _cycle_read(
+        self, appliance: Any, edge: str, record: dict[str, Any]
+    ) -> None:
         """Read `appliance`'s context `_CYCLE_READ_DELAY` s after the push, and once more
         `_CYCLE_READ_RETRY` s later if the activity does not show `edge` yet (decision
-        C3). Each read publishes like a push. Never raises: the poll is still there."""
+        C3). Each read publishes like a push. Never raises: the poll is still there.
+        `record` (see `HonAppliance.note_cycle_read`) gets each read and the outcome."""
         try:
             for delay in (_CYCLE_READ_DELAY, _CYCLE_READ_RETRY):
                 await asyncio.sleep(delay)
+                read: dict[str, Any] = {"at": _utc_now()}
+                record["reads"].append(read)
                 try:
                     async with budgeted(CYCLE_READ):
                         await appliance.update(force=True)
@@ -365,13 +379,19 @@ class NativeMqttClient:
                     raise
                 except Exception as err:  # noqa: BLE001 - the poll reads it anyway
                     _LOGGER.debug("MQTT: cycle read failed: %s", type(err).__name__)
+                    read["error"] = type(err).__name__
+                    record["outcome"] = "failed"
                     return
                 self._hon.notify()
                 settled = getattr(appliance, "cycle_edge_settled", None)
-                if not callable(settled) or settled(edge):
+                read["settled"] = not callable(settled) or bool(settled(edge))
+                if read["settled"]:
+                    record["outcome"] = "settled"
                     return
+            record["outcome"] = "unsettled"
         except asyncio.CancelledError:
             # Replaced by a newer edge, or the client stopped.
+            record["outcome"] = "cancelled"
             raise
 
     # -- lifecycle callbacks ---------------------------------------------------

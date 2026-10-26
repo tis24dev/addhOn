@@ -1289,6 +1289,57 @@ def _history_moment(entry: Mapping) -> datetime | None:
     return None
 
 
+def _programme_name(appliance, attributes: Mapping) -> dict | None:
+    """Why `attributes.programName` says what it says (issue #130, decision 9).
+
+    The name has five sources -- the cloud's activity, a favourite of the programme it
+    names or one recovered from `/history`, the category `/history` recovered, the one
+    selected in Home Assistant, the code's own programme -- and the report of #130 had
+    to rebuild which one answered from timestamps. Printed:
+
+    - `name` and `source`, the rule that answered (`HonParameterProgram.name_source`);
+    - `activity`, the cycle the context's activity described as the engine keeps it
+      (`HonAppliance.cycle_activity`): programme, channel, start, the shadow's code
+      read with it (`prCode`); the start's title is left out, it may be a favourite's name;
+    - `cycle_read`, the last read of the context a push at the start or the end of a
+      cycle asked for (`HonAppliance.cycle_read`): the edge, when it was asked, each
+      read and the outcome.
+
+    None for an engine without them, a type that is not followed (no `cycle_read`
+    attribute), or one that raises.
+    """
+    try:
+        followed = getattr(appliance, "_FOLLOWED_TYPES", ())
+        if not hasattr(appliance, "cycle_read") or (
+            getattr(appliance, "appliance_type", None) not in followed
+        ):
+            return None
+        settings = getattr(appliance, "settings", None)
+        program = settings.get("startProgram.program") if isinstance(settings, Mapping) else None
+        cycle = getattr(appliance, "cycle_activity", None)
+        read = getattr(appliance, "cycle_read", None)
+        return {
+            "name": attributes.get("programName"),
+            "source": getattr(program, "name_source", None),
+            "activity": None if cycle is None else {
+                "programme": cycle.programme,
+                "functional_id": cycle.functional_id,
+                "channel": cycle.channel,
+                "started": cycle.started,
+                "prCode": cycle.code,
+            },
+            "cycle_read": None if not isinstance(read, Mapping) else {
+                "edge": read.get("edge"),
+                "asked_at": read.get("asked_at"),
+                "reads": [dict(entry) for entry in read.get("reads") or ()],
+                "outcome": read.get("outcome"),
+            },
+        }
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: programme name unreadable", exc_info=True)
+        return None
+
+
 def _history_recovery(appliance) -> dict | None:
     """{command name: how the last catalog load chose the category it restored}.
 
@@ -4359,6 +4410,13 @@ def _appliance_block(
         # and is always present -- `{}` is the finding "no key had two sources".
         "statistics": dict(statistics),
         "attributes_overridden": overrides,
+        # Why `programName` says what it says, beside how the category it may name was
+        # recovered; omitted for the types that are not followed.
+        **(
+            {"programme_name": programme_name}
+            if (programme_name := _programme_name(appliance, attributes)) is not None
+            else {}
+        ),
         # Just before `commands`, whose active category it explains.
         "history_recovery": _history_recovery(appliance),
         "commands": commands,
