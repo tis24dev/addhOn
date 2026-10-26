@@ -1301,9 +1301,9 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
 
     - `name` and `source`, the rule that answered (`HonParameterProgram.name_source`);
     - `activity`, the cycle the context's activity described as the engine keeps it
-      (`HonAppliance.cycle_activity`): programme, channel, start, the instant the
-      machine started executing it (`execution_started`, issue #138, parsed and
-      re-rendered), the shadow's code read with it (`prCode`), the activity's own
+      (`HonAppliance.cycle_activity`): programme, channel, start and the instant the
+      machine started executing it (`execution_started`, issue #138), both parsed and
+      re-rendered, the shadow's code read with it (`prCode`), the activity's own
       (`activity_prCode`) and the start's options it carried (`options`, issue #138,
       each text bounded); the start's title is left out, it may be a favourite's name;
     - `cycle_read`, the last read of the context a push at the start or the end of a
@@ -1330,7 +1330,7 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
                 "programme": cycle.programme,
                 "functional_id": cycle.functional_id,
                 "channel": cycle.channel,
-                "started": cycle.started,
+                "started": _log_cloud(cycle.started),
                 "execution_started": _log_cloud(getattr(cycle, "execution_started", None)),
                 "prCode": cycle.code,
                 "activity_prCode": cycle.activity_code,

@@ -42,9 +42,9 @@ the notes were generated automatically carry a link to their diff instead of a s
   suggested, the counters that moved, and each state the Keep Fresh switch and phase,
   the stain dropdown and sensor, the phase, the programme and the machine state took, how
   long each start was expected to last and when the machine actually started the cycle,
-  and whether the machine executed each command sent and how long after the cloud
-  accepted it. A table of the cycle's phases sums it up, with the time left, the water
-  and energy used and the temperature at the start of each.
+  and whether the machine executed each start, stop, pause or resume and how long after
+  the cloud accepted it. A table of the cycle's phases sums it up, with the time left,
+  the water and energy used and the temperature at the start of each.
 - **The diagnostics file now says where each programme option's value came from** (#138),
   for every appliance with option entities: your pending choice, what the programme
   prescribes, the running cycle, the machine's report or the last command. Unlike the

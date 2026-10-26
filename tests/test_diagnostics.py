@@ -10745,7 +10745,8 @@ class ProgrammeNameSectionTest(unittest.TestCase):
         self.assertEqual("activity", section["source"])
         self.assertEqual(
             {"programme": "HQD_COTTONS", "functional_id": None, "channel": "appliance",
-             "started": "2026-10-16T12:25:03Z", "execution_started": None, "prCode": 115,
+             "started": "2026-10-16T12:25:03+00:00", "execution_started": None,
+             "prCode": 115,
              "activity_prCode": 115, "options": {"prCode": "115", "temp": "40"}},
             section["activity"],
         )
@@ -10766,7 +10767,7 @@ class ProgrammeNameSectionTest(unittest.TestCase):
         self.loop.run_until_complete(app.load_attributes())
         activity = self._block(app)["programme_name"]["activity"]
         self.assertEqual("2026-10-16T12:25:05+00:00", activity["execution_started"])
-        self.assertEqual("2026-10-16T12:25:03Z", activity["started"])
+        self.assertEqual("2026-10-16T12:25:03+00:00", activity["started"])
 
     def test_the_types_not_followed_print_nothing(self) -> None:
         for kind in ("REF", "OV", "AC"):
@@ -10911,6 +10912,9 @@ class CycleLogSectionTest(unittest.TestCase):
             "timestampAccepted": "2026-10-16T12:25:01.6Z",
             "timestampExecuted": "2026-10-16T12:25:03.1Z",
         })
+        # Not executed 60 s after the send, on Home Assistant's clock.
+        clock = log._clock
+        log._clock = lambda: clock() + 61
         log.command_outcome({
             "command": {"timestamp": "2026-10-16T12:30:00.000Z"},
             "timestampAccepted": "2026-10-16T12:30:00.6Z",

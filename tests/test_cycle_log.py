@@ -413,10 +413,12 @@ class CommandOutcomeTest(_LogTest):
     """What became of a command, as the app reads it (issue #138): the context's
     `commandHistory` slot names it by the `timestamp` it was sent with; executed once
     `timestampExecuted` is set, not received when only `timestampAccepted` is, more than
-    60 s ago (the app's `_command_not_received_timeout`)."""
+    60 s after the send (the app's `_command_not_received_timeout`). The slot's times
+    move with every command and its body only with a start or a stop, so its times speak
+    for the body only when the acceptance lies within 60 s of the send."""
 
-    _SENT = "2026-10-26T07:33:00.148Z"
-    _ACCEPTED = "2026-10-26T07:33:01.6Z"  # the clock reads 07:33:20
+    _SENT = "2026-10-26T07:33:20.148Z"  # the clock reads 07:33:20
+    _ACCEPTED = "2026-10-26T07:33:21.6Z"
 
     def _slot(self, sent=_SENT, accepted=_ACCEPTED, executed=None, **command):
         slot = {"command": {"commandName": "startProgram", "timestamp": sent,
@@ -427,8 +429,8 @@ class CommandOutcomeTest(_LogTest):
             slot["timestampExecuted"] = executed
         return slot
 
-    def _send(self, sent=_SENT, outcome="accepted"):
-        self.log.command(name="startProgram", programme="PROGRAMS.WM_WD.HQD_COTTONS",
+    def _send(self, sent=_SENT, outcome="accepted", name="startProgram"):
+        self.log.command(name=name, programme="PROGRAMS.WM_WD.HQD_COTTONS",
                          sent=sent, outcome=outcome)
 
     def _followups(self):
@@ -437,51 +439,110 @@ class CommandOutcomeTest(_LogTest):
 
     def test_an_executed_command_is_followed_up_once(self) -> None:
         self._send()
-        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:04.2Z"))
-        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:04.2Z"))
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:24.2Z"))
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:24.2Z"))
         [followup] = self._followups()
         self.assertEqual(
             {"kind": "command", "name": "startProgram", "sent": self._SENT,
-             "outcome": "executed", "executed_at": "2026-10-26T07:33:04.2Z", "delay_s": 3},
+             "outcome": "executed", "executed_at": "2026-10-26T07:33:24.2Z", "delay_s": 3},
             {k: followup[k] for k in ("kind", "name", "sent", "outcome", "executed_at",
                                       "delay_s")},
         )
         self.assertIs(int, type(followup["delay_s"]))
         self.assertNotIn("programme", followup)
 
-    def test_not_executed_only_past_60_s_and_never_followed_again(self) -> None:
+    def test_not_executed_60_s_after_the_send_and_never_followed_again(self) -> None:
+        # Measured on Home Assistant's clock from the send's own event: the cloud took
+        # 50 s to accept, and 61 s after the send only 11 s have passed since then.
         self._send()
-        self.log.command_outcome(self._slot())  # 18.4 s after the acceptance
-        self.clock.tick(41)  # 59.4 s
-        self.log.command_outcome(self._slot())
+        accepted = "2026-10-26T07:34:10.148Z"
+        self.clock.tick(59)
+        self.log.command_outcome(self._slot(accepted=accepted))
         self.assertEqual([], self._followups())
-        self.clock.tick(1)  # 60.4 s
-        self.log.command_outcome(self._slot())
+        self.clock.tick(2)
+        self.log.command_outcome(self._slot(accepted=accepted))
         self.clock.tick(30)
-        self.log.command_outcome(self._slot(executed="2026-10-26T07:34:30Z"))
+        self.log.command_outcome(self._slot(accepted=accepted,
+                                            executed="2026-10-26T07:34:30Z"))
         [followup] = self._followups()
         self.assertEqual(("not_executed", self._SENT), (followup["outcome"], followup["sent"]))
         self.assertNotIn("executed_at", followup)
         self.assertNotIn("delay_s", followup)
 
-    def test_a_raised_or_rejected_command_is_followed_up_too(self) -> None:
+    def test_an_empty_executed_counts_as_absent(self) -> None:
+        self._send()
+        self.log.command_outcome(self._slot(executed=""))
+        self.assertEqual([], self._followups())
+        self.clock.tick(61)
+        self.log.command_outcome(self._slot(executed=""))
+        [followup] = self._followups()
+        self.assertEqual("not_executed", followup["outcome"])
+
+    def test_a_raised_command_is_followed_up_too(self) -> None:
         self._send(outcome="raised")
-        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:04.2Z"))
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:24.2Z"))
         [followup] = self._followups()
         self.assertEqual("executed", followup["outcome"])
 
-    def test_an_unreadable_instant_leaves_the_delay_unknown(self) -> None:
+    def test_times_of_another_command_leave_the_command_waiting(self) -> None:
+        cases = {
+            # An air conditioner's slot (2026-08-15): the body of a start sent a month
+            # before, the times of that day's command.
+            "ac": ("2026-07-16T07:01:17.206Z", "2026-08-15T07:00:00.7Z",
+                   "2026-08-15T07:00:01.5Z"),
+            # A dishwasher's (2026-09-23): a start's body sent at 07:21:58, accepted at
+            # 09:08:48.9, executed at 07:22:00.
+            "dw": ("2026-09-23T07:21:58.148Z", "2026-09-23T09:08:48.9Z",
+                   "2026-09-23T07:22:00.0Z"),
+            # Within the window, but executed before accepted: not one command's times.
+            "reversed": (self._SENT, "2026-10-26T07:33:30Z", "2026-10-26T07:33:25Z"),
+            "late": (self._SENT, "2026-10-26T07:34:21.2Z", "2026-10-26T07:34:22Z"),
+        }
+        for case, (sent, accepted, executed) in cases.items():
+            with self.subTest(case=case):
+                self.setUp()
+                self._send(sent=sent)
+                self.log.command_outcome(self._slot(sent, accepted, executed))
+                self.clock.tick(3600)
+                self.log.command_outcome(self._slot(sent, accepted, executed))
+                self.assertEqual([], self._followups())
+                self.assertIn(sent, self.log._awaiting)
+
+    def test_a_setting_after_a_start_does_not_answer_for_the_start(self) -> None:
+        # The slot keeps the start's body and takes the setting's times.
         self._send()
-        self.log.command_outcome(self._slot(accepted="not an instant",
-                                            executed="2026-10-26T07:33:04.2Z"))
+        self.clock.tick(120)
+        self._send(sent="2026-10-26T07:35:20.148Z", name="settings")
+        self.log.command_outcome(self._slot(accepted="2026-10-26T07:35:20.6Z",
+                                            executed="2026-10-26T07:35:21.6Z"))
+        self.assertEqual([], self._followups())
+        # Its own times still answer for it.
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:24.2Z"))
         [followup] = self._followups()
-        self.assertIsNone(followup["delay_s"])
-        # An executed instant older than the acceptance is kept as the cloud said it.
-        self._send(sent="2026-10-26T07:40:00.000Z")
-        self.log.command_outcome(self._slot(sent="2026-10-26T07:40:00.000Z",
-                                            accepted="2026-10-26T09:08:48.9Z",
-                                            executed="2026-10-26T07:40:02.0Z"))
-        self.assertEqual(-5327, self._followups()[-1]["delay_s"])
+        self.assertEqual(("executed", self._SENT), (followup["outcome"], followup["sent"]))
+
+    def test_an_acceptance_up_to_60_s_either_side_of_the_send_counts(self) -> None:
+        for accepted, executed in (("2026-10-26T07:32:21Z", "2026-10-26T07:32:22Z"),
+                                   ("2026-10-26T07:34:20Z", "2026-10-26T07:34:21Z")):
+            with self.subTest(accepted=accepted):
+                self.setUp()
+                self._send()
+                self.log.command_outcome(self._slot(accepted=accepted, executed=executed))
+                [followup] = self._followups()
+                self.assertEqual(1, followup["delay_s"])
+
+    def test_an_unreadable_instant_gives_no_follow_up(self) -> None:
+        for sent, accepted, executed in (
+            (self._SENT, "not an instant", "2026-10-26T07:33:24.2Z"),
+            (self._SENT, self._ACCEPTED, "not an instant"),
+            ("not an instant", self._ACCEPTED, "2026-10-26T07:33:24.2Z"),
+        ):
+            with self.subTest(sent=sent, accepted=accepted, executed=executed):
+                self.setUp()
+                self._send(sent=sent)
+                self.clock.tick(3600)
+                self.log.command_outcome(self._slot(sent, accepted, executed))
+                self.assertEqual([], self._followups())
 
     def test_nothing_without_a_command_of_ours_or_a_verdict(self) -> None:
         self._send()
@@ -491,7 +552,8 @@ class CommandOutcomeTest(_LogTest):
             self._slot(accepted=None),  # neither accepted nor executed: no verdict
             # The transaction id carries the timestamp too, but only `timestamp` counts.
             {"command": {"transactionId": f"AA:BB:CC:00:11:22_{self._SENT}"},
-             "timestampExecuted": "2026-10-26T07:33:04.2Z"},
+             "timestampAccepted": self._ACCEPTED,
+             "timestampExecuted": "2026-10-26T07:33:24.2Z"},
         ):
             with self.subTest(slot=slot):
                 self.log.command_outcome(slot)
@@ -506,7 +568,7 @@ class CommandOutcomeTest(_LogTest):
         for _ in range(EVENT_LIMIT):
             self.log.entity(key="state", old="a", new="b")
         self.assertEqual({}, self.log._awaiting)
-        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:04.2Z"))
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:24.2Z"))
         self.assertEqual([], self._followups())
 
 
