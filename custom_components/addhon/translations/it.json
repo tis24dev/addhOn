@@ -988,6 +988,9 @@
       "anticrease": {
         "name": "Antipiega"
       },
+      "anti_crease_status": {
+        "name": "Antipiega"
+      },
       "good_night": {
         "name": "Buonanotte"
       },
@@ -1207,6 +1210,38 @@
       },
       "rinse_iterations": {
         "name": "Numero di risciacqui"
+      },
+      "stain_type": {
+        "name": "Tipo Macchia",
+        "state": {
+          "none": "Nessuna",
+          "wine": "Vino",
+          "grass": "Erba",
+          "soil": "Terra",
+          "blood": "Sangue",
+          "milk": "Latte",
+          "cooking_oil": "Olio da cucina",
+          "tea": "Tè",
+          "coffee": "Caffè",
+          "chocolate": "Cioccolato",
+          "lip_gloss": "Lucidalabbra",
+          "curry": "Curry",
+          "milk_tea": "Tè al latte",
+          "chili_oil": "Olio di peperoncino",
+          "blue_ink": "Inchiostro blu",
+          "color_pencil": "Matita colorata",
+          "shoe_cream": "Lucido da scarpe",
+          "oil_pastel": "Pastello a olio",
+          "blueberry": "Mirtillo",
+          "sweat": "Sudore",
+          "egg": "Uovo",
+          "ketchup": "Ketchup",
+          "baby_food": "Pappa",
+          "soy_sauce": "Salsa di soia",
+          "bean_paste": "Pasta di fagioli",
+          "chili_sauce": "Salsa piccante",
+          "fruit": "Frutta"
+        }
       },
       "fan_direction_vertical": {
         "name": "Direzione aria verticale",

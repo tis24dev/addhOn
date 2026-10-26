@@ -11,6 +11,25 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **New stain-type dropdown and anti-crease switch on washers whose schema offers them**
+  (#138). Both are disabled by default: enable them by hand in the entity settings. They
+  are experimental, added to measure what the machine does with them. The stain dropdown
+  is not offered on a washer whose programmes tie a stain to a temperature, because there
+  the order of the choices can make the start fail.
+- **During a cycle, Keep Fresh and the stain type show what the cycle was started with**
+  (#138), as the official app does. The washer does not report either while it runs, so
+  the Keep Fresh switch of a cycle started with it went back to off about a minute after
+  the start. On washers and washer-dryers, for a cycle started from Home Assistant or the
+  app, the switch, the stain dropdown and the stain sensor now read the cycle's own values
+  until it ends; a cycle started on the panel still shows what the machine reports.
+- **The diagnostics file of washers, washer-dryers, dryers and dishwashers now carries a
+  timeline of the last cycles** (#138): what the machine reported and when, and what was
+  sent, so one download explains a whole cycle. It is kept in memory: reloading the
+  integration keeps it, restarting Home Assistant starts it over.
+- **The diagnostics file now says where each programme option's value came from** (#138),
+  for every appliance with option entities: your pending choice, what the programme
+  prescribes, the running cycle, the machine's report or the last command. Unlike the
+  timeline, it starts over when the integration is reloaded.
 - **Picking a programme now presets the options that programme calls for** (#98). With a
   programme selected and an option you have not touched, the switches, the dropdowns and
   the delayed start show what THAT programme prescribes instead of the settings the last

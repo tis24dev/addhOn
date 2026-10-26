@@ -144,6 +144,7 @@ from .hon_commands import (
     param_values,
 )
 from .program_labels import for_coordinator, lc_label_target
+from .program_options import cycle_option_raw
 from .ref_programs import model_zones as _model_zones, my_zone_code_for_value, my_zone_codes
 
 _LOGGER = logging.getLogger(__name__)
@@ -205,6 +206,10 @@ class HonSensorEntityDescription(SensorEntityDescription):
     # Laundry Centre unit (`"WM"` / `"TD"`) the entity belongs to (#124): it sits on that
     # unit's child device and its unique_id carries the unit. None everywhere else.
     unit: str | None = None
+    # When True, what the running cycle was started with comes first, then the shadow
+    # (`program_options.cycle_option_raw`, issue #138): for a value the shadow does not
+    # report during a cycle. Defaults off: no existing entity changes behaviour.
+    cycle_option: bool = False
 
 
 # State + remaining time: identical for washer/washer-dryer/tumble dryer.
@@ -509,6 +514,7 @@ _WASH_EXTRA: tuple[HonSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.ENUM,
         options=sorted(set(STAIN_TYPE_MAP.values())),
         value_fn=_stain,
+        cycle_option=True,
     ),
 )
 
@@ -1748,7 +1754,16 @@ class HonSensor(HonBaseEntity, SensorEntity):
     @property
     def native_value(self):
         skip_zero = self.entity_description.zero_is_missing
-        raw = self._get_attr(self.entity_description.attr_key)
+        raw = None
+        if self.entity_description.cycle_option:
+            cycle = cycle_option_raw(self._appliance_data, self.entity_description.attr_key)
+            # A cycle code the description does not map would show unknown where the
+            # shadow has a value: it is used only when it renders.
+            value_fn = self.entity_description.value_fn
+            if cycle is not None and (value_fn is None or value_fn(cycle) is not None):
+                raw = cycle
+        if raw is None:
+            raw = self._get_attr(self.entity_description.attr_key)
         for fallback in self.entity_description.attr_fallbacks:
             if raw is not None and not (skip_zero and _is_zeroish(raw)):
                 break

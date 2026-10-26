@@ -83,6 +83,7 @@ from datetime import datetime, timezone
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from .client.engine.cycle_log import is_identity_key
 from .const import (
     ACCOUNT_DEVICE_SUFFIX,
     APPLIANCE_AC,
@@ -101,6 +102,7 @@ from .const import (
     CONF_ENABLE_EXPERIMENTAL,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
+    PROGRAM_OPTION_SOURCES,
     PROGRAM_PARAM_NAMES,
 )
 from .debug_utils import _MAC_RE, redact_id
@@ -1300,7 +1302,9 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
     - `name` and `source`, the rule that answered (`HonParameterProgram.name_source`);
     - `activity`, the cycle the context's activity described as the engine keeps it
       (`HonAppliance.cycle_activity`): programme, channel, start, the shadow's code
-      read with it (`prCode`); the start's title is left out, it may be a favourite's name;
+      read with it (`prCode`), the activity's own (`activity_prCode`) and the start's
+      options it carried (`options`, issue #138, each text bounded); the start's title
+      is left out, it may be a favourite's name;
     - `cycle_read`, the last read of the context a push at the start or the end of a
       cycle asked for (`HonAppliance.cycle_read`): the edge, when it was asked, each
       read and the outcome.
@@ -1327,6 +1331,12 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
                 "channel": cycle.channel,
                 "started": cycle.started,
                 "prCode": cycle.code,
+                "activity_prCode": cycle.activity_code,
+                "options": {
+                    _bounded_text(key, _OPTION_TEXT_MAX_CHARS):
+                        _bounded_text(value, _OPTION_TEXT_MAX_CHARS)
+                    for key, value in cycle.options.items()
+                },
             },
             "cycle_read": None if not isinstance(read, Mapping) else {
                 "edge": read.get("edge"),
@@ -1337,6 +1347,193 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
         }
     except Exception:  # noqa: BLE001 - a dump must degrade, never raise
         _LOGGER.debug("Diagnostics debug: programme name unreadable", exc_info=True)
+        return None
+
+
+# The cycle log's own words (`client/engine/cycle_log.py`), printed as literals of this
+# module, and the bound on every other text it prints: the log cuts at the same length.
+_CYCLE_LOG_KINDS = frozenset({"session", "shadow", "context", "command", "cycle_read"})
+_CYCLE_LOG_ROADS = frozenset({"mqtt", "rest", "local"})
+_CYCLE_LOG_REASONS = frozenset({"load", "poll", "cycle_read"})
+_CYCLE_LOG_OUTCOMES = frozenset(
+    {"accepted", "rejected", "raised", "settled", "unsettled", "failed", "cancelled"}
+)
+_CYCLE_LOG_EDGES = frozenset({"start", "end"})
+_CYCLE_LOG_TEXT_MAX = 64
+# The cloud's instants among the keys a read of the context is summarised with.
+_CYCLE_LOG_CLOUD_KEYS = frozenset(
+    {"activityStarted", "activityEnded", "timestampAccepted", "timestampExecuted", "timestamp"}
+)
+
+
+def _log_at(value) -> str | None:
+    """Home Assistant's own epoch seconds, to the millisecond, as the dump writes them."""
+    if type(value) not in (int, float):
+        return None
+    try:
+        moment = datetime.fromtimestamp(value, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return _stamp_text(moment.replace(microsecond=moment.microsecond // 1000 * 1000))
+
+
+def _log_cloud(value) -> str | None:
+    """A cloud instant, parsed and re-rendered, never echoed (as `_conn_event_row`)."""
+    return _stamp_text(_as_utc(_parse_cloud_moment(value), True))
+
+
+def _log_text(value) -> str | None:
+    return _bounded_text(value, _CYCLE_LOG_TEXT_MAX)
+
+
+def _log_int(value) -> int | None:
+    return value if type(value) is int else None
+
+
+def _log_flag(value) -> bool | None:
+    return value if type(value) is bool else None
+
+
+def _log_summary(value, depth: int = 0) -> dict | None:
+    """A read of the context as the log summarised it: activity, slot, connection."""
+    if not isinstance(value, Mapping) or depth > 2:
+        return None
+    summary: dict = {}
+    for key, item in value.items():
+        if (name := _log_text(key)) is None:
+            continue
+        if isinstance(item, Mapping):
+            summary[name] = _log_summary(item, depth + 1)
+        elif name in _CYCLE_LOG_CLOUD_KEYS:
+            summary[name] = _log_cloud(item)
+        else:
+            summary[name] = _log_text(item)
+    return summary
+
+
+def _log_row(row) -> dict | None:
+    if not isinstance(row, Mapping):
+        return None
+    rendered = {key: _log_text(row.get(key)) for key in ("key", "before", "after")}
+    rendered |= {mark: True for mark in ("refused", "same") if row.get(mark) is True}
+    if "cloud_from" in row:
+        rendered["cloud_from"] = _log_text(row["cloud_from"])
+    # `_redact` reads dict keys, and a row prints the parameter's name as a value: a
+    # parameter named like an identity key must not print what it holds.
+    name = rendered["key"]
+    if name is not None and (name.lower() in _TO_REDACT or is_identity_key(name)):
+        for field in ("before", "after", "cloud_from"):
+            if field in rendered:
+                rendered[field] = _REDACTED
+    if "stamp" in row:
+        rendered["stamp"] = _log_cloud(row["stamp"])
+    return rendered
+
+
+def _log_rows(rows) -> list:
+    return [r for r in map(_log_row, rows if isinstance(rows, list) else ()) if r is not None]
+
+
+def _log_reads(reads) -> list:
+    return [
+        {
+            key: _log_cloud(item) if key == "at" else
+            _log_text(item) if key == "error" else _log_flag(item)
+            for key, item in read.items()
+            if key in ("at", "settled", "dropped", "error")
+        }
+        for read in (reads if isinstance(reads, list) else ())
+        if isinstance(read, Mapping)
+    ]
+
+
+def _log_token(allowed: frozenset):
+    return lambda value: _closed_token(value, allowed)
+
+
+# What each kind of event prints, field by field, and how; a field the event lacks is
+# left out, and so is any field not named here.
+_CYCLE_LOG_FIELDS = {
+    "session": {"session": _log_int},
+    "shadow": {
+        "road": _log_token(_CYCLE_LOG_ROADS), "resumed": _log_flag, "cloud_at": _log_cloud,
+        "event_id": _log_text, "until": _log_at, "steps": _log_int,
+        "last_event_id": _log_text, "rows": _log_rows,
+        "unseeded": lambda names: [
+            _log_text(name) for name in (names if isinstance(names, list) else ())
+        ],
+        "truncated": _log_int,
+    },
+    "context": {
+        "reason": _log_token(_CYCLE_LOG_REASONS), "order": _log_int, "asked": _log_at,
+        "applied": _log_flag, "summary": _log_summary, "unchanged": _log_int,
+        "last_at": _log_at,
+    },
+    "command": {
+        "name": _log_text, "programme": _log_text, "sent": _log_cloud,
+        "outcome": _log_token(_CYCLE_LOG_OUTCOMES), "result_code": _log_text,
+        "error": _log_text,
+    },
+    "cycle_read": {
+        "edge": _log_token(_CYCLE_LOG_EDGES), "asked_at": _log_cloud, "reads": _log_reads,
+        "outcome": _log_token(_CYCLE_LOG_OUTCOMES),
+    },
+}
+
+
+def _log_event(raw) -> dict | None:
+    if not isinstance(raw, Mapping):
+        return None
+    kind = _closed_token(raw.get("kind"), _CYCLE_LOG_KINDS)
+    event = {"seq": _log_int(raw.get("seq")), "at": _log_at(raw.get("at")), "kind": kind}
+    for field, render in _CYCLE_LOG_FIELDS.get(kind, {}).items():
+        if field in raw:
+            event[field] = render(raw[field])
+    return event
+
+
+def _cycle_log_section(appliance) -> dict | None:
+    """What the cycles did over time (issue #138): `HonAppliance.cycle_log`.
+
+    The pushes, every row kept and marked (`refused` by the shield of our own write,
+    `same`, `cloud_from`), the reads of the context that moved something, the commands
+    sent and how the cloud answered, the reads a cycle's edge asked for, and the
+    sessions; the events in `seq` order, what the ring dropped counted by kind. The
+    `programme_name` below is the last state of the same story. Home Assistant's
+    instants by `_stamp_text`; the cloud's parsed and re-rendered, never echoed; every
+    other text bounded and masked by `_bounded_text`, then `_redact` like the block.
+
+    None for an engine without the log, a type whose cycles are not followed, or a log
+    that raises.
+    """
+    try:
+        log = getattr(appliance, "cycle_log", None)
+        if log is None:
+            return None
+        raw = log.snapshot()
+        if not isinstance(raw, Mapping):
+            return None
+        limits = raw.get("limits") if isinstance(raw.get("limits"), Mapping) else {}
+        dropped = raw.get("dropped") if isinstance(raw.get("dropped"), Mapping) else {}
+        return {
+            "since": _log_at(raw.get("since")),
+            "sessions": _log_int(raw.get("sessions")),
+            "limits": {
+                key: limits.get(key) for key in ("events", "rows", "text")
+                if type(limits.get(key)) is int
+            },
+            "dropped": {
+                _closed_token(kind, _CYCLE_LOG_KINDS): count
+                for kind, count in dropped.items()
+                if type(count) is int
+            },
+            "events": [
+                event for event in map(_log_event, raw.get("events") or ())
+                if event is not None
+            ],
+        }
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: cycle log unreadable", exc_info=True)
         return None
 
 
@@ -4209,6 +4406,7 @@ def _appliance_block(
     entities: Mapping | None = None,
     now: datetime | None = None,
     energy_counters: Mapping | None = None,
+    option_sources: Mapping | None = None,
 ) -> dict:
     """Build the (redacted) diagnostics block for a single appliance.
 
@@ -4230,6 +4428,10 @@ def _appliance_block(
     `energy_counters` is what this appliance's HW energy counters left on the
     coordinator (`hpwh.HPWH_ENERGY_STORE`), trailing and None by default for the
     same reasons as `now`; it is read only for a heat-pump water heater.
+
+    `option_sources` is what the programme-option entities noted on the coordinator
+    (`const.PROGRAM_OPTION_SOURCES`) about where each value came from (issue #138),
+    trailing and None by default for the same reasons.
     """
     appliance = data.get("appliance")
     app_type = data.get("type")
@@ -4292,6 +4494,7 @@ def _appliance_block(
     option_slots = _option_slots(
         program_options_matrix, appliance_options, opt_compatibility
     )
+    option_sources_section = _option_sources(option_sources)
     # ONE walk of the per-type tables, ONE lazy-import decision, shared by both
     # consumers -- which is what the `_mapped_sets` docstring claims and what
     # makes `coverage.registries_unavailable` and `entities.sources` structurally
@@ -4410,6 +4613,13 @@ def _appliance_block(
         # and is always present -- `{}` is the finding "no key had two sources".
         "statistics": dict(statistics),
         "attributes_overridden": overrides,
+        # What the cycles did over time, the story `programme_name` below tells the end
+        # of; omitted for the types that are not followed (issue #138).
+        **(
+            {"cycle_log": cycle_log}
+            if (cycle_log := _cycle_log_section(appliance)) is not None
+            else {}
+        ),
         # Why `programName` says what it says, beside how the category it may name was
         # recovered; omitted for the types that are not followed.
         **(
@@ -4433,6 +4643,10 @@ def _appliance_block(
         # they are the answer to issue #106. It is built FROM that section, so it cannot
         # appear without it.
         **({"option_slots": option_slots} if option_slots else {}),
+        # Right after the options' names: where each option entity's value came from on
+        # its last read (buffer, programme, running cycle, shadow, start command), the
+        # one thing the entity states do not say (issue #138).
+        **({"option_sources": option_sources_section} if option_sources_section else {}),
         "coverage": coverage,
         # Next to coverage on purpose: one says what the code could map for this
         # type, the other what Home Assistant actually holds. Reading them together
@@ -5136,6 +5350,30 @@ def _energy_store(coordinator, appliance_id: str) -> Mapping | None:
     store = getattr(coordinator, HPWH_ENERGY_STORE, None)
     counters = store.get(appliance_id) if isinstance(store, Mapping) else None
     return counters if isinstance(counters, Mapping) else None
+
+
+_OPTION_SOURCES = frozenset({"pending", "prescribed", "cycle", "shadow", "command", "none"})
+
+
+def _option_sources_store(coordinator, appliance_id: str) -> Mapping | None:
+    """What the programme-option entities of one appliance noted as their sources."""
+    store = getattr(coordinator, PROGRAM_OPTION_SOURCES, None)
+    sources = store.get(appliance_id) if isinstance(store, Mapping) else None
+    return sources if isinstance(sources, Mapping) else None
+
+
+def _option_sources(sources: Mapping | None) -> dict:
+    """The `option_sources` section: {parameter: source}, only the closed vocabulary.
+
+    The keys are cloud parameter names and the values six words this module owns, so
+    whatever else sits in the store is not printed (issue #138)."""
+    if not isinstance(sources, Mapping):
+        return {}
+    return {
+        param: source
+        for param, source in sources.items()
+        if isinstance(param, str) and isinstance(source, str) and source in _OPTION_SOURCES
+    }
 
 
 def _energy_counters(counters: Mapping | None) -> dict:
@@ -5862,6 +6100,7 @@ async def async_get_config_entry_diagnostics(
                     inventory.get(appliance_id),
                     now=now,
                     energy_counters=_energy_store(coordinator, appliance_id),
+                    option_sources=_option_sources_store(coordinator, appliance_id),
                 )
             )
 
@@ -6018,5 +6257,6 @@ async def async_get_device_diagnostics(
             inventory.get(appliance_id),
             now=now,
             energy_counters=_energy_store(coordinator, appliance_id),
+            option_sources=_option_sources_store(coordinator, appliance_id),
         ),
     }

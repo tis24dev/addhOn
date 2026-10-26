@@ -37,13 +37,17 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
 
 from homeassistant.exceptions import HomeAssistantError
 
 from .base_entity import HonBaseEntity
 from .client.engine.parameter.range import HonParameterRange
 from .const import (
+    APPLIANCE_WD,
+    APPLIANCE_WM,
     DOMAIN,
+    PROGRAM_OPTION_SOURCES,
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_OPTIONS,
     PROGRAM_PENDING_STORE,
@@ -269,6 +273,72 @@ def startprogram_option_param(appliance, name: str):
     if isinstance(params, dict):
         return params.get(name)
     return None
+
+
+def has_stain_rules(appliance) -> bool:
+    """True when a programme of the appliance ties a stain to a temperature or a wash time.
+
+    The catalogue says so in a category's `ancillaryParameters.programRules`: a
+    `temp.stainType` or `addWashDefaultTime.stainType` map, or a `stainType` key, in its
+    `enumValues` or `fixedValue` node, or straight under `programRules` (the same nodes the app's `checkStainConditions` and
+    `getStainsElement` read, apk2 decomp.txt @1390611, @1391736). Where they exist the
+    stain is not a free option, because the order of the choices decides whether the start
+    is valid, so no stain select is offered there (issue #138). Never raises: any odd
+    shape reads as False."""
+    try:
+        command = startprogram_command(appliance)
+        categories = getattr(command, "categories", None)
+        if not isinstance(categories, dict):
+            return False
+        for category in categories.values():
+            group = getattr(category, "ancillary_group", None)
+            rules = group.get("programRules") if isinstance(group, dict) else None
+            if not isinstance(rules, dict):
+                continue
+            # The wrapped shape (`enumValues`/`fixedValue`) and the unwrapped one
+            # (`programRules.<target>.<trigger>`) both appear in catalogues.
+            for branch in (rules.get("enumValues"), rules.get("fixedValue"), rules):
+                if not isinstance(branch, dict):
+                    continue
+                if "stainType" in branch:
+                    return True
+                for target in ("temp", "addWashDefaultTime"):
+                    node = branch.get(target)
+                    if isinstance(node, dict) and "stainType" in node:
+                        return True
+    except Exception:  # noqa: BLE001 - a gate must never take the setup down
+        return False
+    return False
+
+
+# Issue #138, decision D5: the options read from the running cycle's activity, the two a
+# washer's shadow does not report during a cycle (it keeps the 0 of rest).
+CYCLE_OPTION_PARAMS = frozenset({"permanentPressStatus", "stainType"})
+# Decision C2: washers and washer-dryers only. A tumble dryer has a Keep Fresh switch too,
+# with no sample of its activity, and the app reads `tumblingStatus` and `antiCreaseTime`
+# there instead.
+_CYCLE_OPTION_TYPES = frozenset({APPLIANCE_WM, APPLIANCE_WD})
+
+
+def cycle_option_raw(appliance_data: Mapping, param: str) -> str | None:
+    """What the running cycle was started with for `param`, or None (issue #138).
+
+    `appliance_data` is the appliance's coordinator entry. None for a parameter outside
+    ``CYCLE_OPTION_PARAMS``, a type outside WM/WD, and an appliance without the engine's
+    ``cycle_option``; otherwise its answer, which is None outside a cycle started from
+    Home Assistant or the app (``HonAppliance.cycle_option``)."""
+    if param not in CYCLE_OPTION_PARAMS or not isinstance(appliance_data, Mapping):
+        return None
+    if appliance_data.get("type") not in _CYCLE_OPTION_TYPES:
+        return None
+    reader = getattr(appliance_data.get("appliance"), "cycle_option", None)
+    if not callable(reader):
+        return None
+    try:
+        value = reader(param)
+    except Exception:  # noqa: BLE001 - the state path falls back to the shadow
+        return None
+    return value if isinstance(value, str) else None
 
 
 def option_range(param) -> tuple[float, float, float] | None:
@@ -648,22 +718,40 @@ class HonProgramOptionEntity(HonBaseEntity):
         return True
 
     def _current_raw(self):
-        """Pending value if buffered, else what the selected program prescribes, else the
-        live device value.
+        """Pending value if buffered, else what the selected program prescribes, else what
+        the running cycle was started with, else the live device value.
 
-        Reads ``_get_attr(param)`` (the direct attribute the device reports) and then
+        The running cycle's value (issue #138) answers for Keep Fresh and the stain alone,
+        which the shadow does not report during a cycle (``cycle_option_raw``); a choice
+        buffered or prescribed during the cycle is for the next start and comes first.
+        Then ``_get_attr(param)`` (the direct attribute the device reports) and
         ``_get_attr("startProgram." + param)`` (startProgram is not shadow-synced into
         attributes, unlike ``settings``)."""
         pending = self._pending().get(self._param)
         if pending is not None:
-            return pending
+            return self._record_source("pending", pending)
         prescribed = self._prescribed_raw()
         if prescribed is not None and self._renderable(prescribed):
-            return prescribed
+            return self._record_source("prescribed", prescribed)
+        cycle = cycle_option_raw(self._appliance_data, self._param)
+        if cycle is not None and self._renderable(cycle):
+            return self._record_source("cycle", cycle)
         raw = self._get_attr(self._param)
         if raw is not None:
-            return raw
-        return self._get_attr(f"{STARTPROGRAM_COMMAND}.{self._param}")
+            return self._record_source("shadow", raw)
+        raw = self._get_attr(f"{STARTPROGRAM_COMMAND}.{self._param}")
+        return self._record_source("command" if raw is not None else "none", raw)
+
+    def _record_source(self, source: str, raw):
+        """Note which link of `_current_raw` answered, for the dump (issue #138); returns
+        ``raw`` untouched. A dict write that never raises into a read."""
+        try:
+            self._coordinator_store(PROGRAM_OPTION_SOURCES).setdefault(
+                self._appliance_id, {}
+            )[self._param] = source
+        except Exception:  # noqa: BLE001 - diagnostics must not break a state read
+            pass
+        return raw
 
     def _active_option_param(self):
         """Resolve this param off the ACTIVE startProgram command's parameters only.

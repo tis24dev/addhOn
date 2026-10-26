@@ -19,11 +19,13 @@ import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from time import monotonic
+from types import MappingProxyType
 from typing import Any, Optional
 
 from ...command_diagnostics import observe_shadow_read
 from ..catalog_repository import CommandCatalogRepository
 from ..helpers import parse_cloud_timestamp
+from . import cycle_log as _cycle_log
 from .appliances import registry as _native_appliances
 from .attributes import HonAttribute
 from .command_loader import HonCommandLoader, command_identity, start_identity
@@ -80,6 +82,16 @@ def _programme_key(name: Any) -> Optional[str]:
     if not isinstance(name, str) or not name.strip():
         return None
     return name.strip().rsplit(".", 1)[-1].upper()
+
+
+def _as_int(value: Any) -> Optional[int]:
+    """`value` as an int, None if absent or unreadable (an activity's prCode)."""
+    if value is None:
+        return None
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _open_started(activity: Any) -> Any:
@@ -210,6 +222,16 @@ class HonAppliance:
         # datetime.now() would distort. Distinct from _last_realtime_ts, which is the CLOUD
         # timestamp used for ordering against the cloud-stamped lastConnEvent.
         self._last_realtime_local: Optional[float] = None
+        # What the cycles did over time, for the dump (issue #138): the followed types
+        # only, one log per appliance id that a reload takes up again. The first read of
+        # this object seeds it (`load_attributes`).
+        self._cycle_log: Optional[_cycle_log.CycleLog] = None
+        self._cycle_log_seeded = False
+        if self.appliance_type in FOLLOWED_TYPES:
+            try:
+                self._cycle_log = _cycle_log.attach(self.unique_id)
+            except Exception:  # noqa: BLE001 - the log must never cost the appliance
+                _LOGGER.debug("Cycle log unavailable", exc_info=True)
         # Per-type layer (resolved via the static registry).
         self._extra = _native_appliances.get_extra(self)
 
@@ -403,6 +425,9 @@ class HonAppliance:
           next programme, prCode 0, the machine's resting code: 136 on Lajahome's 3
           idle dumps out of 3).
 
+        The cycle taken carries the start's options and the activity's prCode too
+        (issue #138, `cycle_option`); they change nothing above.
+
         Runs on the client loop only, from `load_attributes`, before the name is
         derived. Nothing else writes `_cycle_activity`.
         """
@@ -435,6 +460,8 @@ class HonAppliance:
                 label=details.get("prStrDisp"),
                 code=code,
                 started=started,
+                options=self._start_options(details),
+                activity_code=_as_int(details.get("prCode")),
             )
             return
         # No open activity to take (none, ended, read at rest, or older than the cycle
@@ -443,6 +470,61 @@ class HonAppliance:
         # dropped at a new start: the start read settles only on another one (S2).
         if self._cycle_activity is not None and self._cycle_activity.code != code:
             self._cycle_activity = None
+
+    def _start_options(self, details: Mapping[str, Any]) -> Mapping[str, str]:
+        """The activity's values of the start's parameters, as text (issue #138).
+
+        The activity carries the start's parameters next to what the app adds
+        (`principalUserId`, `deviceModel`, `prStrDisp`): only the keys of the
+        `startProgram` command are kept, and only the scalar values, as the text the
+        shadow holds (a number arrives as `19` or `"19"`). A schema that declares the
+        start's title (`prStr`, a favourite's name) or another key of who started it
+        still gives none of them (`cycle_log.IDENTITY_KEYS`). Read-only: a push reads it.
+        """
+        command = self._commands.get("startProgram")
+        keys = set(getattr(command, "setting_keys", None) or ())
+        return MappingProxyType({
+            key: str(value)
+            for key, value in details.items()
+            if key in keys
+            and not _cycle_log.is_identity_key(key)
+            and isinstance(value, (str, int, float))
+            and not isinstance(value, bool)
+        })
+
+    def cycle_option(self, key: str) -> Optional[str]:
+        """What the running cycle was started with for `key`, or None (issue #138).
+
+        The shadow of a washer never reports `permanentPressStatus` (Keep Fresh) or
+        `stainType` during a cycle; the app shows a running cycle's options from its
+        activity, and only while `machMode` is 2, 3 or 5 (`slot143`, apk2 decomp.txt
+        @2588626-2588744; the running card, @2591986-2592000). The value answers only
+        when all of these hold, else None:
+
+        - a cycle is kept, and was not started on the panel (`channel` `appliance`,
+          whose activity is a picture of the shadow, not what was chosen);
+        - the context last read still has that activity open (decision C1): a cycle
+          kept after its end for its name (S1) would otherwise lend its options to
+          the next cycle on the same code, before the read that brings its activity;
+        - the kept cycle's code, the activity's prCode and the shadow's prCode now
+          are one, as the app's card checks the activity's (@2591727-2591733);
+        - the shadow's `machMode` now is in `cycle_modes` (decision D4).
+
+        Reads the shadow and the kept cycle only: no I/O, nothing written.
+        """
+        cycle = self._cycle_activity
+        if cycle is None or cycle.channel == "appliance":
+            return None
+        started = self.activity_started
+        if started is None or started != cycle.started:
+            return None
+        code = self._live_int("prCode")
+        if code is None or cycle.code != code or cycle.activity_code != code:
+            return None
+        modes = cycle_modes(self.appliance_type)
+        if modes is None or self._live_int("machMode") not in modes:
+            return None
+        return cycle.options.get(key)
 
     def _older_than_kept(self, started: Any) -> bool:
         """Whether an activity that began at `started` began before the cycle kept.
@@ -464,6 +546,17 @@ class HonAppliance:
         and outcome. Read by the diagnostics dump only.
         """
         self._cycle_read = record
+        if self._cycle_log is not None:
+            try:
+                self._cycle_log.cycle_read(record)
+            except Exception:  # noqa: BLE001 - the log must never cost the read
+                _LOGGER.debug("Cycle log failed", exc_info=True)
+
+    @property
+    def cycle_log(self) -> Optional[_cycle_log.CycleLog]:
+        """The log of the cycles for the dump (issue #138); None for the types whose
+        cycles are not followed."""
+        return self._cycle_log
 
     @property
     def cycle_read(self) -> Optional[dict[str, Any]]:
@@ -790,28 +883,54 @@ class HonAppliance:
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 
-    async def load_attributes(self) -> bool:
+    async def load_attributes(self, *, reason: str = "load") -> bool:
         # Two reads of the context can overlap -- the poll, a read a cycle edge asked
         # for, the refresh after a command -- and answer out of order. An answer older
         # than one already applied is dropped whole, and a parameter a push delivered
         # after this read started keeps the pushed value: the answer was taken before it
         # (review of PR #139, S1). Every read runs on the client loop, so the counters
-        # need no lock.
+        # need no lock. `reason` names the read in the cycle log (issue #138): "load"
+        # at setup, "poll", or "cycle_read" for the one a cycle's edge asked for.
         self._context_reads_started += 1
         order = self._context_reads_started
         asked = datetime.now(timezone.utc)
         attributes = await self.api.load_attributes(self)
+        log = self._cycle_log
         if order < self._context_read_applied:
             _LOGGER.debug("Context read answered after a newer one: dropped")
+            if log is not None:
+                try:
+                    log.context(
+                        reason=reason, order=order, asked=asked.timestamp(), applied=False
+                    )
+                except Exception:  # noqa: BLE001 - the log must never cost the read
+                    _LOGGER.debug("Cycle log failed", exc_info=True)
             return False
         self._context_read_applied = order
         activity = attributes.get("activity", _UNREAD)
+        rows: list[_cycle_log.ShadowRow] = []
         for name, values in attributes.pop("shadow", {}).get("parameters", {}).items():
             if name in self._attributes.get("parameters", {}):
                 held = self._attributes["parameters"][name]
                 if _pushed_since(held, asked):
                     continue
-                held.update(values)
+                if log is None:
+                    held.update(values)
+                    continue
+                # `value_text`, never `str()`: a value the cloud sent as null or a
+                # number makes `HonAttribute.__str__` raise, and the read must apply.
+                before, stamped = _cycle_log.value_text(held), held.last_update
+                applied = held.update(values)
+                offered = values.get("parNewVal") if isinstance(values, dict) else values
+                rows.append(_cycle_log.ShadowRow(
+                    name, before, _cycle_log.value_text(held) if applied else offered, applied,
+                    # Only when `lastUpdate` moved: the value a push brought, read again.
+                    stamp=(
+                        values.get("lastUpdate")
+                        if isinstance(values, dict) and held.last_update != stamped
+                        else None
+                    ),
+                ))
             else:
                 self._attributes.setdefault("parameters", {})[name] = HonAttribute(values)
         self._attributes |= attributes
@@ -875,7 +994,41 @@ class HonAppliance:
             observe_shadow_read(self)
         except Exception:
             _LOGGER.debug("Delivery check failed", exc_info=True)
+        if log is not None:
+            self._log_read(log, rows, reason, order, asked, activity)
         return True
+
+    def _log_read(
+        self,
+        log: _cycle_log.CycleLog,
+        rows: list[_cycle_log.ShadowRow],
+        reason: str,
+        order: int,
+        asked: datetime,
+        activity: Any,
+    ) -> None:
+        """An applied read of the context in the cycle log (issue #138). Never raises.
+
+        The first read of this object seeds the log with the whole shadow instead of
+        rows: a log a reload took up again logs only what moved meanwhile.
+        """
+        try:
+            if self._cycle_log_seeded:
+                log.shadow("rest", rows)
+            else:
+                self._cycle_log_seeded = True
+                log.seed(dict(self._attributes.get("parameters", {})))
+            log.context(
+                reason=reason,
+                order=order,
+                asked=asked.timestamp(),
+                applied=True,
+                summary=_cycle_log.context_summary(
+                    self._attributes, None if activity is _UNREAD else activity
+                ),
+            )
+        except Exception:  # noqa: BLE001 - the log must never cost the read
+            _LOGGER.debug("Cycle log failed", exc_info=True)
 
     def derive_attributes(self) -> None:
         """Re-run the per-type derivations (programName, active, pause, available).
@@ -906,7 +1059,7 @@ class HonAppliance:
         follow = self.appliance_type in self._FOLLOWED_TYPES
         if follow:
             self._apply_followed_list()
-        applied = await self.load_attributes()
+        applied = await self.load_attributes(reason="cycle_read" if force else "poll")
         self.sync_params_to_command("settings")
         if follow:
             self._follow_new_cycle()
@@ -963,10 +1116,24 @@ class HonAppliance:
         shadow = self.attributes.get("parameters", {})
         if not isinstance(shadow, dict):
             return
+        # getattr: the air purifier's contract tests borrow this method for a double.
+        log = getattr(self, "_cycle_log", None)
+        rows: list[_cycle_log.ShadowRow] = []
         for key, value in params.items():
             current = shadow.get(key)
             if current is not None and hasattr(current, "update"):
+                before = _cycle_log.value_text(current) if log is not None else None
                 current.update(str(value), shield=True)
+                if log is not None:
+                    rows.append(
+                        _cycle_log.ShadowRow(key, before, _cycle_log.value_text(current), True)
+                    )
+        if rows:
+            # Our own write after an accepted command, in the cycle log (issue #138).
+            try:
+                log.shadow("local", rows)
+            except Exception:  # noqa: BLE001 - the log must never cost the write
+                _LOGGER.debug("Cycle log failed", exc_info=True)
 
     def sync_params_to_command(self, command_name: str) -> None:
         if not (command := self.commands.get(command_name)):

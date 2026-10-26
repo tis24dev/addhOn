@@ -771,7 +771,7 @@ class DiagnosticsRedactionTest(unittest.TestCase):
         # names the account in `activity.attributes.principalUserId`.
         activity = {
             "category": "CYCLE",
-            "attributes": {"principalUserId": "001bU00000hPkWkQAK", "prCode": "116"},
+            "attributes": {"principalUserId": "001000000000000AAA", "prCode": "116"},
         }
         printed = diagnostics._redact({"attributes": {"activity": activity}})
         attributes = printed["attributes"]["activity"]["attributes"]
@@ -4578,6 +4578,61 @@ class HeatPumpEnergySectionTest(unittest.TestCase):
         self.assertEqual(result["appliance"]["energy_counters"], expected)
 
 
+class OptionSourcesSectionTest(unittest.TestCase):
+    """`option_sources`: which link of `_current_raw` gave each option's value (issue #138)."""
+
+    @staticmethod
+    def _block(sources) -> dict:
+        data = {
+            "appliance": FakeAppliance(commands={}),
+            "type": "WM",
+            "attributes": {},
+            "statistics": {},
+        }
+        return diagnostics._appliance_block("wm-1", data, option_sources=sources)
+
+    def test_printed_after_option_slots_from_the_store(self) -> None:
+        block = self._block({"stainType": "cycle", "temp": "shadow", "spinSpeed": "none"})
+        self.assertEqual(
+            {"stainType": "cycle", "temp": "shadow", "spinSpeed": "none"},
+            block["option_sources"],
+        )
+        keys = list(block)
+        self.assertEqual("coverage", keys[keys.index("option_sources") + 1])
+        if "option_slots" in keys:
+            self.assertEqual(keys.index("option_slots") + 1, keys.index("option_sources"))
+        json.dumps(block)
+
+    def test_a_source_outside_the_closed_vocabulary_is_dropped(self) -> None:
+        block = self._block({
+            "temp": "shadow", "spinSpeed": "somewhere", "stainType": 3, "prCode": None,
+        })
+        self.assertEqual({"temp": "shadow"}, block["option_sources"])
+
+    def test_absent_when_the_store_has_nothing(self) -> None:
+        for store in (None, {}, "garbage", {"temp": "somewhere"}):
+            with self.subTest(store=store):
+                self.assertNotIn("option_sources", self._block(store))
+
+    def test_the_dumps_read_the_coordinator_store(self) -> None:
+        coordinator = FakeCoordinator({"hw-1": {
+            "appliance": FakeAppliance(commands={}), "type": "WM",
+            "attributes": {}, "statistics": {},
+        }})
+        coordinator.program_option_sources = {
+            "hw-1": {"temp": "prescribed"}, "other": {"temp": "pending"},
+        }
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(FakeHass(coordinator), FakeEntry())
+        )
+        self.assertEqual({"temp": "prescribed"}, result["appliances"][0]["option_sources"])
+        device = FakeDevice({(DOMAIN, "hw-1")})
+        result = _run(
+            diagnostics.async_get_device_diagnostics(FakeHass(coordinator), FakeEntry(), device)
+        )
+        self.assertEqual({"temp": "prescribed"}, result["appliance"]["option_sources"])
+
+
 class CoverageExpectedAbsentTest(unittest.TestCase):
     """The mirror axis: what this code maps and the device does not have."""
 
@@ -5757,7 +5812,10 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
             # 621 with the quick wash and intensive switches (#112): two rows, same shape.
             # 623 with the Keep Fresh phase binary (#112): one read name,
             # `freshAirStatus`, on WM and on WD.
-            623,
+            # 635 with the stain type select and the anti-crease status switch (#138):
+            # two rows, three names each (the parameter, its startProgram. read, the
+            # write) on WM and on WD.
+            635,
             seen,
             f"the sweep changed to {seen} names; re-measure and update this number "
             f"deliberately, naming what joined or left it",
@@ -10670,10 +10728,13 @@ class ProgrammeNameSectionTest(unittest.TestCase):
     def test_a_panel_cycle_says_the_activity_named_it(self) -> None:
         app = self._washer()
         self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = "2"
+        # The activity's values of the start's parameters are kept (issue #138): this
+        # schema has `prCode` and `temp`, not `permanentPressStatus`.
         self.cloud.context["activity"] = {
             "activityStarted": "2026-10-16T12:25:03Z",
             "attributes": {"programName": "HQD_COTTONS", "channel": "appliance",
-                           "prStrDisp": "My own title"}}
+                           "prStrDisp": "My own title", "prCode": "115", "temp": "40",
+                           "permanentPressStatus": "0"}}
         self.loop.run_until_complete(app.load_attributes())
         app.note_cycle_read({
             "edge": "start", "asked_at": "2026-10-16T12:25:04+00:00",
@@ -10684,7 +10745,8 @@ class ProgrammeNameSectionTest(unittest.TestCase):
         self.assertEqual("activity", section["source"])
         self.assertEqual(
             {"programme": "HQD_COTTONS", "functional_id": None, "channel": "appliance",
-             "started": "2026-10-16T12:25:03Z", "prCode": 115},
+             "started": "2026-10-16T12:25:03Z", "prCode": 115, "activity_prCode": 115,
+             "options": {"prCode": "115", "temp": "40"}},
             section["activity"],
         )
         self.assertEqual("settled", section["cycle_read"]["outcome"])
@@ -10700,6 +10762,178 @@ class ProgrammeNameSectionTest(unittest.TestCase):
         self.assertNotIn(
             "programme_name", _option_block(OptionAppliance(options={}, additional_data={}))
         )
+
+
+class CycleLogSectionTest(unittest.TestCase):
+    """`cycle_log`: what the washer did over its last cycles (issue #138).
+
+    On the engine's own appliance, whose start schema carries the title keys a
+    favourite's name rides in (`prStr`, `prStrDisp`).
+    """
+
+    _MAC = "AA:BB:CC:12:34:56"
+
+    def setUp(self) -> None:
+        from custom_components.addhon.client.engine import cycle_log
+
+        cycle_log.forget_all()
+
+    def _washer(self, kind="WM"):
+        from custom_components.addhon.client import factory
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from test_follow_started_elsewhere import CloudDouble, _fixed, _programme
+
+        programme = _programme("115")
+        programme["parameters"] |= {"prStr": _fixed("x"), "prStrDisp": _fixed("x")}
+        commands = {
+            "applianceModel": {"options": {}},
+            "startProgram": {"PROGRAMS.WM_WD.HQD_COTTONS": programme},
+            "dictionaryId": 1,
+        }
+        context = {"shadow": {"parameters": {
+            "prCode": {"parNewVal": "115", "lastUpdate": "2026-10-16T12:20:00Z"},
+            "machMode": {"parNewVal": "1", "lastUpdate": "2026-10-16T12:20:00Z"}}},
+            "activity": {}, "commandHistory": None,
+            "lastConnEvent": {"macAddress": self._MAC, "category": "CONNECTED"}}
+        self.cloud = CloudDouble(commands, [], context)
+        app = factory._native_engine_appliance_cls()(
+            self.cloud,
+            {"applianceTypeName": kind, "applianceModelId": 1, "macAddress": self._MAC},
+            zone=0,
+        )
+        self.loop = asyncio.new_event_loop()
+        self.addCleanup(self.loop.close)
+        self.loop.run_until_complete(app.load_commands())
+        self.loop.run_until_complete(app.load_attributes())
+        return app
+
+    def _block(self, app, kind="WM"):
+        return diagnostics._appliance_block(
+            "id1",
+            {"appliance": app, "type": kind, "attributes": dict(app.attributes), "statistics": {}},
+        )
+
+    def _cycle(self, app):
+        """A start from the app, with a favourite's title and the account in its activity."""
+        self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = "2"
+        self.cloud.context["activity"] = {
+            "activityStarted": "2026-10-16T12:25:03Z", "macAddress": self._MAC,
+            "attributes": {"programName": "HQD_COTTONS", "channel": "mobileApp",
+                           "prCode": "115", "temp": "40", "prStr": "My own title",
+                           "prStrDisp": "My%20own%20title", "principalUserId": "acct-0000-test",
+                           "mobileId": "phone-0000-test"}}
+        self.loop.run_until_complete(app.load_attributes(reason="cycle_read"))
+
+    def test_the_section_sits_right_before_programme_name(self) -> None:
+        keys = list(self._block(self._washer()))
+        self.assertEqual("programme_name", keys[keys.index("cycle_log") + 1])
+
+    def test_the_types_not_followed_print_nothing(self) -> None:
+        for kind in ("AC", "REF"):
+            with self.subTest(kind=kind):
+                self.assertNotIn("cycle_log", self._block(self._washer(kind), kind))
+        self.assertNotIn(
+            "cycle_log", _option_block(OptionAppliance(options={}, additional_data={}))
+        )
+
+    def test_a_snapshot_that_raises_omits_the_section(self) -> None:
+        app = self._washer()
+
+        def boom():
+            raise RuntimeError("broken log")
+
+        app.cycle_log.snapshot = boom
+        block = self._block(app)
+        self.assertNotIn("cycle_log", block)
+        self.assertIn("programme_name", block)
+
+    def test_the_events_are_rendered(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import ShadowRow
+
+        app = self._washer()
+        self._cycle(app)
+        app.cycle_log.shadow("mqtt", [ShadowRow("stainType", "19", "19", False, "0")],
+                             cloud_at="2026-10-16T12:25:07.5Z", event_id=9)
+        app.cycle_log.command(name="startProgram", programme="HQD_COTTONS",
+                              sent="2026-10-16T12:25:01.000Z", outcome="rejected", code="7")
+        section = self._block(app)["cycle_log"]
+        self.assertEqual(1, section["sessions"])
+        self.assertEqual({}, section["dropped"])
+        kinds = [event["kind"] for event in section["events"]]
+        self.assertEqual(["session", "context", "shadow", "context", "shadow", "command"], kinds)
+        context = section["events"][3]
+        self.assertEqual("cycle_read", context["reason"])
+        activity = context["summary"]["activity"]
+        self.assertEqual("2026-10-16T12:25:03+00:00", activity["activityStarted"])
+        self.assertEqual({"programName": "HQD_COTTONS", "channel": "mobileApp",
+                          "prCode": "115", "temp": "40"}, activity["attributes"])
+        push = section["events"][4]
+        self.assertEqual(
+            {"road": "mqtt", "cloud_at": "2026-10-16T12:25:07.500000+00:00", "event_id": "9",
+             "rows": [{"key": "stainType", "before": "19", "after": "19", "refused": True,
+                       "cloud_from": "0"}]},
+            {k: push[k] for k in ("road", "cloud_at", "event_id", "rows")},
+        )
+        # HA's own instants, to the millisecond.
+        self.assertRegex(push["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{3}000)?\+00:00$")
+        command = section["events"][5]
+        self.assertEqual(
+            {"name": "startProgram", "programme": "HQD_COTTONS",
+             "sent": "2026-10-16T12:25:01+00:00", "outcome": "rejected", "result_code": "7"},
+            {k: command[k] for k in ("name", "programme", "sent", "outcome", "result_code")},
+        )
+
+    def test_a_row_named_like_an_identity_key_is_blanked(self) -> None:
+        # `_redact` works on dict keys, and a shadow row prints the parameter's name as a
+        # VALUE: the rows must blank what an identity-named parameter holds themselves.
+        from custom_components.addhon.client.engine.cycle_log import ShadowRow
+
+        app = self._washer()
+        self._cycle(app)
+        app.cycle_log.shadow("rest", [
+            ShadowRow("serialNumber", "SN-0001", "SN-0002", True, "SN-0000"),
+            ShadowRow("code", "C-1", "C-2", True),
+            ShadowRow("stainType", "1", "2", True, "0"),
+        ])
+        rows = [e for e in self._block(app)["cycle_log"]["events"]
+                if e["kind"] == "shadow"][-1]["rows"]
+        by_key = {row["key"]: row for row in rows}
+        for name in ("serialNumber", "code"):
+            with self.subTest(name=name):
+                self.assertEqual("***", by_key[name]["before"])
+                self.assertEqual("***", by_key[name]["after"])
+        self.assertEqual("***", by_key["serialNumber"]["cloud_from"])
+        self.assertEqual(("1", "2", "0"), (by_key["stainType"]["before"],
+                                           by_key["stainType"]["after"],
+                                           by_key["stainType"]["cloud_from"]))
+        blob = json.dumps(self._block(app)["cycle_log"])
+        for text in ("SN-000", "C-1", "C-2"):
+            with self.subTest(text=text):
+                self.assertNotIn(text, blob)
+
+    def test_no_mac_account_or_favourite_name_in_the_block(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import ShadowRow
+
+        app = self._washer()
+        self._cycle(app)
+        # Neither in the options the cycle was started with...
+        self.assertEqual({"prCode": "115", "temp": "40"}, dict(app.cycle_activity.options))
+        app.cycle_log.shadow("mqtt", [ShadowRow("machMode", "2", f"x{self._MAC}", True)])
+        block = self._block(app)
+        blob = json.dumps(block)
+        self.assertIn('"cycle_log"', blob)
+        # ...nor the MAC, the account or the phone anywhere in the dump...
+        for text in ("12:34:56", "acct-0000", "phone-0000"):
+            with self.subTest(text=text):
+                self.assertNotIn(text, blob)
+        # ...nor the title in the log or the programme's section. (`attributes.activity`
+        # prints the activity whole, as before this log; `_mask_favourites` covers the
+        # title there only when it is spelled as the favourite is.)
+        section = json.dumps([block["cycle_log"], block["programme_name"]])
+        for text in ("My own title", "My%20own"):
+            with self.subTest(text=text):
+                self.assertNotIn(text, section)
 
 
 def _history_entry(timestamp=None, accepted=None, name="startProgram", **parameters):

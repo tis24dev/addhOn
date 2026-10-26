@@ -726,7 +726,7 @@ class SendCommandTest(unittest.TestCase):
             "email": "mario.rossi+hon@example.co.uk",
             "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
             "uuid": "eu-west-1:3f2a9c1e-7b4d-4e8f-9a0b-1c2d3e4f5a6b",
-            "salesforce id": "001bU00000hPkWkQAK",
+            "salesforce id": "001000000000000AAA",
             "hex": "a3f9c2e81b7d4f60a3f9c2e81b7d4f60",
             "serial": "0021800012345ABC67890",
             "mac": "AA:BB:CC:DD:EE:FF",
@@ -855,6 +855,70 @@ class SendCommandTest(unittest.TestCase):
                 self.assertEqual(kept, "waterHard" in sent)
                 self.assertEqual("40", sent["temp"])
                 self.assertIn("waterHard", params)  # the caller's mapping is not touched
+
+
+class SendCommandCycleLogTest(unittest.TestCase):
+    """Each command sent, and how the cloud answered, in the cycle log (issue #138)."""
+
+    _TIMESTAMP = "2026-06-18T12:34:56.789Z"
+
+    def setUp(self) -> None:
+        SendCommandTest._patch_clock(self, "2026-06-18T12:34:56.789012")
+
+    @staticmethod
+    def _appliance(log):
+        app = FakeAppliance()
+        app.appliance_type = "WM"
+        app.cycle_log = log
+        return app
+
+    def test_send_command_logs_its_outcome(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import CycleLog
+
+        log = CycleLog()
+        app = self._appliance(log)
+        accepted = FakeConnection({"payload": {"resultCode": "0"}})
+        self.assertTrue(_run(_call(accepted).send_command(
+            app, "startProgram", {"temp": "40"}, {}, "hqd_cottons")))
+        rejected = FakeConnection({"payload": {"resultCode": "7", "errorType": "Some.Error"}})
+        with self.assertLogs("custom_components.addhon.client.transport.api", "ERROR"):
+            self.assertFalse(_run(_call(rejected).send_command(app, "settings", {}, {})))
+        raising = _RaisingConnection(RuntimeError("hOn server error (status 500)"))
+        with self.assertRaises(RuntimeError):
+            _run(_call(raising).send_command(app, "pauseProgram", {}, {}))
+        rows = [
+            {k: event.get(k) for k in ("name", "programme", "sent", "outcome", "result_code",
+                                       "error")}
+            for event in log.snapshot()["events"]
+        ]
+        self.assertEqual(
+            [
+                {"name": "startProgram", "programme": "HQD_COTTONS", "sent": self._TIMESTAMP,
+                 "outcome": "accepted", "result_code": None, "error": None},
+                {"name": "settings", "programme": None, "sent": self._TIMESTAMP,
+                 "outcome": "rejected", "result_code": "7", "error": "Some.Error"},
+                {"name": "pauseProgram", "programme": None, "sent": self._TIMESTAMP,
+                 "outcome": "raised", "result_code": None, "error": "RuntimeError"},
+            ],
+            rows,
+        )
+        self.assertNotIn(app.mac_address, json.dumps(log.snapshot()))
+
+    def test_a_raising_cycle_log_does_not_change_the_result(self) -> None:
+        class _Broken:
+            def command(self, **kwargs):
+                raise RuntimeError("broken log")
+
+        app = self._appliance(_Broken())
+        conn = FakeConnection({"payload": {"resultCode": "0"}})
+        self.assertTrue(_run(_call(conn).send_command(app, "settings", {}, {})))
+        conn = FakeConnection({"payload": {"resultCode": "7"}})
+        with self.assertLogs("custom_components.addhon.client.transport.api", "ERROR"):
+            self.assertFalse(_run(_call(conn).send_command(app, "settings", {}, {})))
+        error = RuntimeError("hOn server error (status 500)")
+        with self.assertRaises(RuntimeError) as raised:
+            _run(_call(_RaisingConnection(error)).send_command(app, "settings", {}, {}))
+        self.assertIs(error, raised.exception)
 
 
 class CommandTimestampTest(unittest.TestCase):
