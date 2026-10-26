@@ -58,6 +58,11 @@ class CycleActivity(NamedTuple):
     for the types whose starts are followed (`HonAppliance.cycle_activity`), read by
     `HonParameterProgram.name_for_code`.
 
+    Issue #138: `execution_started` is the activity's `activityExecutionStarted`, the
+    instant the machine started executing the cycle, as the cloud wrote it (with a
+    space: `2026-10-10 16:11:13`); the app titles and times the cycle from it before
+    `activityStarted` (apk2 decomp.txt @4175867, @4187993-4188011). None without it.
+
     Issue #138: `options` holds the activity's values of the start's parameters, as
     text, and `activity_code` the activity's own prCode: the options a running cycle
     was started with, which the shadow does not report for Keep Fresh and the stain
@@ -73,6 +78,7 @@ class CycleActivity(NamedTuple):
     started: Any
     options: Mapping[str, str] = MappingProxyType({})
     activity_code: int | None = None
+    execution_started: Any = None
 
 
 class HonParameterProgram(HonParameterEnum):

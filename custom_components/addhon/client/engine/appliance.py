@@ -505,6 +505,7 @@ class HonAppliance:
                 started=started,
                 options=self._start_options(details),
                 activity_code=_as_int(details.get("prCode")),
+                execution_started=activity.get("activityExecutionStarted"),
             )
             return
         # No open activity to take (none, ended, read at rest, or older than the cycle

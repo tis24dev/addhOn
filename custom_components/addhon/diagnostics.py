@@ -1301,10 +1301,11 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
 
     - `name` and `source`, the rule that answered (`HonParameterProgram.name_source`);
     - `activity`, the cycle the context's activity described as the engine keeps it
-      (`HonAppliance.cycle_activity`): programme, channel, start, the shadow's code
-      read with it (`prCode`), the activity's own (`activity_prCode`) and the start's
-      options it carried (`options`, issue #138, each text bounded); the start's title
-      is left out, it may be a favourite's name;
+      (`HonAppliance.cycle_activity`): programme, channel, start, the instant the
+      machine started executing it (`execution_started`, issue #138, parsed and
+      re-rendered), the shadow's code read with it (`prCode`), the activity's own
+      (`activity_prCode`) and the start's options it carried (`options`, issue #138,
+      each text bounded); the start's title is left out, it may be a favourite's name;
     - `cycle_read`, the last read of the context a push at the start or the end of a
       cycle asked for (`HonAppliance.cycle_read`): the edge, when it was asked, each
       read and the outcome.
@@ -1330,6 +1331,7 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
                 "functional_id": cycle.functional_id,
                 "channel": cycle.channel,
                 "started": cycle.started,
+                "execution_started": _log_cloud(getattr(cycle, "execution_started", None)),
                 "prCode": cycle.code,
                 "activity_prCode": cycle.activity_code,
                 "options": {
@@ -1364,9 +1366,10 @@ _CYCLE_LOG_OUTCOMES = frozenset({
 _CYCLE_LOG_EDGES = frozenset({"start", "end"})
 _CYCLE_LOG_TEXT_MAX = 64
 # The cloud's instants among the keys a read of the context is summarised with.
-_CYCLE_LOG_CLOUD_KEYS = frozenset(
-    {"activityStarted", "activityEnded", "timestampAccepted", "timestampExecuted", "timestamp"}
-)
+_CYCLE_LOG_CLOUD_KEYS = frozenset({
+    "activityStarted", "activityExecutionStarted", "activityEnded", "timestampAccepted",
+    "timestampExecuted", "timestamp",
+})
 
 
 def _log_at(value) -> str | None:

@@ -65,6 +65,14 @@ class ParseCloudTimestampTest(unittest.TestCase):
             self.parse("2026-06-25T13:35:13Z"),
         )
 
+    def test_a_space_for_the_t_is_the_same_instant(self) -> None:
+        # Issue #138: an activity's `activityExecutionStarted` is written with a space
+        # and no zone ("2026-10-10 16:11:13") beside `activityStarted` in ISO form.
+        self.assertEqual(
+            self.parse("2026-10-10 16:11:13"),
+            self.parse("2026-10-10T16:11:13Z"),
+        )
+
     def test_ordering_iso_vs_epoch(self) -> None:
         older = self.parse(1782394513133)            # 13:35:13
         newer = self.parse("2026-06-25T16:04:21.1Z")  # 16:04

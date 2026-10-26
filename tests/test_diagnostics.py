@@ -10745,13 +10745,28 @@ class ProgrammeNameSectionTest(unittest.TestCase):
         self.assertEqual("activity", section["source"])
         self.assertEqual(
             {"programme": "HQD_COTTONS", "functional_id": None, "channel": "appliance",
-             "started": "2026-10-16T12:25:03Z", "prCode": 115, "activity_prCode": 115,
-             "options": {"prCode": "115", "temp": "40"}},
+             "started": "2026-10-16T12:25:03Z", "execution_started": None, "prCode": 115,
+             "activity_prCode": 115, "options": {"prCode": "115", "temp": "40"}},
             section["activity"],
         )
         self.assertEqual("settled", section["cycle_read"]["outcome"])
         # The start's title may be a favourite's name the user typed: never printed.
         self.assertNotIn("My own title", json.dumps(section))
+
+    def test_the_instant_the_machine_started_is_printed(self) -> None:
+        # The cloud writes it with a space (`2026-10-10 16:11:13`) beside
+        # `activityStarted` in ISO form; parsed and re-rendered, never echoed.
+        app = self._washer()
+        self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = "2"
+        self.cloud.context["activity"] = {
+            "activityStarted": "2026-10-16T12:25:03Z",
+            "activityExecutionStarted": "2026-10-16 12:25:05",
+            "attributes": {"programName": "HQD_COTTONS", "channel": "appliance",
+                           "prCode": "115"}}
+        self.loop.run_until_complete(app.load_attributes())
+        activity = self._block(app)["programme_name"]["activity"]
+        self.assertEqual("2026-10-16T12:25:05+00:00", activity["execution_started"])
+        self.assertEqual("2026-10-16T12:25:03Z", activity["started"])
 
     def test_the_types_not_followed_print_nothing(self) -> None:
         for kind in ("REF", "OV", "AC"):
@@ -10926,6 +10941,24 @@ class CycleLogSectionTest(unittest.TestCase):
         section = self._block(app)["cycle_log"]
         starts = [e for e in section["events"] if e["kind"] == "command"]
         self.assertEqual([86, None], [e["estimated_min"] for e in starts])
+
+    def test_the_instant_the_machine_started_is_rendered_in_either_form(self) -> None:
+        for raw, rendered in (("2026-10-16 12:25:05", "2026-10-16T12:25:05+00:00"),
+                              ("2026-10-16T12:25:05Z", "2026-10-16T12:25:05+00:00"),
+                              ("not an instant", None)):
+            with self.subTest(raw=raw):
+                app = self._washer()
+                self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = "2"
+                self.cloud.context["activity"] = {
+                    "activityStarted": "2026-10-16T12:25:03Z",
+                    "activityExecutionStarted": raw,
+                    "attributes": {"programName": "HQD_COTTONS", "prCode": "115"}}
+                self.loop.run_until_complete(app.load_attributes(reason="cycle_read"))
+                section = self._block(app)["cycle_log"]
+                context = [e for e in section["events"] if e["kind"] == "context"][-1]
+                self.assertEqual(
+                    rendered, context["summary"]["activity"]["activityExecutionStarted"]
+                )
 
     def test_statistics_events_are_rendered(self) -> None:
         app = self._washer()

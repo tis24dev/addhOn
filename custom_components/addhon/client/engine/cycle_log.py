@@ -145,7 +145,9 @@ def _scalars(values: Any) -> dict[str, Optional[str]]:
 def context_summary(attributes: Mapping, activity: Any) -> dict:
     """What one read of the context says about the cycle, as the log compares it.
 
-    `activity` is the read's activity, None when the payload carried none. Its start and
+    `activity` is the read's activity, None when the payload carried none. Its start, the
+    instant the machine started executing it (`activityExecutionStarted`, which the app
+    titles and times the cycle from, apk2 decomp.txt @4175867, @4187993-4188011), its
     end and the scalars of its `attributes` are kept; of the `commandHistory` slot its
     scalars and its command's; of `lastConnEvent` the category. Identity keys are left
     out everywhere.
@@ -158,7 +160,9 @@ def context_summary(attributes: Mapping, activity: Any) -> dict:
     else:
         summary_activity = {
             key: _text(activity.get(key))
-            for key in ("activityStarted", "activityEnded", "completed")
+            for key in (
+                "activityStarted", "activityExecutionStarted", "activityEnded", "completed"
+            )
         }
         summary_activity["attributes"] = _scalars(activity.get("attributes"))
     slot = attributes.get("commandHistory")

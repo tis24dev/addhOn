@@ -299,10 +299,23 @@ class ContextTest(_LogTest):
         self.assertEqual(("cycle_read", 2, 1), (second["reason"], second["order"],
                                                 second["unchanged"]))
         self.assertEqual(
-            {"activityStarted": _T0, "activityEnded": None, "completed": None,
+            {"activityStarted": _T0, "activityExecutionStarted": None, "activityEnded": None,
+             "completed": None,
              "attributes": {"programName": "HQD_COTTONS", "stainType": "19"}},
             second["summary"]["activity"],
         )
+
+    def test_the_instant_the_machine_started_is_kept(self) -> None:
+        # The app titles and times a cycle from `activityExecutionStarted ||
+        # activityStarted` (apk2 decomp.txt @4175867, @4187993-4188011); the cloud
+        # writes it with a space.
+        opened = {"activityStarted": _T0, "attributes": {"programName": "HQD_COTTONS"}}
+        self._read(1, opened)
+        self._read(2, opened | {"activityExecutionStarted": "2026-10-26 08:00:04"})
+        first, second = _events(self.log, "context")
+        self.assertIsNone(first["summary"]["activity"]["activityExecutionStarted"])
+        self.assertEqual("2026-10-26 08:00:04",
+                         second["summary"]["activity"]["activityExecutionStarted"])
 
     def test_a_stale_answer_is_an_event(self) -> None:
         self._read(2, {})
