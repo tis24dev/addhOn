@@ -697,6 +697,34 @@ class StainAndAntiCreaseTest(unittest.TestCase):
                 appliance, _ = self._data()
                 self.assertFalse(has_stain_rules(self._with_rules(appliance, odd)))
 
+    def test_has_stain_rules_on_the_shape_a_catalogue_really_carries(self) -> None:
+        cases = json.loads(
+            (REPO / "tests" / "fixtures" / "wm_hqd_duration" / "cases.json").read_text()
+        )["models"]
+        pets = cases["HW80-B14959TU1-S"]["categories"][
+            "PROGRAMS.WM_WD.IOT_WASH_PETS_ODOURS_STAINS_REMOVAL"
+        ]["ancillaryParameters"]
+        appliance, _ = self._data()
+        self.assertTrue(has_stain_rules(self._with_rules(appliance, pets)))
+        bathrobe = cases["HW90-B14387TU1-S"]["categories"]["PROGRAMS.WM_WD.IOT_WASH_BATHROBE"]
+        appliance, _ = self._data()
+        self.assertFalse(has_stain_rules(self._with_rules(appliance, bathrobe["ancillaryParameters"])))
+
+    def test_has_stain_rules_on_the_unwrapped_shape(self) -> None:
+        # `programRules.<target>.<trigger>`, with no `enumValues`/`fixedValue` node.
+        for rules in (
+            {"temp": {"stainType": {"1": 35}}},
+            {"addWashDefaultTime": {"stainType": {"1": 10}}},
+            {"stainType": {"native": {"wine": 1}}},
+        ):
+            with self.subTest(rules=rules):
+                appliance, _ = self._data()
+                self.assertTrue(has_stain_rules(self._with_rules(appliance, {"programRules": rules})))
+        for rules in ({"temp": {"other": 1}}, {"temp": 3, "addWashDefaultTime": None}, {}):
+            with self.subTest(rules=rules):
+                appliance, _ = self._data()
+                self.assertFalse(has_stain_rules(self._with_rules(appliance, {"programRules": rules})))
+
     @staticmethod
     def _created_by_select_setup(appliance, data) -> set[str]:
         import asyncio

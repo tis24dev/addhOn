@@ -280,7 +280,7 @@ def has_stain_rules(appliance) -> bool:
 
     The catalogue says so in a category's `ancillaryParameters.programRules`: a
     `temp.stainType` or `addWashDefaultTime.stainType` map, or a `stainType` key, in its
-    `enumValues` or `fixedValue` node (the same nodes the app's `checkStainConditions` and
+    `enumValues` or `fixedValue` node, or straight under `programRules` (the same nodes the app's `checkStainConditions` and
     `getStainsElement` read, apk2 decomp.txt @1390611, @1391736). Where they exist the
     stain is not a free option, because the order of the choices decides whether the start
     is valid, so no stain select is offered there (issue #138). Never raises: any odd
@@ -295,8 +295,9 @@ def has_stain_rules(appliance) -> bool:
             rules = group.get("programRules") if isinstance(group, dict) else None
             if not isinstance(rules, dict):
                 continue
-            for branch_name in ("enumValues", "fixedValue"):
-                branch = rules.get(branch_name)
+            # The wrapped shape (`enumValues`/`fixedValue`) and the unwrapped one
+            # (`programRules.<target>.<trigger>`) both appear in catalogues.
+            for branch in (rules.get("enumValues"), rules.get("fixedValue"), rules):
                 if not isinstance(branch, dict):
                     continue
                 if "stainType" in branch:
@@ -333,7 +334,10 @@ def cycle_option_raw(appliance_data: Mapping, param: str) -> str | None:
     reader = getattr(appliance_data.get("appliance"), "cycle_option", None)
     if not callable(reader):
         return None
-    value = reader(param)
+    try:
+        value = reader(param)
+    except Exception:  # noqa: BLE001 - the state path falls back to the shadow
+        return None
     return value if isinstance(value, str) else None
 
 
