@@ -10884,6 +10884,37 @@ class CycleLogSectionTest(unittest.TestCase):
             {k: command[k] for k in ("name", "programme", "sent", "outcome", "result_code")},
         )
 
+    def test_a_command_follow_up_is_rendered(self) -> None:
+        app = self._washer()
+        log = app.cycle_log
+        for sent in ("2026-10-16T12:25:01.000Z", "2026-10-16T12:30:00.000Z"):
+            log.command(name="startProgram", programme="HQD_COTTONS", sent=sent,
+                        outcome="accepted")
+        log.command_outcome({
+            "command": {"timestamp": "2026-10-16T12:25:01.000Z",
+                        "transactionId": f"{self._MAC}_2026-10-16T12:25:01.000Z"},
+            "timestampAccepted": "2026-10-16T12:25:01.6Z",
+            "timestampExecuted": "2026-10-16T12:25:03.1Z",
+        })
+        log.command_outcome({
+            "command": {"timestamp": "2026-10-16T12:30:00.000Z"},
+            "timestampAccepted": "2026-10-16T12:30:00.6Z",
+        })
+        section = self._block(app)["cycle_log"]
+        executed, not_executed = [
+            e for e in section["events"]
+            if e["kind"] == "command" and e["outcome"] != "accepted"
+        ]
+        self.assertEqual(
+            {"name": "startProgram", "sent": "2026-10-16T12:25:01+00:00",
+             "outcome": "executed", "executed_at": "2026-10-16T12:25:03.100000+00:00",
+             "delay_s": 2},
+            {k: executed[k] for k in ("name", "sent", "outcome", "executed_at", "delay_s")},
+        )
+        self.assertEqual("not_executed", not_executed["outcome"])
+        self.assertNotIn("executed_at", not_executed)
+        self.assertNotIn("AA:BB:CC", json.dumps(section))
+
     def test_statistics_events_are_rendered(self) -> None:
         app = self._washer()
         app.cycle_log.statistics(

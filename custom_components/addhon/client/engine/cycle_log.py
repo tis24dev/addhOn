@@ -21,7 +21,10 @@ This log keeps it, in memory, bounded, per appliance. Events, by `kind`:
 - `context`: a read of the context whose activity, `commandHistory` slot or connection
   differs from the last one logged, or whose answer was dropped as stale; a read that
   repeats it is only counted on that event (`unchanged`, `last_at`);
-- `command`: each command sent and how the cloud answered;
+- `command`: each command sent and how the cloud answered; then, once, what became of
+  it as the app reads it, from a read of the context whose `commandHistory` slot names it
+  by the `timestamp` it was sent with: `executed` (`executed_at`, `delay_s` from the
+  acceptance) or `not_executed`, accepted and not executed `NOT_RECEIVED_S` later;
 - `cycle_read`: a read a push at a cycle's start or end asked for, as the MQTT transport
   fills it in;
 - `statistics`: what a poll's `/statistics` added or moved since the last one: the rows of
@@ -50,10 +53,15 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Callable, NamedTuple, Optional
 
 from ...debug_utils import _MAC_RE
+from ..helpers import parse_cloud_timestamp
 
 EVENT_LIMIT = 2000
 ROW_LIMIT = 128
 TEXT_LIMIT = 64
+# Accepted and still not executed this many seconds later: the command never reached the
+# machine, as the app judges it (`_command_not_received_timeout`, apk2 decomp.txt
+# @1021485-1021495; `updateApplianceStatus` @1021870-1022070).
+NOT_RECEIVED_S = 60
 
 # Who started a cycle and from where, never what it does: the hOn accounts, the phone,
 # the start's title (a favourite's name is the user's own text), the MAC and the
@@ -296,6 +304,9 @@ class CycleLog:
         # whose summary the next reads are compared with.
         self._run: Optional[dict] = None
         self._context: Optional[dict] = None
+        # The `command` events still waiting for what became of them, by the timestamp
+        # they were sent with; one leaves when followed up or dropped by the ring.
+        self._awaiting: dict[str, dict] = {}
 
     # -- writers (each takes the lock once; the event is built before) ----------
     def _append(self, kind: str, now: float, **fields: Any) -> dict:
@@ -306,6 +317,8 @@ class CycleLog:
             if evicted is self._context:
                 # The next read is logged again, so the dump always shows the last one.
                 self._context = None
+            if self._awaiting.get(evicted.get("sent")) is evicted:
+                del self._awaiting[evicted["sent"]]
         self._seq += 1
         event = {"seq": self._seq, "at": now, "kind": kind, **fields}
         self._events.append(event)
@@ -453,7 +466,48 @@ class CycleLog:
         if error is not None:
             fields["error"] = _text(error)
         with self._lock:
-            self._append("command", now, **fields)
+            event = self._append("command", now, **fields)
+            if fields["sent"] is not None:
+                self._awaiting[fields["sent"]] = event
+
+    def command_outcome(self, slot: Any) -> None:
+        """What became of a command this log holds, from a read of the context's
+        `commandHistory` slot, as the app reads it (issue #138, apk2 decomp.txt
+        @3271661): the slot names the command by the `timestamp` it was sent with,
+        `executed` once `timestampExecuted` is set (`executed_at` as the cloud wrote it,
+        `delay_s` the whole seconds from `timestampAccepted`, None when either cannot be
+        read), `not_executed` when only `timestampAccepted` is, more than
+        `NOT_RECEIVED_S` ago. One follow-up per command; nothing when the slot names no
+        command still waiting here, or cannot say yet. The slot's `transactionId` carries
+        the MAC: it is never read."""
+        if not isinstance(slot, Mapping):
+            return
+        command = slot.get("command")
+        sent = _text(command.get("timestamp")) if isinstance(command, Mapping) else None
+        if sent is None:
+            return
+        now = self._clock()
+        accepted = parse_cloud_timestamp(slot.get("timestampAccepted"))
+        executed_at = _text(slot.get("timestampExecuted")) or None
+        if executed_at is not None:
+            executed = parse_cloud_timestamp(slot.get("timestampExecuted"))
+            fields: dict[str, Any] = {
+                "outcome": "executed",
+                "executed_at": executed_at,
+                "delay_s": (
+                    round((executed - accepted).total_seconds())
+                    if executed is not None and accepted is not None
+                    else None
+                ),
+            }
+        elif accepted is not None and now - accepted.timestamp() > NOT_RECEIVED_S:
+            fields = {"outcome": "not_executed"}
+        else:
+            return
+        with self._lock:
+            event = self._awaiting.pop(sent, None)
+            if event is not None:
+                self._append("command", now, name=event.get("name"), sent=sent, **fields)
 
     def cycle_read(self, record: Mapping) -> None:
         """A read a push at a cycle's edge asked for; the transport fills `record` in

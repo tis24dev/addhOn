@@ -1357,9 +1357,10 @@ _CYCLE_LOG_KINDS = frozenset(
 )
 _CYCLE_LOG_ROADS = frozenset({"mqtt", "rest", "local"})
 _CYCLE_LOG_REASONS = frozenset({"load", "poll", "cycle_read"})
-_CYCLE_LOG_OUTCOMES = frozenset(
-    {"accepted", "rejected", "raised", "settled", "unsettled", "failed", "cancelled"}
-)
+_CYCLE_LOG_OUTCOMES = frozenset({
+    "accepted", "rejected", "raised", "executed", "not_executed", "settled", "unsettled",
+    "failed", "cancelled",
+})
 _CYCLE_LOG_EDGES = frozenset({"start", "end"})
 _CYCLE_LOG_TEXT_MAX = 64
 # The cloud's instants among the keys a read of the context is summarised with.
@@ -1501,7 +1502,7 @@ _CYCLE_LOG_FIELDS = {
     "command": {
         "name": _log_text, "programme": _log_text, "sent": _log_cloud,
         "outcome": _log_token(_CYCLE_LOG_OUTCOMES), "result_code": _log_text,
-        "error": _log_text,
+        "error": _log_text, "executed_at": _log_cloud, "delay_s": _log_int,
     },
     "cycle_read": {
         "edge": _log_token(_CYCLE_LOG_EDGES), "asked_at": _log_cloud, "reads": _log_reads,
@@ -1599,7 +1600,8 @@ def _cycle_log_section(appliance) -> dict | None:
 
     The pushes, every row kept and marked (`refused` by the shield of our own write,
     `same`, `cloud_from`), the reads of the context that moved something, the commands
-    sent and how the cloud answered, the reads a cycle's edge asked for, and the
+    sent, how the cloud answered and whether the machine executed them (the context's
+    `commandHistory` slot, once each), the reads a cycle's edge asked for, and the
     sessions; the events in `seq` order, what the ring dropped counted by kind, and
     before them the `phases` those events show (`_log_phases`). The
     `programme_name` below is the last state of the same story. Home Assistant's

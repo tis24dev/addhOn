@@ -1063,7 +1063,9 @@ class HonAppliance:
         """An applied read of the context in the cycle log (issue #138). Never raises.
 
         The first read of this object seeds the log with the whole shadow instead of
-        rows: a log a reload took up again logs only what moved meanwhile.
+        rows: a log a reload took up again logs only what moved meanwhile. Then the
+        `commandHistory` slot the read merged follows up a command the log holds
+        (`CycleLog.command_outcome`), apart: a failure of one costs not the other.
         """
         try:
             if self._cycle_log_seeded:
@@ -1080,6 +1082,11 @@ class HonAppliance:
                     self._attributes, None if activity is _UNREAD else activity
                 ),
             )
+        except Exception:  # noqa: BLE001 - the log must never cost the read
+            _LOGGER.debug("Cycle log failed", exc_info=True)
+        try:
+            # What became of a command the log holds, from the slot this read merged.
+            log.command_outcome(self._attributes.get("commandHistory"))
         except Exception:  # noqa: BLE001 - the log must never cost the read
             _LOGGER.debug("Cycle log failed", exc_info=True)
 

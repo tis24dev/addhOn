@@ -384,6 +384,107 @@ class CommandTest(_LogTest):
         )
 
 
+class CommandOutcomeTest(_LogTest):
+    """What became of a command, as the app reads it (issue #138): the context's
+    `commandHistory` slot names it by the `timestamp` it was sent with; executed once
+    `timestampExecuted` is set, not received when only `timestampAccepted` is, more than
+    60 s ago (the app's `_command_not_received_timeout`)."""
+
+    _SENT = "2026-10-26T07:33:00.148Z"
+    _ACCEPTED = "2026-10-26T07:33:01.6Z"  # the clock reads 07:33:20
+
+    def _slot(self, sent=_SENT, accepted=_ACCEPTED, executed=None, **command):
+        slot = {"command": {"commandName": "startProgram", "timestamp": sent,
+                            "transactionId": f"AA:BB:CC:00:11:22_{sent}", **command}}
+        if accepted is not None:
+            slot["timestampAccepted"] = accepted
+        if executed is not None:
+            slot["timestampExecuted"] = executed
+        return slot
+
+    def _send(self, sent=_SENT, outcome="accepted"):
+        self.log.command(name="startProgram", programme="PROGRAMS.WM_WD.HQD_COTTONS",
+                         sent=sent, outcome=outcome)
+
+    def _followups(self):
+        return [e for e in _events(self.log, "command")
+                if e["outcome"] in ("executed", "not_executed")]
+
+    def test_an_executed_command_is_followed_up_once(self) -> None:
+        self._send()
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:04.2Z"))
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:04.2Z"))
+        [followup] = self._followups()
+        self.assertEqual(
+            {"kind": "command", "name": "startProgram", "sent": self._SENT,
+             "outcome": "executed", "executed_at": "2026-10-26T07:33:04.2Z", "delay_s": 3},
+            {k: followup[k] for k in ("kind", "name", "sent", "outcome", "executed_at",
+                                      "delay_s")},
+        )
+        self.assertIs(int, type(followup["delay_s"]))
+        self.assertNotIn("programme", followup)
+
+    def test_not_executed_only_past_60_s_and_never_followed_again(self) -> None:
+        self._send()
+        self.log.command_outcome(self._slot())  # 18.4 s after the acceptance
+        self.clock.tick(41)  # 59.4 s
+        self.log.command_outcome(self._slot())
+        self.assertEqual([], self._followups())
+        self.clock.tick(1)  # 60.4 s
+        self.log.command_outcome(self._slot())
+        self.clock.tick(30)
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:34:30Z"))
+        [followup] = self._followups()
+        self.assertEqual(("not_executed", self._SENT), (followup["outcome"], followup["sent"]))
+        self.assertNotIn("executed_at", followup)
+        self.assertNotIn("delay_s", followup)
+
+    def test_a_raised_or_rejected_command_is_followed_up_too(self) -> None:
+        self._send(outcome="raised")
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:04.2Z"))
+        [followup] = self._followups()
+        self.assertEqual("executed", followup["outcome"])
+
+    def test_an_unreadable_instant_leaves_the_delay_unknown(self) -> None:
+        self._send()
+        self.log.command_outcome(self._slot(accepted="not an instant",
+                                            executed="2026-10-26T07:33:04.2Z"))
+        [followup] = self._followups()
+        self.assertIsNone(followup["delay_s"])
+        # An executed instant older than the acceptance is kept as the cloud said it.
+        self._send(sent="2026-10-26T07:40:00.000Z")
+        self.log.command_outcome(self._slot(sent="2026-10-26T07:40:00.000Z",
+                                            accepted="2026-10-26T09:08:48.9Z",
+                                            executed="2026-10-26T07:40:02.0Z"))
+        self.assertEqual(-5327, self._followups()[-1]["delay_s"])
+
+    def test_nothing_without_a_command_of_ours_or_a_verdict(self) -> None:
+        self._send()
+        for slot in (
+            None, "garbage", {}, {"command": None}, {"command": {"timestamp": None}},
+            self._slot(sent="2026-10-26T07:30:00.000Z", executed="2026-10-26T07:30:02Z"),
+            self._slot(accepted=None),  # neither accepted nor executed: no verdict
+            # The transaction id carries the timestamp too, but only `timestamp` counts.
+            {"command": {"transactionId": f"AA:BB:CC:00:11:22_{self._SENT}"},
+             "timestampExecuted": "2026-10-26T07:33:04.2Z"},
+        ):
+            with self.subTest(slot=slot):
+                self.log.command_outcome(slot)
+                self.assertEqual([], self._followups())
+        self.clock.tick(3600)
+        self.log.command_outcome(self._slot(accepted=None))
+        self.assertEqual([], self._followups())
+        self.assertNotIn("AA:BB:CC", json.dumps(self.log.snapshot()))
+
+    def test_a_command_the_ring_dropped_is_forgotten(self) -> None:
+        self._send()
+        for _ in range(EVENT_LIMIT):
+            self.log.entity(key="state", old="a", new="b")
+        self.assertEqual({}, self.log._awaiting)
+        self.log.command_outcome(self._slot(executed="2026-10-26T07:33:04.2Z"))
+        self.assertEqual([], self._followups())
+
+
 class StatisticsTest(_LogTest):
     """What `/statistics` added or moved between two polls: a measured load per cycle
     (`loadingPercentage`), the counters, the temperature bands (issue #138)."""
@@ -664,6 +765,39 @@ class EngineHooksTest(_Harness):
              {"key": "stainType", "before": "0", "after": "19"}],
             _rows(local),
         )
+
+    def test_a_read_follows_up_a_command_from_its_slot(self) -> None:
+        app = self._washer()
+        sent = "2026-10-26T08:00:00.148Z"
+        app.cycle_log.command(name="startProgram", programme="PROGRAMS.WM_WD.HQD_COTTONS",
+                              sent=sent, outcome="accepted")
+        self.cloud.context = _context("2")
+        self.cloud.context["commandHistory"] = {
+            "command": {"commandName": "startProgram", "timestamp": sent,
+                        "transactionId": f"aa_{sent}", "macAddress": "aa"},
+            "timestampAccepted": "2026-10-26T08:00:01.6Z",
+            "timestampExecuted": "2026-10-26T08:00:03.1Z",
+        }
+        self.loop.run_until_complete(app.update())
+        self.loop.run_until_complete(app.update(force=True))
+        followups = [e for e in _events(app.cycle_log, "command") if e["outcome"] == "executed"]
+        self.assertEqual(
+            [{"name": "startProgram", "sent": sent, "executed_at": "2026-10-26T08:00:03.1Z",
+              "delay_s": 2}],
+            [{k: e[k] for k in ("name", "sent", "executed_at", "delay_s")} for e in followups],
+        )
+
+    def test_a_raising_follow_up_costs_neither_the_read_nor_its_context(self) -> None:
+        app = self._washer()
+
+        def boom(slot):
+            raise RuntimeError("broken")
+
+        app.cycle_log.command_outcome = boom
+        self.cloud.context = _context("2", activity=_activity("HQD_COTTONS", "appliance"))
+        self.assertTrue(self.loop.run_until_complete(app.load_attributes(reason="poll")))
+        self.assertEqual("2", str(app.attributes["parameters"]["machMode"]))
+        self.assertEqual(["load", "poll"], [e["reason"] for e in _events(app.cycle_log, "context")])
 
     def test_a_raising_log_costs_neither_the_read_nor_the_write(self) -> None:
         app = self._washer()
