@@ -336,6 +336,84 @@ class FavouriteOfTheNamedProgrammeTest(_Harness):
         self.assertEqual("hqd_cottons", name)
 
 
+class FavouriteRecognisedByItsTitleTest(_Harness):
+    """Decision 7: a favourite's start carries its name as the title.
+
+    paps42's favourite starts (diagnostics/issue112-dumps/paps42-beta7-entry-diag.json):
+    `/history` records the base programme as `programName` and the favourite's name as
+    `attributes.prStr`; the activity echoes it as `prStrDisp`. Home Assistant sends the
+    favourite's name as `prStr` too.
+    """
+
+    _FAVOURITES = [
+        {"favouriteName": "My jeans", "command": {
+            "commandName": "startProgram",
+            "programName": "PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS",
+            "parameters": {"temp": "30"}}},
+        # Same name, another programme: not the favourite of Denim.
+        {"favouriteName": "Sheets", "command": {
+            "commandName": "startProgram",
+            "programName": "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN",
+            "parameters": {"temp": "60"}}},
+    ]
+
+    def _setup_after(self, label):
+        return self._appliance(
+            [_start("PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS", _DENIM_AT, label=label)],
+            _shadow("115", "1") | {"activity": {}, "commandHistory": None},
+            self._FAVOURITES,
+        )
+
+    def test_a_favourite_start_is_recovered_as_the_favourite(self) -> None:
+        app = self._setup_after("My jeans")
+        self.assertEqual("My jeans", app.attributes["programName"])
+        self.assertEqual("favourite", app.history_recovery["startProgram"])
+        # The row's options go on the favourite, as on any recovered start (D2).
+        self.assertEqual("40", str(app.commands["startProgram"].parameters["temp"].value))
+
+    def test_a_title_that_names_no_favourite_of_it_recovers_the_programme(self) -> None:
+        for label in ("Farmer - Nadrág", "Sheets", "", None):
+            with self.subTest(label=label):
+                app = self._setup_after(label)
+                self.assertEqual("iot_wash_denim_jeans", app.attributes["programName"])
+                self.assertEqual("programName", app.history_recovery["startProgram"])
+
+    def test_a_favourite_start_followed_at_runtime_selects_the_favourite(self) -> None:
+        app = self._setup_after(None)
+        self.cloud.history = [
+            _start("PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS", "2026-10-16T12:25:00.000Z",
+                   label="My jeans"),
+            *self.cloud.history,
+        ]
+        self.cloud.context["commandHistory"] = self.cloud.history[0]
+        for _ in range(2):  # sees the new start, then applies the list read
+            self.loop.run_until_complete(app.update(force=True))
+            self.loop.run_until_complete(asyncio.sleep(0.01))
+        self.assertEqual("My jeans", app.settings["startProgram.program"].value)
+        self.assertEqual("favourite", app.history_recovery["startProgram"])
+
+    def test_the_activity_s_title_names_the_favourite(self) -> None:
+        app = self._setup_after(None)
+        for title in ("My jeans", "My%20jeans"):  # the app URI-decodes `prStrDisp`
+            with self.subTest(title=title):
+                name = self._read(
+                    app,
+                    {"activity": _activity(
+                        "IOT_WASH_DENIM_JEANS", "mobileApp", prStrDisp=title)},
+                    machMode="2",
+                )
+                self.assertEqual("My jeans", name)
+
+    def test_the_activity_s_title_of_another_programme_s_favourite_is_ignored(self) -> None:
+        app = self._setup_after(None)
+        name = self._read(
+            app,
+            {"activity": _activity("IOT_WASH_DENIM_JEANS", "mobileApp", prStrDisp="Sheets")},
+            machMode="2",
+        )
+        self.assertEqual("iot_wash_denim_jeans", name)
+
+
 class DishwasherTest(_Harness):
     """The dishwasher: `functionalId`, machMode 4 and its shadow's prPosition."""
 

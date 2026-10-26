@@ -17,10 +17,27 @@ from __future__ import annotations
 
 import logging
 from typing import Any, NamedTuple
+from urllib.parse import unquote
 
 from .enum import HonParameterEnum
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def favourite_label(value: Any) -> str:
+    """The programme title a start or an activity carries, as a favourite's name reads.
+
+    A start sends its title as `prStr` -- for a favourite the name the user gave it,
+    from the app and from Home Assistant alike (`HonCommand._program_label_to_send`) --
+    and the activity echoes it as `prStrDisp`, which the app URI-decodes
+    (`decodedTitle`, apk2 decomp.txt @1551812). "" when there is none.
+    """
+    if not isinstance(value, str):
+        return ""
+    try:
+        return unquote(value).strip()
+    except Exception:  # noqa: BLE001 - a malformed title is just a title
+        return value.strip()
 
 
 class CycleActivity(NamedTuple):
@@ -218,7 +235,11 @@ class HonParameterProgram(HonParameterEnum):
         if cycle is not None and cycle.code == code:
             if (named := self._cycle_programme(cycle, code)) is not None:
                 # A favourite is a copy of its base programme under the user's name: the
-                # activity names the base, so a selected favourite of it keeps its name.
+                # activity names the base, and its title the favourite (decision 7)...
+                if (favourite := self.favourite_of(named, cycle.label)) is not None:
+                    return favourite
+                # ...or, without a title that says so, a selected favourite of it
+                # keeps its name.
                 if (
                     active is not None
                     and self._is_favourite(active)
@@ -266,6 +287,28 @@ class HonParameterProgram(HonParameterEnum):
         activity spells the bare name (`HQD_COTTONS`), cut the same way.
         """
         return str(name).strip().rsplit(".", 1)[-1].lower()
+
+    def favourite_of(self, base: str, label: Any) -> str | None:
+        """The favourite of programme `base` that `label` names, or None.
+
+        Issue #130, decision 7: a favourite's start records its base programme as the
+        programme and the favourite's name as its title (`prStr` in `/history`,
+        `prStrDisp` in the activity; paps42's 5 favourite rows out of 5). A favourite
+        of another programme with the same name is not it.
+        """
+        wanted = favourite_label(label)
+        if not wanted:
+            return None
+        return next(
+            (
+                name
+                for name, category in self._programs.items()
+                if self._is_favourite(category)
+                and favourite_label(getattr(category, "favourite_name", "")) == wanted
+                and self._category_key(getattr(category, "category", "")) == base
+            ),
+            None,
+        )
 
     @staticmethod
     def _fixed(category: Any, key: str) -> str:
