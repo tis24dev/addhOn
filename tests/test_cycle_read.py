@@ -225,6 +225,35 @@ class CycleReadTest(unittest.TestCase):
         self.assertTrue(first.cancelled())
         self.assertEqual(1, app.reads)
 
+    def test_a_push_after_stop_schedules_nothing(self) -> None:
+        # Review of PR #139 (S3): a push already in flight when stop() runs.
+        app = _CycleAppliance()
+        hon = FakeHon([app])
+        client = NativeMqttClient(hon, "MID")
+        client._loop = self.loop
+        self.loop.run_until_complete(client.stop())
+        client._on_message(_packet(_TOPIC, {"parameters": []}))
+        self._settle()
+        self.assertEqual({}, client._cycle_reads)
+        self.assertEqual(0, app.reads)
+
+    def test_the_deferred_start_reads_again_once_the_watchdog_runs(self) -> None:
+        # create() stops a client whose first connect failed and leaves it to the
+        # watchdog: that client is not unloaded, so its pushes still ask for reads.
+        app = _CycleAppliance()
+        client = NativeMqttClient(FakeHon([app]), "MID")
+        client._loop = self.loop
+        self.loop.run_until_complete(client.stop())
+
+        async def _no_watchdog() -> None:
+            return None
+
+        with patch.object(client, "_watchdog", _no_watchdog):
+            self.loop.run_until_complete(client._start_watchdog())
+        client._on_message(_packet(_TOPIC, {"parameters": []}))
+        self._settle()
+        self.assertEqual(1, app.reads)
+
     def test_stop_cancels_a_pending_read(self) -> None:
         app = _CycleAppliance()
         client, _ = self._push(app)

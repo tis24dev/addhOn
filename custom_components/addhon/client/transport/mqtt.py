@@ -30,6 +30,7 @@ import functools
 import json
 import logging
 import secrets
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -212,6 +213,13 @@ class NativeMqttClient:
         # for each appliance, by `id()` (see `_ask_cycle_read`).
         self._loop: asyncio.AbstractEventLoop | None = None
         self._cycle_reads: dict[int, Any] = {}
+        # Set by `stop()` before it cancels those reads, cleared when the client runs
+        # again (`create()`, the watchdog); the lock makes the check and the scheduling
+        # in `_ask_cycle_read` one step against the swap in `stop()`, so a push already
+        # in flight cannot schedule a read stop() never sees (review of PR #139, S3).
+        # Reentrant: a done-callback may run on the thread that holds it.
+        self._stopping = False
+        self._reads_lock = threading.RLock()
 
     @property
     def client(self) -> mqtt5.Client:
@@ -243,6 +251,8 @@ class NativeMqttClient:
 
     async def create(self) -> "NativeMqttClient":
         self._loop = asyncio.get_running_loop()
+        with self._reads_lock:
+            self._stopping = False
         try:
             self._set_setup_phase("mqtt_connect")
             try:
@@ -318,7 +328,9 @@ class NativeMqttClient:
             except Exception as err:  # pragma: no cover - defensive
                 _LOGGER.debug("addhOn: awaiting MQTT watchdog cancel failed: %s", err)
             self._watchdog_task = None
-        reads, self._cycle_reads = self._cycle_reads, {}
+        with self._reads_lock:
+            self._stopping = True
+            reads, self._cycle_reads = self._cycle_reads, {}
         for read in reads.values():
             read.cancel()
         self._stop_client()
@@ -335,8 +347,15 @@ class NativeMqttClient:
         """
         edge_of = getattr(appliance, "cycle_edge", None)
         edge = edge_of(before) if callable(edge_of) else None
+        if edge is None:
+            return
+        with self._reads_lock:
+            self._schedule_cycle_read(appliance, edge)
+
+    def _schedule_cycle_read(self, appliance: Any, edge: str) -> None:
+        """`_ask_cycle_read`'s scheduling, under `_reads_lock`; nothing once stopping."""
         loop = self._loop
-        if edge is None or loop is None or loop.is_closed():
+        if self._stopping or loop is None or loop.is_closed():
             return
         key = id(appliance)
         if (pending := self._cycle_reads.get(key)) is not None:
@@ -358,8 +377,9 @@ class NativeMqttClient:
         self._cycle_reads[key] = future
 
         def _forget(done: Any) -> None:
-            if self._cycle_reads.get(key) is done:
-                self._cycle_reads.pop(key, None)
+            with self._reads_lock:
+                if self._cycle_reads.get(key) is done:
+                    self._cycle_reads.pop(key, None)
 
         future.add_done_callback(_forget)
 
@@ -787,6 +807,9 @@ class NativeMqttClient:
             await self._subscribe(appliance)
 
     async def _start_watchdog(self) -> None:
+        # The deferred start (create() stopped, the watchdog retries) runs again.
+        with self._reads_lock:
+            self._stopping = False
         if not self._watchdog_task or self._watchdog_task.done():
             self._watchdog_task = asyncio.create_task(self._watchdog())
 
