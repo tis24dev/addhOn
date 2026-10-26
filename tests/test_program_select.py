@@ -750,6 +750,15 @@ class ProgramSelectAtRestTest(unittest.TestCase):
         entity.coordinator.pending_programs = {"washer-1": "hqd_cottons"}
         self.assertEqual("hqd_cottons", entity.current_option)
 
+    def test_the_select_reads_the_engine_s_cycle_set(self) -> None:
+        # Review of PR #139 (S4): one set for the name, the cycle edges and the select.
+        from unittest.mock import patch
+
+        from custom_components.addhon import select
+
+        with patch.object(select, "cycle_modes", return_value=frozenset({1})):
+            self.assertEqual("hqd_eco_40_60", self._entity(machMode="1").current_option)
+
     def test_mach_mode_4_runs_on_the_dishwasher_alone(self) -> None:
         self.assertEqual("hqd_eco_40_60", self._entity("DW", machMode="4").current_option)
         self.assertEqual("iot_wash_denim_jeans", self._entity("WM", machMode="4").current_option)

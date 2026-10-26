@@ -47,15 +47,28 @@ _UNREAD = object()
 # set rules the name, the select and the cycle edges alike (review of PR #139, S4).
 _CYCLE_MODES = frozenset({2, 3, 5})
 _CYCLE_MODES_BY_TYPE = {"DW": _CYCLE_MODES | {4}}
-# A push that moves `machMode` into a cycle (execution 2, delayed start 5; the
-# dishwasher's 4 too) from outside one (pause 3 counts as inside: a resume is not a new
-# cycle), or out of one into the end 7 or selection 1, asks for a read of the context
-# (issue #130, decision C1): the activity that names the cycle comes only with it.
-_EDGE_START = {"DW": frozenset({2, 4, 5})}
-_EDGE_RUNNING = {"DW": frozenset({2, 3, 4, 5})}
-_EDGE_START_DEFAULT = frozenset({2, 5})
-_EDGE_RUNNING_DEFAULT = frozenset({2, 3, 5})
+# The types whose starts are followed when a cycle begins elsewhere (issue #112, decision
+# D4 of 2026-10-06): the four the app's dashboard shows a running programme for.
+FOLLOWED_TYPES = frozenset({"WM", "WD", "TD", "DW"})
+# A push that moves `machMode` into a cycle from outside one, or out of one into the end 7
+# or selection 1, asks for a read of the context (issue #130, decision C1): the activity
+# that names the cycle comes only with it. The cycle is `cycle_modes`' set, the one the
+# name and the select read too (review of PR #139, S4); entering it at the pause 3 is a
+# resume, not a start.
+_PAUSE = 3
 _EDGE_END = frozenset({7, 1})
+
+
+def cycle_modes(appliance_type: Any) -> Optional[frozenset[int]]:
+    """The `machMode` values of a running cycle for `appliance_type`, None if not followed.
+
+    One set for the three things that ask whether a cycle runs: the activity that names
+    it (`HonAppliance._watch_cycle`), the push that starts or ends it
+    (`HonAppliance.cycle_edge`) and the programme select at rest (`select.py`).
+    """
+    if appliance_type not in FOLLOWED_TYPES:
+        return None
+    return _CYCLE_MODES_BY_TYPE.get(appliance_type, _CYCLE_MODES)
 
 
 def _programme_key(name: Any) -> Optional[str]:
@@ -90,9 +103,8 @@ def _newest_start(history: Any) -> dict[str, Any]:
 
 class HonAppliance:
     _MINIMAL_UPDATE_INTERVAL = 5  # seconds
-    # Types whose start is followed when a cycle begins elsewhere (issue #112, decision
-    # D4 of 2026-10-06): the four the app's dashboard shows a running programme for.
-    _FOLLOWED_TYPES = frozenset({"WM", "WD", "TD", "DW"})
+    # Types whose start is followed when a cycle begins elsewhere (see FOLLOWED_TYPES).
+    _FOLLOWED_TYPES = FOLLOWED_TYPES
     # Reads of `/history` for one new cycle, one per poll, before giving up (decision of
     # 2026-10-06): a read that failed, or a list without the start just announced.
     _FOLLOW_ATTEMPTS = 3
@@ -394,7 +406,7 @@ class HonAppliance:
         details = details if isinstance(details, dict) else {}
         code = self._live_int("prCode")
         started = activity.get("activityStarted")
-        modes = _CYCLE_MODES_BY_TYPE.get(self.appliance_type, _CYCLE_MODES)
+        modes = cycle_modes(self.appliance_type) or _CYCLE_MODES
         if started and not activity.get("activityEnded") and self._live_int("machMode") in modes:
             self._cycle_activity = CycleActivity(
                 programme=details.get("programName"),
@@ -442,10 +454,8 @@ class HonAppliance:
         after = self.mach_mode
         if after is None or after == before:
             return None
-        running = _EDGE_RUNNING.get(self.appliance_type, _EDGE_RUNNING_DEFAULT)
-        if after in _EDGE_START.get(self.appliance_type, _EDGE_START_DEFAULT) and (
-            before not in running
-        ):
+        running = cycle_modes(self.appliance_type) or _CYCLE_MODES
+        if after in running and after != _PAUSE and before not in running:
             return "start"
         if after in _EDGE_END and before in running:
             return "end"

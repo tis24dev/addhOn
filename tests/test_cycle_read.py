@@ -96,6 +96,16 @@ class CycleEdgeTest(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 self.assertEqual(edge, self._edge(app, before, after))
 
+    def test_one_cycle_set_per_type(self) -> None:
+        # Review of PR #139 (S4): the set the name, the edges and the select share.
+        from custom_components.addhon.client.engine.appliance import cycle_modes
+
+        for kind in ("WM", "WD", "TD"):
+            self.assertEqual(frozenset({2, 3, 5}), cycle_modes(kind))
+        self.assertEqual(frozenset({2, 3, 4, 5}), cycle_modes("DW"))
+        for kind in ("OV", "REF", "AC", "LC", None):
+            self.assertIsNone(cycle_modes(kind))
+
     def test_the_types_not_followed_ask_for_nothing(self) -> None:
         for kind in ("OV", "REF", "WH"):
             with self.subTest(kind=kind):

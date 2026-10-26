@@ -30,6 +30,7 @@ from .air_purifier import (
     reports_attribute,
 )
 from .base_entity import HonBaseEntity, coordinator_data_map
+from .client.engine.appliance import cycle_modes
 from .command_dispatch import CommandPatch, async_dispatch_patch
 from .const import (
     AC_ATTR_SWING_H,
@@ -117,16 +118,6 @@ REF_PROGRAM_OFF = "off"
 # stays because it reads as this class's own vocabulary at the two sites below.
 _REF_MODE_FLAG_TO_PROGRAM: dict[str, str] = dict(REF_PARAM_TO_FLAG)
 
-# The `machMode` values under which the programme select shows the running programme
-# (issue #130, decision F2), for the types whose starts are followed: execution 2,
-# pause 3 and delayed start 5, as the app's washer dashboard takes a cycle in progress
-# (apk2 decomp.txt @2588647-2588662); the dishwasher's 4 too. Any other value is rest.
-_SELECT_CYCLE_MODES: dict[str, frozenset[int]] = {
-    "WM": frozenset({2, 3, 5}),
-    "WD": frozenset({2, 3, 5}),
-    "TD": frozenset({2, 3, 5}),
-    "DW": frozenset({2, 3, 4, 5}),
-}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -850,11 +841,12 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         """True when the shadow's `machMode` says no cycle runs (decision F2).
 
         For the types whose starts are followed alone, with the values the app takes
-        as a cycle in progress (`_SELECT_CYCLE_MODES`). An unreadable `machMode` -- a
-        NaN or an infinite value included -- is not "at rest": the select then reads
-        as before.
+        as a cycle in progress: the engine's `cycle_modes`, the set the programme name
+        and the cycle edges read too (review of PR #139, S4). An unreadable `machMode`
+        -- a NaN or an infinite value included -- is not "at rest": the select then
+        reads as before.
         """
-        modes = _SELECT_CYCLE_MODES.get(self._appliance_data.get("type"))
+        modes = cycle_modes(self._appliance_data.get("type"))
         if modes is None:
             return False
         try:
