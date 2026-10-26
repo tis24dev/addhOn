@@ -10911,6 +10911,22 @@ class CycleLogSectionTest(unittest.TestCase):
         )
         self.assertNotIn("SN-000", json.dumps(section))
 
+    def test_entity_events_are_rendered_and_a_favourite_masked(self) -> None:
+        from unittest import mock
+
+        app = self._washer()
+        app.cycle_log.entity(key="opt_permanent_press", old="off", new="on")
+        app.cycle_log.entity(key="program_name", old="Cottons", new="Lana delicata")
+        with mock.patch.object(diagnostics, "favourite_names", lambda appliance: ["Lana delicata"]):
+            section = self._block(app)["cycle_log"]
+        events = [e for e in section["events"] if e["kind"] == "entity"]
+        self.assertEqual(
+            [{"key": "opt_permanent_press", "before": "off", "after": "on"},
+             {"key": "program_name", "before": "Cottons", "after": "<favourite 1>"}],
+            [{k: e[k] for k in ("key", "before", "after")} for e in events],
+        )
+        self.assertNotIn("Lana", json.dumps(section))
+
     def test_a_row_named_like_an_identity_key_is_blanked(self) -> None:
         # `_redact` works on dict keys, and a shadow row prints the parameter's name as a
         # VALUE: the rows must blank what an identity-named parameter holds themselves.

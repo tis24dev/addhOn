@@ -28,6 +28,9 @@ This log keeps it, in memory, bounded, per appliance. Events, by `kind`:
   `loadingPercentage` it did not hold (the load measured and suggested, the start date of
   one cycle each) and the scalars that changed, a map's own one level down
   (`temperatureUsage.temp40`); the first read of an appliance object only seeds;
+- `entity`: a state one of the entities that show a cycle's options, phase, programme or
+  machine state published (`key`, the unique_id's suffix), `unknown` and `unavailable`
+  kept as the text they are; Home Assistant's listener feeds it (`__init__.py`);
 - `session`: a new appliance object took the log (setup, reload).
 
 One ring of `EVENT_LIMIT` events for every kind (R2), what it drops counted by kind.
@@ -490,6 +493,13 @@ class CycleLog:
             fields["truncated"] = cut
         with self._lock:
             self._append("statistics", now, **fields)
+
+    def entity(self, *, key: str, old: str | None, new: str | None) -> None:
+        """A state an entity published: `key` names it by its unique_id's suffix."""
+        now = self._clock()
+        fields = {"key": _text(key), "before": _text(old), "after": _text(new)}
+        with self._lock:
+            self._append("entity", now, **fields)
 
     # -- reader ----------------------------------------------------------------
     def snapshot(self) -> dict:

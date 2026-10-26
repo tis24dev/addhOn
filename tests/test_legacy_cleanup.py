@@ -882,5 +882,139 @@ class RemoveConfigEntryDeviceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(allowed)
 
 
+class _State:
+    def __init__(self, state) -> None:
+        self.state = state
+
+
+class _UnloadEntry(FakeEntry):
+    def __init__(self) -> None:
+        super().__init__()
+        self.on_unload: list = []
+
+    def async_on_unload(self, func) -> None:
+        self.on_unload.append(func)
+
+
+class CycleEntityTrackingTest(unittest.TestCase):
+    """The states the option, phase, programme and machine-state entities publish reach
+    their appliance's cycle log (issue #138, Q3), on the followed types only."""
+
+    _TRACKED = {
+        "switch.wm_keep_fresh": "wm1_opt_permanent_press",
+        "binary_sensor.wm_keep_fresh_phase": "wm1_keep_fresh",
+        "select.wm_stain": "wm1_opt_stain_type",
+        "sensor.wm_stain": "wm1_stain_type",
+        "sensor.wm_phase": "wm1_program_phase",
+        "sensor.wm_programme": "wm1_program_name",
+        "sensor.wm_state": "wm1_state",
+    }
+
+    def setUp(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import CycleLog
+
+        entries = [FakeRegEntry(entity_id, unique_id)
+                   for entity_id, unique_id in self._TRACKED.items()]
+        entries += [
+            FakeRegEntry("sensor.wm_remaining", "wm1_remaining_time"),
+            FakeRegEntry("sensor.ac_state", "ac1_state"),
+            # Same suffix, another domain: not the entity the table names.
+            FakeRegEntry("sensor.wm_opt_stain", "wm1_opt_stain_type"),
+        ]
+        self.registry = FakeRegistry(entries)
+        er.async_get = lambda hass: self.registry
+        self.tracked: list = []
+        self.unsubscribed: list = []
+        event = types.ModuleType("homeassistant.helpers.event")
+
+        def track(hass, entity_ids, action):
+            self.tracked.append((list(entity_ids), action))
+            return lambda: self.unsubscribed.append(True)
+
+        event.async_track_state_change_event = track
+        previous = sys.modules.get("homeassistant.helpers.event")
+        sys.modules["homeassistant.helpers.event"] = event
+        self.addCleanup(
+            lambda: sys.modules.pop("homeassistant.helpers.event")
+            if previous is None else sys.modules.__setitem__("homeassistant.helpers.event", previous)
+        )
+        self.log = CycleLog()
+        self.coord_data = {
+            "wm1": {"type": "WM", "appliance": types.SimpleNamespace(cycle_log=self.log)},
+            "ac1": {"type": "AC", "appliance": types.SimpleNamespace(cycle_log=None)},
+        }
+        self.entry = _UnloadEntry()
+
+    def _track(self):
+        from custom_components.addhon import _track_cycle_entities
+
+        _track_cycle_entities(types.SimpleNamespace(), self.entry, self.coord_data)
+
+    def _fire(self, entity_id, old, new) -> None:
+        [(_ids, action)] = self.tracked
+        action(types.SimpleNamespace(data={
+            "entity_id": entity_id,
+            "old_state": None if old is None else _State(old),
+            "new_state": None if new is None else _State(new),
+        }))
+
+    def _entity_events(self):
+        return [(e["key"], e["before"], e["after"])
+                for e in self.log.snapshot()["events"] if e["kind"] == "entity"]
+
+    def test_the_named_entities_are_tracked_and_released_on_unload(self) -> None:
+        self._track()
+        [(entity_ids, _action)] = self.tracked
+        self.assertEqual(sorted(self._TRACKED), sorted(entity_ids))
+        self.assertEqual(1, len(self.entry.on_unload))
+        self.entry.on_unload[0]()
+        self.assertEqual([True], self.unsubscribed)
+
+    def test_each_state_change_is_logged_by_its_key(self) -> None:
+        self._track()
+        self._fire("switch.wm_keep_fresh", "off", "on")
+        self._fire("sensor.wm_phase", "washing", "unavailable")
+        self._fire("binary_sensor.wm_keep_fresh_phase", None, "unknown")
+        # A change of the attributes alone is not a new state.
+        self._fire("sensor.wm_state", "running", "running")
+        self.assertEqual(
+            [("opt_permanent_press", "off", "on"), ("program_phase", "washing", "unavailable"),
+             ("keep_fresh", None, "unknown")],
+            self._entity_events(),
+        )
+
+    def test_a_raising_log_never_reaches_home_assistant(self) -> None:
+        self._track()
+
+        def boom(**kwargs):
+            raise RuntimeError("broken log")
+
+        self.log.entity = boom
+        self._fire("switch.wm_keep_fresh", "off", "on")
+
+    def test_nothing_followed_tracks_nothing(self) -> None:
+        self.coord_data = {"ac1": self.coord_data["ac1"]}
+        self._track()
+        self.assertEqual([], self.tracked)
+        self.assertEqual([], self.entry.on_unload)
+
+    def test_a_broken_registry_costs_nothing_to_the_setup(self) -> None:
+        def broken(hass):
+            raise RuntimeError("no registry")
+
+        er.async_get = broken
+        self._track()
+        self.assertEqual([], self.tracked)
+
+    def test_the_setup_tracks_after_the_platforms(self) -> None:
+        import inspect
+
+        from custom_components import addhon
+
+        source = inspect.getsource(addhon.async_setup_entry)
+        forwarded = source.index("async_forward_entry_setups(entry, PLATFORMS)")
+        self.assertGreater(source.index("_track_cycle_entities("), forwarded)
+
+
 if __name__ == "__main__":
     unittest.main()

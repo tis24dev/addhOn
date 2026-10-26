@@ -448,6 +448,29 @@ class StatisticsTest(_LogTest):
         self.assertNotIn("principalUserId", event["changed"])
 
 
+class EntityTest(_LogTest):
+    """The states the option, phase, programme and machine-state entities published
+    (issue #138, Q3): which one showed what, and when, against the pushes."""
+
+    def test_each_state_is_an_event(self) -> None:
+        self.log.entity(key="opt_permanent_press", old="off", new="on")
+        self.log.entity(key="keep_fresh", old="unknown", new="unavailable")
+        self.log.entity(key="state", old=None, new="running")
+        events = _events(self.log, "entity")
+        self.assertEqual(
+            [("opt_permanent_press", "off", "on"), ("keep_fresh", "unknown", "unavailable"),
+             ("state", None, "running")],
+            [(e["key"], e["before"], e["after"]) for e in events],
+        )
+        json.dumps(self.log.snapshot())
+
+    def test_a_state_is_cut_and_mac_masked(self) -> None:
+        self.log.entity(key="program_name", old="AA:BB:CC:DD:EE:FF", new="y" * 200)
+        [event] = _events(self.log, "entity")
+        self.assertEqual("***", event["before"])
+        self.assertEqual(TEXT_LIMIT, len(event["after"]))
+
+
 class SessionTest(unittest.TestCase):
     """The log per appliance id at module level: a reload adds to it."""
 

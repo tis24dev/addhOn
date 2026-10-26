@@ -1353,7 +1353,7 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
 # The cycle log's own words (`client/engine/cycle_log.py`), printed as literals of this
 # module, and the bound on every other text it prints: the log cuts at the same length.
 _CYCLE_LOG_KINDS = frozenset(
-    {"session", "shadow", "context", "command", "cycle_read", "statistics"}
+    {"session", "shadow", "context", "command", "cycle_read", "statistics", "entity"}
 )
 _CYCLE_LOG_ROADS = frozenset({"mqtt", "rest", "local"})
 _CYCLE_LOG_REASONS = frozenset({"load", "poll", "cycle_read"})
@@ -1508,6 +1508,9 @@ _CYCLE_LOG_FIELDS = {
         "outcome": _log_token(_CYCLE_LOG_OUTCOMES),
     },
     "statistics": {"new_rows": _log_loads, "changed": _log_changes, "truncated": _log_int},
+    # A state is text the user can have written (a favourite's name on `program_name`):
+    # bounded here, masked with the block by `_mask_favourites`.
+    "entity": {"key": _log_text, "before": _log_text, "after": _log_text},
 }
 
 

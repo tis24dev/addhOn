@@ -34,8 +34,10 @@ the notes were generated automatically carry a link to their diff instead of a s
   timeline of the last cycles** (#138): what the machine reported and when, and what was
   sent, so one download explains a whole cycle. It is kept in memory: reloading the
   integration keeps it, restarting Home Assistant starts it over.
-- **The cycle timeline also shows what the statistics added after each cycle** (#138):
-  the load the washer measured and the one it suggested, and the counters that moved.
+- **The cycle timeline also shows what the statistics added after each cycle and what
+  the cycle's entities showed** (#138): the load the washer measured and the one it
+  suggested, the counters that moved, and each state the Keep Fresh switch and phase,
+  the stain dropdown and sensor, the phase, the programme and the machine state took.
 - **The diagnostics file now says where each programme option's value came from** (#138),
   for every appliance with option entities: your pending choice, what the programme
   prescribes, the running cycle, the machine's report or the last command. Unlike the
