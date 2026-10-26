@@ -564,6 +564,24 @@ class EngineHooksTest(_Harness):
         self.assertEqual(["load", "poll", "cycle_read"],
                          [e["reason"] for e in _events(log, "context")])
 
+    def test_a_key_a_poll_lists_for_the_first_time_is_new(self) -> None:
+        app = self._washer()
+        self.cloud.context = _context(antiCreaseStatus="1")
+        self.cloud.context["shadow"]["parameters"]["antiCreaseStatus"]["lastUpdate"] = _T1
+        self.loop.run_until_complete(app.update())
+        [rest] = _events(app.cycle_log, "shadow")
+        self.assertEqual(
+            [{"key": "antiCreaseStatus", "before": None, "after": "1", "new": True,
+              "stamp": _T1}],
+            _rows(rest),
+        )
+        self.assertEqual("1", str(app.attributes["parameters"]["antiCreaseStatus"]))
+
+    def test_the_seeding_read_logs_no_new_key(self) -> None:
+        self.TYPE = "WM"
+        app = self._appliance([], _context(antiCreaseStatus="1"))
+        self.assertEqual([], _events(app.cycle_log, "shadow"))
+
     def test_a_dropped_answer_is_logged(self) -> None:
         app = self._washer()
         gate = asyncio.Event()

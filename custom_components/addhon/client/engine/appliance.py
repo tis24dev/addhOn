@@ -971,7 +971,17 @@ class HonAppliance:
                     ),
                 ))
             else:
-                self._attributes.setdefault("parameters", {})[name] = HonAttribute(values)
+                created = HonAttribute(values)
+                self._attributes.setdefault("parameters", {})[name] = created
+                if log is not None:
+                    # A key the cloud lists for the first time (issue #138), as a push
+                    # that creates one marks it; the seeding read logs none
+                    # (`_log_read`).
+                    rows.append(_cycle_log.ShadowRow(
+                        name, None, _cycle_log.value_text(created), True,
+                        stamp=values.get("lastUpdate") if isinstance(values, dict) else None,
+                        new=True,
+                    ))
         self._attributes |= attributes
         # Authoritative connectivity = lastConnEvent.category (app model
         # ApplianceConnectionState, see apk/analysis/per-type-derivations.md #5).
