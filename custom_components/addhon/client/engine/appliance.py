@@ -61,6 +61,12 @@ FOLLOWED_TYPES = frozenset({"WM", "WD", "TD", "DW"})
 # fallback the appliance stays on v1 until the integration is reloaded (the poll's
 # call budget has no room for a retry every minute).
 STATISTICS_V2_TYPES = FOLLOWED_TYPES
+# The keys the app reads from a laundry statistics answer (apk2 decomp.txt @4183897,
+# @4190638, @4191608, @4192391): a v2 answer that carries none of them is another
+# shape, not the statistics, and v1 answers instead (review of PR #141).
+STATISTICS_KEYS = frozenset(
+    {"programsCounter", "mostUsedPrograms", "temperatureUsage", "loadingPercentage"}
+)
 # A push that moves `machMode` into a cycle from outside one, or out of one into the end 7
 # or selection 1, asks for a read of the context (issue #130, decision C1): the activity
 # that names the cycle comes only with it. The cycle is `cycle_modes`' set, the one the
@@ -1164,9 +1170,10 @@ class HonAppliance:
     async def _read_statistics(self) -> dict[str, Any]:
         """The statistics payload: v2 first on `STATISTICS_V2_TYPES`, v1 otherwise.
 
-        v2 is taken when it answers a non-empty map; an error or an empty answer
-        falls back to v1 for good (`_statistics_v1_only`) and is named in
-        `statistics_source`. An API without `load_statistics_v2` reads v1.
+        v2 is taken when it answers a map carrying at least one of the keys the app
+        reads (`STATISTICS_KEYS`); an error, an empty answer or another shape falls
+        back to v1 for good (`_statistics_v1_only`) and is named in
+        `statistics_source` (`empty`, `shape`, or the error's class name). An API without `load_statistics_v2` reads v1.
         """
         read_v2 = getattr(self.api, "load_statistics_v2", None)
         if (
@@ -1181,9 +1188,12 @@ class HonAppliance:
                 fallback = type(error).__name__
             else:
                 if isinstance(answer, dict) and answer:
-                    self._statistics_source = {"version": "v2", "fallback": None}
-                    return answer
-                fallback = "empty"
+                    if any(key in answer for key in STATISTICS_KEYS):
+                        self._statistics_source = {"version": "v2", "fallback": None}
+                        return answer
+                    fallback = "shape"
+                else:
+                    fallback = "empty"
             self._statistics_v1_only = True
             _LOGGER.info(
                 "Statistics v2 gave nothing for %s (%s): reading v1 from now on",

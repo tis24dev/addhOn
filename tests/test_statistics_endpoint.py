@@ -122,6 +122,23 @@ class EngineChoiceTest(unittest.TestCase):
                 self.assertEqual(["v2", "v1", "maintenance"], api.calls)
                 self.assertEqual({"version": "v1", "fallback": "empty"}, app.statistics_source)
 
+    def test_a_v2_answer_of_another_shape_falls_back_to_v1(self) -> None:
+        api = _Api(v2={"resultCode": "0", "foo": {"bar": 1}}, v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual(["v2", "v1", "maintenance"], api.calls)
+        self.assertEqual(99, app.statistics["programsCounter"])
+        self.assertEqual({"version": "v1", "fallback": "shape"}, app.statistics_source)
+
+    def test_one_known_key_is_enough_for_v2(self) -> None:
+        for key in sorted(appliance_mod.STATISTICS_KEYS):
+            with self.subTest(key=key):
+                api = _Api(v2={key: 1}, v1={"programsCounter": 99})
+                app = _appliance(api)
+                _run(app.load_statistics())
+                self.assertEqual(["v2", "maintenance"], api.calls)
+                self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+
     def test_after_one_fallback_the_appliance_stays_on_v1(self) -> None:
         api = _Api(v2={}, v1={"programsCounter": 99})
         app = _appliance(api)
