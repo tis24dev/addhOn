@@ -82,6 +82,13 @@ def _programme_key(name: Any) -> Optional[str]:
     return name.strip().rsplit(".", 1)[-1].upper()
 
 
+def _open_started(activity: Any) -> Any:
+    """`activityStarted` of `activity` when it is open (started, not ended), else None."""
+    if not isinstance(activity, dict) or activity.get("activityEnded"):
+        return None
+    return activity.get("activityStarted") or None
+
+
 def _pushed_since(attribute: Any, instant: datetime) -> bool:
     """Whether a push delivered `attribute`'s value after `instant` (HA's clock)."""
     received = getattr(attribute, "received_at", None)
@@ -405,9 +412,12 @@ class HonAppliance:
         details = activity.get("attributes")
         details = details if isinstance(details, dict) else {}
         code = self._live_int("prCode")
-        started = activity.get("activityStarted")
+        # The same reading of "open" as the check a cycle's start read is settled by
+        # (`cycle_edge_settled`): what is kept and what is compared are one thing
+        # (review of PR #139, S2).
+        started = _open_started(activity)
         modes = cycle_modes(self.appliance_type) or _CYCLE_MODES
-        if started and not activity.get("activityEnded") and self._live_int("machMode") in modes:
+        if started is not None and self._live_int("machMode") in modes:
             self._cycle_activity = CycleActivity(
                 programme=details.get("programName"),
                 # The app reads it on the dishwasher alone (`mapLastActivity`).
@@ -464,10 +474,7 @@ class HonAppliance:
     @property
     def activity_started(self) -> Any:
         """`activityStarted` of the open activity the context last read, else None."""
-        activity = self._attributes.get("activity")
-        if not isinstance(activity, dict) or activity.get("activityEnded"):
-            return None
-        return activity.get("activityStarted") or None
+        return _open_started(self._attributes.get("activity"))
 
     def cycle_edge_settled(self, edge: str, before: Any = None) -> bool:
         """Whether the context last read already shows `edge` (decision C3: otherwise
