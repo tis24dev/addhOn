@@ -46,6 +46,15 @@ _UNREAD = object()
 # decision 6).
 _CYCLE_MODES = frozenset({2, 3, 5, 8})
 _CYCLE_MODES_BY_TYPE = {"DW": _CYCLE_MODES | {4}}
+# A push that moves `machMode` into a cycle (execution 2, delayed start 5; the
+# dishwasher's 4 too) from outside one (pause 3 counts as inside: a resume is not a new
+# cycle), or out of one into the end 7 or selection 1, asks for a read of the context
+# (issue #130, decision C1): the activity that names the cycle comes only with it.
+_EDGE_START = {"DW": frozenset({2, 4, 5})}
+_EDGE_RUNNING = {"DW": frozenset({2, 3, 4, 5})}
+_EDGE_START_DEFAULT = frozenset({2, 5})
+_EDGE_RUNNING_DEFAULT = frozenset({2, 3, 5})
+_EDGE_END = frozenset({7, 1})
 
 
 def _programme_key(name: Any) -> Optional[str]:
@@ -382,6 +391,44 @@ class HonAppliance:
             )
         elif self._cycle_activity is not None and self._cycle_activity.code != code:
             self._cycle_activity = None
+
+    @property
+    def mach_mode(self) -> Optional[int]:
+        """The shadow's `machMode` as an int, None if absent or unreadable."""
+        return self._live_int("machMode")
+
+    def cycle_edge(self, before: Optional[int]) -> Optional[str]:
+        """"start" or "end" when `machMode` moved from `before` into or out of a cycle.
+
+        Called by the MQTT transport after a push applied its parameters (issue #130,
+        decision C1): the start of a cycle, or its end, is when the context's activity
+        changes, and a push never carries the activity. None for any other move, a
+        push that left `machMode` alone, and the types whose starts are not followed.
+        """
+        if self.appliance_type not in self._FOLLOWED_TYPES:
+            return None
+        after = self.mach_mode
+        if after is None or after == before:
+            return None
+        running = _EDGE_RUNNING.get(self.appliance_type, _EDGE_RUNNING_DEFAULT)
+        if after in _EDGE_START.get(self.appliance_type, _EDGE_START_DEFAULT) and (
+            before not in running
+        ):
+            return "start"
+        if after in _EDGE_END and before in running:
+            return "end"
+        return None
+
+    def cycle_edge_settled(self, edge: str) -> bool:
+        """Whether the context last read already shows `edge`: an open activity at the
+        start, none at the end (decision C3: otherwise it is read once more)."""
+        activity = self._attributes.get("activity")
+        is_open = (
+            isinstance(activity, dict)
+            and bool(activity.get("activityStarted"))
+            and not activity.get("activityEnded")
+        )
+        return is_open if edge == "start" else not is_open
 
     def _live_int(self, key: str) -> Optional[int]:
         """A shadow parameter as an int, None if absent or unreadable."""

@@ -95,6 +95,9 @@ APPLIANCE_LIST = budget(1)
 # load_attributes. load_statistics moved to the first coordinator refresh, which redoes
 # it anyway. The budget keeps a third hop of headroom for a lazy re-auth in between.
 APPLIANCE_ONE = budget(3)
+# One read of one appliance's context, asked by a push at the start or the end of a
+# cycle (transport/mqtt.py, issue #130): a single GET.
+CYCLE_READ = budget(1)
 
 # What ONE lazy sign-in can add to the request that triggers it: `_check_headers`
 # tries the refresh first and, when that leaves the tokens unusable, falls back to the

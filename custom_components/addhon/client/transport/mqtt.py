@@ -35,6 +35,7 @@ from typing import Any
 from awscrt import mqtt5
 from awsiot import mqtt5_client_builder  # type: ignore[import-untyped]
 
+from ..budget import CYCLE_READ, budgeted
 from .device import MOBILE_ID
 from .values import AWS_AUTHORIZER, AWS_ENDPOINT
 from ...command_diagnostics import observe_mqtt_update
@@ -68,6 +69,12 @@ _RECONNECT_AFTER_FAILED_TICKS = 3
 # rebuild failures, so a persistent 5xx from the AWS authorizer is not hammered
 # every tick. Reset to 0 on recovery; never masks (each failure still logs WARNING).
 _RECONNECT_BACKOFF_CAP = 60
+# The read of the context a push at the start or the end of a cycle asks for (issue
+# #130, decisions C2/C3): 3 s after the push, then once more 10 s later if the activity
+# does not show the change yet. Live read on mik's air conditioner, 2026-10-25: the
+# activity opened and closed with the shadow, readable 2 s after the change.
+_CYCLE_READ_DELAY = 3  # seconds
+_CYCLE_READ_RETRY = 10  # seconds
 # Consecutive in-place re-subscribe FAILURES (transport reports connected, but the
 # SUBACK keeps stalling) before the watchdog stops retrying the subscribe and escalates
 # to a full _start() rebuild. A half-open socket awscrt still believes is connected, or
@@ -194,6 +201,11 @@ class NativeMqttClient:
         # stop() is asynchronous). See _is_stale_generation.
         self._generation = 0
         self._watchdog_task: asyncio.Task[None] | None = None
+        # The loop `create()` ran on, the session's own, where the reads a push asks for
+        # are run (a push arrives on an awscrt thread); and the read pending or running
+        # for each appliance, by `id()` (see `_ask_cycle_read`).
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._cycle_reads: dict[int, Any] = {}
 
     @property
     def client(self) -> mqtt5.Client:
@@ -224,6 +236,7 @@ class NativeMqttClient:
                 pass
 
     async def create(self) -> "NativeMqttClient":
+        self._loop = asyncio.get_running_loop()
         try:
             self._set_setup_phase("mqtt_connect")
             try:
@@ -299,7 +312,67 @@ class NativeMqttClient:
             except Exception as err:  # pragma: no cover - defensive
                 _LOGGER.debug("addhOn: awaiting MQTT watchdog cancel failed: %s", err)
             self._watchdog_task = None
+        reads, self._cycle_reads = self._cycle_reads, {}
+        for read in reads.values():
+            read.cancel()
         self._stop_client()
+
+    # -- reads a push asks for -------------------------------------------------
+    def _ask_cycle_read(self, appliance: Any, before: Any) -> None:
+        """Read the context soon when a push started or ended a cycle (issue #130).
+
+        Runs on the awscrt thread. The activity that names the running programme comes
+        only with the context, read by the 60 s poll: without this, a cycle started on
+        the panel or from the app stayed unnamed for up to a minute. One appliance's
+        context alone (decision C2), on the session's loop, scheduled from here; a
+        newer edge replaces a read still pending for the same appliance.
+        """
+        edge_of = getattr(appliance, "cycle_edge", None)
+        edge = edge_of(before) if callable(edge_of) else None
+        loop = self._loop
+        if edge is None or loop is None or loop.is_closed():
+            return
+        key = id(appliance)
+        if (pending := self._cycle_reads.get(key)) is not None:
+            pending.cancel()
+        coro = self._cycle_read(appliance, edge)
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            # The loop closed between the check and the call: an unload. The poll is
+            # gone too, so there is nothing left to name.
+            coro.close()
+            return
+        self._cycle_reads[key] = future
+
+        def _forget(done: Any) -> None:
+            if self._cycle_reads.get(key) is done:
+                self._cycle_reads.pop(key, None)
+
+        future.add_done_callback(_forget)
+
+    async def _cycle_read(self, appliance: Any, edge: str) -> None:
+        """Read `appliance`'s context `_CYCLE_READ_DELAY` s after the push, and once more
+        `_CYCLE_READ_RETRY` s later if the activity does not show `edge` yet (decision
+        C3). Each read publishes like a push. Never raises: the poll is still there."""
+        try:
+            for delay in (_CYCLE_READ_DELAY, _CYCLE_READ_RETRY):
+                await asyncio.sleep(delay)
+                try:
+                    async with budgeted(CYCLE_READ):
+                        await appliance.update(force=True)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as err:  # noqa: BLE001 - the poll reads it anyway
+                    _LOGGER.debug("MQTT: cycle read failed: %s", type(err).__name__)
+                    return
+                self._hon.notify()
+                settled = getattr(appliance, "cycle_edge_settled", None)
+                if not callable(settled) or settled(edge):
+                    return
+        except asyncio.CancelledError:
+            # Replaced by a newer edge, or the client stopped.
+            raise
 
     # -- lifecycle callbacks ---------------------------------------------------
     # The callbacks that write self._connection are registered (in _start) bound to the
@@ -431,6 +504,9 @@ class NativeMqttClient:
                 # parsing parameters so the liveness is recorded even if a later param is
                 # dirty. mark_realtime_seen is positive-only and never raises.
                 appliance.mark_realtime_seen(payload.get("timestamp"))
+                # The cycle's state before this push: a move into or out of a cycle
+                # asks for a read of the context (see `_ask_cycle_read`).
+                mode_before = getattr(appliance, "mach_mode", None)
                 params = appliance.attributes.get("parameters", {})
                 raw_params = payload.get("parameters")
                 if not isinstance(raw_params, list):
@@ -471,6 +547,7 @@ class NativeMqttClient:
                 # The fields derived from the parameters (programName above all) follow
                 # the pushed values now, not at the next poll.
                 appliance.derive_attributes()
+                self._ask_cycle_read(appliance, mode_before)
                 try:
                     observe_mqtt_update(appliance, observed_values)
                 except Exception:
