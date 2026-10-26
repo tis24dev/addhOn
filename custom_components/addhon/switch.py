@@ -362,6 +362,8 @@ class HonProgramOptionSwitchDescription:
     param: str
     types: tuple[str, ...]
     icon: str | None = None
+    # False where the entity is experimental: created, but left for the user to enable.
+    enabled_default: bool = True
 
 
 # Candidate program-option switches (decomp/andre0512 superset), capability-gated by the
@@ -387,6 +389,10 @@ _PROGRAM_OPTION_SWITCHES: tuple[HonProgramOptionSwitchDescription, ...] = (
     HonProgramOptionSwitchDescription(key="prewash", param="prewash", types=_WASH_TYPES, icon="mdi:water-sync"),
     HonProgramOptionSwitchDescription(key="hygiene", param="hygiene", types=_HYGIENE_TYPES, icon="mdi:bacteria"),
     HonProgramOptionSwitchDescription(key="anticrease", param="anticrease", types=_WASH_TYPES, icon="mdi:tshirt-crew"),
+    # The newer name of `anticrease` (issue #138): a model has this or `anticrease`, never
+    # both. The app never sends it (telemetry only, apk2 decomp.txt @1550767), so it is
+    # offered disabled, to measure what the machine does with it.
+    HonProgramOptionSwitchDescription(key="anti_crease_status", param="antiCreaseStatus", types=_WASH_TYPES, icon="mdi:tshirt-crew", enabled_default=False),
     HonProgramOptionSwitchDescription(key="good_night", param="goodNight", types=_WASH_TYPES, icon="mdi:weather-night"),
     HonProgramOptionSwitchDescription(key="sterilization", param="sterilizationStatus", types=_DRY_TYPES, icon="mdi:bacteria-outline"),
     HonProgramOptionSwitchDescription(key="tumbling", param="tumblingStatus", types=_DRY_TYPES, icon="mdi:tumble-dryer"),
@@ -1383,6 +1389,7 @@ class HonProgramOptionSwitch(HonProgramOptionEntity, SwitchEntity):
         self._attr_unique_id = f"{appliance_id}_opt_{description.key}"
         if description.icon:
             self._attr_icon = description.icon
+        self._attr_entity_registry_enabled_default = description.enabled_default
         # Resolve on/off tokens from the device schema: off = "0" (or the lowest value), on =
         # the first value that is not off. Handles plain 0/1 AND value-pair ranges such as
         # antiCreaseTime[0,360]. Re-resolved per SELECTED program (issue #98): a program that

@@ -5,8 +5,10 @@
 purifier aroma and panel light, and the induction hob's intake limit."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import logging
+from typing import Any
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -60,6 +62,7 @@ from .const import (
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_OPTIONS,
     PROGRAM_PENDING_STORE,
+    STAIN_TYPE_MAP,
     STEAM_LEVEL_LABELS,
     TEMP_LEVEL_LABELS,
 )
@@ -76,6 +79,7 @@ from .ac_command import async_send_settings, param_allowed_values, settings_para
 from .program_options import (
     HonProgramOptionEntity,
     async_send_program,
+    has_stain_rules,
     is_settable_option,
     mark_pending_choice,
     normalize_code,
@@ -242,6 +246,10 @@ class HonProgramOptionSelectDescription:
     label_map: dict[str, str] | None = None
     drop: tuple[str, ...] = ()
     icon: str | None = None
+    # False where the entity is experimental: created, but left for the user to enable.
+    enabled_default: bool = True
+    # `excluded_when(appliance)` True means no entity for this appliance, whatever its schema.
+    excluded_when: Callable[[Any], bool] | None = None
 
 
 _WASH_TYPES = (APPLIANCE_WM, APPLIANCE_WD)
@@ -299,6 +307,14 @@ _PROGRAM_OPTION_SELECTS: tuple[HonProgramOptionSelectDescription, ...] = (
     HonProgramOptionSelectDescription(
         key="rinse_iterations", param="rinseIterations",
         translation_key="rinse_iterations", types=_WASH_TYPES, icon="mdi:water-plus",
+    ),
+    # Stain type (issue #138): the app's `stainOptions` codes, apk2 decomp.txt @997245-997350.
+    # No select where the catalogue ties a stain to a temperature (`has_stain_rules`): the
+    # order of the choices can then fail the start.
+    HonProgramOptionSelectDescription(
+        key="stain_type", param="stainType", translation_key="stain_type",
+        types=_WASH_TYPES, label_map=STAIN_TYPE_MAP, icon="mdi:liquid-spot",
+        enabled_default=False, excluded_when=has_stain_rules,
     ),
 )
 
@@ -580,6 +596,8 @@ async def async_setup_entry(
         created_opts: list[str] = []
         for desc in _PROGRAM_OPTION_SELECTS:
             if app_type not in desc.types:
+                continue
+            if desc.excluded_when is not None and desc.excluded_when(appliance):
                 continue
             if not HonProgramOptionSelect.supports(appliance, desc.param, desc.drop):
                 continue
@@ -935,6 +953,7 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
         self._attr_unique_id = f"{appliance_id}_opt_{description.key}"
         if description.icon:
             self._attr_icon = description.icon
+        self._attr_entity_registry_enabled_default = description.enabled_default
         self._label_map = description.label_map or {}
         # The option set is rebuilt whenever the resolved parameter changes -- which is what
         # selecting another program does, since each startProgram category carries its own

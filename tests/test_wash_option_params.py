@@ -41,6 +41,9 @@ _DW_FIXTURE = REPO / "tests" / "fixtures" / "dw_haier_xs6b0s3fsb" / "startprogra
 # Issue #112: two washers of the newer schemas, from the reporters' beta7 diagnostics.
 _WM_HAIER_FIXTURE = REPO / "tests" / "fixtures" / "wm_haier_hw80_b14959tu1s" / "startprogram_params.json"
 _WM_CANDY_HQD_FIXTURE = REPO / "tests" / "fixtures" / "wm_candy_bp49sbl8fr" / "startprogram_params.json"
+# Issue #138: a Haier HW90 of the same HQD family, whose schema offers the stain type and
+# the anti-crease status.
+_WM_HW90_FIXTURE = REPO / "tests" / "fixtures" / "wm_haier_hw90_b14387tu1s" / "startprogram_params.json"
 
 
 def _mod(name: str) -> types.ModuleType:
@@ -163,11 +166,14 @@ from custom_components.addhon.const import (  # noqa: E402
     APPLIANCE_WD,
     APPLIANCE_WM,
     DIVERTER_LEVEL_LABELS,
+    STAIN_TYPE_MAP,
 )
 from custom_components.addhon.program_options import (  # noqa: E402
     couple_half_load_to_basket,
+    has_stain_rules,
     is_half_load_with_diverter,
     is_settable_option,
+    normalize_code,
     option_choices,
     startprogram_option_param,
 )
@@ -282,6 +288,7 @@ class CatalogPinTest(unittest.TestCase):
         "tumbling": "tumblingStatus",
         "permanent_press": "permanentPressStatus",
         "anti_crease_time": "antiCreaseTime",
+        "anti_crease_status": "antiCreaseStatus",  # washers, issue #138
         # Washers of the newer schemas (issue #112).
         "night_wash": "nightWashStatus",
         "silent_mode": "silentMode",
@@ -306,6 +313,7 @@ class CatalogPinTest(unittest.TestCase):
         ("wash_temp", "temp"),
         ("diverter_level", "diverterLevel"),  # dishwasher, issue #106
         ("rinse_iterations", "rinseIterations"),  # washers, issue #112
+        ("stain_type", "stainType"),  # washers, issue #138
     }
     _PINNED_NUMBERS = {
         "delay_time": "delayTime",
@@ -554,6 +562,11 @@ class NewerWasherSchemaTest(unittest.TestCase):
             "anticrease", "delayTime", "fastMode", "intensiveMode", "nightWashStatus",
             "permanentPressStatus", "prewash", "silentMode", "spinSpeed", "temp",
         },
+        # Haier HW90-B14387TU1-S, category `iot_wash_bed_linen` (issue #138).
+        _WM_HW90_FIXTURE: {
+            "antiCreaseStatus", "delayTime", "haier_SoakPrewashSelection", "nightWashStatus",
+            "permanentPressStatus", "rinseIterations", "spinSpeed", "stainType", "temp",
+        },
     }
 
     def _built(self, fixture):
@@ -604,6 +617,118 @@ class NewerWasherSchemaTest(unittest.TestCase):
         self.assertEqual(rinses, ["0", "1", "2", "3", "4", "5"])
         wash_time = option_choices(startprogram_option_param(appliance, "mainWashTime"))
         self.assertEqual(wash_time, [str(m) for m in range(5, 55, 5)])
+
+
+class StainAndAntiCreaseTest(unittest.TestCase):
+    """Issue #138: the stain type select and the anti-crease status switch.
+
+    Both stand on the HW90-B14387TU1-S schema (`stainType` a range 0..26, `antiCreaseStatus`
+    a 0/1 range), and both are disabled by default: the app offers them, the machine's
+    reaction to them from here is still to be measured.
+    """
+
+    def _data(self):
+        appliance, _ = _build_appliance(_WM_HW90_FIXTURE)
+        data = {"type": APPLIANCE_WM, "appliance": appliance, "name": "Washer", "attributes": {}}
+        return appliance, data
+
+    def _switches(self):
+        _, data = self._data()
+        coordinator = types.SimpleNamespace(data={"wm1": data}, hass=None)
+        return switch._appliance_switches(coordinator, "wm1", data, None)
+
+    def _select(self, key, narrow_stain_to=None):
+        appliance, data = self._data()
+        if narrow_stain_to is not None:
+            appliance.commands["startProgram"].parameters["stainType"].max = narrow_stain_to
+        coordinator = types.SimpleNamespace(data={"wm1": data}, hass=None)
+        desc = next(d for d in select._PROGRAM_OPTION_SELECTS if d.key == key)
+        return select.HonProgramOptionSelect(coordinator, "wm1", desc, None)
+
+    def test_the_stain_select_offers_the_app_codes(self) -> None:
+        stain = self._select("stain_type")
+        self.assertEqual(stain.options, list(STAIN_TYPE_MAP.values()))
+        self.assertEqual(stain._key_to_raw["none"], "0")
+        self.assertEqual(stain._key_to_raw["sweat"], "19")
+        self.assertEqual(stain._key_to_raw["fruit"], "26")
+
+    def test_a_narrower_stain_range_offers_only_its_codes(self) -> None:
+        # The select offers what the range allows, never the whole map.
+        stain = self._select("stain_type", narrow_stain_to=5)
+        self.assertEqual(stain.options, [STAIN_TYPE_MAP[str(c)] for c in range(6)])
+
+    def test_the_anti_crease_switch_is_off_0_on_1(self) -> None:
+        built = [e for e in self._switches() if hasattr(e, "_desc")]
+        anti = next(e for e in built if e._desc.key == "anti_crease_status")
+        self.assertEqual((anti._off, anti._on), ("0", "1"))
+        # A model has this or `anticrease`, never both: the HW90 has no `anticrease`.
+        self.assertFalse(any(e._desc.key == "anticrease" for e in built))
+
+    def test_the_two_new_entities_are_disabled_by_default(self) -> None:
+        built = {e._attr_unique_id: e for e in self._switches() if hasattr(e, "_desc")}
+        self.assertIs(built["wm1_opt_anti_crease_status"]._attr_entity_registry_enabled_default, False)
+        stain = self._select("stain_type")
+        self.assertEqual(stain._attr_unique_id, "wm1_opt_stain_type")
+        self.assertIs(stain._attr_entity_registry_enabled_default, False)
+        self.assertIs(self._select("rinse_iterations")._attr_entity_registry_enabled_default, True)
+
+    @staticmethod
+    def _with_rules(appliance, group):
+        command = appliance.commands["startProgram"]
+        command._ancillary_group = group
+        command._categories = {"cat": command}
+        return appliance
+
+    def test_has_stain_rules(self) -> None:
+        for group in (
+            {"programRules": {"enumValues": {"temp": {"stainType": {"1": 35}}}}},
+            {"programRules": {"fixedValue": {"addWashDefaultTime": {"stainType": {"1": 10}}}}},
+            {"programRules": {"enumValues": {"stainType": {"native": {"wine": 1}}}}},
+        ):
+            with self.subTest(group=group):
+                appliance, _ = self._data()
+                self.assertTrue(has_stain_rules(self._with_rules(appliance, group)))
+        appliance, _ = self._data()
+        self.assertFalse(has_stain_rules(appliance))
+        self.assertFalse(has_stain_rules(types.SimpleNamespace(commands={})))
+        self.assertFalse(has_stain_rules(types.SimpleNamespace()))
+        for odd in (None, "x", {"programRules": None}, {"programRules": {"enumValues": 3}}):
+            with self.subTest(odd=odd):
+                appliance, _ = self._data()
+                self.assertFalse(has_stain_rules(self._with_rules(appliance, odd)))
+
+    @staticmethod
+    def _created_by_select_setup(appliance, data) -> set[str]:
+        import asyncio
+
+        from custom_components.addhon.const import DOMAIN
+
+        coordinator = types.SimpleNamespace(data={"wm1": data}, hass=None)
+        hass = types.SimpleNamespace(
+            data={DOMAIN: {"e1": {"coordinator": coordinator, "client": None}}}
+        )
+        added: list = []
+        asyncio.run(select.async_setup_entry(hass, types.SimpleNamespace(entry_id="e1"), added.extend))
+        return {str(e._attr_unique_id) for e in added}
+
+    def test_no_stain_select_where_stain_rules_exist(self) -> None:
+        desc = next(d for d in select._PROGRAM_OPTION_SELECTS if d.key == "stain_type")
+        self.assertIs(desc.excluded_when, has_stain_rules)
+        appliance, data = self._data()
+        self.assertIn("wm1_opt_stain_type", self._created_by_select_setup(appliance, data))
+        rules = {"programRules": {"enumValues": {"temp": {"stainType": {"1": 35}}}}}
+        self._with_rules(appliance, rules)
+        created = self._created_by_select_setup(appliance, data)
+        self.assertNotIn("wm1_opt_stain_type", created)
+        self.assertIn("wm1_opt_rinse_iterations", created)
+
+    def test_an_untouched_start_sends_zero_for_both(self) -> None:
+        # The values the active category holds when nothing was buffered: the default of
+        # both ranges, which is what a start sends.
+        appliance, _ = self._data()
+        params = appliance.commands["startProgram"].parameters
+        self.assertEqual(normalize_code(params["stainType"].value), "0")
+        self.assertEqual(normalize_code(params["antiCreaseStatus"].value), "0")
 
 
 if __name__ == "__main__":

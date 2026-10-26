@@ -5757,7 +5757,10 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
             # 621 with the quick wash and intensive switches (#112): two rows, same shape.
             # 623 with the Keep Fresh phase binary (#112): one read name,
             # `freshAirStatus`, on WM and on WD.
-            623,
+            # 635 with the stain type select and the anti-crease status switch (#138):
+            # two rows, three names each (the parameter, its startProgram. read, the
+            # write) on WM and on WD.
+            635,
             seen,
             f"the sweep changed to {seen} names; re-measure and update this number "
             f"deliberately, naming what joined or left it",

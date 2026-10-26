@@ -11,6 +11,11 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **New stain-type dropdown and anti-crease switch on washers whose schema offers them**
+  (#138). Both are disabled by default: enable them by hand in the entity settings. They
+  are experimental, added to measure what the machine does with them. The stain dropdown
+  is not offered on a washer whose programmes tie a stain to a temperature, because there
+  the order of the choices can make the start fail.
 - **Picking a programme now presets the options that programme calls for** (#98). With a
   programme selected and an option you have not touched, the switches, the dropdowns and
   the delayed start show what THAT programme prescribes instead of the settings the last

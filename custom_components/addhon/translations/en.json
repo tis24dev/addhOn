@@ -988,6 +988,9 @@
       "anticrease": {
         "name": "Anti-crease"
       },
+      "anti_crease_status": {
+        "name": "Anti-crease"
+      },
       "good_night": {
         "name": "Good night"
       },
@@ -1207,6 +1210,38 @@
       },
       "rinse_iterations": {
         "name": "Number of rinses"
+      },
+      "stain_type": {
+        "name": "Stain type",
+        "state": {
+          "none": "None",
+          "wine": "Wine",
+          "grass": "Grass",
+          "soil": "Soil",
+          "blood": "Blood",
+          "milk": "Milk",
+          "cooking_oil": "Cooking oil",
+          "tea": "Tea",
+          "coffee": "Coffee",
+          "chocolate": "Chocolate",
+          "lip_gloss": "Lip gloss",
+          "curry": "Curry",
+          "milk_tea": "Milk tea",
+          "chili_oil": "Chili oil",
+          "blue_ink": "Blue ink",
+          "color_pencil": "Color pencil",
+          "shoe_cream": "Shoe cream",
+          "oil_pastel": "Oil pastel",
+          "blueberry": "Blueberry",
+          "sweat": "Sweat",
+          "egg": "Egg",
+          "ketchup": "Ketchup",
+          "baby_food": "Baby food",
+          "soy_sauce": "Soy sauce",
+          "bean_paste": "Bean paste",
+          "chili_sauce": "Chili sauce",
+          "fruit": "Fruit"
+        }
       },
       "fan_direction_vertical": {
         "name": "Vertical fan direction",

@@ -271,6 +271,41 @@ def startprogram_option_param(appliance, name: str):
     return None
 
 
+def has_stain_rules(appliance) -> bool:
+    """True when a programme of the appliance ties a stain to a temperature or a wash time.
+
+    The catalogue says so in a category's `ancillaryParameters.programRules`: a
+    `temp.stainType` or `addWashDefaultTime.stainType` map, or a `stainType` key, in its
+    `enumValues` or `fixedValue` node (the same nodes the app's `checkStainConditions` and
+    `getStainsElement` read, apk2 decomp.txt @1390611, @1391736). Where they exist the
+    stain is not a free option, because the order of the choices decides whether the start
+    is valid, so no stain select is offered there (issue #138). Never raises: any odd
+    shape reads as False."""
+    try:
+        command = startprogram_command(appliance)
+        categories = getattr(command, "categories", None)
+        if not isinstance(categories, dict):
+            return False
+        for category in categories.values():
+            group = getattr(category, "ancillary_group", None)
+            rules = group.get("programRules") if isinstance(group, dict) else None
+            if not isinstance(rules, dict):
+                continue
+            for branch_name in ("enumValues", "fixedValue"):
+                branch = rules.get(branch_name)
+                if not isinstance(branch, dict):
+                    continue
+                if "stainType" in branch:
+                    return True
+                for target in ("temp", "addWashDefaultTime"):
+                    node = branch.get(target)
+                    if isinstance(node, dict) and "stainType" in node:
+                        return True
+    except Exception:  # noqa: BLE001 - a gate must never take the setup down
+        return False
+    return False
+
+
 def option_range(param) -> tuple[float, float, float] | None:
     """(min, max, step) of a range parameter, or None if it is not a range.
 
