@@ -344,7 +344,10 @@ class NativeMqttClient:
         record: dict[str, Any] = {"edge": edge, "asked_at": _utc_now(), "reads": []}
         if callable(note := getattr(appliance, "note_cycle_read", None)):
             note(record)
-        coro = self._cycle_read(appliance, edge, record)
+        # The activity open when the push came: at the start, one the cloud has not
+        # replaced yet is the previous cycle's (see `cycle_edge_settled`).
+        before = getattr(appliance, "activity_started", None)
+        coro = self._cycle_read(appliance, edge, record, before)
         try:
             future = asyncio.run_coroutine_threadsafe(coro, loop)
         except RuntimeError:
@@ -361,7 +364,7 @@ class NativeMqttClient:
         future.add_done_callback(_forget)
 
     async def _cycle_read(
-        self, appliance: Any, edge: str, record: dict[str, Any]
+        self, appliance: Any, edge: str, record: dict[str, Any], before: Any = None
     ) -> None:
         """Read `appliance`'s context `_CYCLE_READ_DELAY` s after the push, and once more
         `_CYCLE_READ_RETRY` s later if the activity does not show `edge` yet (decision
@@ -384,7 +387,7 @@ class NativeMqttClient:
                     return
                 self._hon.notify()
                 settled = getattr(appliance, "cycle_edge_settled", None)
-                read["settled"] = not callable(settled) or bool(settled(edge))
+                read["settled"] = not callable(settled) or bool(settled(edge, before))
                 if read["settled"]:
                     record["outcome"] = "settled"
                     return

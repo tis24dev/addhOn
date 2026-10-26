@@ -437,16 +437,23 @@ class HonAppliance:
             return "end"
         return None
 
-    def cycle_edge_settled(self, edge: str) -> bool:
-        """Whether the context last read already shows `edge`: an open activity at the
-        start, none at the end (decision C3: otherwise it is read once more)."""
+    @property
+    def activity_started(self) -> Any:
+        """`activityStarted` of the open activity the context last read, else None."""
         activity = self._attributes.get("activity")
-        is_open = (
-            isinstance(activity, dict)
-            and bool(activity.get("activityStarted"))
-            and not activity.get("activityEnded")
-        )
-        return is_open if edge == "start" else not is_open
+        if not isinstance(activity, dict) or activity.get("activityEnded"):
+            return None
+        return activity.get("activityStarted") or None
+
+    def cycle_edge_settled(self, edge: str, before: Any = None) -> bool:
+        """Whether the context last read already shows `edge` (decision C3: otherwise
+        it is read once more): at the start an open activity other than `before`, the
+        one open when the push came; at the end none. An activity the cloud has not
+        replaced yet is the previous cycle's, not this one (review of PR #139, S2)."""
+        started = self.activity_started
+        if edge == "start":
+            return started is not None and started != before
+        return started is None
 
     def _live_int(self, key: str) -> Optional[int]:
         """A shadow parameter as an int, None if absent or unreadable."""

@@ -111,6 +111,17 @@ class CycleEdgeTest(unittest.TestCase):
         app.attributes["activity"] = _open_activity() | {"activityEnded": "2026-10-16T13:30:00Z"}
         self.assertTrue(app.cycle_edge_settled("end"))
 
+    def test_the_previous_cycle_s_activity_does_not_settle_a_start(self) -> None:
+        # Review of PR #139 (S2): the cloud still shows the activity of the cycle
+        # before, which was open when the push came.
+        app = self._appliance("WM")
+        app.attributes["activity"] = _open_activity()
+        before = app.activity_started
+        self.assertEqual("2026-10-16T12:25:03Z", before)
+        self.assertFalse(app.cycle_edge_settled("start", before))
+        app.attributes["activity"] = _open_activity() | {"activityStarted": "2026-10-16T14:00:00Z"}
+        self.assertTrue(app.cycle_edge_settled("start", before))
+
 
 class _CycleAppliance(FakeAppliance):
     """A pushed appliance whose edge and read the test sets."""
@@ -123,12 +134,16 @@ class _CycleAppliance(FakeAppliance):
         self.settled = list(settled)
         self.reads = 0
         self.read_error = None
+        self.befores = []
 
     def cycle_edge(self, before):
         self.edges.append(before)
         return self.edge
 
-    def cycle_edge_settled(self, edge):
+    activity_started = "2026-10-16T10:00:00Z"
+
+    def cycle_edge_settled(self, edge, before=None):
+        self.befores.append(before)
         return self.settled.pop(0) if self.settled else True
 
     async def update(self, force=False):
@@ -167,6 +182,8 @@ class CycleReadTest(unittest.TestCase):
         self.assertEqual(1, app.reads)
         self.assertEqual(2, hon.notified)
         self.assertEqual({}, client._cycle_reads)
+        # The activity open when the push came is what the read is judged against.
+        self.assertEqual(["2026-10-16T10:00:00Z"], app.befores)
 
     def test_a_read_that_does_not_show_the_edge_is_tried_once_more(self) -> None:
         app = _CycleAppliance(settled=(False, False))
@@ -258,6 +275,48 @@ class PanelStartEndToEndTest(unittest.TestCase):
         loop.run_until_complete(asyncio.sleep(0.05))
         self.assertEqual("hqd_cottons", app.attributes["programName"])  # the read
         self.assertEqual(2, hon.notified)
+
+    def test_a_start_read_that_still_shows_the_previous_cycle_reads_again(self) -> None:
+        # Review of PR #139 (S2): Cottons ran from the panel; the cloud has not cleared
+        # its activity when Perfect White starts on the same 115.
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        commands = {
+            "applianceModel": {"options": {}},
+            "startProgram": {
+                "PROGRAMS.WM_WD.HQD_COTTONS": _programme("115"),
+                "PROGRAMS.WM_WD.IOT_WASH_PERFECT_WHITE": _programme("115"),
+            },
+            "dictionaryId": 1,
+        }
+        cloud = CloudDouble(commands, [], _context("2", _open_activity()))
+        app = factory._native_engine_appliance_cls()(
+            cloud,
+            {"applianceTypeName": "WM", "applianceModelId": 1, "macAddress": "aa",
+             "topics": {"subscribe": [_TOPIC]}},
+            zone=0,
+        )
+        loop.run_until_complete(app.load_commands())
+        loop.run_until_complete(app.load_attributes())
+        app.attributes["parameters"]["machMode"].update({"parNewVal": "7"})  # it ended
+        reads = []
+        newer = _open_activity() | {"activityStarted": "2026-10-16T14:00:00Z", "attributes": {
+            "programName": "IOT_WASH_PERFECT_WHITE", "channel": "mobileApp"}}
+
+        async def load_attributes(appliance):
+            reads.append(len(reads))
+            # The first read still shows Cottons; the retry shows the new cycle.
+            return _context("2", _open_activity() if len(reads) == 1 else newer)
+
+        cloud.load_attributes = load_attributes
+        client = NativeMqttClient(FakeHon([app]), "MID")
+        client._loop = loop
+        client._on_message(_packet(_TOPIC, {"parameters": [
+            {"parName": "machMode", "parValue": "2", "parNewVal": "2"}]}))
+        loop.run_until_complete(asyncio.sleep(0.05))
+        self.assertEqual(2, len(reads))
+        self.assertEqual("iot_wash_perfect_white", app.attributes["programName"])
+        self.assertEqual("settled", app.cycle_read["outcome"])
 
 
 if __name__ == "__main__":
