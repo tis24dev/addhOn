@@ -397,7 +397,10 @@ class NativeMqttClient:
                 record["reads"].append(read)
                 try:
                     async with budgeted(CYCLE_READ):
-                        await appliance.update(force=True)
+                        # False: an answer older than one already applied (a poll that
+                        # overlapped), dropped by `load_attributes` -- nothing to
+                        # publish, and not a sight of the edge (review of PR #139, S1).
+                        applied = await appliance.update(force=True)
                 except asyncio.CancelledError:
                     raise
                 except Exception as err:  # noqa: BLE001 - the poll reads it anyway
@@ -405,6 +408,9 @@ class NativeMqttClient:
                     read["error"] = type(err).__name__
                     record["outcome"] = "failed"
                     return
+                if applied is False:
+                    read["dropped"] = True
+                    continue
                 self._hon.notify()
                 settled = getattr(appliance, "cycle_edge_settled", None)
                 read["settled"] = not callable(settled) or bool(settled(edge, before))

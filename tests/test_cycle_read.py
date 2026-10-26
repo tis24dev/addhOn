@@ -145,12 +145,16 @@ class _CycleAppliance(FakeAppliance):
         self.reads = 0
         self.read_error = None
         self.befores = []
+        self.applied = []  # what each update() answers, None once exhausted
 
     def cycle_edge(self, before):
         self.edges.append(before)
         return self.edge
 
     activity_started = "2026-10-16T10:00:00Z"
+
+    def note_cycle_read(self, record):
+        self.cycle_read_record = record
 
     def cycle_edge_settled(self, edge, before=None):
         self.befores.append(before)
@@ -161,6 +165,7 @@ class _CycleAppliance(FakeAppliance):
         self.reads += 1
         if self.read_error is not None:
             raise self.read_error
+        return self.applied.pop(0) if self.applied else None
 
 
 @patch.object(mqtt_module, "_CYCLE_READ_DELAY", 0)
@@ -201,6 +206,18 @@ class CycleReadTest(unittest.TestCase):
         self._settle()
         self.assertEqual(2, app.reads)
         self.assertEqual(3, hon.notified)
+
+    def test_an_answer_dropped_as_older_is_read_again_and_not_published(self) -> None:
+        # Review of PR #139 (S1): the poll overlapped and its newer answer won.
+        app = _CycleAppliance(settled=(True,))
+        app.applied = [False, True]
+        client, hon = self._push(app)
+        self._settle()
+        self.assertEqual(2, app.reads)
+        self.assertEqual(2, hon.notified)  # the push, then the retry only
+        reads = app.cycle_read_record["reads"]
+        self.assertTrue(reads[0]["dropped"])
+        self.assertNotIn("dropped", reads[1])
 
     def test_no_edge_no_read(self) -> None:
         app = _CycleAppliance(edge=None)

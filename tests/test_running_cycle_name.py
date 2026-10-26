@@ -269,6 +269,34 @@ class OverlappingReadsTest(_Harness):
         self.assertEqual("hqd_cottons", app.attributes["programName"])
         self.assertEqual("HQD_COTTONS", app.cycle_activity.programme)
 
+    def test_an_activity_older_than_the_cycle_kept_does_not_replace_it(self) -> None:
+        app = self._denim_last_started()
+        newer = _activity("IOT_WASH_PERFECT_WHITE", "mobileApp", started="2026-10-16T14:00:00Z")
+        self._read(app, {"activity": newer}, machMode="2")
+        older = _activity("HQD_COTTONS", "appliance")  # began at 12:25:03
+        self.assertEqual("iot_wash_perfect_white", self._read(app, {"activity": older}))
+        self.assertEqual("2026-10-16T14:00:00Z", app.cycle_activity.started)
+        # A start that cannot be read is taken, as before.
+        unreadable = _activity("HQD_COTTONS", "appliance", started="not a time")
+        self.assertEqual("hqd_cottons", self._read(app, {"activity": unreadable}))
+
+    def test_update_says_whether_its_answer_was_applied(self) -> None:
+        app = self._denim_last_started()
+        self.assertTrue(self.loop.run_until_complete(app.update(force=True)))
+        self.assertIsNone(self.loop.run_until_complete(app.update()))  # under 5 s
+        newer = _shadow("115", "2") | {"activity": {}, "commandHistory": None}
+        older = _shadow("115", "1") | {"activity": {}, "commandHistory": None}
+        self._gated(app, [older, newer])
+
+        async def overlap():
+            first = asyncio.ensure_future(app.update(force=True))
+            await asyncio.sleep(0)
+            second = await app.update(force=True)
+            self.gate.set()
+            return await first, second
+
+        self.assertEqual((False, True), self.loop.run_until_complete(overlap()))
+
     def test_a_value_pushed_during_a_read_is_kept(self) -> None:
         app = self._denim_last_started()
         # The answer was taken before the push: machMode 1, a new prCode alongside.

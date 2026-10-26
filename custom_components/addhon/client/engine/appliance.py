@@ -417,7 +417,14 @@ class HonAppliance:
         # (review of PR #139, S2).
         started = _open_started(activity)
         modes = cycle_modes(self.appliance_type) or _CYCLE_MODES
-        if started is not None and self._live_int("machMode") in modes:
+        # An activity that began before the cycle kept is an answer older than the one
+        # that brought it, whatever read it came with: it says nothing on what runs
+        # (review of PR #139, S1).
+        if (
+            started is not None
+            and self._live_int("machMode") in modes
+            and not self._older_than_kept(started)
+        ):
             self._cycle_activity = CycleActivity(
                 programme=details.get("programName"),
                 # The app reads it on the dishwasher alone (`mapLastActivity`).
@@ -429,8 +436,25 @@ class HonAppliance:
                 code=code,
                 started=started,
             )
-        elif self._cycle_activity is not None and self._cycle_activity.code != code:
+            return
+        # No open activity to take (none, ended, read at rest, or older than the cycle
+        # kept): the cycle kept stays while the shadow keeps its code (decision S1 of
+        # 2026-10-25) and goes once it has left it. The previous cycle's activity is not
+        # dropped at a new start: the start read settles only on another one (S2).
+        if self._cycle_activity is not None and self._cycle_activity.code != code:
             self._cycle_activity = None
+
+    def _older_than_kept(self, started: Any) -> bool:
+        """Whether an activity that began at `started` began before the cycle kept.
+
+        Both are the cloud's own `activityStarted`, so one clock; when either cannot be
+        read the activity is taken, as before.
+        """
+        kept = self._cycle_activity
+        if kept is None:
+            return False
+        new, old = parse_cloud_timestamp(started), parse_cloud_timestamp(kept.started)
+        return new is not None and old is not None and new < old
 
     def note_cycle_read(self, record: dict[str, Any]) -> None:
         """Keep the record of the read a push just asked for (issue #130, decision 9).
@@ -766,7 +790,7 @@ class HonAppliance:
         self._appliance_model = hydration.appliance_model
         self.sync_params_to_command("settings")
 
-    async def load_attributes(self) -> None:
+    async def load_attributes(self) -> bool:
         # Two reads of the context can overlap -- the poll, a read a cycle edge asked
         # for, the refresh after a command -- and answer out of order. An answer older
         # than one already applied is dropped whole, and a parameter a push delivered
@@ -779,7 +803,7 @@ class HonAppliance:
         attributes = await self.api.load_attributes(self)
         if order < self._context_read_applied:
             _LOGGER.debug("Context read answered after a newer one: dropped")
-            return
+            return False
         self._context_read_applied = order
         activity = attributes.get("activity", _UNREAD)
         for name, values in attributes.pop("shadow", {}).get("parameters", {}).items():
@@ -851,6 +875,7 @@ class HonAppliance:
             observe_shadow_read(self)
         except Exception:
             _LOGGER.debug("Delivery check failed", exc_info=True)
+        return True
 
     def derive_attributes(self) -> None:
         """Re-run the per-type derivations (programName, active, pause, available).
@@ -867,18 +892,25 @@ class HonAppliance:
         self._statistics = await self.api.load_statistics(self)
         self._statistics |= await self.api.load_maintenance(self)
 
-    async def update(self, force: bool = False) -> None:
+    async def update(self, force: bool = False) -> Optional[bool]:
+        """Read the context, unless the last read is under 5 s old and not `force`d.
+
+        Returns whether the answer was applied (False: a newer read's answer already
+        was, see `load_attributes`), None when nothing was read.
+        """
         now = datetime.now()
         min_age = now - timedelta(seconds=self._MINIMAL_UPDATE_INTERVAL)
-        if force or not self._last_update or self._last_update < min_age:
-            self._last_update = now
-            follow = self.appliance_type in self._FOLLOWED_TYPES
-            if follow:
-                self._apply_followed_list()
-            await self.load_attributes()
-            self.sync_params_to_command("settings")
-            if follow:
-                self._follow_new_cycle()
+        if not (force or not self._last_update or self._last_update < min_age):
+            return None
+        self._last_update = now
+        follow = self.appliance_type in self._FOLLOWED_TYPES
+        if follow:
+            self._apply_followed_list()
+        applied = await self.load_attributes()
+        self.sync_params_to_command("settings")
+        if follow:
+            self._follow_new_cycle()
+        return applied
 
     # --- derived views ---
     @property
