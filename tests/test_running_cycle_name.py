@@ -229,6 +229,70 @@ class PanelStartOnASharedCodeTest(_Harness):
         self.assertEqual("hqd_cottons", self._read(app))
 
 
+class OverlappingReadsTest(_Harness):
+    """Review of PR #139 (S1): reads of the context that overlap, and pushes during one.
+
+    The poll and the read a cycle edge asks for can be in flight together and answer
+    out of order; a push can land while a read is in flight, and the read's answer was
+    taken before it.
+    """
+
+    def _gated(self, app, answers, gate_first=True):
+        """Serve `answers` in order; the first waits for `self.gate` when gated."""
+        self.gate = asyncio.Event()
+        queue = list(answers)
+
+        async def load_attributes(appliance):
+            answer = queue.pop(0)
+            if gate_first and answer is answers[0]:
+                await self.gate.wait()
+            return json.loads(json.dumps(answer))
+
+        self.cloud.load_attributes = load_attributes
+
+    def test_an_answer_older_than_one_applied_is_dropped(self) -> None:
+        app = self._denim_last_started()
+        older = _shadow("115", "1") | {"activity": {}, "commandHistory": None}
+        newer = _shadow("115", "2") | {
+            "activity": _activity("HQD_COTTONS", "appliance"), "commandHistory": None}
+        self._gated(app, [older, newer])
+
+        async def overlap():
+            poll = asyncio.ensure_future(app.load_attributes())  # started first...
+            await asyncio.sleep(0)
+            await app.load_attributes()  # ...answered last
+            self.gate.set()
+            await poll
+
+        self.loop.run_until_complete(overlap())
+        self.assertEqual("2", str(app.attributes["parameters"]["machMode"]))
+        self.assertEqual("hqd_cottons", app.attributes["programName"])
+        self.assertEqual("HQD_COTTONS", app.cycle_activity.programme)
+
+    def test_a_value_pushed_during_a_read_is_kept(self) -> None:
+        app = self._denim_last_started()
+        # The answer was taken before the push: machMode 1, a new prCode alongside.
+        stale = _shadow("124", "1") | {"activity": {}, "commandHistory": None}
+        self._gated(app, [stale])
+
+        async def push_during_the_read():
+            read = asyncio.ensure_future(app.load_attributes())
+            await asyncio.sleep(0)
+            self._push(app, machMode="2")
+            self.gate.set()
+            await read
+
+        self.loop.run_until_complete(push_during_the_read())
+        self.assertEqual("2", str(app.attributes["parameters"]["machMode"]))
+        self.assertEqual("124", str(app.attributes["parameters"]["prCode"]))
+
+    def test_a_value_pushed_before_a_read_is_replaced_by_it(self) -> None:
+        app = self._denim_last_started()
+        self._push(app, machMode="2")
+        self._read(app, machMode="3")
+        self.assertEqual("3", str(app.attributes["parameters"]["machMode"]))
+
+
 class AppStartNamedByItsActivityTest(_Harness):
     """Decision 2: the app's own starts are named by the activity too."""
 

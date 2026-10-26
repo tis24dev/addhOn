@@ -69,6 +69,16 @@ def _programme_key(name: Any) -> Optional[str]:
     return name.strip().rsplit(".", 1)[-1].upper()
 
 
+def _pushed_since(attribute: Any, instant: datetime) -> bool:
+    """Whether a push delivered `attribute`'s value after `instant` (HA's clock)."""
+    received = getattr(attribute, "received_at", None)
+    return (
+        getattr(attribute, "received_via", None) == "mqtt"
+        and isinstance(received, datetime)
+        and received > instant
+    )
+
+
 def _newest_start(history: Any) -> dict[str, Any]:
     """The newest `startProgram` body a `/history` list holds, {} without one."""
     for entry in history if isinstance(history, list) else ():
@@ -152,6 +162,10 @@ class HonAppliance:
         # The last read a push at the start or end of a cycle asked for, as the MQTT
         # transport records it (see `note_cycle_read`); None until the first.
         self._cycle_read: Optional[dict[str, Any]] = None
+        # Context reads by start order: the last one started, and the last one whose
+        # answer was applied (see `load_attributes`).
+        self._context_reads_started = 0
+        self._context_read_applied = 0
         self._command_payload: dict[str, str] = {}
         self._history_recovery: dict[str, str] = {}
         # (key, shadow value) pairs already reported as unsyncable: sync runs on every
@@ -736,11 +750,27 @@ class HonAppliance:
         self.sync_params_to_command("settings")
 
     async def load_attributes(self) -> None:
+        # Two reads of the context can overlap -- the poll, a read a cycle edge asked
+        # for, the refresh after a command -- and answer out of order. An answer older
+        # than one already applied is dropped whole, and a parameter a push delivered
+        # after this read started keeps the pushed value: the answer was taken before it
+        # (review of PR #139, S1). Every read runs on the client loop, so the counters
+        # need no lock.
+        self._context_reads_started += 1
+        order = self._context_reads_started
+        asked = datetime.now(timezone.utc)
         attributes = await self.api.load_attributes(self)
+        if order < self._context_read_applied:
+            _LOGGER.debug("Context read answered after a newer one: dropped")
+            return
+        self._context_read_applied = order
         activity = attributes.get("activity", _UNREAD)
         for name, values in attributes.pop("shadow", {}).get("parameters", {}).items():
             if name in self._attributes.get("parameters", {}):
-                self._attributes["parameters"][name].update(values)
+                held = self._attributes["parameters"][name]
+                if _pushed_since(held, asked):
+                    continue
+                held.update(values)
             else:
                 self._attributes.setdefault("parameters", {})[name] = HonAttribute(values)
         self._attributes |= attributes
