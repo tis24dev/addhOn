@@ -81,16 +81,19 @@ class ApplianceExtra:
         # Resolution goes through `name_for_code`, NOT the raw `ids` map: prCode is
         # ambiguous (up to 35 categories share one code), so `ids` can only ever name a
         # code's base program -- it would report "Cottons" while a downloaded "Perfect
-        # White" runs. `name_for_code` answers with the active category when its own
-        # prCode agrees with the reported one, and falls back to `ids` otherwise.
+        # White" runs. `name_for_code` answers, in order:
+        #
+        # 1. with the cycle the cloud's activity describes, when it is on the reported
+        #    code (issue #130): the programme it names, or the favourite of it that its
+        #    title or the selection names; a panel cycle that names nothing usable gives
+        #    the code's own programme. The appliance keeps the cycle for the types whose
+        #    starts are followed (WM, WD, TD, DW); for the others it is None;
+        # 2. with the active category -- recovered from `/history` or selected -- when
+        #    its own prCode agrees with the reported one;
+        # 3. with `ids`, the code's own programme.
         #
         # Robustness: `_raw(...) or "0"` handles an empty/absent prCode -> "No Program"
         # instead of `int("")` -> ValueError.
-        #
-        # The cycle the cloud's activity describes goes in too (issue #130): it names
-        # the programme wherever the cycle was started. The appliance keeps it for the
-        # types whose starts are followed (WM, WD, TD, DW); for the others it is None
-        # and the name is resolved as before.
         program_name = "No Program"
         params = data.get("parameters", {})
         if program := int(self._raw(params, "prCode") or "0"):
