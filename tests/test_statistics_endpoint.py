@@ -1,0 +1,176 @@
+"""The statistics endpoint: `/commands/v2/statistics` first, `/commands/v1/statistics` as the fallback.
+
+The hOn app 2.30.7 reads the statistics of every laundry appliance (washer, washer-dryer,
+dryer, dishwasher, laundry centre) from `GET commands/v2/statistics?macAddress&applianceType`
+(apk2 decomp.txt @3333896-3333916) and keeps `statistics/v1/retrieve` for hobs and air
+purifiers only. addhOn read v1 for every type. No v2 answer has ever been seen, so v2 is
+tried first on the laundry types and v1 answers when v2 fails or answers empty; after one
+fallback the appliance stays on v1 until the integration is reloaded (the poll's call
+budget has no room for a retry every minute). The dump says which version answered.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _golden import install_stubs  # noqa: E402
+
+install_stubs()
+
+from custom_components.addhon.client import factory  # noqa: E402
+from custom_components.addhon.client.engine import appliance as appliance_mod  # noqa: E402
+from custom_components.addhon.client.transport.api import HonApi  # noqa: E402
+from custom_components.addhon import diagnostics  # noqa: E402
+from test_transport_api import FakeAppliance, FakeConnection  # noqa: E402
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+class _Api:
+    """An engine-facing API double: v2 and v1 answer what the test sets, calls are kept."""
+
+    def __init__(self, v2=None, v1=None, v2_error: Exception | None = None) -> None:
+        self.v2, self.v1, self.v2_error = v2, v1, v2_error
+        self.calls: list[str] = []
+
+    async def load_statistics_v2(self, appliance):
+        self.calls.append("v2")
+        if self.v2_error is not None:
+            raise self.v2_error
+        return self.v2
+
+    async def load_statistics(self, appliance):
+        self.calls.append("v1")
+        return self.v1
+
+    async def load_maintenance(self, appliance):
+        self.calls.append("maintenance")
+        return {}
+
+
+class _V1OnlyApi(_Api):
+    """A double without the v2 method: every older test double looks like this."""
+
+    load_statistics_v2 = None
+
+
+def _appliance(api, kind="WM"):
+    return factory._native_engine_appliance_cls()(
+        api, {"applianceTypeName": kind, "applianceModelId": 1, "macAddress": "aa"}, zone=0
+    )
+
+
+class TransportTest(unittest.TestCase):
+    def test_v2_asks_the_app_endpoint_with_the_app_parameters(self) -> None:
+        conn = FakeConnection({"payload": {"programsCounter": 7}})
+        got = _run(HonApi(conn).load_statistics_v2(FakeAppliance()))
+        self.assertEqual({"programsCounter": 7}, got)
+        method, url, kwargs = conn.calls[0][:3]
+        self.assertEqual("GET", method)
+        self.assertTrue(url.endswith("/commands/v2/statistics"), url)
+        self.assertEqual(
+            {"macAddress": "AA:BB:CC:DD:EE:FF", "applianceType": "REF"}, kwargs["params"]
+        )
+
+    def test_v2_answers_an_empty_map_on_a_body_without_a_payload_map(self) -> None:
+        for body in ({}, {"payload": "x"}, None, [1]):
+            with self.subTest(body=body):
+                self.assertEqual({}, _run(HonApi(FakeConnection(body)).load_statistics_v2(FakeAppliance())))
+
+
+class EngineChoiceTest(unittest.TestCase):
+    def test_a_laundry_type_reads_v2_and_says_so(self) -> None:
+        for kind in ("WM", "WD", "TD", "DW"):
+            with self.subTest(kind=kind):
+                api = _Api(v2={"programsCounter": 3}, v1={"programsCounter": 99})
+                app = _appliance(api, kind)
+                _run(app.load_statistics())
+                self.assertEqual(["v2", "maintenance"], api.calls)
+                self.assertEqual(3, app.statistics["programsCounter"])
+                self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+
+    def test_the_other_types_read_v1_as_before(self) -> None:
+        for kind in ("AC", "REF", "OV", "HW", "LC"):
+            with self.subTest(kind=kind):
+                api = _Api(v2={"programsCounter": 3}, v1={"programsCounter": 99})
+                app = _appliance(api, kind)
+                _run(app.load_statistics())
+                self.assertEqual(["v1", "maintenance"], api.calls)
+                self.assertEqual(99, app.statistics["programsCounter"])
+                self.assertEqual({"version": "v1", "fallback": None}, app.statistics_source)
+
+    def test_a_failing_v2_falls_back_to_v1_and_names_the_error(self) -> None:
+        api = _Api(v2_error=RuntimeError("boom"), v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual(["v2", "v1", "maintenance"], api.calls)
+        self.assertEqual(99, app.statistics["programsCounter"])
+        self.assertEqual({"version": "v1", "fallback": "RuntimeError"}, app.statistics_source)
+
+    def test_an_empty_v2_answer_falls_back_to_v1(self) -> None:
+        for empty in ({}, None, "x"):
+            with self.subTest(empty=empty):
+                api = _Api(v2=empty, v1={"programsCounter": 99})
+                app = _appliance(api)
+                _run(app.load_statistics())
+                self.assertEqual(["v2", "v1", "maintenance"], api.calls)
+                self.assertEqual({"version": "v1", "fallback": "empty"}, app.statistics_source)
+
+    def test_after_one_fallback_the_appliance_stays_on_v1(self) -> None:
+        api = _Api(v2={}, v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        _run(app.load_statistics())
+        self.assertEqual(["v2", "v1", "maintenance", "v1", "maintenance"], api.calls)
+        self.assertEqual({"version": "v1", "fallback": "empty"}, app.statistics_source)
+
+    def test_an_api_without_v2_reads_v1(self) -> None:
+        api = _V1OnlyApi(v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual(["v1", "maintenance"], api.calls)
+        self.assertEqual({"version": "v1", "fallback": None}, app.statistics_source)
+
+    def test_before_the_first_read_the_source_is_unknown(self) -> None:
+        self.assertIsNone(_appliance(_Api()).statistics_source)
+
+    def test_the_laundry_types_are_the_followed_ones(self) -> None:
+        self.assertEqual(appliance_mod.FOLLOWED_TYPES, appliance_mod.STATISTICS_V2_TYPES)
+
+
+class DumpTest(unittest.TestCase):
+    def _block(self, source):
+        api = _Api(v2={"programsCounter": 3}, v1={"programsCounter": 99})
+        app = _appliance(api)
+        if source is not None:
+            _run(app.load_statistics())
+        data = {"type": "WM", "appliance": app, "name": "W", "attributes": {}, "statistics": app.statistics}
+        return diagnostics._appliance_block("wm1", data)
+
+    def test_the_source_follows_statistics(self) -> None:
+        block = self._block("v2")
+        keys = list(block)
+        self.assertEqual("statistics_source", keys[keys.index("statistics") + 1])
+        self.assertEqual({"version": "v2", "fallback": None}, block["statistics_source"])
+        json.dumps(block)
+
+    def test_no_read_yet_prints_no_source(self) -> None:
+        self.assertNotIn("statistics_source", self._block(None))
+
+    def test_a_source_outside_the_vocabulary_is_dropped(self) -> None:
+        api = _Api(v2={"programsCounter": 3})
+        app = _appliance(api)
+        app._statistics_source = {"version": "v9", "fallback": "<script>"}
+        data = {"type": "WM", "appliance": app, "name": "W", "attributes": {}, "statistics": {}}
+        block = diagnostics._appliance_block("wm1", data)
+        self.assertEqual({"version": None, "fallback": None}, block["statistics_source"])
+
+
+if __name__ == "__main__":
+    unittest.main()

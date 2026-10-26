@@ -11,6 +11,10 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **Washers, washer-dryers, dryers and dishwashers read their statistics from the endpoint
+  the official app uses** (#138): `/commands/v2/statistics` is tried first and, when it
+  fails or answers nothing, the previous `/commands/v1/statistics` answers instead until
+  the integration is reloaded. The diagnostics file says which one answered and why.
 - **New stain-type dropdown and anti-crease switch on washers whose schema offers them**
   (#138). Both are disabled by default: enable them by hand in the entity settings. They
   are experimental, added to measure what the machine does with them. The stain dropdown

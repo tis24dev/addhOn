@@ -1492,6 +1492,29 @@ def _log_event(raw) -> dict | None:
     return event
 
 
+_STATISTICS_VERSIONS = frozenset({"v1", "v2"})
+
+
+def _statistics_source(appliance) -> dict | None:
+    """`{version, fallback}` of the last statistics read (`HonAppliance.statistics_source`,
+    issue #138), rebuilt: the version only from the two the engine writes, the fallback
+    only as `empty` or a bare exception class name; anything else prints as null. None
+    for an engine without the property or before its first read."""
+    source = getattr(appliance, "statistics_source", None)
+    if not isinstance(source, Mapping):
+        return None
+    version = source.get("version")
+    fallback = source.get("fallback")
+    return {
+        "version": version if type(version) is str and version in _STATISTICS_VERSIONS else None,
+        "fallback": (
+            fallback
+            if type(fallback) is str and fallback.isidentifier() and len(fallback) <= 64
+            else None
+        ),
+    }
+
+
 def _cycle_log_section(appliance) -> dict | None:
     """What the cycles did over time (issue #138): `HonAppliance.cycle_log`.
 
@@ -4612,6 +4635,14 @@ def _appliance_block(
         # there and survives only here. `attributes_overridden` names those keys,
         # and is always present -- `{}` is the finding "no key had two sources".
         "statistics": dict(statistics),
+        # Which statistics endpoint the map above came from (issue #138): the app's
+        # v2 on the laundry types, v1 otherwise or after v2 failed, with the reason.
+        # Omitted before the first read.
+        **(
+            {"statistics_source": source}
+            if (source := _statistics_source(appliance)) is not None
+            else {}
+        ),
         "attributes_overridden": overrides,
         # What the cycles did over time, the story `programme_name` below tells the end
         # of; omitted for the types that are not followed (issue #138).

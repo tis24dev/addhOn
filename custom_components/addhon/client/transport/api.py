@@ -556,11 +556,21 @@ class HonApi:
         return payload if isinstance(payload, dict) else {}
 
     async def load_statistics(self, appliance: Any) -> dict:
+        return await self._load_statistics(appliance, "v1")
+
+    async def load_statistics_v2(self, appliance: Any) -> dict:
+        """`GET /commands/v2/statistics`, the endpoint the hOn app reads the statistics
+        of every laundry appliance from (apk2 decomp.txt @3333896-3333916), with the
+        same two parameters as v1. The engine tries it first on those types and falls
+        back to `load_statistics` (issue #138); nothing else calls it."""
+        return await self._load_statistics(appliance, "v2")
+
+    async def _load_statistics(self, appliance: Any, version: str) -> dict:
         params = {
             "macAddress": appliance.mac_address,
             "applianceType": appliance.appliance_type,
         }
-        url = f"{API_URL}/commands/v1/statistics"
+        url = f"{API_URL}/commands/{version}/statistics"
         async with self._connection.get(url, params=params) as response:
             data = await response.json(content_type=None)
         payload = data.get("payload", {}) if isinstance(data, dict) else {}

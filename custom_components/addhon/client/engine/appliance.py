@@ -52,6 +52,13 @@ _CYCLE_MODES_BY_TYPE = {"DW": _CYCLE_MODES | {4}}
 # The types whose starts are followed when a cycle begins elsewhere (issue #112, decision
 # D4 of 2026-10-06): the four the app's dashboard shows a running programme for.
 FOLLOWED_TYPES = frozenset({"WM", "WD", "TD", "DW"})
+# The types whose statistics the hOn app reads from `/commands/v2/statistics` (apk2
+# decomp.txt @3333896-3333916, laundry only; the laundry centre is left on v1 here: the
+# app sends it a `unit` too, and no answer of its has been seen). Issue #138: v2 is
+# tried first on these, v1 answers when v2 fails or answers empty, and after one
+# fallback the appliance stays on v1 until the integration is reloaded (the poll's
+# call budget has no room for a retry every minute).
+STATISTICS_V2_TYPES = FOLLOWED_TYPES
 # A push that moves `machMode` into a cycle from outside one, or out of one into the end 7
 # or selection 1, asks for a read of the context (issue #130, decision C1): the activity
 # that names the cycle comes only with it. The cycle is `cycle_modes`' set, the one the
@@ -157,6 +164,10 @@ class HonAppliance:
         self._appliance_model: dict[str, Any] = {}
         self._commands: dict[str, HonCommand] = {}
         self._statistics: dict[str, Any] = {}
+        # Which statistics endpoint answered last and why v1 did, for the dump
+        # (`statistics_source`); None before the first read. A fallback is sticky.
+        self._statistics_source: Optional[dict[str, Any]] = None
+        self._statistics_v1_only = False
         self._attributes: dict[str, Any] = {}
         self._zone = zone
         self._additional_data: dict[str, Any] = {}
@@ -340,6 +351,13 @@ class HonAppliance:
     @property
     def statistics(self) -> dict[str, Any]:
         return self._statistics
+
+    @property
+    def statistics_source(self) -> Optional[dict[str, Any]]:
+        """`{"version": "v2" | "v1", "fallback": None | reason}` of the last statistics
+        read (issue #138): the reason is `"empty"` or the class name of what v2 raised.
+        None before the first read. Read by the diagnostics dump only."""
+        return self._statistics_source
 
     @property
     def info(self) -> dict[str, Any]:
@@ -1042,8 +1060,43 @@ class HonAppliance:
             self._attributes = self._extra.attributes(self._attributes)
 
     async def load_statistics(self) -> None:
-        self._statistics = await self.api.load_statistics(self)
+        self._statistics = await self._read_statistics()
         self._statistics |= await self.api.load_maintenance(self)
+
+    async def _read_statistics(self) -> dict[str, Any]:
+        """The statistics payload: v2 first on `STATISTICS_V2_TYPES`, v1 otherwise.
+
+        v2 is taken when it answers a non-empty map; an error or an empty answer
+        falls back to v1 for good (`_statistics_v1_only`) and is named in
+        `statistics_source`. An API without `load_statistics_v2` reads v1.
+        """
+        read_v2 = getattr(self.api, "load_statistics_v2", None)
+        if (
+            self.appliance_type in STATISTICS_V2_TYPES
+            and not self._statistics_v1_only
+            and callable(read_v2)
+        ):
+            fallback = None
+            try:
+                answer = await read_v2(self)
+            except Exception as error:  # noqa: BLE001 - any failure means v1
+                fallback = type(error).__name__
+            else:
+                if isinstance(answer, dict) and answer:
+                    self._statistics_source = {"version": "v2", "fallback": None}
+                    return answer
+                fallback = "empty"
+            self._statistics_v1_only = True
+            _LOGGER.info(
+                "Statistics v2 gave nothing for %s (%s): reading v1 from now on",
+                self.appliance_type,
+                fallback,
+            )
+            self._statistics_source = {"version": "v1", "fallback": fallback}
+            return await self.api.load_statistics(self)
+        if self._statistics_source is None or self._statistics_source.get("version") != "v1":
+            self._statistics_source = {"version": "v1", "fallback": None}
+        return await self.api.load_statistics(self)
 
     async def update(self, force: bool = False) -> Optional[bool]:
         """Read the context, unless the last read is under 5 s old and not `force`d.
