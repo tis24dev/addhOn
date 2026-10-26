@@ -771,7 +771,7 @@ class DiagnosticsRedactionTest(unittest.TestCase):
         # names the account in `activity.attributes.principalUserId`.
         activity = {
             "category": "CYCLE",
-            "attributes": {"principalUserId": "001bU00000hPkWkQAK", "prCode": "116"},
+            "attributes": {"principalUserId": "001000000000000AAA", "prCode": "116"},
         }
         printed = diagnostics._redact({"attributes": {"activity": activity}})
         attributes = printed["attributes"]["activity"]["attributes"]

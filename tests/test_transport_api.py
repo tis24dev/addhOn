@@ -726,7 +726,7 @@ class SendCommandTest(unittest.TestCase):
             "email": "mario.rossi+hon@example.co.uk",
             "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
             "uuid": "eu-west-1:3f2a9c1e-7b4d-4e8f-9a0b-1c2d3e4f5a6b",
-            "salesforce id": "001bU00000hPkWkQAK",
+            "salesforce id": "001000000000000AAA",
             "hex": "a3f9c2e81b7d4f60a3f9c2e81b7d4f60",
             "serial": "0021800012345ABC67890",
             "mac": "AA:BB:CC:DD:EE:FF",
