@@ -4578,6 +4578,61 @@ class HeatPumpEnergySectionTest(unittest.TestCase):
         self.assertEqual(result["appliance"]["energy_counters"], expected)
 
 
+class OptionSourcesSectionTest(unittest.TestCase):
+    """`option_sources`: which link of `_current_raw` gave each option's value (issue #138)."""
+
+    @staticmethod
+    def _block(sources) -> dict:
+        data = {
+            "appliance": FakeAppliance(commands={}),
+            "type": "WM",
+            "attributes": {},
+            "statistics": {},
+        }
+        return diagnostics._appliance_block("wm-1", data, option_sources=sources)
+
+    def test_printed_after_option_slots_from_the_store(self) -> None:
+        block = self._block({"stainType": "cycle", "temp": "shadow", "spinSpeed": "none"})
+        self.assertEqual(
+            {"stainType": "cycle", "temp": "shadow", "spinSpeed": "none"},
+            block["option_sources"],
+        )
+        keys = list(block)
+        self.assertEqual("coverage", keys[keys.index("option_sources") + 1])
+        if "option_slots" in keys:
+            self.assertEqual(keys.index("option_slots") + 1, keys.index("option_sources"))
+        json.dumps(block)
+
+    def test_a_source_outside_the_closed_vocabulary_is_dropped(self) -> None:
+        block = self._block({
+            "temp": "shadow", "spinSpeed": "somewhere", "stainType": 3, "prCode": None,
+        })
+        self.assertEqual({"temp": "shadow"}, block["option_sources"])
+
+    def test_absent_when_the_store_has_nothing(self) -> None:
+        for store in (None, {}, "garbage", {"temp": "somewhere"}):
+            with self.subTest(store=store):
+                self.assertNotIn("option_sources", self._block(store))
+
+    def test_the_dumps_read_the_coordinator_store(self) -> None:
+        coordinator = FakeCoordinator({"hw-1": {
+            "appliance": FakeAppliance(commands={}), "type": "WM",
+            "attributes": {}, "statistics": {},
+        }})
+        coordinator.program_option_sources = {
+            "hw-1": {"temp": "prescribed"}, "other": {"temp": "pending"},
+        }
+        result = _run(
+            diagnostics.async_get_config_entry_diagnostics(FakeHass(coordinator), FakeEntry())
+        )
+        self.assertEqual({"temp": "prescribed"}, result["appliances"][0]["option_sources"])
+        device = FakeDevice({(DOMAIN, "hw-1")})
+        result = _run(
+            diagnostics.async_get_device_diagnostics(FakeHass(coordinator), FakeEntry(), device)
+        )
+        self.assertEqual({"temp": "prescribed"}, result["appliance"]["option_sources"])
+
+
 class CoverageExpectedAbsentTest(unittest.TestCase):
     """The mirror axis: what this code maps and the device does not have."""
 

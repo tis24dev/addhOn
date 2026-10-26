@@ -47,6 +47,7 @@ from custom_components.addhon import select, sensor, switch  # noqa: E402
 from custom_components.addhon.client import factory  # noqa: E402
 from custom_components.addhon.client.engine.attributes import HonAttribute  # noqa: E402
 from custom_components.addhon.const import (  # noqa: E402
+    PROGRAM_OPTION_SOURCES,
     PROGRAM_PENDING_OPTIONS,
     PROGRAM_PENDING_STORE,
 )
@@ -234,6 +235,46 @@ class CycleOptionEntityTest(_EntityHarness):
         setattr(coordinator, PROGRAM_PENDING_STORE, {"wm1": "iot_wash_bed_linen"})
         self.assertFalse(self._keep_fresh(coordinator).is_on)
         self.assertEqual("none", self._stain_select(coordinator).current_option)
+
+    def test_current_raw_records_where_its_value_came_from(self) -> None:
+        # Issue #138: the dump says which link of `_current_raw` gave the value shown.
+        param = "permanentPressStatus"
+
+        def source(coordinator, entity):
+            entity._current_raw()
+            return getattr(coordinator, PROGRAM_OPTION_SOURCES)["wm1"][param]
+
+        coordinator = self._coordinator(self._cycle())
+        entity = self._keep_fresh(coordinator)
+        self.assertEqual("cycle", source(coordinator, entity))
+        setattr(coordinator, PROGRAM_PENDING_OPTIONS, {"wm1": {param: "0"}})
+        self.assertEqual("pending", source(coordinator, entity))
+        coordinator = self._coordinator(self._cycle())
+        setattr(coordinator, PROGRAM_PENDING_STORE, {"wm1": "iot_wash_bed_linen"})
+        self.assertEqual("prescribed", source(coordinator, self._keep_fresh(coordinator)))
+        coordinator = self._coordinator(self._washer())
+        entity = self._keep_fresh(coordinator)
+        self.assertEqual("shadow", source(coordinator, entity))
+        with mock.patch.object(
+            entity, "_get_attr", side_effect=lambda name: "1" if "." in name else None
+        ):
+            self.assertEqual("command", source(coordinator, entity))
+        with mock.patch.object(entity, "_get_attr", return_value=None):
+            self.assertEqual("none", source(coordinator, entity))
+            self.assertIsNone(entity._current_raw())
+
+    def test_a_store_that_cannot_be_written_does_not_stop_the_read(self) -> None:
+        coordinator = self._coordinator(self._washer())
+        entity = self._keep_fresh(coordinator)
+        real = entity._coordinator_store
+
+        def store(name):
+            if name == PROGRAM_OPTION_SOURCES:
+                raise RuntimeError("broken store")
+            return real(name)
+
+        with mock.patch.object(entity, "_coordinator_store", side_effect=store):
+            self.assertEqual(0, entity._current_raw())
 
     def test_the_cycle_wins_over_the_shadow(self) -> None:
         app = self._cycle()

@@ -47,6 +47,7 @@ from .const import (
     APPLIANCE_WD,
     APPLIANCE_WM,
     DOMAIN,
+    PROGRAM_OPTION_SOURCES,
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_OPTIONS,
     PROGRAM_PENDING_STORE,
@@ -724,17 +725,29 @@ class HonProgramOptionEntity(HonBaseEntity):
         attributes, unlike ``settings``)."""
         pending = self._pending().get(self._param)
         if pending is not None:
-            return pending
+            return self._record_source("pending", pending)
         prescribed = self._prescribed_raw()
         if prescribed is not None and self._renderable(prescribed):
-            return prescribed
+            return self._record_source("prescribed", prescribed)
         cycle = cycle_option_raw(self._appliance_data, self._param)
         if cycle is not None and self._renderable(cycle):
-            return cycle
+            return self._record_source("cycle", cycle)
         raw = self._get_attr(self._param)
         if raw is not None:
-            return raw
-        return self._get_attr(f"{STARTPROGRAM_COMMAND}.{self._param}")
+            return self._record_source("shadow", raw)
+        raw = self._get_attr(f"{STARTPROGRAM_COMMAND}.{self._param}")
+        return self._record_source("command" if raw is not None else "none", raw)
+
+    def _record_source(self, source: str, raw):
+        """Note which link of `_current_raw` answered, for the dump (issue #138); returns
+        ``raw`` untouched. A dict write that never raises into a read."""
+        try:
+            self._coordinator_store(PROGRAM_OPTION_SOURCES).setdefault(
+                self._appliance_id, {}
+            )[self._param] = source
+        except Exception:  # noqa: BLE001 - diagnostics must not break a state read
+            pass
+        return raw
 
     def _active_option_param(self):
         """Resolve this param off the ACTIVE startProgram command's parameters only.

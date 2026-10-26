@@ -87,6 +87,12 @@ AP_LAST_MODE_STORE = "ap_last_modes"
 # clears them on a successful send (see program_options.py / button.py). Discussion #35.
 PROGRAM_PENDING_OPTIONS = "pending_options"
 
+# Which link of `HonProgramOptionEntity._current_raw` gave each option entity's value on
+# its last read (issue #138), for the diagnostics dump alone. Shape:
+# {appliance_id: {param: source}}; sources are pending, prescribed, cycle, shadow,
+# command, none.
+PROGRAM_OPTION_SOURCES = "program_option_sources"
+
 # --- Program-option label maps (discussion #35) -------------------------------
 # Labels ONLY (machine keys for the select state translations); the legal VALUE set is
 # ALWAYS read from the device's startProgram schema, never hardcoded (a model exposes

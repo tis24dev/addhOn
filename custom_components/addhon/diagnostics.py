@@ -101,6 +101,7 @@ from .const import (
     CONF_ENABLE_EXPERIMENTAL,
     CONF_ENABLE_MQTT_DEBUG,
     DOMAIN,
+    PROGRAM_OPTION_SOURCES,
     PROGRAM_PARAM_NAMES,
 )
 from .debug_utils import _MAC_RE, redact_id
@@ -4397,6 +4398,7 @@ def _appliance_block(
     entities: Mapping | None = None,
     now: datetime | None = None,
     energy_counters: Mapping | None = None,
+    option_sources: Mapping | None = None,
 ) -> dict:
     """Build the (redacted) diagnostics block for a single appliance.
 
@@ -4418,6 +4420,10 @@ def _appliance_block(
     `energy_counters` is what this appliance's HW energy counters left on the
     coordinator (`hpwh.HPWH_ENERGY_STORE`), trailing and None by default for the
     same reasons as `now`; it is read only for a heat-pump water heater.
+
+    `option_sources` is what the programme-option entities noted on the coordinator
+    (`const.PROGRAM_OPTION_SOURCES`) about where each value came from (issue #138),
+    trailing and None by default for the same reasons.
     """
     appliance = data.get("appliance")
     app_type = data.get("type")
@@ -4480,6 +4486,7 @@ def _appliance_block(
     option_slots = _option_slots(
         program_options_matrix, appliance_options, opt_compatibility
     )
+    option_sources_section = _option_sources(option_sources)
     # ONE walk of the per-type tables, ONE lazy-import decision, shared by both
     # consumers -- which is what the `_mapped_sets` docstring claims and what
     # makes `coverage.registries_unavailable` and `entities.sources` structurally
@@ -4628,6 +4635,10 @@ def _appliance_block(
         # they are the answer to issue #106. It is built FROM that section, so it cannot
         # appear without it.
         **({"option_slots": option_slots} if option_slots else {}),
+        # Right after the options' names: where each option entity's value came from on
+        # its last read (buffer, programme, running cycle, shadow, start command), the
+        # one thing the entity states do not say (issue #138).
+        **({"option_sources": option_sources_section} if option_sources_section else {}),
         "coverage": coverage,
         # Next to coverage on purpose: one says what the code could map for this
         # type, the other what Home Assistant actually holds. Reading them together
@@ -5331,6 +5342,30 @@ def _energy_store(coordinator, appliance_id: str) -> Mapping | None:
     store = getattr(coordinator, HPWH_ENERGY_STORE, None)
     counters = store.get(appliance_id) if isinstance(store, Mapping) else None
     return counters if isinstance(counters, Mapping) else None
+
+
+_OPTION_SOURCES = frozenset({"pending", "prescribed", "cycle", "shadow", "command", "none"})
+
+
+def _option_sources_store(coordinator, appliance_id: str) -> Mapping | None:
+    """What the programme-option entities of one appliance noted as their sources."""
+    store = getattr(coordinator, PROGRAM_OPTION_SOURCES, None)
+    sources = store.get(appliance_id) if isinstance(store, Mapping) else None
+    return sources if isinstance(sources, Mapping) else None
+
+
+def _option_sources(sources: Mapping | None) -> dict:
+    """The `option_sources` section: {parameter: source}, only the closed vocabulary.
+
+    The keys are cloud parameter names and the values six words this module owns, so
+    whatever else sits in the store is not printed (issue #138)."""
+    if not isinstance(sources, Mapping):
+        return {}
+    return {
+        param: source
+        for param, source in sources.items()
+        if isinstance(param, str) and isinstance(source, str) and source in _OPTION_SOURCES
+    }
 
 
 def _energy_counters(counters: Mapping | None) -> dict:
@@ -6057,6 +6092,7 @@ async def async_get_config_entry_diagnostics(
                     inventory.get(appliance_id),
                     now=now,
                     energy_counters=_energy_store(coordinator, appliance_id),
+                    option_sources=_option_sources_store(coordinator, appliance_id),
                 )
             )
 
@@ -6213,5 +6249,6 @@ async def async_get_device_diagnostics(
             inventory.get(appliance_id),
             now=now,
             energy_counters=_energy_store(coordinator, appliance_id),
+            option_sources=_option_sources_store(coordinator, appliance_id),
         ),
     }
