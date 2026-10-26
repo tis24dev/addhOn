@@ -10915,6 +10915,18 @@ class CycleLogSectionTest(unittest.TestCase):
         self.assertNotIn("executed_at", not_executed)
         self.assertNotIn("AA:BB:CC", json.dumps(section))
 
+    def test_the_estimated_duration_of_a_start_is_rendered(self) -> None:
+        app = self._washer()
+        app.cycle_log.command(name="startProgram", programme="HQD_COTTONS",
+                              sent="2026-10-16T12:25:01.000Z", outcome="accepted",
+                              estimated_min=86)
+        app.cycle_log.command(name="startProgram", programme="HQD_COTTONS",
+                              sent="2026-10-16T12:26:01.000Z", outcome="accepted",
+                              estimated_min=None)
+        section = self._block(app)["cycle_log"]
+        starts = [e for e in section["events"] if e["kind"] == "command"]
+        self.assertEqual([86, None], [e["estimated_min"] for e in starts])
+
     def test_statistics_events_are_rendered(self) -> None:
         app = self._washer()
         app.cycle_log.statistics(

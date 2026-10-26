@@ -370,6 +370,18 @@ class CommandTest(_LogTest):
                          (rejected["outcome"], rejected["result_code"], rejected["error"]))
         self.assertEqual(("raised", "RuntimeError"), (raised["outcome"], raised["error"]))
 
+    def test_a_start_keeps_its_estimated_duration(self) -> None:
+        self.log.command(name="startProgram", programme=None, sent=_T0, outcome="accepted",
+                         estimated_min=86)
+        self.log.command(name="startProgram", programme=None, sent=_T1, outcome="accepted",
+                         estimated_min=None)
+        self.log.command(name="startProgram", programme=None, sent=None, outcome="raised",
+                         estimated_min="86")
+        self.log.command(name="settings", programme=None, sent=None, outcome="accepted")
+        events = _events(self.log, "command")
+        self.assertEqual([86, None, None], [e["estimated_min"] for e in events[:3]])
+        self.assertNotIn("estimated_min", events[3])
+
     def test_a_cycle_read_is_shown_as_the_transport_filled_it_in(self) -> None:
         record = {"edge": "start", "asked_at": "2026-10-26T08:00:04+00:00", "reads": []}
         self.log.cycle_read(record)

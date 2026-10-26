@@ -21,7 +21,8 @@ This log keeps it, in memory, bounded, per appliance. Events, by `kind`:
 - `context`: a read of the context whose activity, `commandHistory` slot or connection
   differs from the last one logged, or whose answer was dropped as stale; a read that
   repeats it is only counted on that event (`unchanged`, `last_at`);
-- `command`: each command sent and how the cloud answered; then, once, what became of
+- `command`: each command sent and how the cloud answered, a start with the minutes the
+  engine expects its cycle to last (`estimated_min`); then, once, what became of
   it as the app reads it, from a read of the context whose `commandHistory` slot names it
   by the `timestamp` it was sent with: `executed` (`executed_at`, `delay_s` from the
   acceptance) or `not_executed`, accepted and not executed `NOT_RECEIVED_S` later;
@@ -85,6 +86,8 @@ _COUNTERS: dict[str, Optional[float]] = {
     "totalElectricityUsed": None,
 }
 _PLAIN = frozenset({"key", "before", "after"})
+# `CycleLog.command` without an estimate: not a start that has one.
+_NO_ESTIMATE: Any = object()
 _CONTAINERS = (Mapping, list, tuple, set, frozenset)
 
 
@@ -451,9 +454,12 @@ class CycleLog:
         outcome: str,
         code: Any = None,
         error: str | None = None,
+        estimated_min: Any = _NO_ESTIMATE,
     ) -> None:
         """One command sent (`sent` is its timestamp, which `/history` keeps too) and
-        how the cloud answered: `accepted`, `rejected` (`code`, `error`), `raised`."""
+        how the cloud answered: `accepted`, `rejected` (`code`, `error`), `raised`. A
+        washer, washer-dryer or dryer start also keeps `estimated_min`, the minutes the
+        engine expects its cycle to last, None when it has no estimate."""
         now = self._clock()
         fields = {
             "name": _text(name),
@@ -465,6 +471,8 @@ class CycleLog:
             fields["result_code"] = _text(code)
         if error is not None:
             fields["error"] = _text(error)
+        if estimated_min is not _NO_ESTIMATE:
+            fields["estimated_min"] = estimated_min if type(estimated_min) is int else None
         with self._lock:
             event = self._append("command", now, **fields)
             if fields["sent"] is not None:

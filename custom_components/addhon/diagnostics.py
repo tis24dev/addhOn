@@ -1502,7 +1502,8 @@ _CYCLE_LOG_FIELDS = {
     "command": {
         "name": _log_text, "programme": _log_text, "sent": _log_cloud,
         "outcome": _log_token(_CYCLE_LOG_OUTCOMES), "result_code": _log_text,
-        "error": _log_text, "executed_at": _log_cloud, "delay_s": _log_int,
+        "error": _log_text, "estimated_min": _log_int, "executed_at": _log_cloud,
+        "delay_s": _log_int,
     },
     "cycle_read": {
         "edge": _log_token(_CYCLE_LOG_EDGES), "asked_at": _log_cloud, "reads": _log_reads,

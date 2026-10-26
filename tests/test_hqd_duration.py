@@ -30,6 +30,7 @@ from custom_components.addhon.client.engine.hqd_duration import (  # noqa: E402
     delay_counts_to_end,
     delay_to_send,
     programme_duration,
+    start_duration,
     started_programme_duration,
 )
 
@@ -269,6 +270,42 @@ class StartedProgrammeDurationTest(unittest.TestCase):
     def test_a_programme_missing_from_the_catalogue(self) -> None:
         appliance = self._waiting(self._row(), categories={})
         self.assertIsNone(started_programme_duration(appliance, "116"))
+
+
+class StartDurationTest(unittest.TestCase):
+    """Issue #138: the estimate of a start body, the one the cycle log keeps beside the
+    start it sends: the category its `programName` names, as for `/history`."""
+
+    HW90 = "HW90-B14387TU1-S"
+
+    def _appliance(self, start, categories=None):
+        category = _category(self.HW90, start["programName"])
+        command = types.SimpleNamespace(
+            categories=categories if categories is not None else {"iot_wash_bed_linen": category}
+        )
+        return _appliance(self.HW90, commands={"startProgram": command})
+
+    def _bed_linen(self) -> dict:
+        return next(start for start in MODELS[self.HW90]["starts"]
+                    if start["programName"] == "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN")
+
+    def test_the_hw90_bed_linen_start_lasts_86_minutes(self) -> None:
+        start = self._bed_linen()
+        self.assertEqual(86.0, start["expected"])
+        self.assertEqual(86.0, start_duration(self._appliance(start), start))
+
+    def test_nothing_without_the_category_or_the_parameters(self) -> None:
+        start = self._bed_linen()
+        self.assertIsNone(start_duration(self._appliance(start, categories={}), start))
+        self.assertIsNone(start_duration(_appliance(self.HW90, commands={}), start))
+        self.assertIsNone(start_duration(self._appliance(start), {**start, "parameters": None}))
+        self.assertIsNone(start_duration(self._appliance(start), None))
+        # Ancillaries that are not a map count as none, as for a `/history` start.
+        self.assertEqual(
+            programme_duration(self._appliance(start), _category(self.HW90, start["programName"]),
+                               start["parameters"], None),
+            start_duration(self._appliance(start), {**start, "ancillaryParameters": "x"}),
+        )
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ decoupled from the engine, as the whole native layer is.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -40,6 +41,7 @@ from .connection import HonConnection
 from .parse import APPLIANCE_LIST_PATH, parse_appliance_list, probe_appliance_list
 from .tokens import token_person_account_id
 from .values import API_URL
+from ..engine.hqd_duration import start_duration
 from ...debug_utils import redact_identity, safe_key_names, structure_only
 from ...error_codes import APPLIANCE_LIST_EMPTY, classify
 
@@ -134,15 +136,42 @@ def _cloud_error(payload: Any) -> str | None:
     return _scrub_cloud_text(str(payload["errorType"]))
 
 
+# The types whose start the cycle log keeps with the engine's estimate of its duration.
+_ESTIMATED_TYPES = frozenset({"WM", "WD", "TD"})
+
+
+def _estimated_minutes(appliance: Any, data: dict[str, Any]) -> int | None:
+    """The minutes the engine expects the cycle of the start `data` to last, whole and
+    half up as the delay sensor rounds them (issue #138): `hqd_duration.start_duration`
+    on the body as it went out, the call the delay sensor makes on a `/history` start.
+    None when the engine has no estimate, or raises."""
+    try:
+        minutes = start_duration(appliance, data)
+        if minutes is None or not math.isfinite(minutes):
+            return None
+        return math.floor(minutes + 0.5)
+    except Exception:  # noqa: BLE001 - diagnostics only
+        _LOGGER.debug("Cycle log: no estimated duration", exc_info=True)
+        return None
+
+
 def _note_command(
     appliance: Any, data: dict[str, Any], outcome: str, *, code: Any = None,
     error: str | None = None,
 ) -> None:
     """A command sent, and how the cloud answered, in the appliance's cycle log (issue
-    #138). The command's `timestamp` is the one `/history` keeps. Never raises."""
+    #138). The command's `timestamp` is the one `/history` keeps; a washer,
+    washer-dryer or dryer start adds the engine's estimate of its duration, worked out
+    here, before the log's lock. Never raises."""
     try:
         log = getattr(appliance, "cycle_log", None)
         if log is not None:
+            extra: dict[str, Any] = {}
+            if (
+                data.get("commandName") == "startProgram"
+                and getattr(appliance, "appliance_type", None) in _ESTIMATED_TYPES
+            ):
+                extra["estimated_min"] = _estimated_minutes(appliance, data)
             log.command(
                 name=data.get("commandName"),
                 programme=data.get("programName"),
@@ -150,6 +179,7 @@ def _note_command(
                 outcome=outcome,
                 code=code,
                 error=error,
+                **extra,
             )
     except Exception:  # noqa: BLE001 - diagnostics only
         _LOGGER.debug("Cycle log failed", exc_info=True)
