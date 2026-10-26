@@ -763,8 +763,16 @@ class ProgramSelectAtRestTest(unittest.TestCase):
                 self.assertEqual("hqd_eco_40_60", self._entity(kind, **attributes).current_option)
 
     def test_a_start_target_the_list_lacks_falls_back_to_the_name(self) -> None:
-        entity = self._entity(machMode="1", **{"startProgram.program": "iot_hidden_programme"})
-        self.assertEqual("hqd_eco_40_60", entity.current_option)
+        # Review of PR #139 (S6): the same rest state twice, with a running name that is
+        # neither start target, so only the at-rest rule can tell the two answers apart.
+        listed = self._entity(machMode="1", programName="hqd_cottons")
+        self.assertEqual("iot_wash_denim_jeans", listed.current_option)
+        unlisted = self._entity(
+            machMode="1",
+            programName="hqd_cottons",
+            **{"startProgram.program": "iot_hidden_programme"},
+        )
+        self.assertEqual("hqd_cottons", unlisted.current_option)
 
 
 _FAMILIES = REPO_ROOT / "tests" / "fixtures" / "program_families.json"
