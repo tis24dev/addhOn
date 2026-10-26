@@ -19,6 +19,7 @@ import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from time import monotonic
+from types import MappingProxyType
 from typing import Any, Optional
 
 from ...command_diagnostics import observe_shadow_read
@@ -80,6 +81,16 @@ def _programme_key(name: Any) -> Optional[str]:
     if not isinstance(name, str) or not name.strip():
         return None
     return name.strip().rsplit(".", 1)[-1].upper()
+
+
+def _as_int(value: Any) -> Optional[int]:
+    """`value` as an int, None if absent or unreadable (an activity's prCode)."""
+    if value is None:
+        return None
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _open_started(activity: Any) -> Any:
@@ -403,6 +414,9 @@ class HonAppliance:
           next programme, prCode 0, the machine's resting code: 136 on Lajahome's 3
           idle dumps out of 3).
 
+        The cycle taken carries the start's options and the activity's prCode too
+        (issue #138, `cycle_option`); they change nothing above.
+
         Runs on the client loop only, from `load_attributes`, before the name is
         derived. Nothing else writes `_cycle_activity`.
         """
@@ -435,6 +449,8 @@ class HonAppliance:
                 label=details.get("prStrDisp"),
                 code=code,
                 started=started,
+                options=self._start_options(details),
+                activity_code=_as_int(details.get("prCode")),
             )
             return
         # No open activity to take (none, ended, read at rest, or older than the cycle
@@ -443,6 +459,58 @@ class HonAppliance:
         # dropped at a new start: the start read settles only on another one (S2).
         if self._cycle_activity is not None and self._cycle_activity.code != code:
             self._cycle_activity = None
+
+    def _start_options(self, details: Mapping[str, Any]) -> Mapping[str, str]:
+        """The activity's values of the start's parameters, as text (issue #138).
+
+        The activity carries the start's parameters next to what the app adds
+        (`principalUserId`, `deviceModel`, `prStrDisp`): only the keys of the
+        `startProgram` command are kept, and only the scalar values, as the text the
+        shadow holds (a number arrives as `19` or `"19"`). Read-only: a push reads it.
+        """
+        command = self._commands.get("startProgram")
+        keys = set(getattr(command, "setting_keys", None) or ())
+        return MappingProxyType({
+            key: str(value)
+            for key, value in details.items()
+            if key in keys
+            and isinstance(value, (str, int, float))
+            and not isinstance(value, bool)
+        })
+
+    def cycle_option(self, key: str) -> Optional[str]:
+        """What the running cycle was started with for `key`, or None (issue #138).
+
+        The shadow of a washer never reports `permanentPressStatus` (Keep Fresh) or
+        `stainType` during a cycle; the app shows a running cycle's options from its
+        activity, and only while `machMode` is 2, 3 or 5 (`slot143`, apk2 decomp.txt
+        @2588626-2588744; the running card, @2591986-2592000). The value answers only
+        when all of these hold, else None:
+
+        - a cycle is kept, and was not started on the panel (`channel` `appliance`,
+          whose activity is a picture of the shadow, not what was chosen);
+        - the context last read still has that activity open (decision C1): a cycle
+          kept after its end for its name (S1) would otherwise lend its options to
+          the next cycle on the same code, before the read that brings its activity;
+        - the kept cycle's code, the activity's prCode and the shadow's prCode now
+          are one, as the app's card checks the activity's (@2591727-2591733);
+        - the shadow's `machMode` now is in `cycle_modes` (decision D4).
+
+        Reads the shadow and the kept cycle only: no I/O, nothing written.
+        """
+        cycle = self._cycle_activity
+        if cycle is None or cycle.channel == "appliance":
+            return None
+        started = self.activity_started
+        if started is None or started != cycle.started:
+            return None
+        code = self._live_int("prCode")
+        if code is None or cycle.code != code or cycle.activity_code != code:
+            return None
+        modes = cycle_modes(self.appliance_type)
+        if modes is None or self._live_int("machMode") not in modes:
+            return None
+        return cycle.options.get(key)
 
     def _older_than_kept(self, started: Any) -> bool:
         """Whether an activity that began at `started` began before the cycle kept.

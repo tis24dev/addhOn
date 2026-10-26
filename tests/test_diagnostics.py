@@ -10673,10 +10673,13 @@ class ProgrammeNameSectionTest(unittest.TestCase):
     def test_a_panel_cycle_says_the_activity_named_it(self) -> None:
         app = self._washer()
         self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = "2"
+        # The activity's values of the start's parameters are kept (issue #138): this
+        # schema has `prCode` and `temp`, not `permanentPressStatus`.
         self.cloud.context["activity"] = {
             "activityStarted": "2026-10-16T12:25:03Z",
             "attributes": {"programName": "HQD_COTTONS", "channel": "appliance",
-                           "prStrDisp": "My own title"}}
+                           "prStrDisp": "My own title", "prCode": "115", "temp": "40",
+                           "permanentPressStatus": "0"}}
         self.loop.run_until_complete(app.load_attributes())
         app.note_cycle_read({
             "edge": "start", "asked_at": "2026-10-16T12:25:04+00:00",
@@ -10687,7 +10690,8 @@ class ProgrammeNameSectionTest(unittest.TestCase):
         self.assertEqual("activity", section["source"])
         self.assertEqual(
             {"programme": "HQD_COTTONS", "functional_id": None, "channel": "appliance",
-             "started": "2026-10-16T12:25:03Z", "prCode": 115},
+             "started": "2026-10-16T12:25:03Z", "prCode": 115, "activity_prCode": 115,
+             "options": {"prCode": "115", "temp": "40"}},
             section["activity"],
         )
         self.assertEqual("settled", section["cycle_read"]["outcome"])

@@ -37,12 +37,15 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
 
 from homeassistant.exceptions import HomeAssistantError
 
 from .base_entity import HonBaseEntity
 from .client.engine.parameter.range import HonParameterRange
 from .const import (
+    APPLIANCE_WD,
+    APPLIANCE_WM,
     DOMAIN,
     PROGRAM_PARAM_NAMES,
     PROGRAM_PENDING_OPTIONS,
@@ -304,6 +307,33 @@ def has_stain_rules(appliance) -> bool:
     except Exception:  # noqa: BLE001 - a gate must never take the setup down
         return False
     return False
+
+
+# Issue #138, decision D5: the options read from the running cycle's activity, the two a
+# washer's shadow does not report during a cycle (it keeps the 0 of rest).
+CYCLE_OPTION_PARAMS = frozenset({"permanentPressStatus", "stainType"})
+# Decision C2: washers and washer-dryers only. A tumble dryer has a Keep Fresh switch too,
+# with no sample of its activity, and the app reads `tumblingStatus` and `antiCreaseTime`
+# there instead.
+_CYCLE_OPTION_TYPES = frozenset({APPLIANCE_WM, APPLIANCE_WD})
+
+
+def cycle_option_raw(appliance_data: Mapping, param: str) -> str | None:
+    """What the running cycle was started with for `param`, or None (issue #138).
+
+    `appliance_data` is the appliance's coordinator entry. None for a parameter outside
+    ``CYCLE_OPTION_PARAMS``, a type outside WM/WD, and an appliance without the engine's
+    ``cycle_option``; otherwise its answer, which is None outside a cycle started from
+    Home Assistant or the app (``HonAppliance.cycle_option``)."""
+    if param not in CYCLE_OPTION_PARAMS or not isinstance(appliance_data, Mapping):
+        return None
+    if appliance_data.get("type") not in _CYCLE_OPTION_TYPES:
+        return None
+    reader = getattr(appliance_data.get("appliance"), "cycle_option", None)
+    if not callable(reader):
+        return None
+    value = reader(param)
+    return value if isinstance(value, str) else None
 
 
 def option_range(param) -> tuple[float, float, float] | None:
@@ -683,10 +713,13 @@ class HonProgramOptionEntity(HonBaseEntity):
         return True
 
     def _current_raw(self):
-        """Pending value if buffered, else what the selected program prescribes, else the
-        live device value.
+        """Pending value if buffered, else what the selected program prescribes, else what
+        the running cycle was started with, else the live device value.
 
-        Reads ``_get_attr(param)`` (the direct attribute the device reports) and then
+        The running cycle's value (issue #138) answers for Keep Fresh and the stain alone,
+        which the shadow does not report during a cycle (``cycle_option_raw``); a choice
+        buffered or prescribed during the cycle is for the next start and comes first.
+        Then ``_get_attr(param)`` (the direct attribute the device reports) and
         ``_get_attr("startProgram." + param)`` (startProgram is not shadow-synced into
         attributes, unlike ``settings``)."""
         pending = self._pending().get(self._param)
@@ -695,6 +728,9 @@ class HonProgramOptionEntity(HonBaseEntity):
         prescribed = self._prescribed_raw()
         if prescribed is not None and self._renderable(prescribed):
             return prescribed
+        cycle = cycle_option_raw(self._appliance_data, self._param)
+        if cycle is not None and self._renderable(cycle):
+            return cycle
         raw = self._get_attr(self._param)
         if raw is not None:
             return raw

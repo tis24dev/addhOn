@@ -16,6 +16,12 @@ the notes were generated automatically carry a link to their diff instead of a s
   are experimental, added to measure what the machine does with them. The stain dropdown
   is not offered on a washer whose programmes tie a stain to a temperature, because there
   the order of the choices can make the start fail.
+- **During a cycle, Keep Fresh and the stain type show what the cycle was started with**
+  (#138), as the official app does. The washer does not report either while it runs, so
+  the Keep Fresh switch of a cycle started with it went back to off about a minute after
+  the start. On washers and washer-dryers, for a cycle started from Home Assistant or the
+  app, the switch, the stain dropdown and the stain sensor now read the cycle's own values
+  until it ends; a cycle started on the panel still shows what the machine reports.
 - **Picking a programme now presets the options that programme calls for** (#98). With a
   programme selected and an option you have not touched, the switches, the dropdowns and
   the delayed start show what THAT programme prescribes instead of the settings the last

@@ -1300,7 +1300,9 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
     - `name` and `source`, the rule that answered (`HonParameterProgram.name_source`);
     - `activity`, the cycle the context's activity described as the engine keeps it
       (`HonAppliance.cycle_activity`): programme, channel, start, the shadow's code
-      read with it (`prCode`); the start's title is left out, it may be a favourite's name;
+      read with it (`prCode`), the activity's own (`activity_prCode`) and the start's
+      options it carried (`options`, issue #138, each text bounded); the start's title
+      is left out, it may be a favourite's name;
     - `cycle_read`, the last read of the context a push at the start or the end of a
       cycle asked for (`HonAppliance.cycle_read`): the edge, when it was asked, each
       read and the outcome.
@@ -1327,6 +1329,12 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
                 "channel": cycle.channel,
                 "started": cycle.started,
                 "prCode": cycle.code,
+                "activity_prCode": cycle.activity_code,
+                "options": {
+                    _bounded_text(key, _OPTION_TEXT_MAX_CHARS):
+                        _bounded_text(value, _OPTION_TEXT_MAX_CHARS)
+                    for key, value in cycle.options.items()
+                },
             },
             "cycle_read": None if not isinstance(read, Mapping) else {
                 "edge": read.get("edge"),

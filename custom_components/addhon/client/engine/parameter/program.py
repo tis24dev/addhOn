@@ -16,6 +16,8 @@ program counts as an enum.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, NamedTuple
 from urllib.parse import unquote
 
@@ -55,6 +57,12 @@ class CycleActivity(NamedTuple):
     prCode in the same read and `started` its `activityStarted`. Kept by the appliance
     for the types whose starts are followed (`HonAppliance.cycle_activity`), read by
     `HonParameterProgram.name_for_code`.
+
+    Issue #138: `options` holds the activity's values of the start's parameters, as
+    text, and `activity_code` the activity's own prCode: the options a running cycle
+    was started with, which the shadow does not report for Keep Fresh and the stain
+    (`HonAppliance.cycle_option`). Read-only, as the whole tuple: a push reads it from
+    the transport's thread.
     """
 
     programme: Any
@@ -63,6 +71,8 @@ class CycleActivity(NamedTuple):
     label: Any
     code: int | None
     started: Any
+    options: Mapping[str, str] = MappingProxyType({})
+    activity_code: int | None = None
 
 
 class HonParameterProgram(HonParameterEnum):
