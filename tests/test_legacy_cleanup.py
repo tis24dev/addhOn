@@ -7,6 +7,7 @@ SENSORS (which also end in '_power') are not purged on every setup.
 """
 from __future__ import annotations
 
+import json
 import sys
 import types
 import unittest
@@ -982,6 +983,40 @@ class CycleEntityTrackingTest(unittest.TestCase):
              ("keep_fresh", None, "unknown")],
             self._entity_events(),
         )
+
+    def test_a_favourite_name_is_masked_whole_before_the_log_cuts_it(self) -> None:
+        # The log cuts a state at 64 characters, and the dump's `_mask_favourites` only
+        # matches a name whole: a long favourite's name must be masked before the cut,
+        # in any case the slug of its category spells it.
+        from unittest import mock
+
+        from custom_components.addhon import ref_programs
+
+        name = "Delicati della nonna lavati a mano " + "x" * 45
+        self.assertEqual(80, len(name))
+        with mock.patch.object(ref_programs, "favourite_names", lambda appliance: {name}):
+            self._track()
+            self._fire("sensor.wm_programme", "Cottons", name)
+            self._fire("sensor.wm_programme", name, name.lower() + " (2)")
+        self.assertEqual(
+            [("program_name", "Cottons", "<favourite>"),
+             ("program_name", "<favourite>", "<favourite>")],
+            self._entity_events(),
+        )
+        self.assertNotIn("nonna", json.dumps(self.log.snapshot()))
+
+    def test_without_favourites_readable_the_state_is_not_logged(self) -> None:
+        from unittest import mock
+
+        from custom_components.addhon import ref_programs
+
+        def broken(appliance):
+            raise RuntimeError("no commands")
+
+        with mock.patch.object(ref_programs, "favourite_names", broken):
+            self._track()
+            self._fire("sensor.wm_programme", "Cottons", "Mine")
+        self.assertEqual([], self._entity_events())
 
     def test_a_raising_log_never_reaches_home_assistant(self) -> None:
         self._track()

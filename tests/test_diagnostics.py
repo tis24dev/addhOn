@@ -10927,6 +10927,51 @@ class CycleLogSectionTest(unittest.TestCase):
         )
         self.assertNotIn("Lana", json.dumps(section))
 
+    def test_a_long_favourite_name_never_reaches_the_dump_through_an_entity(self) -> None:
+        # Through the setup's own listener: a favourite's name of 80 characters,
+        # published by `sensor.program_name`, is in the block neither whole nor cut.
+        from unittest import mock
+
+        from custom_components import addhon
+        from custom_components.addhon import ref_programs
+
+        name = "Delicati della nonna lavati a mano " + "x" * 45
+        app = self._washer()
+        registry = types.SimpleNamespace(
+            async_get_entity_id=lambda domain, platform, unique_id:
+            "sensor.wm_programme" if unique_id == "id1_program_name" else None
+        )
+        tracked = []
+        event = types.ModuleType("homeassistant.helpers.event")
+        event.async_track_state_change_event = (
+            lambda hass, ids, action: tracked.append(action) or (lambda: None)
+        )
+        helpers = sys.modules["homeassistant.helpers"]
+        entry = types.SimpleNamespace(async_on_unload=lambda func: None)
+        favourites = lambda appliance: {name}  # noqa: E731
+        with mock.patch.dict(sys.modules, {"homeassistant.helpers.event": event}), \
+                mock.patch.object(helpers, "event", event, create=True), \
+                mock.patch.object(helpers.entity_registry, "async_get",
+                                  lambda hass: registry, create=True), \
+                mock.patch.object(sys.modules["homeassistant.core"], "callback",
+                                  lambda func: func, create=True), \
+                mock.patch.object(ref_programs, "favourite_names", favourites), \
+                mock.patch.object(diagnostics, "favourite_names", favourites):
+            addhon._track_cycle_entities(
+                types.SimpleNamespace(), entry, {"id1": {"type": "WM", "appliance": app}}
+            )
+            [action] = tracked
+            state = types.SimpleNamespace(state=name)
+            action(types.SimpleNamespace(data={
+                "entity_id": "sensor.wm_programme",
+                "old_state": types.SimpleNamespace(state="Cottons"), "new_state": state,
+            }))
+            blob = json.dumps(self._block(app))
+        self.assertIn('"key": "program_name"', blob)
+        for piece in (name, name[:64], name[:20], "nonna"):
+            with self.subTest(piece=piece):
+                self.assertNotIn(piece, blob)
+
     def test_a_row_named_like_an_identity_key_is_blanked(self) -> None:
         # `_redact` works on dict keys, and a shadow row prints the parameter's name as a
         # VALUE: the rows must blank what an identity-named parameter holds themselves.

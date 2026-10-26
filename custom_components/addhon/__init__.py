@@ -903,6 +903,27 @@ _CYCLE_LOG_ENTITIES = (
     ("sensor", "state"),
 )
 
+# What the cycle log keeps of a state that carries a favourite's name.
+_FAVOURITE_STATE = "<favourite>"
+
+
+def _cycle_state(state, favourites) -> str | None:
+    """`state` as the cycle log may keep it: the whole state replaced by
+    `_FAVOURITE_STATE` when it carries one of `favourites`, ignoring case (a programme's
+    slug lowers its category), or the last dotted part of one.
+
+    Compared whole, before the log cuts the state: a cut name no longer matches the
+    names the dump masks with `_mask_favourites`, and would reach it.
+    """
+    if state is None:
+        return None
+    folded = str(state).casefold()
+    for name in favourites:
+        for spelling in {str(name).strip(), str(name).split(".")[-1].strip()}:
+            if spelling and spelling.casefold() in folded:
+                return _FAVOURITE_STATE
+    return str(state)
+
 
 def _track_cycle_entities(hass: HomeAssistant, entry: ConfigEntry, coord_data) -> None:
     """Hand each new state of `_CYCLE_LOG_ENTITIES` to its appliance's cycle log, on
@@ -911,13 +932,16 @@ def _track_cycle_entities(hass: HomeAssistant, entry: ConfigEntry, coord_data) -
     After the platforms, so the registry names the entities' ids. Never raises into the
     setup, and the callback, on Home Assistant's loop, never into the state machine
     (the log's lock keeps it safe against the push thread). A change of the attributes
-    alone is not a new state and is not logged.
+    alone is not a new state and is not logged. A state that carries a favourite's
+    name is logged as `_FAVOURITE_STATE` (`_cycle_state`), and not at all while the
+    favourites cannot be read.
     """
     try:
         from homeassistant.core import callback
         from homeassistant.helpers import entity_registry as er
         from homeassistant.helpers.event import async_track_state_change_event
 
+        from . import ref_programs
         from .client.engine.appliance import FOLLOWED_TYPES
 
         registry = er.async_get(hass)
@@ -949,8 +973,14 @@ def _track_cycle_entities(hass: HomeAssistant, entry: ConfigEntry, coord_data) -
                     getattr(event.data.get(name), "state", None)
                     for name in ("old_state", "new_state")
                 )
-                if log is not None and old != new:
-                    log.entity(key=key, old=old, new=new)
+                if log is None or old == new:
+                    return
+                favourites = ref_programs.favourite_names(appliance)
+                log.entity(
+                    key=key,
+                    old=_cycle_state(old, favourites),
+                    new=_cycle_state(new, favourites),
+                )
             except Exception:  # noqa: BLE001 - the log must never cost a state write
                 _LOGGER.debug("Cycle log failed", exc_info=True)
 
