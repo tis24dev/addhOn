@@ -83,6 +83,7 @@ from datetime import datetime, timezone
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from .client.engine.cycle_log import is_identity_key
 from .const import (
     ACCOUNT_DEVICE_SUFFIX,
     APPLIANCE_AC,
@@ -1417,6 +1418,13 @@ def _log_row(row) -> dict | None:
     rendered |= {mark: True for mark in ("refused", "same") if row.get(mark) is True}
     if "cloud_from" in row:
         rendered["cloud_from"] = _log_text(row["cloud_from"])
+    # `_redact` reads dict keys, and a row prints the parameter's name as a value: a
+    # parameter named like an identity key must not print what it holds.
+    name = rendered["key"]
+    if name is not None and (name.lower() in _TO_REDACT or is_identity_key(name)):
+        for field in ("before", "after", "cloud_from"):
+            if field in rendered:
+                rendered[field] = _REDACTED
     if "stamp" in row:
         rendered["stamp"] = _log_cloud(row["stamp"])
     return rendered

@@ -10884,6 +10884,34 @@ class CycleLogSectionTest(unittest.TestCase):
             {k: command[k] for k in ("name", "programme", "sent", "outcome", "result_code")},
         )
 
+    def test_a_row_named_like_an_identity_key_is_blanked(self) -> None:
+        # `_redact` works on dict keys, and a shadow row prints the parameter's name as a
+        # VALUE: the rows must blank what an identity-named parameter holds themselves.
+        from custom_components.addhon.client.engine.cycle_log import ShadowRow
+
+        app = self._washer()
+        self._cycle(app)
+        app.cycle_log.shadow("rest", [
+            ShadowRow("serialNumber", "SN-0001", "SN-0002", True, "SN-0000"),
+            ShadowRow("code", "C-1", "C-2", True),
+            ShadowRow("stainType", "1", "2", True, "0"),
+        ])
+        rows = [e for e in self._block(app)["cycle_log"]["events"]
+                if e["kind"] == "shadow"][-1]["rows"]
+        by_key = {row["key"]: row for row in rows}
+        for name in ("serialNumber", "code"):
+            with self.subTest(name=name):
+                self.assertEqual("***", by_key[name]["before"])
+                self.assertEqual("***", by_key[name]["after"])
+        self.assertEqual("***", by_key["serialNumber"]["cloud_from"])
+        self.assertEqual(("1", "2", "0"), (by_key["stainType"]["before"],
+                                           by_key["stainType"]["after"],
+                                           by_key["stainType"]["cloud_from"]))
+        blob = json.dumps(self._block(app)["cycle_log"])
+        for text in ("SN-000", "C-1", "C-2"):
+            with self.subTest(text=text):
+                self.assertNotIn(text, blob)
+
     def test_no_mac_account_or_favourite_name_in_the_block(self) -> None:
         from custom_components.addhon.client.engine.cycle_log import ShadowRow
 
