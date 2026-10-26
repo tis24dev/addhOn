@@ -215,6 +215,27 @@ class CycleLogTest(unittest.TestCase):
         self.assertEqual([], self._events(app))
         self.assertEqual({"cycles": 12}, app.statistics["drumCleaning"])
 
+    def test_an_empty_statistics_half_is_not_a_change(self) -> None:
+        # The mirror: `/statistics` answers `{}` once while `/maintenance-cycle` does
+        # not; the statistics keys last seen stay in the comparison.
+        api = _V1OnlyApi()
+        answers = [self._payload(4), {}, self._payload(4)]
+
+        async def load_statistics(appliance):
+            return answers.pop(0)
+
+        async def load_maintenance(appliance):
+            return {"drumCleaning": {"cycles": 12}}
+
+        api.load_statistics = load_statistics
+        api.load_maintenance = load_maintenance
+        app = _appliance(api)
+        _run(app.load_statistics())
+        _run(app.load_statistics())
+        self.assertEqual({"drumCleaning": {"cycles": 12}}, app.statistics)
+        _run(app.load_statistics())
+        self.assertEqual([], self._events(app))
+
     def test_a_key_that_disappears_is_logged_as_null(self) -> None:
         api = _Api(v2=dict(self._payload(4), totalWashCycle=3))
         app = _appliance(api)
