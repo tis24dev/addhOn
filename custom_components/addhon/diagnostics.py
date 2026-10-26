@@ -1352,7 +1352,9 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
 
 # The cycle log's own words (`client/engine/cycle_log.py`), printed as literals of this
 # module, and the bound on every other text it prints: the log cuts at the same length.
-_CYCLE_LOG_KINDS = frozenset({"session", "shadow", "context", "command", "cycle_read"})
+_CYCLE_LOG_KINDS = frozenset(
+    {"session", "shadow", "context", "command", "cycle_read", "statistics"}
+)
 _CYCLE_LOG_ROADS = frozenset({"mqtt", "rest", "local"})
 _CYCLE_LOG_REASONS = frozenset({"load", "poll", "cycle_read"})
 _CYCLE_LOG_OUTCOMES = frozenset(
@@ -1447,6 +1449,33 @@ def _log_reads(reads) -> list:
     ]
 
 
+def _log_loads(rows) -> list:
+    """The `loadingPercentage` rows a statistics event saw first: the load measured and
+    suggested, and the cycle's date, parsed and re-rendered."""
+    return [
+        {"current": _log_text(row.get("current")), "max": _log_text(row.get("max")),
+         "date": _log_cloud(row.get("date"))}
+        for row in (rows if isinstance(rows, list) else ())
+        if isinstance(row, Mapping)
+    ]
+
+
+def _log_changes(changes) -> dict:
+    """{key: {before, after}} of a statistics event; a key named like an identity key,
+    or whose last dotted part is, prints blanked, as `_log_row` does."""
+    rendered: dict = {}
+    for key, pair in changes.items() if isinstance(changes, Mapping) else ():
+        if (name := _log_text(key)) is None or not isinstance(pair, Mapping):
+            continue
+        leaf = name.rsplit(".", 1)[-1]
+        blank = any(part.lower() in _TO_REDACT or is_identity_key(part) for part in (name, leaf))
+        rendered[name] = {
+            field: _REDACTED if blank else _log_text(pair.get(field))
+            for field in ("before", "after")
+        }
+    return rendered
+
+
 def _log_token(allowed: frozenset):
     return lambda value: _closed_token(value, allowed)
 
@@ -1478,6 +1507,7 @@ _CYCLE_LOG_FIELDS = {
         "edge": _log_token(_CYCLE_LOG_EDGES), "asked_at": _log_cloud, "reads": _log_reads,
         "outcome": _log_token(_CYCLE_LOG_OUTCOMES),
     },
+    "statistics": {"new_rows": _log_loads, "changed": _log_changes, "truncated": _log_int},
 }
 
 

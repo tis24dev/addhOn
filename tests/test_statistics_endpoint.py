@@ -144,6 +144,76 @@ class EngineChoiceTest(unittest.TestCase):
         self.assertEqual(appliance_mod.FOLLOWED_TYPES, appliance_mod.STATISTICS_V2_TYPES)
 
 
+class CycleLogTest(unittest.TestCase):
+    """Each poll's statistics are compared with the last: a measured load per cycle and
+    the counters that moved reach the cycle log (issue #138); the first read only seeds."""
+
+    def setUp(self) -> None:
+        from custom_components.addhon.client.engine import cycle_log
+
+        cycle_log.forget_all()
+
+    @staticmethod
+    def _payload(counter, *loads):
+        return {
+            "programsCounter": counter,
+            "loadingPercentage": [
+                {"current": current, "max": 1, "date": date} for current, date in loads
+            ],
+            "temperatureUsage": {"temp0to30": 1, "temp40": counter, "temp60to90": 0},
+        }
+
+    def _events(self, app):
+        return [e for e in app.cycle_log.snapshot()["events"] if e["kind"] == "statistics"]
+
+    def test_the_first_read_seeds_then_a_new_cycle_is_logged(self) -> None:
+        api = _Api(v2=self._payload(4, (0.9, "2026-10-20")))
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual([], self._events(app))
+        api.v2 = self._payload(5, (0.9, "2026-10-20"), (0.4, "2026-10-29"))
+        _run(app.load_statistics())
+        _run(app.load_statistics())
+        [event] = self._events(app)
+        self.assertEqual([{"current": "0.4", "max": "1", "date": "2026-10-29"}],
+                         event["new_rows"])
+        self.assertEqual(
+            {"programsCounter": {"before": "4", "after": "5"},
+             "temperatureUsage.temp40": {"before": "4", "after": "5"}},
+            event["changed"],
+        )
+
+    def test_an_empty_answer_is_not_a_change(self) -> None:
+        api = _Api(v2=self._payload(4), v1={})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = {}
+        _run(app.load_statistics())
+        api.v1 = self._payload(4)
+        _run(app.load_statistics())
+        self.assertEqual([], self._events(app))
+
+    def test_a_raising_log_costs_nothing_to_the_poll(self) -> None:
+        api = _Api(v2=self._payload(4))
+        app = _appliance(api)
+        _run(app.load_statistics())
+
+        def boom(**kwargs):
+            raise RuntimeError("broken log")
+
+        app.cycle_log.statistics = boom
+        api.v2 = self._payload(5)
+        with self.assertLogs(appliance_mod._LOGGER, "DEBUG") as logs:
+            _run(app.load_statistics())
+        self.assertEqual(5, app.statistics["programsCounter"])
+        self.assertTrue(any("Cycle log failed" in line for line in logs.output))
+
+    def test_the_types_not_followed_keep_no_log(self) -> None:
+        app = _appliance(_Api(v1=self._payload(4)), "AC")
+        _run(app.load_statistics())
+        self.assertIsNone(app.cycle_log)
+
+
 class DumpTest(unittest.TestCase):
     def _block(self, source):
         api = _Api(v2={"programsCounter": 3}, v1={"programsCounter": 99})

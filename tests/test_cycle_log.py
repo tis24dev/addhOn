@@ -384,6 +384,70 @@ class CommandTest(_LogTest):
         )
 
 
+class StatisticsTest(_LogTest):
+    """What `/statistics` added or moved between two polls: a measured load per cycle
+    (`loadingPercentage`), the counters, the temperature bands (issue #138)."""
+
+    _BEFORE = {
+        "programsCounter": 41,
+        "loadingPercentage": [{"current": 0.9, "max": 1, "date": "2026-10-20"}],
+        "mostUsedPrograms": [{"prCode": "115", "count": 9}],
+        "temperatureUsage": {"temp0to30": 10, "temp40": 20, "temp60to90": 11},
+        "macAddress": "AA:BB:CC:DD:EE:FF",
+    }
+
+    def test_the_changes_between_two_reads(self) -> None:
+        after = dict(self._BEFORE, programsCounter=42, totalWashCycle=7,
+                     macAddress="AA:BB:CC:DD:EE:00")
+        after["loadingPercentage"] = self._BEFORE["loadingPercentage"] + [
+            {"current": 0.4, "max": 1, "date": "2026-10-29", "nested": {"x": 1}}
+        ]
+        after["temperatureUsage"] = {"temp0to30": 10, "temp40": 21, "temp60to90": 11}
+        new_rows, changed = cycle_log.statistics_changes(
+            cycle_log.statistics_state(self._BEFORE), cycle_log.statistics_state(after)
+        )
+        # Only the new row, its scalars only; the lists other than the loads, and who
+        # the appliance is, never.
+        self.assertEqual([{"current": "0.4", "max": "1", "date": "2026-10-29"}], new_rows)
+        self.assertEqual(
+            {"programsCounter": ("41", "42"), "temperatureUsage.temp40": ("20", "21"),
+             "totalWashCycle": (None, "7")},
+            changed,
+        )
+
+    def test_the_same_read_twice_changes_nothing(self) -> None:
+        state = cycle_log.statistics_state(self._BEFORE)
+        self.assertEqual(([], {}), cycle_log.statistics_changes(state, state))
+
+    def test_an_event_only_when_something_changed(self) -> None:
+        self.log.statistics(new_rows=[], changed={})
+        self.assertEqual([], _events(self.log))
+        self.log.statistics(
+            new_rows=[{"current": "0.4", "max": "1", "date": "2026-10-29"}],
+            changed={"programsCounter": ("41", "42")},
+        )
+        [event] = _events(self.log, "statistics")
+        self.assertEqual(
+            {"new_rows": [{"current": "0.4", "max": "1", "date": "2026-10-29"}],
+             "changed": {"programsCounter": {"before": "41", "after": "42"}}},
+            {k: event[k] for k in ("new_rows", "changed")},
+        )
+        json.dumps(self.log.snapshot())
+
+    def test_the_event_is_bounded(self) -> None:
+        long = "x" * (TEXT_LIMIT + 10) + "AA:BB:CC:DD:EE:FF"
+        self.log.statistics(
+            new_rows=[{"current": str(n), "date": long} for n in range(cycle_log.ROW_LIMIT + 2)],
+            changed={"programsCounter": ("1", long), "principalUserId": ("a", "b")},
+        )
+        [event] = _events(self.log, "statistics")
+        self.assertEqual(cycle_log.ROW_LIMIT, len(event["new_rows"]))
+        self.assertEqual(2, event["truncated"])
+        self.assertEqual(TEXT_LIMIT, len(event["new_rows"][0]["date"]))
+        self.assertEqual(TEXT_LIMIT, len(event["changed"]["programsCounter"]["after"]))
+        self.assertNotIn("principalUserId", event["changed"])
+
+
 class SessionTest(unittest.TestCase):
     """The log per appliance id at module level: a reload adds to it."""
 

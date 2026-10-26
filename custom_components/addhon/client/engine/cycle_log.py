@@ -24,6 +24,10 @@ This log keeps it, in memory, bounded, per appliance. Events, by `kind`:
 - `command`: each command sent and how the cloud answered;
 - `cycle_read`: a read a push at a cycle's start or end asked for, as the MQTT transport
   fills it in;
+- `statistics`: what a poll's `/statistics` added or moved since the last one: the rows of
+  `loadingPercentage` it did not hold (the load measured and suggested, the start date of
+  one cycle each) and the scalars that changed, a map's own one level down
+  (`temperatureUsage.temp40`); the first read of an appliance object only seeds;
 - `session`: a new appliance object took the log (setup, reload).
 
 One ring of `EVENT_LIMIT` events for every kind (R2), what it drops counted by kind.
@@ -156,6 +160,51 @@ def context_summary(attributes: Mapping, activity: Any) -> dict:
             _text(connection.get("category")) if isinstance(connection, Mapping) else None
         ),
     }
+
+
+def statistics_state(payload: Any) -> dict:
+    """What one statistics payload says, as two reads are compared: `rows`, the scalars
+    of each `loadingPercentage` row; `values`, every other scalar by key, a map's own
+    scalars one level down as `<map>.<key>`. Lists other than the loads are left out
+    (`mostUsedPrograms`), and so are the identity keys."""
+    payload = payload if isinstance(payload, Mapping) else {}
+    loads = payload.get("loadingPercentage")
+    loads = loads if isinstance(loads, list) else ()
+    rows = [_scalars(row) for row in loads if isinstance(row, Mapping)]
+    values: dict[str, Optional[str]] = {}
+    for key, value in payload.items():
+        name = _text(key)
+        if name is None or is_identity_key(key):
+            continue
+        if isinstance(value, Mapping):
+            values.update(
+                (f"{name}.{inner}", text) for inner, text in _scalars(value).items()
+            )
+        elif not isinstance(value, _CONTAINERS):
+            values[name] = _text(value)
+    return {"rows": rows, "values": values}
+
+
+def statistics_changes(
+    before: Mapping, after: Mapping
+) -> tuple[list[dict], dict[str, tuple[Optional[str], Optional[str]]]]:
+    """The rows of `after` that `before` did not hold, each as often as it is new, and
+    {key: (before, after)} for each value that changed, a key gone included; both
+    `statistics_state`s."""
+    held = list(before.get("rows", ()))
+    new_rows = []
+    for row in after.get("rows", ()):
+        if row in held:
+            held.remove(row)
+        else:
+            new_rows.append(row)
+    old, new = before.get("values", {}), after.get("values", {})
+    changed = {
+        key: (old.get(key), new.get(key))
+        for key in [*new, *(key for key in old if key not in new)]
+        if old.get(key) != new.get(key)
+    }
+    return new_rows, changed
 
 
 def _row(road: str, row: ShadowRow) -> Optional[dict]:
@@ -409,6 +458,38 @@ class CycleLog:
         now = self._clock()
         with self._lock:
             self._append("cycle_read", now, record=record)
+
+    def statistics(
+        self,
+        *,
+        new_rows: list[dict],
+        changed: Mapping[str, tuple[Optional[str], Optional[str]]],
+    ) -> None:
+        """What a poll's statistics added (`new_rows`, scalars) or moved (`changed`,
+        {key: (before, after)}) since the last; nothing when both are empty."""
+        now = self._clock()
+        rows = [_scalars(row) for row in new_rows if isinstance(row, Mapping)]
+        pairs: dict[str, dict] = {}
+        for key, pair in changed.items() if isinstance(changed, Mapping) else ():
+            name = _text(key)
+            if name is None or is_identity_key(key) or not (
+                isinstance(pair, tuple) and len(pair) == 2
+            ):
+                continue
+            before, after = pair
+            pairs[name] = {"before": _text(before), "after": _text(after)}
+        if not rows and not pairs:
+            return
+        fields: dict[str, Any] = {}
+        if rows:
+            fields["new_rows"] = rows[:ROW_LIMIT]
+        if pairs:
+            fields["changed"] = dict(list(pairs.items())[:ROW_LIMIT])
+        cut = max(len(rows) - ROW_LIMIT, 0) + max(len(pairs) - ROW_LIMIT, 0)
+        if cut:
+            fields["truncated"] = cut
+        with self._lock:
+            self._append("statistics", now, **fields)
 
     # -- reader ----------------------------------------------------------------
     def snapshot(self) -> dict:

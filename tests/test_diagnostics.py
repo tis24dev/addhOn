@@ -10884,6 +10884,33 @@ class CycleLogSectionTest(unittest.TestCase):
             {k: command[k] for k in ("name", "programme", "sent", "outcome", "result_code")},
         )
 
+    def test_statistics_events_are_rendered(self) -> None:
+        app = self._washer()
+        app.cycle_log.statistics(
+            new_rows=[{"current": "0.4", "max": "1", "date": "2026-10-29", "extra": "x"},
+                      {"current": "0.5", "max": "1", "date": "not a date"}],
+            changed={"programsCounter": ("41", "42"), "serialNumber": ("SN-0001", "SN-0002"),
+                     "unit.serialNumber": ("SN-0003", "SN-0004"),
+                     "temperatureUsage.temp40": (None, "3")},
+        )
+        section = self._block(app)["cycle_log"]
+        [event] = [e for e in section["events"] if e["kind"] == "statistics"]
+        self.assertEqual(
+            [{"current": "0.4", "max": "1", "date": "2026-10-29T00:00:00+00:00"},
+             {"current": "0.5", "max": "1", "date": None}],
+            event["new_rows"],
+        )
+        # A key `_redact` knows is blanked whole by it; one a map carried is blanked by
+        # the event itself, `_redact` reading only the dotted key.
+        self.assertEqual(
+            {"programsCounter": {"before": "41", "after": "42"},
+             "serialNumber": "***",
+             "unit.serialNumber": {"before": "***", "after": "***"},
+             "temperatureUsage.temp40": {"before": None, "after": "3"}},
+            event["changed"],
+        )
+        self.assertNotIn("SN-000", json.dumps(section))
+
     def test_a_row_named_like_an_identity_key_is_blanked(self) -> None:
         # `_redact` works on dict keys, and a shadow row prints the parameter's name as a
         # VALUE: the rows must blank what an identity-named parameter holds themselves.
