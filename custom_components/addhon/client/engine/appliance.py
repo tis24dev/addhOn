@@ -62,8 +62,8 @@ FOLLOWED_TYPES = frozenset({"WM", "WD", "TD", "DW"})
 # call budget has no room for a retry every minute).
 STATISTICS_V2_TYPES = FOLLOWED_TYPES
 # The keys the app reads from a laundry statistics answer (apk2 decomp.txt @4183897,
-# @4190638, @4191608, @4192391): a v2 answer that carries none of them is another
-# shape, not the statistics, and v1 answers instead (review of PR #141).
+# @4190638, @4191608, @4192391): a v2 answer that carries none of them with a value
+# is another shape, not the statistics, and v1 answers instead (review of PR #141).
 STATISTICS_KEYS = frozenset(
     {"programsCounter", "mostUsedPrograms", "temperatureUsage", "loadingPercentage"}
 )
@@ -1188,7 +1188,7 @@ class HonAppliance:
                 fallback = type(error).__name__
             else:
                 if isinstance(answer, dict) and answer:
-                    if any(key in answer for key in STATISTICS_KEYS):
+                    if any(answer.get(key) is not None for key in STATISTICS_KEYS):
                         self._statistics_source = {"version": "v2", "fallback": None}
                         return answer
                     fallback = "shape"

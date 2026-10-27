@@ -133,6 +133,13 @@ class EngineChoiceTest(unittest.TestCase):
         self.assertEqual(99, app.statistics["programsCounter"])
         self.assertEqual({"version": "v1", "fallback": "shape"}, app.statistics_source)
 
+    def test_a_known_key_without_a_value_does_not_count(self) -> None:
+        api = _Api(v2={"loadingPercentage": None, "resultCode": "0"}, v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual(["v2", "v1", "maintenance"], api.calls)
+        self.assertEqual({"version": "v1", "fallback": "shape"}, app.statistics_source)
+
     def test_one_known_key_is_enough_for_v2(self) -> None:
         for key in sorted(appliance_mod.STATISTICS_KEYS):
             with self.subTest(key=key):
