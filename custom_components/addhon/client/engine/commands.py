@@ -740,6 +740,8 @@ class HonCommand:
             # ecoDelayStart '0' (seen in each delayed command of the reporters'
             # histories); '1' belongs to its Eco Delay configuration, which we lack.
             ancillary["ecoDelayStart"] = "0"
+        if self._is_washer_start():
+            self._add_stain_key(params, ancillary)
         if laundry_start:
             # Issue #133, the rest of the app's order: the builder (call @2632501)
             # has seen the cleaned parameters above, for the label and the delay; it
@@ -785,6 +787,25 @@ class HonCommand:
             if self._name == "settings":
                 self.appliance.sync_params_to_command("settings")
         return result
+
+    def _add_stain_key(self, params: Mapping, ancillary: dict) -> None:
+        """`stainTypeKey: "1"` beside a stain, as the app's Haier flow sends it (issue
+        #138): choosing a stain writes the flag to `ancillaryParameters.stainTypeKey`
+        and the code to `parameters.stainType` (apk2 decomp.txt @4910616-4910618).
+
+        Only when the `stainType` sent is a number other than 0 and the category files
+        a `stainTypeKey` node among its ancillaries (an enum of stain names with no
+        default, so `ancillary_parameters` leaves it out); any other body is unchanged.
+        """
+        node = self._parameters.get("stainTypeKey")
+        if node is None or node.group != "ancillaryParameters":
+            return
+        try:
+            code = float(params.get("stainType"))
+        except (TypeError, ValueError):
+            return
+        if math.isfinite(code) and code != 0:
+            ancillary["stainTypeKey"] = "1"
 
     def ancillary_parameters(self) -> dict[str, str | float]:
         """This command's `ancillaryParameters` as they go on the wire.

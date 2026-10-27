@@ -25,6 +25,7 @@ HA stack); the engine + gate run for real against reconstructed HonParameters.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import types
@@ -757,6 +758,62 @@ class StainAndAntiCreaseTest(unittest.TestCase):
         params = appliance.commands["startProgram"].parameters
         self.assertEqual(normalize_code(params["stainType"].value), "0")
         self.assertEqual(normalize_code(params["antiCreaseStatus"].value), "0")
+
+
+class StainTypeKeyTest(unittest.TestCase):
+    """Issue #138: a washer start with a stain carries `stainTypeKey: "1"` in its
+    ancillaries, as the app's Haier flow writes it beside `parameters.stainType`
+    (apk2 decomp.txt @4910616-4910618). The HW90-B14387TU1-S declares the node, an enum
+    of stain names, among its ancillaries and with no default: the node is the
+    catalogue's (tests/fixtures/wm_hqd_duration), since the dump the other parameters
+    come from printed the enum's materialised "0" as its `defaultValue`."""
+
+    def _start(self, stain, *, declares_key=True, kind="WM"):
+        params = json.loads(_WM_HW90_FIXTURE.read_text(encoding="utf-8"))["startprogram_params"]
+        self.assertIn("stainTypeKey", params)
+        params.pop("stainTypeKey")
+        catalogue = json.loads(
+            (REPO / "tests" / "fixtures" / "wm_hqd_duration" / "cases.json").read_text()
+        )["models"]["HW90-B14387TU1-S"]["categories"]["PROGRAMS.WM_WD.HQD_COTTONS"]
+        node = catalogue["ancillaryParameters"]["stainTypeKey"]
+        self.assertIsNone(node.get("defaultValue"))
+        schema = {"parameters": params,
+                  "ancillaryParameters": {"stainTypeKey": node} if declares_key else {}}
+        sent = []
+
+        class Api:
+            async def send_command(self, appliance, name, params, ancillary, category,
+                                   **kwargs):
+                sent.append((dict(params), dict(ancillary)))
+                return True
+
+        appliance = types.SimpleNamespace(
+            appliance_type=kind, model_attributes={}, zone=0, options={}, commands={},
+            api=Api(), sync_payload_to_params=lambda params: None,
+            sync_params_to_command=lambda name: None,
+        )
+        command = HonCommand("startProgram", schema, appliance,
+                             category_name="PROGRAMS.WM_WD.IOT_WASH_BED_LINEN")
+        appliance.commands["startProgram"] = command
+        command.parameters["stainType"].value = stain
+        asyncio.run(command.send())
+        return sent[-1]
+
+    def test_a_stain_carries_the_key(self) -> None:
+        for kind in ("WM", "WD"):
+            with self.subTest(kind=kind):
+                params, ancillary = self._start("19", kind=kind)
+                self.assertEqual("19", str(params["stainType"]))
+                self.assertEqual("1", ancillary["stainTypeKey"])
+
+    def test_no_stain_no_key(self) -> None:
+        params, ancillary = self._start("0")
+        self.assertEqual("0", str(params["stainType"]))
+        self.assertNotIn("stainTypeKey", ancillary)
+
+    def test_a_schema_without_the_node_is_unchanged(self) -> None:
+        _params, ancillary = self._start("19", declares_key=False)
+        self.assertNotIn("stainTypeKey", ancillary)
 
 
 if __name__ == "__main__":

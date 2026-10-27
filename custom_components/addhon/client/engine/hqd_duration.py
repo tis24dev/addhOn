@@ -1357,6 +1357,22 @@ def started_programme_duration(appliance: Any, pr_code: Any) -> Optional[float]:
     parameters = start.get("parameters")
     if not isinstance(parameters, dict) or not _same_code(parameters.get("prCode"), pr_code):
         return None
+    return start_duration(appliance, start)
+
+
+def start_duration(appliance: Any, start: Any) -> Optional[float]:
+    """Duration of the cycle a `startProgram` body asks for, or None. Issues #131, #138.
+
+    `programme_duration` on the body's `parameters` and `ancillaryParameters` (none
+    when they are not a map), for the category its `programName` names among the
+    appliance's `startProgram` categories: a start of `/history`, or the one the cycle
+    log keeps beside the start it sends.
+    """
+    if not isinstance(start, Mapping):
+        return None
+    parameters = start.get("parameters")
+    if not isinstance(parameters, dict):
+        return None
     commands = getattr(appliance, "commands", None)
     command = commands.get("startProgram") if isinstance(commands, Mapping) else None
     categories = getattr(command, "categories", None)

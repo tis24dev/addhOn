@@ -10745,13 +10745,29 @@ class ProgrammeNameSectionTest(unittest.TestCase):
         self.assertEqual("activity", section["source"])
         self.assertEqual(
             {"programme": "HQD_COTTONS", "functional_id": None, "channel": "appliance",
-             "started": "2026-10-16T12:25:03Z", "prCode": 115, "activity_prCode": 115,
-             "options": {"prCode": "115", "temp": "40"}},
+             "started": "2026-10-16T12:25:03+00:00", "execution_started": None,
+             "prCode": 115,
+             "activity_prCode": 115, "options": {"prCode": "115", "temp": "40"}},
             section["activity"],
         )
         self.assertEqual("settled", section["cycle_read"]["outcome"])
         # The start's title may be a favourite's name the user typed: never printed.
         self.assertNotIn("My own title", json.dumps(section))
+
+    def test_the_instant_the_machine_started_is_printed(self) -> None:
+        # The cloud writes it with a space (`2026-10-10 16:11:13`) beside
+        # `activityStarted` in ISO form; parsed and re-rendered, never echoed.
+        app = self._washer()
+        self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = "2"
+        self.cloud.context["activity"] = {
+            "activityStarted": "2026-10-16T12:25:03Z",
+            "activityExecutionStarted": "2026-10-16 12:25:05",
+            "attributes": {"programName": "HQD_COTTONS", "channel": "appliance",
+                           "prCode": "115"}}
+        self.loop.run_until_complete(app.load_attributes())
+        activity = self._block(app)["programme_name"]["activity"]
+        self.assertEqual("2026-10-16T12:25:05+00:00", activity["execution_started"])
+        self.assertEqual("2026-10-16T12:25:03+00:00", activity["started"])
 
     def test_the_types_not_followed_print_nothing(self) -> None:
         for kind in ("REF", "OV", "AC"):
@@ -10884,6 +10900,170 @@ class CycleLogSectionTest(unittest.TestCase):
             {k: command[k] for k in ("name", "programme", "sent", "outcome", "result_code")},
         )
 
+    def test_a_command_follow_up_is_rendered(self) -> None:
+        app = self._washer()
+        log = app.cycle_log
+        for sent in ("2026-10-16T12:25:01.000Z", "2026-10-16T12:30:00.000Z"):
+            log.command(name="startProgram", programme="HQD_COTTONS", sent=sent,
+                        outcome="accepted")
+        log.command_outcome({
+            "command": {"timestamp": "2026-10-16T12:25:01.000Z",
+                        "transactionId": f"{self._MAC}_2026-10-16T12:25:01.000Z"},
+            "timestampAccepted": "2026-10-16T12:25:01.6Z",
+            "timestampExecuted": "2026-10-16T12:25:03.1Z",
+        })
+        # Not executed 60 s after the send, on Home Assistant's clock.
+        clock = log._clock
+        log._clock = lambda: clock() + 61
+        log.command_outcome({
+            "command": {"timestamp": "2026-10-16T12:30:00.000Z"},
+            "timestampAccepted": "2026-10-16T12:30:00.6Z",
+        })
+        section = self._block(app)["cycle_log"]
+        executed, not_executed = [
+            e for e in section["events"]
+            if e["kind"] == "command" and e["outcome"] != "accepted"
+        ]
+        self.assertEqual(
+            {"name": "startProgram", "sent": "2026-10-16T12:25:01+00:00",
+             "outcome": "executed", "executed_at": "2026-10-16T12:25:03.100000+00:00",
+             "delay_s": 2},
+            {k: executed[k] for k in ("name", "sent", "outcome", "executed_at", "delay_s")},
+        )
+        self.assertEqual("not_executed", not_executed["outcome"])
+        self.assertNotIn("executed_at", not_executed)
+        self.assertNotIn("AA:BB:CC", json.dumps(section))
+
+    def test_the_estimated_duration_of_a_start_is_rendered(self) -> None:
+        app = self._washer()
+        app.cycle_log.command(name="startProgram", programme="HQD_COTTONS",
+                              sent="2026-10-16T12:25:01.000Z", outcome="accepted",
+                              estimated_min=86)
+        app.cycle_log.command(name="startProgram", programme="HQD_COTTONS",
+                              sent="2026-10-16T12:26:01.000Z", outcome="accepted",
+                              estimated_min=None)
+        section = self._block(app)["cycle_log"]
+        starts = [e for e in section["events"] if e["kind"] == "command"]
+        self.assertEqual([86, None], [e["estimated_min"] for e in starts])
+
+    def test_the_instant_the_machine_started_is_rendered_in_either_form(self) -> None:
+        for raw, rendered in (("2026-10-16 12:25:05", "2026-10-16T12:25:05+00:00"),
+                              ("2026-10-16T12:25:05Z", "2026-10-16T12:25:05+00:00"),
+                              ("not an instant", None)):
+            with self.subTest(raw=raw):
+                app = self._washer()
+                self.cloud.context["shadow"]["parameters"]["machMode"]["parNewVal"] = "2"
+                self.cloud.context["activity"] = {
+                    "activityStarted": "2026-10-16T12:25:03Z",
+                    "activityExecutionStarted": raw,
+                    "attributes": {"programName": "HQD_COTTONS", "prCode": "115"}}
+                self.loop.run_until_complete(app.load_attributes(reason="cycle_read"))
+                section = self._block(app)["cycle_log"]
+                context = [e for e in section["events"] if e["kind"] == "context"][-1]
+                self.assertEqual(
+                    rendered, context["summary"]["activity"]["activityExecutionStarted"]
+                )
+
+    def test_statistics_events_are_rendered(self) -> None:
+        app = self._washer()
+        app.cycle_log.statistics(
+            new_rows=[{"current": "0.4", "max": "1", "date": "2026-10-29", "extra": "x"},
+                      {"current": "0.5", "max": "1", "date": "not a date"}],
+            changed={"programsCounter": ("41", "42"), "serialNumber": ("SN-0001", "SN-0002"),
+                     "unit.serialNumber": ("SN-0003", "SN-0004"),
+                     "temperatureUsage.temp40": (None, "3")},
+        )
+        section = self._block(app)["cycle_log"]
+        [event] = [e for e in section["events"] if e["kind"] == "statistics"]
+        self.assertEqual(
+            [{"current": "0.4", "max": "1", "date": "2026-10-29T00:00:00+00:00"},
+             {"current": "0.5", "max": "1", "date": None}],
+            event["new_rows"],
+        )
+        # A key `_redact` knows is blanked whole by it; one a map carried is blanked by
+        # the event itself, `_redact` reading only the dotted key.
+        self.assertEqual(
+            {"programsCounter": {"before": "41", "after": "42"},
+             "serialNumber": "***",
+             "unit.serialNumber": {"before": "***", "after": "***"},
+             "temperatureUsage.temp40": {"before": None, "after": "3"}},
+            event["changed"],
+        )
+        self.assertNotIn("SN-000", json.dumps(section))
+
+    def test_entity_events_are_rendered_and_a_favourite_masked(self) -> None:
+        from unittest import mock
+
+        app = self._washer()
+        app.cycle_log.entity(key="opt_permanent_press", old="off", new="on")
+        app.cycle_log.entity(key="program_name", old="Cottons", new="Lana delicata")
+        with mock.patch.object(diagnostics, "favourite_names", lambda appliance: ["Lana delicata"]):
+            section = self._block(app)["cycle_log"]
+        events = [e for e in section["events"] if e["kind"] == "entity"]
+        self.assertEqual(
+            [{"key": "opt_permanent_press", "before": "off", "after": "on"},
+             {"key": "program_name", "before": "Cottons", "after": "<favourite 1>"}],
+            [{k: e[k] for k in ("key", "before", "after")} for e in events],
+        )
+        self.assertNotIn("Lana", json.dumps(section))
+
+    def test_a_long_favourite_name_never_reaches_the_dump_through_an_entity(self) -> None:
+        # Through the setup's own listener: a favourite's name of 80 characters,
+        # published by `sensor.program_name`, is in the block neither whole nor cut.
+        from unittest import mock
+
+        from custom_components import addhon
+        from custom_components.addhon import ref_programs
+
+        name = "Delicati della nonna lavati a mano " + "x" * 45
+        app = self._washer()
+        registry = types.SimpleNamespace(
+            async_get_entity_id=lambda domain, platform, unique_id:
+            "sensor.wm_programme" if unique_id == "id1_program_name" else None
+        )
+        tracked = []
+        event = types.ModuleType("homeassistant.helpers.event")
+        event.async_track_state_change_event = (
+            lambda hass, ids, action: tracked.append(action) or (lambda: None)
+        )
+        helpers = sys.modules["homeassistant.helpers"]
+        entry = types.SimpleNamespace(async_on_unload=lambda func: None)
+        favourites = lambda appliance: {name}  # noqa: E731
+        with mock.patch.dict(sys.modules, {"homeassistant.helpers.event": event}), \
+                mock.patch.object(helpers, "event", event, create=True), \
+                mock.patch.object(helpers.entity_registry, "async_get",
+                                  lambda hass: registry, create=True), \
+                mock.patch.object(sys.modules["homeassistant.core"], "callback",
+                                  lambda func: func, create=True), \
+                mock.patch.object(ref_programs, "favourite_names", favourites), \
+                mock.patch.object(diagnostics, "favourite_names", favourites):
+            addhon._track_cycle_entities(
+                types.SimpleNamespace(), entry, {"id1": {"type": "WM", "appliance": app}}
+            )
+            [action] = tracked
+            state = types.SimpleNamespace(state=name)
+            action(types.SimpleNamespace(data={
+                "entity_id": "sensor.wm_programme",
+                "old_state": types.SimpleNamespace(state="Cottons"), "new_state": state,
+            }))
+            blob = json.dumps(self._block(app))
+        self.assertIn('"key": "program_name"', blob)
+        for piece in (name, name[:64], name[:20], "nonna"):
+            with self.subTest(piece=piece):
+                self.assertNotIn(piece, blob)
+
+    def test_the_section_carries_the_phases(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import ShadowRow
+
+        app = self._washer()
+        app.cycle_log.shadow("mqtt", [ShadowRow("machMode", "1", "2", True),
+                                      ShadowRow("prPhase", "0", "1", True)])
+        section = self._block(app)["cycle_log"]
+        self.assertEqual([("2", "1")],
+                         [(row["machMode"], row["prPhase"]) for row in section["phases"]])
+        self.assertEqual(["phases", "events"], list(section)[-2:])
+        json.dumps(section)
+
     def test_a_row_named_like_an_identity_key_is_blanked(self) -> None:
         # `_redact` works on dict keys, and a shadow row prints the parameter's name as a
         # VALUE: the rows must blank what an identity-named parameter holds themselves.
@@ -10934,6 +11114,71 @@ class CycleLogSectionTest(unittest.TestCase):
         for text in ("My own title", "My%20own"):
             with self.subTest(text=text):
                 self.assertNotIn(text, section)
+
+
+class CyclePhasesTest(unittest.TestCase):
+    """`cycle_log.phases`: one row each time `machMode` or `prPhase` moved, rebuilt from
+    the shadow events at dump time, with what the other keys held then (issue #138: the
+    phase after the end is named by `prPhase`, never by `machMode` 7)."""
+
+    _AT = 1_793_000_000.0
+    _KEYS = ("remainingTimeMM", "currentWaterUsed", "currentElectricityUsed", "temp",
+             "freshAirStatus", "doorLockStatus", "loosenStatus", "antiCreaseStatus",
+             "stainType")
+
+    def _events(self):
+        def shadow(seq, *rows, **fields):
+            return {"seq": seq, "at": self._AT + seq, "kind": "shadow", "road": "mqtt",
+                    "rows": [dict(zip(("key", "before", "after"), row[:3]), **row[3])
+                             if len(row) > 3 else dict(zip(("key", "before", "after"), row))
+                             for row in rows], **fields}
+
+        return [
+            {"seq": 1, "at": self._AT + 1, "kind": "session", "session": 1},
+            shadow(2, ("machMode", "1", "2"), ("prPhase", "0", "1"),
+                   ("remainingTimeMM", "60", "59"), ("temp", "40", "40", {"same": True})),
+            {"seq": 3, "at": self._AT + 3, "kind": "command", "name": "startProgram"},
+            # A run of counter steps: what it ended on is what the next phase sees.
+            shadow(4, ("currentWaterUsed", "0", "5"), ("remainingTimeMM", "59", "30"),
+                   until=self._AT + 40, steps=3),
+            # Refused by the shield of our own write: the shadow did not take it.
+            shadow(5, ("stainType", "0", "19", {"refused": True})),
+            # The same phase pushed again is not a new phase.
+            shadow(6, ("prPhase", "1", "1", {"same": True})),
+            shadow(7, ("freshAirStatus", None, "1"), resumed=True, road="rest"),
+            shadow(8, ("machMode", "2", "7"), ("prPhase", "1", "24"),
+                   ("antiCreaseStatus", "0", "1")),
+            "not an event",
+            {"seq": 9, "kind": "shadow", "rows": "not rows"},
+        ]
+
+    def test_one_row_per_phase_with_what_the_shadow_held(self) -> None:
+        nulls = dict.fromkeys(self._KEYS)
+        expected = [
+            {"seq": 2, "at": diagnostics._log_at(self._AT + 2), "machMode": "2",
+             "prPhase": "1", **nulls, "remainingTimeMM": "59", "temp": "40"},
+            {"seq": 8, "at": diagnostics._log_at(self._AT + 8), "machMode": "7",
+             "prPhase": "24", **nulls, "remainingTimeMM": "30", "currentWaterUsed": "5",
+             "temp": "40", "freshAirStatus": "1", "antiCreaseStatus": "1"},
+        ]
+        self.assertEqual(expected, diagnostics._log_phases(self._events()))
+        # In `seq` order whatever order the list came in.
+        self.assertEqual(expected, diagnostics._log_phases(list(reversed(self._events()))))
+        json.dumps(diagnostics._log_phases(self._events()))
+
+    def test_the_first_value_seen_opens_a_row(self) -> None:
+        events = [{"seq": 1, "at": self._AT, "kind": "shadow", "road": "mqtt",
+                   "rows": [{"key": "machMode", "before": "1", "after": "1", "same": True}]}]
+        [row] = diagnostics._log_phases(events)
+        self.assertEqual(("1", None), (row["machMode"], row["prPhase"]))
+
+    def test_values_are_bounded_text(self) -> None:
+        events = [{"seq": 1, "at": self._AT, "kind": "shadow", "road": "mqtt",
+                   "rows": [{"key": "machMode", "before": "1", "after": "2"},
+                            {"key": "temp", "before": None, "after": "9" * 200}]}]
+        [row] = diagnostics._log_phases(events)
+        self.assertEqual(64, len(row["temp"]))
+        self.assertEqual([], diagnostics._log_phases(None))
 
 
 def _history_entry(timestamp=None, accepted=None, name="startProgram", **parameters):

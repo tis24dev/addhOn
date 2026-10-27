@@ -889,6 +889,108 @@ async def async_remove_config_entry_device(
     return bool(ours) and not (ours & live_ids)
 
 
+# The entities whose published states the cycle log keeps (issue #138): when the Keep
+# Fresh switch and its phase, the stain dropdown and sensor, the phase, the programme
+# and the machine state showed what during a cycle. (domain, unique_id suffix); the
+# suffix is the event's `key`.
+_CYCLE_LOG_ENTITIES = (
+    ("switch", "opt_permanent_press"),
+    ("binary_sensor", "keep_fresh"),
+    ("select", "opt_stain_type"),
+    ("sensor", "stain_type"),
+    ("sensor", "program_phase"),
+    ("sensor", "program_name"),
+    ("sensor", "state"),
+)
+
+# What the cycle log keeps of a state that carries a favourite's name, and the one
+# entity whose state can: the other six publish enums or on/off.
+_FAVOURITE_STATE = "<favourite>"
+_FAVOURITE_KEY = "program_name"
+
+
+def _cycle_state(state, favourites) -> str | None:
+    """`state` as the cycle log may keep it: the whole state replaced by
+    `_FAVOURITE_STATE` when it carries one of `favourites`, ignoring case (a programme's
+    slug lowers its category), or the last dotted part of one.
+
+    Compared whole, before the log cuts the state: a cut name no longer matches the
+    names the dump masks with `_mask_favourites`, and would reach it.
+    """
+    if state is None:
+        return None
+    folded = str(state).casefold()
+    for name in favourites:
+        for spelling in {str(name).strip(), str(name).split(".")[-1].strip()}:
+            if spelling and spelling.casefold() in folded:
+                return _FAVOURITE_STATE
+    return str(state)
+
+
+def _track_cycle_entities(hass: HomeAssistant, entry: ConfigEntry, coord_data) -> None:
+    """Hand each new state of `_CYCLE_LOG_ENTITIES` to its appliance's cycle log, on
+    the followed types (`FOLLOWED_TYPES`), until the entry unloads.
+
+    After the platforms, so the registry names the entities' ids. Never raises into the
+    setup, and the callback, on Home Assistant's loop, never into the state machine
+    (the log's lock keeps it safe against the push thread). A change of the attributes
+    alone is not a new state and is not logged. A programme name that carries a
+    favourite's name is logged as `_FAVOURITE_STATE` (`_cycle_state`), and none at all
+    while the favourites cannot be read; the other states are logged as published.
+    """
+    try:
+        from homeassistant.core import callback
+        from homeassistant.helpers import entity_registry as er
+        from homeassistant.helpers.event import async_track_state_change_event
+
+        from . import ref_programs
+        from .client.engine.appliance import FOLLOWED_TYPES
+
+        registry = er.async_get(hass)
+        targets: dict[str, tuple[object, str]] = {}
+        for appliance_id, device in (coord_data or {}).items():
+            if not isinstance(device, Mapping) or device.get("type") not in FOLLOWED_TYPES:
+                continue
+            appliance = device.get("appliance")
+            if getattr(appliance, "cycle_log", None) is None:
+                continue
+            for domain, suffix in _CYCLE_LOG_ENTITIES:
+                entity_id = registry.async_get_entity_id(
+                    domain, DOMAIN, f"{appliance_id}_{suffix}"
+                )
+                if entity_id is not None:
+                    targets[entity_id] = (appliance, suffix)
+        if not targets:
+            return
+
+        @callback
+        def _on_state(event) -> None:
+            try:
+                target = targets.get(event.data.get("entity_id"))
+                if target is None:
+                    return
+                appliance, key = target
+                log = getattr(appliance, "cycle_log", None)
+                old, new = (
+                    getattr(event.data.get(name), "state", None)
+                    for name in ("old_state", "new_state")
+                )
+                if log is None or old == new:
+                    return
+                if key == _FAVOURITE_KEY:
+                    favourites = ref_programs.favourite_names(appliance)
+                    old, new = _cycle_state(old, favourites), _cycle_state(new, favourites)
+                log.entity(key=key, old=old, new=new)
+            except Exception:  # noqa: BLE001 - the log must never cost a state write
+                _LOGGER.debug("Cycle log failed", exc_info=True)
+
+        entry.async_on_unload(
+            async_track_state_change_event(hass, list(targets), _on_state)
+        )
+    except Exception:  # noqa: BLE001 - the log must never cost the setup
+        _LOGGER.debug("Setup debug: cycle log entity tracking skipped", exc_info=True)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the Haier hOn integration from a Config Entry."""
     from .hon_client import HonClient
@@ -1162,6 +1264,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Setup debug: forwarding platforms %s", PLATFORMS)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         _LOGGER.debug("Setup debug: platform forwarding completed")
+        _track_cycle_entities(hass, entry, coordinator.data)
     except asyncio.CancelledError:
         if stored:
             unload_platforms = getattr(hass.config_entries, "async_unload_platforms", None)

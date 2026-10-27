@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,7 @@ from .attributes import HonAttribute
 from .command_loader import HonCommandLoader, command_identity, start_identity
 from .commands import HonCommand
 from .exceptions import NoAuthenticationException
+from .hqd_duration import start_duration
 from .parameter.base import HonParameter
 from .parameter.program import CycleActivity
 
@@ -52,6 +54,40 @@ _CYCLE_MODES_BY_TYPE = {"DW": _CYCLE_MODES | {4}}
 # The types whose starts are followed when a cycle begins elsewhere (issue #112, decision
 # D4 of 2026-10-06): the four the app's dashboard shows a running programme for.
 FOLLOWED_TYPES = frozenset({"WM", "WD", "TD", "DW"})
+# The types whose statistics the hOn app reads from `/commands/v2/statistics` (apk2
+# decomp.txt @3333896-3333916, laundry only; the laundry centre is left on v1 here: the
+# app sends it a `unit` too, and no answer of its has been seen). Issue #138: v2 is
+# tried first on these, v1 answers when v2 fails or answers empty, and after one
+# fallback the appliance stays on v1 until the integration is reloaded (the poll's
+# call budget has no room for a retry every minute).
+STATISTICS_V2_TYPES = FOLLOWED_TYPES
+# The keys the app reads from a laundry statistics answer (apk2 decomp.txt @4183897,
+# @4190638, @4191608, @4192391): a v2 answer that carries none of them with a value
+# is another shape, not the statistics, and v1 answers instead (review of PR #141).
+STATISTICS_KEYS = frozenset(
+    {"programsCounter", "mostUsedPrograms", "temperatureUsage", "loadingPercentage"}
+)
+# The shape each of those keys has in the app's mock (@3335382-3335450) and in every
+# v1 answer seen: a counter, two lists, one map. A key of another shape, like a null
+# one, does not make an answer the statistics (review of PR #141).
+_STATISTICS_SHAPES: dict[str, tuple[type, ...]] = {
+    "programsCounter": (int, float, str),
+    "mostUsedPrograms": (list,),
+    "temperatureUsage": (dict,),
+    "loadingPercentage": (list,),
+}
+
+
+def _statistics_shaped(answer: Mapping[str, Any]) -> bool:
+    """Whether `answer` carries at least one statistics key with a value of its shape."""
+    for key, shapes in _STATISTICS_SHAPES.items():
+        value = answer.get(key)
+        if isinstance(value, bool) or not isinstance(value, shapes):
+            continue
+        if isinstance(value, str) and not value.strip().lstrip("-").isdigit():
+            continue
+        return True
+    return False
 # A push that moves `machMode` into a cycle from outside one, or out of one into the end 7
 # or selection 1, asks for a read of the context (issue #130, decision C1): the activity
 # that names the cycle comes only with it. The cycle is `cycle_modes`' set, the one the
@@ -157,6 +193,10 @@ class HonAppliance:
         self._appliance_model: dict[str, Any] = {}
         self._commands: dict[str, HonCommand] = {}
         self._statistics: dict[str, Any] = {}
+        # Which statistics endpoint answered last and why v1 did, for the dump
+        # (`statistics_source`); None before the first read. A fallback is sticky.
+        self._statistics_source: Optional[dict[str, Any]] = None
+        self._statistics_v1_only = False
         self._attributes: dict[str, Any] = {}
         self._zone = zone
         self._additional_data: dict[str, Any] = {}
@@ -227,6 +267,13 @@ class HonAppliance:
         # this object seeds it (`load_attributes`).
         self._cycle_log: Optional[_cycle_log.CycleLog] = None
         self._cycle_log_seeded = False
+        # The last statistics the log was handed (`cycle_log.statistics_state`), None
+        # before this object's first read: the next poll is compared with it.
+        self._statistics_logged: Optional[dict] = None
+        # The last non-empty statistics and `/maintenance-cycle` answers, each standing
+        # in for an empty one in that comparison.
+        self._statistics_half_logged: dict[str, Any] = {}
+        self._maintenance_logged: dict[str, Any] = {}
         if self.appliance_type in FOLLOWED_TYPES:
             try:
                 self._cycle_log = _cycle_log.attach(self.unique_id)
@@ -340,6 +387,31 @@ class HonAppliance:
     @property
     def statistics(self) -> dict[str, Any]:
         return self._statistics
+
+    def adopt_pushed_parameter(self, name: str, data: Mapping[str, Any]) -> HonAttribute:
+        """Hold a parameter a push named before any read seeded it (issue #138).
+
+        The app's shadow takes every parameter of a push, known or not
+        (`Object.assign({}, lastShadow.parameters, data)`, apk2 decomp.txt
+        @3217930-3217960); here a new name waited for the next poll. The attribute is
+        built from the push itself: the pushed value, received by MQTT now, and no
+        cloud instant (the push carries none, and `attributes_received` says when HA
+        got it). Called by the MQTT transport on the awscrt thread. A name already
+        held is left as it is and returned.
+        """
+        parameters = self._attributes.setdefault("parameters", {})
+        held = parameters.get(name)
+        if held is None:
+            held = HonAttribute(dict(data))
+            parameters[name] = held
+        return held
+
+    @property
+    def statistics_source(self) -> Optional[dict[str, Any]]:
+        """`{"version": "v2" | "v1", "fallback": None | reason}` of the last statistics
+        read (issue #138): the reason is `"empty"` or the class name of what v2 raised.
+        None before the first read. Read by the diagnostics dump only."""
+        return self._statistics_source
 
     @property
     def info(self) -> dict[str, Any]:
@@ -462,6 +534,7 @@ class HonAppliance:
                 started=started,
                 options=self._start_options(details),
                 activity_code=_as_int(details.get("prCode")),
+                execution_started=activity.get("activityExecutionStarted"),
             )
             return
         # No open activity to take (none, ended, read at rest, or older than the cycle
@@ -562,6 +635,29 @@ class HonAppliance:
     def cycle_read(self) -> Optional[dict[str, Any]]:
         """The record `note_cycle_read` keeps, None before the first read asked."""
         return self._cycle_read
+
+    def start_estimate(
+        self, command_name: Any, programme: Any, parameters: Any, ancillaries: Any
+    ) -> Optional[int]:
+        """The minutes this appliance's start is expected to last, for the cycle log
+        (issue #138): `hqd_duration.start_duration` on the body as it went out, the call
+        the delay sensor makes on a `/history` start, whole and half up as that sensor
+        rounds them. None for any command but `startProgram`, without an estimate, or on
+        any failure: the transport asks it after a send, and it never raises."""
+        if command_name != "startProgram":
+            return None
+        try:
+            minutes = start_duration(self, {
+                "programName": programme,
+                "parameters": parameters,
+                "ancillaryParameters": ancillaries,
+            })
+            if minutes is None or not math.isfinite(minutes):
+                return None
+            return math.floor(minutes + 0.5)
+        except Exception:  # noqa: BLE001 - diagnostics only
+            _LOGGER.debug("Start estimate failed", exc_info=True)
+            return None
 
     @property
     def mach_mode(self) -> Optional[int]:
@@ -932,7 +1028,17 @@ class HonAppliance:
                     ),
                 ))
             else:
-                self._attributes.setdefault("parameters", {})[name] = HonAttribute(values)
+                created = HonAttribute(values)
+                self._attributes.setdefault("parameters", {})[name] = created
+                if log is not None:
+                    # A key the cloud lists for the first time (issue #138), as a push
+                    # that creates one marks it; the seeding read logs none
+                    # (`_log_read`).
+                    rows.append(_cycle_log.ShadowRow(
+                        name, None, _cycle_log.value_text(created), True,
+                        stamp=values.get("lastUpdate") if isinstance(values, dict) else None,
+                        new=True,
+                    ))
         self._attributes |= attributes
         # Authoritative connectivity = lastConnEvent.category (app model
         # ApplianceConnectionState, see apk/analysis/per-type-derivations.md #5).
@@ -1010,7 +1116,9 @@ class HonAppliance:
         """An applied read of the context in the cycle log (issue #138). Never raises.
 
         The first read of this object seeds the log with the whole shadow instead of
-        rows: a log a reload took up again logs only what moved meanwhile.
+        rows: a log a reload took up again logs only what moved meanwhile. Then the
+        `commandHistory` slot the read merged follows up a command the log holds
+        (`CycleLog.command_outcome`), apart: a failure of one costs not the other.
         """
         try:
             if self._cycle_log_seeded:
@@ -1029,6 +1137,11 @@ class HonAppliance:
             )
         except Exception:  # noqa: BLE001 - the log must never cost the read
             _LOGGER.debug("Cycle log failed", exc_info=True)
+        try:
+            # What became of a command the log holds, from the slot this read merged.
+            log.command_outcome(self._attributes.get("commandHistory"))
+        except Exception:  # noqa: BLE001 - the log must never cost the read
+            _LOGGER.debug("Cycle log failed", exc_info=True)
 
     def derive_attributes(self) -> None:
         """Re-run the per-type derivations (programName, active, pause, available).
@@ -1042,8 +1155,77 @@ class HonAppliance:
             self._attributes = self._extra.attributes(self._attributes)
 
     async def load_statistics(self) -> None:
-        self._statistics = await self.api.load_statistics(self)
-        self._statistics |= await self.api.load_maintenance(self)
+        self._statistics = await self._read_statistics()
+        # The statistics half as it came, before the merge writes into it.
+        statistics = dict(self._statistics) if isinstance(self._statistics, dict) else {}
+        maintenance = await self.api.load_maintenance(self)
+        self._statistics |= maintenance
+        if self._cycle_log is not None:
+            self._log_statistics(self._cycle_log, statistics, maintenance)
+
+    def _log_statistics(
+        self, log: _cycle_log.CycleLog, statistics: Any, maintenance: Any
+    ) -> None:
+        """What this poll's statistics added or moved since the last, in the cycle log
+        (issue #138): a cycle's measured load lands here, and only here. The first read
+        of this object seeds the comparison silently. An empty answer is no read: both
+        halves empty log nothing, and one half empty beside a full one leaves that
+        half's keys last seen in the comparison (the next read is compared with the last
+        that said something). Never raises."""
+        try:
+            if statistics:
+                self._statistics_half_logged = dict(statistics)
+            if maintenance:
+                self._maintenance_logged = dict(maintenance)
+            if not statistics and not maintenance:
+                return
+            compared = self._statistics_half_logged | self._maintenance_logged
+            state = _cycle_log.statistics_state(compared)
+            previous, self._statistics_logged = self._statistics_logged, state
+            if previous is not None:
+                new_rows, changed = _cycle_log.statistics_changes(previous, state)
+                log.statistics(new_rows=new_rows, changed=changed)
+        except Exception:  # noqa: BLE001 - the log must never cost the poll
+            _LOGGER.debug("Cycle log failed", exc_info=True)
+
+    async def _read_statistics(self) -> dict[str, Any]:
+        """The statistics payload: v2 first on `STATISTICS_V2_TYPES`, v1 otherwise.
+
+        v2 is taken when it answers a map carrying at least one of the keys the app
+        reads (`STATISTICS_KEYS`); an error, an empty answer or another shape falls
+        back to v1 for good (`_statistics_v1_only`) and is named in
+        `statistics_source` (`empty`, `shape`, or the error's class name). An API without `load_statistics_v2` reads v1.
+        """
+        read_v2 = getattr(self.api, "load_statistics_v2", None)
+        if (
+            self.appliance_type in STATISTICS_V2_TYPES
+            and not self._statistics_v1_only
+            and callable(read_v2)
+        ):
+            fallback = None
+            try:
+                answer = await read_v2(self)
+            except Exception as error:  # noqa: BLE001 - any failure means v1
+                fallback = type(error).__name__
+            else:
+                if isinstance(answer, dict) and answer:
+                    if _statistics_shaped(answer):
+                        self._statistics_source = {"version": "v2", "fallback": None}
+                        return answer
+                    fallback = "shape"
+                else:
+                    fallback = "empty"
+            self._statistics_v1_only = True
+            _LOGGER.info(
+                "Statistics v2 gave nothing for %s (%s): reading v1 from now on",
+                self.appliance_type,
+                fallback,
+            )
+            self._statistics_source = {"version": "v1", "fallback": fallback}
+            return await self.api.load_statistics(self)
+        if self._statistics_source is None or self._statistics_source.get("version") != "v1":
+            self._statistics_source = {"version": "v1", "fallback": None}
+        return await self.api.load_statistics(self)
 
     async def update(self, force: bool = False) -> Optional[bool]:
         """Read the context, unless the last read is under 5 s old and not `force`d.

@@ -11,6 +11,17 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **Washers, washer-dryers, dryers and dishwashers read their statistics from the endpoint
+  the official app uses** (#138): `/commands/v2/statistics` is tried first and, when it
+  fails or answers nothing, the previous `/commands/v1/statistics` answers instead until
+  the integration is reloaded. The diagnostics file says which one answered and why.
+- **A value the appliance reports for the first time is shown as soon as it is pushed**
+  (#138). A parameter the cloud had never listed used to wait for the next poll, up to a
+  minute; it is now taken from the push itself, as the official app does. The cycle
+  timeline marks such rows as `new`.
+- **A washer start with a stain now also says a stain was chosen, as the official app
+  does** (#138): beside the stain code it sends the flag the app adds, on washers and
+  washer-dryers whose schema has it. Starts without a stain are unchanged.
 - **New stain-type dropdown and anti-crease switch on washers whose schema offers them**
   (#138). Both are disabled by default: enable them by hand in the entity settings. They
   are experimental, added to measure what the machine does with them. The stain dropdown
@@ -26,6 +37,14 @@ the notes were generated automatically carry a link to their diff instead of a s
   timeline of the last cycles** (#138): what the machine reported and when, and what was
   sent, so one download explains a whole cycle. It is kept in memory: reloading the
   integration keeps it, restarting Home Assistant starts it over.
+- **The cycle timeline also shows what the statistics added after each cycle and what
+  the cycle's entities showed** (#138): the load the washer measured and the one it
+  suggested, the counters that moved, and each state the Keep Fresh switch and phase,
+  the stain dropdown and sensor, the phase, the programme and the machine state took, how
+  long each start was expected to last and when the machine actually started the cycle,
+  and whether the machine executed each start, stop, pause or resume and how long after
+  the cloud accepted it. A table of the cycle's phases sums it up, with the time left,
+  the water and energy used and the temperature at the start of each.
 - **The diagnostics file now says where each programme option's value came from** (#138),
   for every appliance with option entities: your pending choice, what the programme
   prescribes, the running cycle, the machine's report or the last command. Unlike the

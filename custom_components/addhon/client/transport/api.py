@@ -19,7 +19,8 @@ here: they use a handler without auth and do not enter the setup flow of our
 appliances; not implemented because not used.
 
 `appliance` is duck-typed (`Any`): we only read `.appliance_type`, `.appliance_model_id`,
-`.mac_address`, `.code`, `.info` (dict), `.options`. This way `transport/` stays
+`.mac_address`, `.code`, `.info` (dict), `.options`, and, when it has them, the cycle
+log's `.cycle_log` and `.start_estimate()` (issue #138). This way `transport/` stays
 decoupled from the engine, as the whole native layer is.
 """
 from __future__ import annotations
@@ -134,15 +135,48 @@ def _cloud_error(payload: Any) -> str | None:
     return _scrub_cloud_text(str(payload["errorType"]))
 
 
+# The types whose start the cycle log keeps with the engine's estimate of its duration.
+_ESTIMATED_TYPES = frozenset({"WM", "WD", "TD"})
+
+
+def _estimated_minutes(appliance: Any, data: dict[str, Any]) -> int | None:
+    """The minutes the appliance expects the cycle of the start `data` to last (issue
+    #138), asked of its `start_estimate` with the body as it went out: the engine's
+    `HonAppliance.start_estimate`. None when the appliance has no such method, answers
+    anything but a whole number, or raises."""
+    try:
+        estimate = getattr(appliance, "start_estimate", None)
+        if not callable(estimate):
+            return None
+        minutes = estimate(
+            data.get("commandName"),
+            data.get("programName"),
+            data.get("parameters"),
+            data.get("ancillaryParameters"),
+        )
+        return minutes if type(minutes) is int else None
+    except Exception:  # noqa: BLE001 - diagnostics only
+        _LOGGER.debug("Cycle log: no estimated duration", exc_info=True)
+        return None
+
+
 def _note_command(
     appliance: Any, data: dict[str, Any], outcome: str, *, code: Any = None,
     error: str | None = None,
 ) -> None:
     """A command sent, and how the cloud answered, in the appliance's cycle log (issue
-    #138). The command's `timestamp` is the one `/history` keeps. Never raises."""
+    #138). The command's `timestamp` is the one `/history` keeps; a washer,
+    washer-dryer or dryer start adds the appliance's estimate of its duration
+    (`_estimated_minutes`), asked before the log's lock. Never raises."""
     try:
         log = getattr(appliance, "cycle_log", None)
         if log is not None:
+            extra: dict[str, Any] = {}
+            if (
+                data.get("commandName") == "startProgram"
+                and getattr(appliance, "appliance_type", None) in _ESTIMATED_TYPES
+            ):
+                extra["estimated_min"] = _estimated_minutes(appliance, data)
             log.command(
                 name=data.get("commandName"),
                 programme=data.get("programName"),
@@ -150,6 +184,7 @@ def _note_command(
                 outcome=outcome,
                 code=code,
                 error=error,
+                **extra,
             )
     except Exception:  # noqa: BLE001 - diagnostics only
         _LOGGER.debug("Cycle log failed", exc_info=True)
@@ -556,11 +591,21 @@ class HonApi:
         return payload if isinstance(payload, dict) else {}
 
     async def load_statistics(self, appliance: Any) -> dict:
+        return await self._load_statistics(appliance, "v1")
+
+    async def load_statistics_v2(self, appliance: Any) -> dict:
+        """`GET /commands/v2/statistics`, the endpoint the hOn app reads the statistics
+        of every laundry appliance from (apk2 decomp.txt @3333896-3333916), with the
+        same two parameters as v1. The engine tries it first on those types and falls
+        back to `load_statistics` (issue #138); nothing else calls it."""
+        return await self._load_statistics(appliance, "v2")
+
+    async def _load_statistics(self, appliance: Any, version: str) -> dict:
         params = {
             "macAddress": appliance.mac_address,
             "applianceType": appliance.appliance_type,
         }
-        url = f"{API_URL}/commands/v1/statistics"
+        url = f"{API_URL}/commands/{version}/statistics"
         async with self._connection.get(url, params=params) as response:
             data = await response.json(content_type=None)
         payload = data.get("payload", {}) if isinstance(data, dict) else {}

@@ -111,6 +111,22 @@ class _CycleHarness(_Harness):
         return app
 
 
+class ExecutionStartedTest(_CycleHarness):
+    """Issue #138: the instant the machine actually started the cycle, kept with it: the
+    app titles and times a cycle from `activityExecutionStarted || activityStarted`
+    (apk2 decomp.txt @4175867, @4187993-4188011)."""
+
+    def test_the_activity_s_execution_instant_is_kept(self) -> None:
+        app = self._washer()
+        activity = _start() | {"activityExecutionStarted": "2026-10-16 14:00:04"}
+        self._read(app, {"activity": activity}, machMode="2")
+        self.assertEqual("2026-10-16 14:00:04", app.cycle_activity.execution_started)
+        self.assertEqual(activity["activityStarted"], app.cycle_activity.started)
+
+    def test_an_activity_without_it_keeps_none(self) -> None:
+        self.assertIsNone(self._cycle().cycle_activity.execution_started)
+
+
 class CycleOptionTest(_CycleHarness):
     """`HonAppliance.cycle_option`: what the running cycle's start sent, or None."""
 

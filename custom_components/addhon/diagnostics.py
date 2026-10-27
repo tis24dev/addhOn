@@ -1301,10 +1301,11 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
 
     - `name` and `source`, the rule that answered (`HonParameterProgram.name_source`);
     - `activity`, the cycle the context's activity described as the engine keeps it
-      (`HonAppliance.cycle_activity`): programme, channel, start, the shadow's code
-      read with it (`prCode`), the activity's own (`activity_prCode`) and the start's
-      options it carried (`options`, issue #138, each text bounded); the start's title
-      is left out, it may be a favourite's name;
+      (`HonAppliance.cycle_activity`): programme, channel, start and the instant the
+      machine started executing it (`execution_started`, issue #138), both parsed and
+      re-rendered, the shadow's code read with it (`prCode`), the activity's own
+      (`activity_prCode`) and the start's options it carried (`options`, issue #138,
+      each text bounded); the start's title is left out, it may be a favourite's name;
     - `cycle_read`, the last read of the context a push at the start or the end of a
       cycle asked for (`HonAppliance.cycle_read`): the edge, when it was asked, each
       read and the outcome.
@@ -1329,7 +1330,8 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
                 "programme": cycle.programme,
                 "functional_id": cycle.functional_id,
                 "channel": cycle.channel,
-                "started": cycle.started,
+                "started": _log_cloud(cycle.started),
+                "execution_started": _log_cloud(getattr(cycle, "execution_started", None)),
                 "prCode": cycle.code,
                 "activity_prCode": cycle.activity_code,
                 "options": {
@@ -1352,18 +1354,22 @@ def _programme_name(appliance, attributes: Mapping) -> dict | None:
 
 # The cycle log's own words (`client/engine/cycle_log.py`), printed as literals of this
 # module, and the bound on every other text it prints: the log cuts at the same length.
-_CYCLE_LOG_KINDS = frozenset({"session", "shadow", "context", "command", "cycle_read"})
+_CYCLE_LOG_KINDS = frozenset(
+    {"session", "shadow", "context", "command", "cycle_read", "statistics", "entity"}
+)
 _CYCLE_LOG_ROADS = frozenset({"mqtt", "rest", "local"})
 _CYCLE_LOG_REASONS = frozenset({"load", "poll", "cycle_read"})
-_CYCLE_LOG_OUTCOMES = frozenset(
-    {"accepted", "rejected", "raised", "settled", "unsettled", "failed", "cancelled"}
-)
+_CYCLE_LOG_OUTCOMES = frozenset({
+    "accepted", "rejected", "raised", "executed", "not_executed", "settled", "unsettled",
+    "failed", "cancelled",
+})
 _CYCLE_LOG_EDGES = frozenset({"start", "end"})
 _CYCLE_LOG_TEXT_MAX = 64
 # The cloud's instants among the keys a read of the context is summarised with.
-_CYCLE_LOG_CLOUD_KEYS = frozenset(
-    {"activityStarted", "activityEnded", "timestampAccepted", "timestampExecuted", "timestamp"}
-)
+_CYCLE_LOG_CLOUD_KEYS = frozenset({
+    "activityStarted", "activityExecutionStarted", "activityEnded", "timestampAccepted",
+    "timestampExecuted", "timestamp",
+})
 
 
 def _log_at(value) -> str | None:
@@ -1415,7 +1421,7 @@ def _log_row(row) -> dict | None:
     if not isinstance(row, Mapping):
         return None
     rendered = {key: _log_text(row.get(key)) for key in ("key", "before", "after")}
-    rendered |= {mark: True for mark in ("refused", "same") if row.get(mark) is True}
+    rendered |= {mark: True for mark in ("refused", "same", "new") if row.get(mark) is True}
     if "cloud_from" in row:
         rendered["cloud_from"] = _log_text(row["cloud_from"])
     # `_redact` reads dict keys, and a row prints the parameter's name as a value: a
@@ -1447,6 +1453,33 @@ def _log_reads(reads) -> list:
     ]
 
 
+def _log_loads(rows) -> list:
+    """The `loadingPercentage` rows a statistics event saw first: the load measured and
+    suggested, and the cycle's date, parsed and re-rendered."""
+    return [
+        {"current": _log_text(row.get("current")), "max": _log_text(row.get("max")),
+         "date": _log_cloud(row.get("date"))}
+        for row in (rows if isinstance(rows, list) else ())
+        if isinstance(row, Mapping)
+    ]
+
+
+def _log_changes(changes) -> dict:
+    """{key: {before, after}} of a statistics event; a key named like an identity key,
+    or whose last dotted part is, prints blanked, as `_log_row` does."""
+    rendered: dict = {}
+    for key, pair in changes.items() if isinstance(changes, Mapping) else ():
+        if (name := _log_text(key)) is None or not isinstance(pair, Mapping):
+            continue
+        leaf = name.rsplit(".", 1)[-1]
+        blank = any(part.lower() in _TO_REDACT or is_identity_key(part) for part in (name, leaf))
+        rendered[name] = {
+            field: _REDACTED if blank else _log_text(pair.get(field))
+            for field in ("before", "after")
+        }
+    return rendered
+
+
 def _log_token(allowed: frozenset):
     return lambda value: _closed_token(value, allowed)
 
@@ -1472,12 +1505,17 @@ _CYCLE_LOG_FIELDS = {
     "command": {
         "name": _log_text, "programme": _log_text, "sent": _log_cloud,
         "outcome": _log_token(_CYCLE_LOG_OUTCOMES), "result_code": _log_text,
-        "error": _log_text,
+        "error": _log_text, "estimated_min": _log_int, "executed_at": _log_cloud,
+        "delay_s": _log_int,
     },
     "cycle_read": {
         "edge": _log_token(_CYCLE_LOG_EDGES), "asked_at": _log_cloud, "reads": _log_reads,
         "outcome": _log_token(_CYCLE_LOG_OUTCOMES),
     },
+    "statistics": {"new_rows": _log_loads, "changed": _log_changes, "truncated": _log_int},
+    # A state is text the user can have written (a favourite's name on `program_name`):
+    # bounded here, masked with the block by `_mask_favourites`.
+    "entity": {"key": _log_text, "before": _log_text, "after": _log_text},
 }
 
 
@@ -1492,13 +1530,84 @@ def _log_event(raw) -> dict | None:
     return event
 
 
+# The two keys a phase row opens on, and what each row says the shadow held then
+# (issue #138): the app names the phase after the end from `prPhase` (HQD 20 TUMBLING,
+# 24 REFRESH) and times it from its `lastUpdate`; `machMode` 7 is never a phase.
+_PHASE_KEYS = ("machMode", "prPhase")
+_PHASE_VALUES = (
+    "remainingTimeMM", "currentWaterUsed", "currentElectricityUsed", "temp",
+    "freshAirStatus", "doorLockStatus", "loosenStatus", "antiCreaseStatus", "stainType",
+)
+
+
+def _log_phases(events) -> list:
+    """The cycle log's phases, rebuilt from its `shadow` events in `seq` order: a row
+    each time `machMode` or `prPhase` takes a value other than the last one (the first
+    value seen included), with the event's `seq` and instant and the last value then
+    held by each of `_PHASE_VALUES`, null when never seen. Only the rows the shadow
+    applied count (not `refused`); a `resumed` event counts like any other, and a run
+    of counter steps by the values it ended on. Pure; bounded text."""
+    shadows = sorted(
+        (
+            event for event in (events if isinstance(events, (list, tuple)) else ())
+            if isinstance(event, Mapping) and event.get("kind") == "shadow"
+            and type(event.get("seq")) is int
+        ),
+        key=lambda event: event["seq"],
+    )
+    held: dict = {}
+    phases: list = []
+    for event in shadows:
+        moved = False
+        rows = event.get("rows")
+        for row in rows if isinstance(rows, list) else ():
+            if not isinstance(row, Mapping) or row.get("refused") is True:
+                continue
+            key, value = row.get("key"), _log_text(row.get("after"))
+            if key in _PHASE_KEYS and held.get(key, ...) != value:
+                moved = True
+            if key in _PHASE_KEYS or key in _PHASE_VALUES:
+                held[key] = value
+        if moved:
+            phases.append({
+                "seq": event["seq"], "at": _log_at(event.get("at")),
+                **{key: held.get(key) for key in (*_PHASE_KEYS, *_PHASE_VALUES)},
+            })
+    return phases
+
+
+_STATISTICS_VERSIONS = frozenset({"v1", "v2"})
+
+
+def _statistics_source(appliance) -> dict | None:
+    """`{version, fallback}` of the last statistics read (`HonAppliance.statistics_source`,
+    issue #138), rebuilt: the version only from the two the engine writes, the fallback
+    only as `empty` or a bare exception class name; anything else prints as null. None
+    for an engine without the property or before its first read."""
+    source = getattr(appliance, "statistics_source", None)
+    if not isinstance(source, Mapping):
+        return None
+    version = source.get("version")
+    fallback = source.get("fallback")
+    return {
+        "version": version if type(version) is str and version in _STATISTICS_VERSIONS else None,
+        "fallback": (
+            fallback
+            if type(fallback) is str and fallback.isidentifier() and len(fallback) <= 64
+            else None
+        ),
+    }
+
+
 def _cycle_log_section(appliance) -> dict | None:
     """What the cycles did over time (issue #138): `HonAppliance.cycle_log`.
 
     The pushes, every row kept and marked (`refused` by the shield of our own write,
     `same`, `cloud_from`), the reads of the context that moved something, the commands
-    sent and how the cloud answered, the reads a cycle's edge asked for, and the
-    sessions; the events in `seq` order, what the ring dropped counted by kind. The
+    sent, how the cloud answered and whether the machine executed them (the context's
+    `commandHistory` slot, once each), the reads a cycle's edge asked for, and the
+    sessions; the events in `seq` order, what the ring dropped counted by kind, and
+    before them the `phases` those events show (`_log_phases`). The
     `programme_name` below is the last state of the same story. Home Assistant's
     instants by `_stamp_text`; the cloud's parsed and re-rendered, never echoed; every
     other text bounded and masked by `_bounded_text`, then `_redact` like the block.
@@ -1527,6 +1636,7 @@ def _cycle_log_section(appliance) -> dict | None:
                 for kind, count in dropped.items()
                 if type(count) is int
             },
+            "phases": _log_phases(raw.get("events")),
             "events": [
                 event for event in map(_log_event, raw.get("events") or ())
                 if event is not None
@@ -4612,6 +4722,14 @@ def _appliance_block(
         # there and survives only here. `attributes_overridden` names those keys,
         # and is always present -- `{}` is the finding "no key had two sources".
         "statistics": dict(statistics),
+        # Which statistics endpoint the map above came from (issue #138): the app's
+        # v2 on the laundry types, v1 otherwise or after v2 failed, with the reason.
+        # Omitted before the first read.
+        **(
+            {"statistics_source": source}
+            if (source := _statistics_source(appliance)) is not None
+            else {}
+        ),
         "attributes_overridden": overrides,
         # What the cycles did over time, the story `programme_name` below tells the end
         # of; omitted for the types that are not followed (issue #138).

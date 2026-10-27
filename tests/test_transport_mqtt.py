@@ -1597,6 +1597,13 @@ class _LoggedAppliance(FakeAppliance):
         }}
         self.cycle_log = CycleLog() if log is None else log
         self.mach_mode = 1
+        self.adopted: list[str] = []
+
+    def adopt_pushed_parameter(self, name, data):
+        held = HonAttribute(dict(data))
+        self.attributes["parameters"][name] = held
+        self.adopted.append(name)
+        return held
 
     def cycle_edge(self, before):
         return "start"
@@ -1647,11 +1654,28 @@ class CycleLogPushTest(unittest.TestCase):
         self.assertEqual(
             [{"key": "machMode", "before": "1", "after": "2"},
              {"key": "stainType", "before": "19", "after": "19", "refused": True,
-              "cloud_from": "0"}],
+              "cloud_from": "0"},
+             {"key": "unknownKey", "before": None, "after": "x", "new": True}],
             shadow["rows"],
         )
-        self.assertEqual(["unknownKey"], shadow["unseeded"])
+        self.assertNotIn("unseeded", shadow)
         self.assertEqual("settled", read["outcome"])
+
+    def test_a_key_the_shadow_lacks_is_created_from_the_push(self) -> None:
+        app = _LoggedAppliance(self._TOPIC)
+        self._push(app, [{"parName": "loosenStatus", "parOldVal": "0", "parNewVal": "1"}])
+        held = app.attributes["parameters"]["loosenStatus"]
+        self.assertIsInstance(held, HonAttribute)
+        self.assertEqual("1", str(held))
+        self.assertEqual(["loosenStatus"], app.adopted)
+
+    def test_an_appliance_that_cannot_adopt_lists_the_key_as_unseeded(self) -> None:
+        app = _LoggedAppliance(self._TOPIC)
+        app.adopt_pushed_parameter = None
+        self._push(app, [{"parName": "loosenStatus", "parNewVal": "1"}])
+        self.assertNotIn("loosenStatus", app.attributes["parameters"])
+        shadow = app.cycle_log.snapshot()["events"][0]
+        self.assertEqual(["loosenStatus"], shadow["unseeded"])
 
     def test_a_raising_cycle_log_does_not_stop_the_push(self) -> None:
         class _Broken:

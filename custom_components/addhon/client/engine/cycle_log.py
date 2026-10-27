@@ -13,16 +13,29 @@ This log keeps it, in memory, bounded, per appliance. Events, by `kind`:
   marked `refused` by the 10 s shield of our own write (the start's echo of
   `stainType`/`antiCreaseStatus` lands inside it), `same` as the value held, or
   `cloud_from` when the cloud's old value is not the one held (a push missed); the keys
-  absent from the shadow are listed as `unseeded`. A read keeps the rows refused,
+  the shadow did not hold are created from the push and marked `new`; a name the
+  appliance cannot adopt is listed as `unseeded`. A read keeps the rows refused,
   changed, or whose `lastUpdate` moved (`stamp`); a write of ours the rows it changed.
   Pushes that only step the countdown and consumption counters, with nothing between,
   are one event (`until`, `steps`);
 - `context`: a read of the context whose activity, `commandHistory` slot or connection
   differs from the last one logged, or whose answer was dropped as stale; a read that
   repeats it is only counted on that event (`unchanged`, `last_at`);
-- `command`: each command sent and how the cloud answered;
+- `command`: each command sent and how the cloud answered, a start with the minutes the
+  engine expects its cycle to last (`estimated_min`); then, once, what became of
+  it as the app reads it, from a read of the context whose `commandHistory` slot names it
+  by the `timestamp` it was sent with and whose acceptance lies within `SLOT_WINDOW_S`
+  of it: `executed` (`executed_at`, `delay_s` from the acceptance) or `not_executed`,
+  accepted and not executed `NOT_RECEIVED_S` after the send;
 - `cycle_read`: a read a push at a cycle's start or end asked for, as the MQTT transport
   fills it in;
+- `statistics`: what a poll's `/statistics` added or moved since the last one: the rows of
+  `loadingPercentage` it did not hold (the load measured and suggested, the start date of
+  one cycle each) and the scalars that changed, a map's own one level down
+  (`temperatureUsage.temp40`); the first read of an appliance object only seeds;
+- `entity`: a state one of the entities that show a cycle's options, phase, programme or
+  machine state published (`key`, the unique_id's suffix), `unknown` and `unavailable`
+  kept as the text they are; Home Assistant's listener feeds it (`__init__.py`);
 - `session`: a new appliance object took the log (setup, reload).
 
 One ring of `EVENT_LIMIT` events for every kind (R2), what it drops counted by kind.
@@ -42,10 +55,18 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Callable, NamedTuple, Optional
 
 from ...debug_utils import _MAC_RE
+from ..helpers import parse_cloud_timestamp
 
 EVENT_LIMIT = 2000
 ROW_LIMIT = 128
 TEXT_LIMIT = 64
+# Accepted and still not executed this many seconds later: the command never reached the
+# machine, as the app judges it (`_command_not_received_timeout`, apk2 decomp.txt
+# @1021485-1021495; `updateApplianceStatus` @1021870-1022070).
+NOT_RECEIVED_S = 60
+# How far from a command's own timestamp the `commandHistory` slot's acceptance may lie,
+# either side, for the slot's times to be that command's (`CycleLog.command_outcome`).
+SLOT_WINDOW_S = 60
 
 # Who started a cycle and from where, never what it does: the hOn accounts, the phone,
 # the start's title (a favourite's name is the user's own text), the MAC and the
@@ -69,6 +90,8 @@ _COUNTERS: dict[str, Optional[float]] = {
     "totalElectricityUsed": None,
 }
 _PLAIN = frozenset({"key", "before", "after"})
+# `CycleLog.command` without an estimate: not a start that has one.
+_NO_ESTIMATE: Any = object()
 _CONTAINERS = (Mapping, list, tuple, set, frozenset)
 
 
@@ -83,6 +106,8 @@ class ShadowRow(NamedTuple):
     applied: bool
     cloud_old: str | None = None
     stamp: str | None = None
+    # The key was created by this push (the shadow had not seeded it).
+    new: bool = False
 
 
 def is_identity_key(key: Any) -> bool:
@@ -124,7 +149,9 @@ def _scalars(values: Any) -> dict[str, Optional[str]]:
 def context_summary(attributes: Mapping, activity: Any) -> dict:
     """What one read of the context says about the cycle, as the log compares it.
 
-    `activity` is the read's activity, None when the payload carried none. Its start and
+    `activity` is the read's activity, None when the payload carried none. Its start, the
+    instant the machine started executing it (`activityExecutionStarted`, which the app
+    titles and times the cycle from, apk2 decomp.txt @4175867, @4187993-4188011), its
     end and the scalars of its `attributes` are kept; of the `commandHistory` slot its
     scalars and its command's; of `lastConnEvent` the category. Identity keys are left
     out everywhere.
@@ -137,7 +164,9 @@ def context_summary(attributes: Mapping, activity: Any) -> dict:
     else:
         summary_activity = {
             key: _text(activity.get(key))
-            for key in ("activityStarted", "activityEnded", "completed")
+            for key in (
+                "activityStarted", "activityExecutionStarted", "activityEnded", "completed"
+            )
         }
         summary_activity["attributes"] = _scalars(activity.get("attributes"))
     slot = attributes.get("commandHistory")
@@ -155,6 +184,51 @@ def context_summary(attributes: Mapping, activity: Any) -> dict:
     }
 
 
+def statistics_state(payload: Any) -> dict:
+    """What one statistics payload says, as two reads are compared: `rows`, the scalars
+    of each `loadingPercentage` row; `values`, every other scalar by key, a map's own
+    scalars one level down as `<map>.<key>`. Lists other than the loads are left out
+    (`mostUsedPrograms`), and so are the identity keys."""
+    payload = payload if isinstance(payload, Mapping) else {}
+    loads = payload.get("loadingPercentage")
+    loads = loads if isinstance(loads, list) else ()
+    rows = [_scalars(row) for row in loads if isinstance(row, Mapping)]
+    values: dict[str, Optional[str]] = {}
+    for key, value in payload.items():
+        name = _text(key)
+        if name is None or is_identity_key(key):
+            continue
+        if isinstance(value, Mapping):
+            values.update(
+                (f"{name}.{inner}", text) for inner, text in _scalars(value).items()
+            )
+        elif not isinstance(value, _CONTAINERS):
+            values[name] = _text(value)
+    return {"rows": rows, "values": values}
+
+
+def statistics_changes(
+    before: Mapping, after: Mapping
+) -> tuple[list[dict], dict[str, tuple[Optional[str], Optional[str]]]]:
+    """The rows of `after` that `before` did not hold, each as often as it is new, and
+    {key: (before, after)} for each value that changed, a key gone included; both
+    `statistics_state`s."""
+    held = list(before.get("rows", ()))
+    new_rows = []
+    for row in after.get("rows", ()):
+        if row in held:
+            held.remove(row)
+        else:
+            new_rows.append(row)
+    old, new = before.get("values", {}), after.get("values", {})
+    changed = {
+        key: (old.get(key), new.get(key))
+        for key in [*new, *(key for key in old if key not in new)]
+        if old.get(key) != new.get(key)
+    }
+    return new_rows, changed
+
+
 def _row(road: str, row: ShadowRow) -> Optional[dict]:
     """`row` as the log keeps it, marked, or None when `road` does not keep it."""
     key = _text(row.key)
@@ -162,7 +236,9 @@ def _row(road: str, row: ShadowRow) -> Optional[dict]:
         return None
     before, after, applied = _text(row.before), _text(row.after), bool(row.applied)
     entry: dict[str, Any] = {"key": key, "before": before, "after": after}
-    if not applied:
+    if row.new:
+        entry["new"] = True
+    elif not applied:
         entry["refused"] = True
     elif before == after:
         entry["same"] = True
@@ -239,6 +315,9 @@ class CycleLog:
         # whose summary the next reads are compared with.
         self._run: Optional[dict] = None
         self._context: Optional[dict] = None
+        # The `command` events still waiting for what became of them, by the timestamp
+        # they were sent with; one leaves when followed up or dropped by the ring.
+        self._awaiting: dict[str, dict] = {}
 
     # -- writers (each takes the lock once; the event is built before) ----------
     def _append(self, kind: str, now: float, **fields: Any) -> dict:
@@ -249,6 +328,8 @@ class CycleLog:
             if evicted is self._context:
                 # The next read is logged again, so the dump always shows the last one.
                 self._context = None
+            if self._awaiting.get(evicted.get("sent")) is evicted:
+                del self._awaiting[evicted["sent"]]
         self._seq += 1
         event = {"seq": self._seq, "at": now, "kind": kind, **fields}
         self._events.append(event)
@@ -381,9 +462,12 @@ class CycleLog:
         outcome: str,
         code: Any = None,
         error: str | None = None,
+        estimated_min: Any = _NO_ESTIMATE,
     ) -> None:
         """One command sent (`sent` is its timestamp, which `/history` keeps too) and
-        how the cloud answered: `accepted`, `rejected` (`code`, `error`), `raised`."""
+        how the cloud answered: `accepted`, `rejected` (`code`, `error`), `raised`. A
+        washer, washer-dryer or dryer start also keeps `estimated_min`, the minutes the
+        engine expects its cycle to last, None when it has no estimate."""
         now = self._clock()
         fields = {
             "name": _text(name),
@@ -395,8 +479,64 @@ class CycleLog:
             fields["result_code"] = _text(code)
         if error is not None:
             fields["error"] = _text(error)
+        if estimated_min is not _NO_ESTIMATE:
+            fields["estimated_min"] = estimated_min if type(estimated_min) is int else None
         with self._lock:
-            self._append("command", now, **fields)
+            event = self._append("command", now, **fields)
+            if fields["sent"] is not None:
+                self._awaiting[fields["sent"]] = event
+
+    def command_outcome(self, slot: Any) -> None:
+        """What became of a command this log holds, from a read of the context's
+        `commandHistory` slot, as the app reads it (issue #138, apk2 decomp.txt
+        @3271661): the slot names the command by the `timestamp` it was sent with,
+        `executed` once `timestampExecuted` is set (`executed_at` as the cloud wrote it,
+        `delay_s` the whole seconds from `timestampAccepted`), `not_executed` when only
+        `timestampAccepted` is, more than `NOT_RECEIVED_S` after the send's own event
+        (both on Home Assistant's clock).
+
+        The slot's times move with every command, its body only with a start or a stop
+        (`diagnostics._command_history_block`): a slot speaks for the command its body
+        names only when its acceptance lies within `SLOT_WINDOW_S` of that command's
+        timestamp, either side, and, executed, not before it was accepted. Any other
+        slot, or one whose instants cannot be read, leaves the command waiting with no
+        follow-up (`/history` in the dump answers for it). One follow-up per command.
+        The slot's `transactionId` carries the MAC: it is never read."""
+        if not isinstance(slot, Mapping):
+            return
+        command = slot.get("command")
+        sent = _text(command.get("timestamp")) if isinstance(command, Mapping) else None
+        if sent is None:
+            return
+        sent_at = parse_cloud_timestamp(command.get("timestamp"))
+        accepted = parse_cloud_timestamp(slot.get("timestampAccepted"))
+        if (
+            sent_at is None
+            or accepted is None
+            or abs((accepted - sent_at).total_seconds()) > SLOT_WINDOW_S
+        ):
+            return
+        executed_at = _text(slot.get("timestampExecuted")) or None
+        if executed_at is not None:
+            executed = parse_cloud_timestamp(slot.get("timestampExecuted"))
+            if executed is None or executed < accepted:
+                return
+            fields: dict[str, Any] = {
+                "outcome": "executed",
+                "executed_at": executed_at,
+                "delay_s": round((executed - accepted).total_seconds()),
+            }
+        else:
+            fields = {"outcome": "not_executed"}
+        now = self._clock()
+        with self._lock:
+            event = self._awaiting.get(sent)
+            if event is None or (
+                executed_at is None and not now - event["at"] > NOT_RECEIVED_S
+            ):
+                return
+            del self._awaiting[sent]
+            self._append("command", now, name=event.get("name"), sent=sent, **fields)
 
     def cycle_read(self, record: Mapping) -> None:
         """A read a push at a cycle's edge asked for; the transport fills `record` in
@@ -404,6 +544,45 @@ class CycleLog:
         now = self._clock()
         with self._lock:
             self._append("cycle_read", now, record=record)
+
+    def statistics(
+        self,
+        *,
+        new_rows: list[dict],
+        changed: Mapping[str, tuple[Optional[str], Optional[str]]],
+    ) -> None:
+        """What a poll's statistics added (`new_rows`, scalars) or moved (`changed`,
+        {key: (before, after)}) since the last; nothing when both are empty."""
+        now = self._clock()
+        rows = [_scalars(row) for row in new_rows if isinstance(row, Mapping)]
+        pairs: dict[str, dict] = {}
+        for key, pair in changed.items() if isinstance(changed, Mapping) else ():
+            name = _text(key)
+            if name is None or is_identity_key(key) or not (
+                isinstance(pair, tuple) and len(pair) == 2
+            ):
+                continue
+            before, after = pair
+            pairs[name] = {"before": _text(before), "after": _text(after)}
+        if not rows and not pairs:
+            return
+        fields: dict[str, Any] = {}
+        if rows:
+            fields["new_rows"] = rows[:ROW_LIMIT]
+        if pairs:
+            fields["changed"] = dict(list(pairs.items())[:ROW_LIMIT])
+        cut = max(len(rows) - ROW_LIMIT, 0) + max(len(pairs) - ROW_LIMIT, 0)
+        if cut:
+            fields["truncated"] = cut
+        with self._lock:
+            self._append("statistics", now, **fields)
+
+    def entity(self, *, key: str, old: str | None, new: str | None) -> None:
+        """A state an entity published: `key` names it by its unique_id's suffix."""
+        now = self._clock()
+        fields = {"key": _text(key), "before": _text(old), "after": _text(new)}
+        with self._lock:
+            self._append("entity", now, **fields)
 
     # -- reader ----------------------------------------------------------------
     def snapshot(self) -> dict:
