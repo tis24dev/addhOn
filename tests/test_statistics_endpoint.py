@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The statistics endpoint: `/commands/v2/statistics` first, `/commands/v1/statistics` as the fallback.
 
 The hOn app 2.30.7 reads the statistics of every laundry appliance (washer, washer-dryer,

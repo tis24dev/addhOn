@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """A parameter a push names before any read seeded it is created from the push.
 
 The hOn app's shadow takes every parameter of an `appliancestatus` push, known or not
