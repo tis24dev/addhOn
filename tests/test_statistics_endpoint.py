@@ -140,10 +140,37 @@ class EngineChoiceTest(unittest.TestCase):
         self.assertEqual(["v2", "v1", "maintenance"], api.calls)
         self.assertEqual({"version": "v1", "fallback": "shape"}, app.statistics_source)
 
+    def test_a_known_key_of_another_shape_does_not_count(self) -> None:
+        for answer in (
+            {"loadingPercentage": "x"},
+            {"loadingPercentage": {"rows": []}},
+            {"temperatureUsage": [30, 20, 50]},
+            {"programsCounter": {}},
+            {"programsCounter": "many"},
+            {"programsCounter": True},
+            {"mostUsedPrograms": "none"},
+        ):
+            with self.subTest(answer=answer):
+                api = _Api(v2=answer, v1={"programsCounter": 99})
+                app = _appliance(api)
+                _run(app.load_statistics())
+                self.assertEqual(["v2", "v1", "maintenance"], api.calls)
+                self.assertEqual({"version": "v1", "fallback": "shape"}, app.statistics_source)
+
+    def test_a_numeric_counter_as_text_counts(self) -> None:
+        api = _Api(v2={"programsCounter": "84"}, v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual(["v2", "maintenance"], api.calls)
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+
     def test_one_known_key_is_enough_for_v2(self) -> None:
+        shaped = {
+            "programsCounter": 7, "mostUsedPrograms": [], "temperatureUsage": {}, "loadingPercentage": [],
+        }
         for key in sorted(appliance_mod.STATISTICS_KEYS):
             with self.subTest(key=key):
-                api = _Api(v2={key: 1}, v1={"programsCounter": 99})
+                api = _Api(v2={key: shaped[key]}, v1={"programsCounter": 99})
                 app = _appliance(api)
                 _run(app.load_statistics())
                 self.assertEqual(["v2", "maintenance"], api.calls)

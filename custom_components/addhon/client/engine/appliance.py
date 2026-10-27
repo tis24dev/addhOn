@@ -67,6 +67,27 @@ STATISTICS_V2_TYPES = FOLLOWED_TYPES
 STATISTICS_KEYS = frozenset(
     {"programsCounter", "mostUsedPrograms", "temperatureUsage", "loadingPercentage"}
 )
+# The shape each of those keys has in the app's mock (@3335382-3335450) and in every
+# v1 answer seen: a counter, two lists, one map. A key of another shape, like a null
+# one, does not make an answer the statistics (review of PR #141).
+_STATISTICS_SHAPES: dict[str, tuple[type, ...]] = {
+    "programsCounter": (int, float, str),
+    "mostUsedPrograms": (list,),
+    "temperatureUsage": (dict,),
+    "loadingPercentage": (list,),
+}
+
+
+def _statistics_shaped(answer: Mapping[str, Any]) -> bool:
+    """Whether `answer` carries at least one statistics key with a value of its shape."""
+    for key, shapes in _STATISTICS_SHAPES.items():
+        value = answer.get(key)
+        if isinstance(value, bool) or not isinstance(value, shapes):
+            continue
+        if isinstance(value, str) and not value.strip().lstrip("-").isdigit():
+            continue
+        return True
+    return False
 # A push that moves `machMode` into a cycle from outside one, or out of one into the end 7
 # or selection 1, asks for a read of the context (issue #130, decision C1): the activity
 # that names the cycle comes only with it. The cycle is `cycle_modes`' set, the one the
@@ -1188,7 +1209,7 @@ class HonAppliance:
                 fallback = type(error).__name__
             else:
                 if isinstance(answer, dict) and answer:
-                    if any(answer.get(key) is not None for key in STATISTICS_KEYS):
+                    if _statistics_shaped(answer):
                         self._statistics_source = {"version": "v2", "fallback": None}
                         return answer
                     fallback = "shape"
