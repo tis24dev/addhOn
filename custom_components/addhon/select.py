@@ -70,6 +70,7 @@ from .const import (
 )
 from .debug_utils import redact_id, redact_store
 from .hob import HOB_POWER_LIMIT_PARAM, HOB_SETTINGS_COMMAND, power_limit_levels
+from .hpwh import code as _hpwh_code
 from .hon_commands import (
     async_send_command,
     command_param,
@@ -638,6 +639,14 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+# The end of a cycle (`machMode` 7) and its tumbling phase (`prPhase` 20: TUMBLING on
+# HQD, TUMBLING_START on the standard table, `binary_sensor._TUMBLING_PHASE`), which the
+# washers and washer-dryers go through before READY (issue #138, `_at_rest`).
+_END_MODE = 7
+_TUMBLING_PHASE = "20"
+_TUMBLING_TYPES = frozenset({"WM", "WD"})
+
+
 class HonProgramSelect(HonBaseEntity, SelectEntity):
     """Select for the washer/dryer program selection."""
 
@@ -883,14 +892,32 @@ class HonProgramSelect(HonBaseEntity, SelectEntity):
         and the cycle edges read too (review of PR #139, S4). An unreadable `machMode`
         -- a NaN or an infinite value included -- is not "at rest": the select then
         reads as before.
+
+        Issue #138: on the washers and washer-dryers, `machMode` 7 with `prPhase` 20
+        -- the end-of-cycle tumbling, TUMBLING on HQD, TUMBLING_START on the standard
+        table (`binary_sensor._TUMBLING_PHASE`) -- is not rest either. A reporter's
+        HQD washer showed the last recovered programme there while the name sensor
+        still said the cycle's: the app keeps the cycle's card at machMode 7 as long
+        as the phase is not READY (`apk2/analysis/issue138-beta3/16-app-ciclo-da-
+        pannello-keepfresh-machmode7.md` section 2, apk2 decomp.txt @2591537-2591543,
+        @1361412-1361436). The select then goes on reading the cycle's programme, and
+        shows the category once the phase leaves 20 or `machMode` changes.
         """
-        modes = cycle_modes(self._appliance_data.get("type"))
+        kind = self._appliance_data.get("type")
+        modes = cycle_modes(kind)
         if modes is None:
             return False
         try:
-            return int(float(str(self._get_attr("machMode")))) not in modes
+            mode = int(float(str(self._get_attr("machMode"))))
         except (TypeError, ValueError, OverflowError):
             return False
+        if mode in modes:
+            return False
+        return not (
+            kind in _TUMBLING_TYPES
+            and mode == _END_MODE
+            and _hpwh_code(self._get_attr("prPhase")) == _TUMBLING_PHASE
+        )
 
     async def async_select_option(self, option: str) -> None:
         code = self._program_reverse.get(option)
