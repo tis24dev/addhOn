@@ -268,5 +268,77 @@ class PanelStartTest(_Harness):
         self.assertEqual(1, app.followed_starts)
 
 
+_APP_AT = "2026-10-31T10:08:56Z"
+_BED_LINEN_ROW_AT = "2026-10-31T10:08:55.000Z"
+_LATER_PANEL_AT = "2026-10-31T10:12:00Z"
+
+
+class PanelStartOverPendingFollowTest(_Harness):
+    """A panel start while an app start's follow of `/history` is still pending.
+
+    The app started Bed linen, its row was still to be read (or read and not yet
+    listed), and Cottons was started on the panel: the panel's cycle is the newest,
+    so what the follow brings afterwards must not replace it. The follow ends with
+    the panel start, a read still in flight is dropped, and no start is counted.
+    """
+
+    def _app_started_bed_linen(self, app):
+        self._poll(app, activity=_activity("IOT_WASH_BED_LINEN", "mobileApp", started=_APP_AT,
+                                           spinSpeed="1400"), machMode="2")
+
+    def _panel_started_cottons(self, app):
+        self._poll(app, activity=_activity("HQD_COTTONS", started=_LATER_PANEL_AT,
+                                           spinSpeed="1400"), machMode="2")
+        self.assertEqual("PROGRAMS.WM_WD.HQD_COTTONS", app.commands["startProgram"].category)
+        self.assertEqual("panel", app.history_recovery["startProgram"])
+
+    def _assert_cottons_stays(self, app):
+        self.assertEqual("PROGRAMS.WM_WD.HQD_COTTONS", app.commands["startProgram"].category)
+        self.assertEqual("panel", app.history_recovery["startProgram"])
+        self.assertEqual("1400", self._value(app, "spinSpeed"))
+        self.assertEqual(0, app.followed_starts)
+
+    def test_a_read_in_flight_across_the_panel_start_is_dropped(self) -> None:
+        app = self._denim_last_started()
+        self.cloud.history.insert(
+            0, _start("PROGRAMS.WM_WD.IOT_WASH_BED_LINEN", _BED_LINEN_ROW_AT, spinSpeed="400"))
+        self.cloud.history_gate = asyncio.Event()  # the read waits
+        self._app_started_bed_linen(app)
+        self.assertFalse(app._follow_task.done())
+        self._panel_started_cottons(app)
+        self.cloud.history_gate.set()
+        self.loop.run_until_complete(asyncio.sleep(0.01))
+        self._poll(app)
+        self._assert_cottons_stays(app)
+
+    def test_a_row_the_cloud_lists_late_is_not_applied(self) -> None:
+        app = self._denim_last_started()
+        self._app_started_bed_linen(app)  # the list has no row of it yet
+        self.assertEqual("IOT_WASH_BED_LINEN", app._awaited_programme)
+        self._panel_started_cottons(app)
+        reads = self.cloud.history_reads
+        self.cloud.history.insert(
+            0, _start("PROGRAMS.WM_WD.IOT_WASH_BED_LINEN", _BED_LINEN_ROW_AT, spinSpeed="400"))
+        self._poll(app, 2)
+        self._assert_cottons_stays(app)
+        self.assertEqual(reads, self.cloud.history_reads)  # the follow ended, no more reads
+
+    def test_a_start_the_slot_announced_is_dropped_too(self) -> None:
+        app = self._denim_last_started()
+        self.cloud.history_gate = asyncio.Event()
+        self.cloud.history.insert(
+            0, _start("PROGRAMS.WM_WD.IOT_WASH_BED_LINEN", _BED_LINEN_ROW_AT, spinSpeed="400"))
+        self.cloud.context["commandHistory"] = {"command": {
+            "commandName": "startProgram", "timestamp": _BED_LINEN_ROW_AT,
+            "programName": "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN", "parameters": {"prCode": "115"}}}
+        self._poll(app, machMode="2")
+        self.assertIsNotNone(app._awaited_start)
+        self._panel_started_cottons(app)
+        self.cloud.history_gate.set()
+        self.loop.run_until_complete(asyncio.sleep(0.01))
+        self._poll(app)
+        self._assert_cottons_stays(app)
+
+
 if __name__ == "__main__":
     unittest.main()

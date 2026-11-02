@@ -225,6 +225,9 @@ class HonAppliance:
         self._announced_polls_left = 0
         self._follow_task: Optional[asyncio.Task] = None
         self._follow_list: Optional[list[dict[str, Any]]] = None
+        # Bumped when a panel start ends the follow: a read in flight that began
+        # before it is stale and must not land (see `_read_followed`).
+        self._follow_generation = 0
         self._followed_starts = 0
         # The cycle the context's activity last described (issue #130, see
         # `_watch_cycle`). Written by the context read alone, on the client loop; a push
@@ -876,6 +879,12 @@ class HonAppliance:
         in this same read is the one applied. Read while the shadow still says idle,
         it is left for the next poll to see again. A failure while pointing is
         logged and the poll goes on. Runs on the client loop only.
+
+        The panel's cycle is the newest: a follow an app start left pending (its row
+        not listed yet, or its read still in flight) would otherwise land afterwards
+        and put that start back over it. Once pointed, the follow ends, a list read
+        and not yet applied is dropped, and a read in flight is told not to land
+        (`_follow_generation`); the task itself is left to finish.
         """
         cycle = self._cycle_activity
         if cycle is None or cycle.started != started:
@@ -901,6 +910,9 @@ class HonAppliance:
             return
         if how is not None:
             self._history_recovery = {**self._history_recovery, "startProgram": how}
+            self._end_follow()
+            self._follow_list = None
+            self._follow_generation += 1
 
     def _arm_follow(self) -> None:
         # A new start gets its own reads, whatever an earlier one left (S6).
@@ -922,8 +934,11 @@ class HonAppliance:
         self._follow_task = asyncio.get_running_loop().create_task(self._read_followed())
 
     async def _read_followed(self) -> None:
+        generation = self._follow_generation
         history = await self.refresh_command_history()
-        if history is not None:
+        # A panel start ended the follow while this read was out: its list is older
+        # than the cycle now pointed, and is not kept for the next poll.
+        if history is not None and generation == self._follow_generation:
             self._follow_list = history
 
     @property
