@@ -759,7 +759,17 @@ class HonProgramOptionEntity(HonBaseEntity):
         dryer = self._appliance_data.get("type") == APPLIANCE_TD
 
         def held(name):
-            return normalize_code(before.get(name, getattr(params.get(name), "value", None)))
+            # The buffer, else what the programme prescribes (as `_prescribed_raw`), else
+            # the parameter's live value. NOT the live value first: a timed Start leaves
+            # `dryLevel` "0" in the category and keeps it on success, while the programme,
+            # picked again, is rebuilt from its schema only at Start -- the coupling would
+            # then skip the "0" the time needs, and the Start send the schema's level.
+            if name in before:
+                return normalize_code(before[name])
+            raw = self._prescribed_for(command, params, name)
+            if raw is None:
+                raw = getattr(params.get(name), "value", None)
+            return normalize_code(raw)
 
         timed = (
             dryer
@@ -790,14 +800,8 @@ class HonProgramOptionEntity(HonBaseEntity):
                     return []
                 target = _BEST_IRONING_DRY_LEVEL
             elif was_on:
-                # The app's `originalValue`: what the programme prescribes, which for a
-                # favourite is its saved value (as in `_prescribed_raw`).
-                raw = (
-                    getattr(level, "value", None)
-                    if getattr(command, "is_favourite", False)
-                    else getattr(level, "schema_value", None)
-                )
-                target = normalize_code(raw)
+                # The app's `originalValue`: what the programme prescribes.
+                target = normalize_code(self._prescribed_for(command, params, _DRY_LEVEL_PARAM))
                 if target is None:
                     return []
             else:
@@ -821,6 +825,21 @@ class HonProgramOptionEntity(HonBaseEntity):
             per[_DRY_TIME_PARAM] = "0"
             changed.append(_DRY_TIME_PARAM)
         return changed
+
+    @staticmethod
+    def _prescribed_for(command, params: dict, name: str):
+        """What `command` prescribes for its parameter `name`, or None.
+
+        A favourite's saved value, else the schema's `schema_value`, as `_prescribed_raw`
+        reads this entity's own option (and for the same reasons: the live `value` is
+        the user's past choice, kept there by the Start). None where the parameter is
+        absent or the schema prescribes nothing."""
+        param = params.get(name)
+        if param is None:
+            return None
+        if getattr(command, "is_favourite", False):
+            return getattr(param, "value", None)
+        return getattr(param, "schema_value", None)
 
     def _selected_category(self):
         """The SELECTED program's category command, or None."""

@@ -983,6 +983,38 @@ class DryerDryingTimeTest(unittest.IsolatedAsyncioTestCase):
         await dry_time.async_select_option("120")
         self.assertEqual({"dryTime": "9", "dryLevel": "0"}, self._buffer(coordinator))
 
+    @staticmethod
+    def _after_a_timed_start(coordinator, favourite: bool = False) -> dict:
+        """The category as a timed Start from Home Assistant leaves it: `dryLevel` "0"
+        below its lowered range beside the time, both kept on success. A favourite is
+        marked the way the loader marks one."""
+        from custom_components.addhon.client.engine.parameter.fixed import HonParameterFixed
+
+        command = coordinator.data["td1"]["appliance"].commands["startProgram"]
+        params = command.parameters
+        params["dryLevel"].min = 0
+        params["dryLevel"].value = "0"
+        params["dryTime"].value = "7"
+        if favourite:
+            params["favourite"] = HonParameterFixed("favourite", {"fixedValue": "1"}, "custom")
+        return params
+
+    async def test_a_time_after_a_timed_start_still_buffers_dry_level_zero(self) -> None:
+        # The programme is picked again (it is rebuilt from its schema only at Start) and
+        # a time chosen: the coupling reads the level the programme prescribes (4), not
+        # the stale "0", or the Start would send the schema's level beside the time.
+        coordinator, dry_time, _, _ = self._entities()
+        self._after_a_timed_start(coordinator)
+        await dry_time.async_select_option("110")
+        self.assertEqual({"dryTime": "8", "dryLevel": "0"}, self._buffer(coordinator))
+
+    async def test_a_favourite_prescribes_its_own_level(self) -> None:
+        # A favourite IS the saved configuration: its "0" is what it prescribes.
+        coordinator, dry_time, _, _ = self._entities()
+        self._after_a_timed_start(coordinator, favourite=True)
+        await dry_time.async_select_option("110")
+        self.assertEqual({"dryTime": "8"}, self._buffer(coordinator))
+
     async def test_a_washer_dryer_level_never_touches_the_time(self) -> None:
         coordinator, _, level, _ = self._entities(app_type=APPLIANCE_WD)
         coordinator.pending_options = {"td1": {"dryLevel": "0", "dryTime": "6"}}
