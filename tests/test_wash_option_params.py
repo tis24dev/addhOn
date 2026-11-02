@@ -320,6 +320,8 @@ class CatalogPinTest(unittest.TestCase):
         ("diverter_level", "diverterLevel"),  # dishwasher, issue #106
         ("rinse_iterations", "rinseIterations"),  # washers, issue #112
         ("stain_type", "stainType"),  # washers, issue #138
+        ("dry_time", "dryTime"),  # CHG dryers, issue #142
+        ("dry_time_mm", "dryTimeMM"),  # HQD dryers, issue #142
     }
     _PINNED_NUMBERS = {
         "delay_time": "delayTime",
@@ -647,7 +649,9 @@ class ChgDryerAntiCreaseTest(unittest.TestCase):
             for param, drop in _catalog_entries(APPLIANCE_TD)
             if is_settable_option(startprogram_option_param(appliance, param), drop)
         }
-        self.assertEqual(settable, {"anticrease", "bestIroning", "dryLevel", "delayTime"})
+        self.assertEqual(
+            settable, {"anticrease", "bestIroning", "dryLevel", "dryTime", "delayTime"}
+        )
 
     def test_both_switches_are_built_off_0_on_1(self) -> None:
         built = self._switches()
@@ -691,17 +695,21 @@ class _ListeningCoordinator(types.SimpleNamespace):
         self.broadcasts += 1
 
 
-def _build_chg_dryer(rules: bool = True, pin_dry_level: str | None = None):
+def _build_chg_dryer(
+    rules: bool = True, pin_dry_level: str | None = None, pin_dry_time: str | None = None
+):
     """The #142 dryer as the engine loads it: schema, slot map and, unless told
     otherwise, the category's `programRules`."""
     data = json.loads(_TD_CHG_FIXTURE.read_text(encoding="utf-8"))
     params = data["startprogram_params"]
     if pin_dry_level is not None:
         params["dryLevel"] = {"typology": "fixed", "fixedValue": pin_dry_level}
-    attributes = {"parameters": params}
+    if pin_dry_time is not None:
+        params["dryTime"] = {"typology": "fixed", "fixedValue": pin_dry_time}
+    attributes = {"parameters": params, "ancillaryParameters": data["ancillary_params"]}
     if rules:
-        attributes["ancillaryParameters"] = {
-            "programRules": {"category": "rule", "typology": "fixed", "fixedValue": data["program_rules"]}
+        attributes["ancillaryParameters"]["programRules"] = {
+            "category": "rule", "typology": "fixed", "fixedValue": data["program_rules"]
         }
     appliance = types.SimpleNamespace(zone="", commands={}, options=data["appliance_options"], info={})
     appliance.commands["startProgram"] = HonCommand("startProgram", attributes, appliance, None, "")
@@ -853,6 +861,163 @@ class ChgDryerBestIroningLevelTest(unittest.IsolatedAsyncioTestCase):
             "",
         )
         self.assertIsNone(command.rule_fixed_value("ecoMode", "1", "tempSel"))
+
+
+def _built_selects(appliance, app_type: str) -> list[str]:
+    """The keys of the program-option selects the setup would build, as select.py gates them."""
+    return [
+        d.key
+        for d in select._PROGRAM_OPTION_SELECTS
+        if app_type in d.types
+        and not (d.excluded_when is not None and d.excluded_when(appliance))
+        and select.HonProgramOptionSelect.supports(appliance, d.param, d.drop)
+    ]
+
+
+def _build_hqd_timer_dryer():
+    """HQD_TIMER of the Haier HD90-A3959 DE (hon-test-data): `dryTimeMM` 30..150, level 11."""
+    model = json.loads(_TD_CATALOGS.read_text(encoding="utf-8"))["models"]["HD90-A3959 DE"]
+    category = json.loads(json.dumps(model["categories"]["PROGRAMS.TD.HQD_TIMER"]))
+    category.pop("remainingTimes", None)
+    appliance = types.SimpleNamespace(zone="", commands={}, options={}, info={})
+    appliance.commands["startProgram"] = HonCommand("startProgram", category, appliance, None, "")
+    return appliance
+
+
+class DryerDryingTimeTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #142: a dryer dries to a level or for a time, as on the app's drying page.
+
+    CHG: `dryTime` is an index the select labels in minutes (`dryTimeOptions` TD, apk2
+    decomp.txt:996651); a time buffers dry level "0", a level picked while drying for a
+    time buffers drying time "0" (`checkAndApplyDryingRules`, @2638175), and Best Ironing,
+    which needs a level, ends a time. HQD: the timer is `dryTimeMM` itself, in minutes.
+    """
+
+    def _entities(self, app_type=APPLIANCE_TD, attributes=None, **build):
+        appliance = _build_chg_dryer(**build)
+        data = {
+            "type": app_type, "appliance": appliance, "name": "Dryer",
+            "attributes": dict(attributes or {}),
+        }
+        coordinator = _ListeningCoordinator({"td1": data})
+
+        def select_for(key):
+            desc = next(
+                d for d in select._PROGRAM_OPTION_SELECTS if d.key == key and APPLIANCE_TD in d.types
+            )
+            return select.HonProgramOptionSelect(coordinator, "td1", desc, None)
+
+        best_desc = next(
+            d for d in switch._PROGRAM_OPTION_SWITCHES if d.key == "best_ironing"
+        )
+        best = switch.HonProgramOptionSwitch(coordinator, "td1", best_desc, None)
+        return coordinator, select_for("dry_time"), select_for("dry_level"), best
+
+    @staticmethod
+    def _buffer(coordinator) -> dict:
+        return coordinator.pending_options["td1"]
+
+    def test_the_chg_dryer_gets_the_time_select_only(self) -> None:
+        # Its `dryTimeMM` is an ancillary parameter mirroring the index: no minutes select.
+        appliance = _build_chg_dryer()
+        built = _built_selects(appliance, APPLIANCE_TD)
+        self.assertIn("dry_time", built)
+        self.assertNotIn("dry_time_mm", built)
+
+    async def test_the_time_select_offers_the_programmes_minutes(self) -> None:
+        _, dry_time, _, _ = self._entities()
+        self.assertEqual(
+            ["70", "80", "90", "100", "110", "120", "130", "140", "150"], dry_time.options
+        )
+        self.assertIs(dry_time._attr_entity_registry_enabled_default, False)
+        self.assertEqual("td1_opt_dry_time", dry_time._attr_unique_id)
+
+    async def test_the_time_reads_unknown_while_drying_to_a_level(self) -> None:
+        # The shadow reports `dryTime` 4 (70 min) beside the level: not a time to show.
+        _, dry_time, level, _ = self._entities(attributes={"dryLevel": 4, "dryTime": 4})
+        self.assertIsNone(dry_time.current_option)
+        self.assertEqual("extra_dry", level.current_option)
+
+    async def test_a_time_buffers_dry_level_zero(self) -> None:
+        coordinator, dry_time, level, _ = self._entities()
+        await dry_time.async_select_option("90")
+        self.assertEqual({"dryTime": "6", "dryLevel": "0"}, self._buffer(coordinator))
+        self.assertEqual("90", dry_time.current_option)
+        self.assertIsNone(level.current_option)
+
+    async def test_a_level_after_a_time_buffers_dry_time_zero(self) -> None:
+        coordinator, dry_time, level, _ = self._entities()
+        await dry_time.async_select_option("90")
+        await level.async_select_option("extra_dry")
+        self.assertEqual({"dryTime": "0", "dryLevel": "4"}, self._buffer(coordinator))
+        self.assertIsNone(dry_time.current_option)
+
+    async def test_a_level_without_a_time_leaves_the_time_alone(self) -> None:
+        coordinator, _, level, _ = self._entities()
+        await level.async_select_option("cupboard")
+        self.assertEqual({"dryLevel": "3"}, self._buffer(coordinator))
+
+    async def test_best_ironing_ends_a_time(self) -> None:
+        coordinator, dry_time, _, best = self._entities()
+        await dry_time.async_select_option("90")
+        await best.async_turn_on()
+        self.assertEqual(
+            {"dryTime": "0", "dryLevel": "1", "bestIroning": "1", "anticrease": "0"},
+            self._buffer(coordinator),
+        )
+
+    async def test_best_ironing_on_a_level_leaves_the_time_alone(self) -> None:
+        coordinator, _, _, best = self._entities()
+        await best.async_turn_on()
+        self.assertNotIn("dryTime", self._buffer(coordinator))
+
+    async def test_a_programme_without_a_time_choice_keeps_its_level(self) -> None:
+        coordinator, dry_time, _, _ = self._entities(pin_dry_time="4")
+        await dry_time.async_select_option("70")
+        self.assertNotIn("dryLevel", self._buffer(coordinator))
+
+    async def test_a_fixed_level_still_goes_to_zero_for_a_time(self) -> None:
+        # antiallergy on the #142 dryer: level fixed at 4, time settable. The app's
+        # `resetParamsValue` writes the "0" whatever the node (apk2 decomp.txt:2637654).
+        coordinator, dry_time, _, _ = self._entities(pin_dry_level="4")
+        await dry_time.async_select_option("120")
+        self.assertEqual({"dryTime": "9", "dryLevel": "0"}, self._buffer(coordinator))
+
+    async def test_a_washer_dryer_level_never_touches_the_time(self) -> None:
+        coordinator, _, level, _ = self._entities(app_type=APPLIANCE_WD)
+        coordinator.pending_options = {"td1": {"dryLevel": "0", "dryTime": "6"}}
+        await level.async_select_option("extra_dry")
+        self.assertEqual("6", self._buffer(coordinator)["dryTime"])
+
+    def test_dry_level_zero_reaches_the_command(self) -> None:
+        from custom_components.addhon.program_options import apply_pending_options
+
+        params = _build_chg_dryer().commands["startProgram"].parameters
+        applied = apply_pending_options(params, {"dryTime": "6", "dryLevel": "0"})
+        self.assertEqual(["dryTime", "dryLevel"], applied)
+        self.assertEqual("0", normalize_code(params["dryLevel"].value))
+        self.assertEqual("6", normalize_code(params["dryTime"].value))
+        # And the way back: a level after a time, `dryTime` "0" below its range of 4..12.
+        applied = apply_pending_options(params, {"dryLevel": "4", "dryTime": "0"})
+        self.assertEqual("0", normalize_code(params["dryTime"].value))
+        self.assertEqual("4", normalize_code(params["dryLevel"].value))
+
+    def test_the_hqd_dryer_gets_the_minutes_select(self) -> None:
+        appliance = _build_hqd_timer_dryer()
+        built = _built_selects(appliance, APPLIANCE_TD)
+        self.assertIn("dry_time_mm", built)
+        self.assertNotIn("dry_time", built)
+        data = {
+            "type": APPLIANCE_TD, "appliance": appliance, "name": "Dryer",
+            "attributes": {"dryTimeMM": 30},
+        }
+        coordinator = _ListeningCoordinator({"td1": data})
+        desc = next(d for d in select._PROGRAM_OPTION_SELECTS if d.key == "dry_time_mm")
+        minutes = select.HonProgramOptionSelect(coordinator, "td1", desc, None)
+        self.assertEqual(["30", "60", "90", "120", "150"], minutes.options)
+        self.assertIs(minutes._attr_entity_registry_enabled_default, False)
+        # A timed programme: its pinned level 11 is the timed one, so the time shows.
+        self.assertEqual("30", minutes.current_option)
 
 
 class StainAndAntiCreaseTest(unittest.TestCase):

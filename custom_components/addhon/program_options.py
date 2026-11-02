@@ -44,6 +44,7 @@ from homeassistant.exceptions import HomeAssistantError
 from .base_entity import HonBaseEntity
 from .client.engine.parameter.range import HonParameterRange
 from .const import (
+    APPLIANCE_TD,
     APPLIANCE_WD,
     APPLIANCE_WM,
     DOMAIN,
@@ -275,6 +276,18 @@ def startprogram_option_param(appliance, name: str):
     return None
 
 
+def dry_time_mm_not_a_parameter(appliance) -> bool:
+    """True where `dryTimeMM` is not one of the `startProgram` parameters (issue #142).
+
+    On a Haier HQD dryer it is the timer, a parameter the user picks in minutes. On a CHG
+    dryer it is an ancillary parameter that only mirrors the `dryTime` index (through the
+    catalogue's `programRules`), and the app's new screen never shows it: it builds its
+    controls from the category's `parameters` alone (`dictionaryParameters`, apk2
+    decomp.txt @3387857-3387870). The minutes select is offered only in the first case."""
+    param = startprogram_option_param(appliance, "dryTimeMM")
+    return param is None or getattr(param, "group", "parameters") != "parameters"
+
+
 def has_stain_rules(appliance) -> bool:
     """True when a programme of the appliance ties a stain to a temperature or a wash time.
 
@@ -477,6 +490,15 @@ EXCLUSIVE_OPTION_GROUPS: tuple[frozenset[str], ...] = (
 _BEST_IRONING_PARAM = "bestIroning"
 _DRY_LEVEL_PARAM = "dryLevel"
 _BEST_IRONING_DRY_LEVEL = "1"
+# A dryer dries to a level or for a time, never both (issue #142). The app's drying page
+# writes one of the two and `checkAndApplyDryingRules` (apk2 decomp.txt:2638175) puts the
+# other to "0": a time leaves with `dryLevel '0'`, below the schema's range, and a level
+# picked after a time with `dryTime '0'`. Best Ironing, which needs a level, ends a time.
+_DRY_TIME_PARAM = "dryTime"
+_DRY_TIME_MM_PARAM = "dryTimeMM"
+# The dry level of a dryer drying for a time: "0" on a CHG one, "11" on a Haier HQD one
+# (its timed programmes pin it; the Haier page writes it with a time, @4867269).
+_TIMED_DRY_LEVELS = ("0", "11")
 
 # Where the app hides Keep Fresh on a washer (issue #112), so a Start must not send the
 # user's buffered choice there: on the HQD platform in the check-up and drum-clean
@@ -547,6 +569,15 @@ def apply_pending_options(params: dict, options: dict) -> list[str]:
                 name,
             )
             continue
+        if name in (_DRY_LEVEL_PARAM, _DRY_TIME_PARAM) and normalize_code(value) == "0":
+            # Drying for a time, or to a level after a time (issue #142): the app sends
+            # `dryLevel '0'` or `dryTime '0'` although the schema's range starts at 1 or
+            # at 4 (`resetParamsValue`, apk2 decomp.txt:2637654, writes without
+            # validating). The range takes it from here on; the Start's rollback
+            # snapshot restores the bound if the send fails.
+            minimum = getattr(param, "min", None)
+            if isinstance(minimum, (int, float)) and minimum > 0:
+                param.min = 0
         param.value = value
         applied.append(name)
         _LOGGER.debug("apply_pending_options: applied option '%s'=%s", name, value)
@@ -640,10 +671,11 @@ class HonProgramOptionEntity(HonBaseEntity):
         was_on = self._param == _BEST_IRONING_PARAM and normalize_code(
             self._current_raw()
         ) not in (None, "0")
+        before = dict(per)
         per[self._param] = value
         mark_pending_choice(self.coordinator, self._appliance_id, PROGRAM_PENDING_OPTIONS)
         cleared = self._clear_exclusive_siblings(per, value)
-        coupled = self._couple_dry_level(per, value, was_on)
+        coupled = self._couple_dry_level(per, before, value, was_on)
         _LOGGER.debug(
             "ProgramOption debug: buffered '%s'=%s id=%s param=%s cleared=%s coupled=%s",
             redact_id(getattr(self, "_attr_unique_id", None), self._appliance_id)
@@ -688,20 +720,67 @@ class HonProgramOptionEntity(HonBaseEntity):
                 cleared.append(name)
         return cleared
 
-    def _couple_dry_level(self, per: dict, value, was_on: bool) -> list[str]:
-        """Buffer the dry level Best Ironing brings, or the Best Ironing a level brings.
+    def _dry_time_inactive(self) -> bool:
+        """True for a dryer's drying-time control while the dryer dries to a level.
 
-        Best Ironing ON buffers dry level "1" where the programme offers it; OFF, after
-        being ON, buffers the programme's own level. A dry level for which the programme's
-        `programRules` prescribe a Best Ironing value buffers that value. Where the other
-        parameter is absent or pinned, nothing else is buffered."""
-        if self._param not in (_BEST_IRONING_PARAM, _DRY_LEVEL_PARAM):
+        Issue #142: the app's drying page shows a level or a time, never both. Here the
+        time reads as unknown unless the dry level the programme leaves with is the timed
+        one (`_TIMED_DRY_LEVELS`): the buffered level, else the programme's own."""
+        if (
+            self._param not in (_DRY_TIME_PARAM, _DRY_TIME_MM_PARAM)
+            or self._appliance_data.get("type") != APPLIANCE_TD
+        ):
+            return False
+        command = self._option_command()
+        params = getattr(command, "parameters", None) if command is not None else None
+        level = params.get(_DRY_LEVEL_PARAM) if isinstance(params, dict) else None
+        if level is None:
+            return False
+        held = self._pending().get(_DRY_LEVEL_PARAM, getattr(level, "value", None))
+        return normalize_code(held) not in _TIMED_DRY_LEVELS
+
+    def _couple_dry_level(self, per: dict, before: dict, value, was_on: bool) -> list[str]:
+        """Buffer what the dry level, the drying time and Best Ironing bring each other.
+
+        Best Ironing ON buffers dry level "1" where the programme offers it, and on a dryer
+        drying for a time ends the time; OFF, after being ON, buffers the programme's own
+        level. A dry level for which the programme's `programRules` prescribe a Best
+        Ironing value buffers that value. On a dryer, a drying time buffers dry level "0",
+        and a level picked while drying for a time buffers drying time "0". `before` is
+        the buffer as it stood before this write. Where the other parameter is absent or
+        pinned, nothing else is buffered."""
+        if self._param not in (_BEST_IRONING_PARAM, _DRY_LEVEL_PARAM, _DRY_TIME_PARAM):
             return []
         command = self._option_command()
         params = getattr(command, "parameters", None) if command is not None else None
         if not isinstance(params, dict):
             return []
         code = normalize_code(value)
+        dryer = self._appliance_data.get("type") == APPLIANCE_TD
+
+        def held(name):
+            return normalize_code(before.get(name, getattr(params.get(name), "value", None)))
+
+        timed = (
+            dryer
+            and _DRY_TIME_PARAM in params
+            and held(_DRY_LEVEL_PARAM) == "0"
+            and held(_DRY_TIME_PARAM) not in (None, "0")
+        )
+        changed: list[str] = []
+        if self._param == _DRY_TIME_PARAM:
+            time = params.get(_DRY_TIME_PARAM)
+            if (
+                dryer
+                and code not in (None, "0")
+                and time is not None
+                and is_settable_option(time)
+                and _DRY_LEVEL_PARAM in params
+                and held(_DRY_LEVEL_PARAM) != "0"
+            ):
+                per[_DRY_LEVEL_PARAM] = "0"
+                changed.append(_DRY_LEVEL_PARAM)
+            return changed
         if self._param == _BEST_IRONING_PARAM:
             level = params.get(_DRY_LEVEL_PARAM)
             if level is None or not is_settable_option(level):
@@ -724,21 +803,24 @@ class HonProgramOptionEntity(HonBaseEntity):
             else:
                 return []
             per[_DRY_LEVEL_PARAM] = target
-            return [_DRY_LEVEL_PARAM]
-        if self._param == _DRY_LEVEL_PARAM:
-            best = params.get(_BEST_IRONING_PARAM)
-            rule = getattr(command, "rule_fixed_value", None)
-            if best is None or not callable(rule) or code is None:
-                return []
+            changed.append(_DRY_LEVEL_PARAM)
+            if code == "1" and timed:
+                per[_DRY_TIME_PARAM] = "0"
+                changed.append(_DRY_TIME_PARAM)
+            return changed
+        # The dry level.
+        best = params.get(_BEST_IRONING_PARAM)
+        rule = getattr(command, "rule_fixed_value", None)
+        if best is not None and callable(rule) and code is not None:
             fixed = rule(_DRY_LEVEL_PARAM, code, _BEST_IRONING_PARAM)
-            if fixed is None:
-                return []
             raw = per.get(_BEST_IRONING_PARAM, getattr(best, "value", None))
-            if normalize_code(raw) == normalize_code(fixed):
-                return []
-            per[_BEST_IRONING_PARAM] = fixed
-            return [_BEST_IRONING_PARAM]
-        return []
+            if fixed is not None and normalize_code(raw) != normalize_code(fixed):
+                per[_BEST_IRONING_PARAM] = fixed
+                changed.append(_BEST_IRONING_PARAM)
+        if timed and code not in (None, "0"):
+            per[_DRY_TIME_PARAM] = "0"
+            changed.append(_DRY_TIME_PARAM)
+        return changed
 
     def _selected_category(self):
         """The SELECTED program's category command, or None."""

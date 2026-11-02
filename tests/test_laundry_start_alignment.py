@@ -525,6 +525,58 @@ class LaundryStartAlignmentTest(unittest.TestCase):
         asyncio.run(command.send_exact(payload))
         self.assertEqual(snapshot, dict(payload))
 
+    # Issue #142: drying for a time, and the tail of `checkDryAndAutodoseOptions`.
+
+    def timed_start(self, category: _Category, options: dict, **send) -> dict:
+        """Apply the buffer as the Start button does, then send; the `parameters` out."""
+        from custom_components.addhon.program_options import apply_pending_options
+
+        command = self.command(category)
+        apply_pending_options(command.parameters, options)
+        asyncio.run(command.send(**send))
+        return self.api.sent[-1]["params"]
+
+    def test_a_chg_dryer_dries_for_a_time_as_the_apps_drying_page_sends_it(self):
+        params = self.timed_start(MIX, {"dryTime": "6", "dryLevel": "0"})
+        self.assertEqual("0", params["dryLevel"])
+        self.assertEqual("6", params["dryTime"])
+        # remainingTimes.dryTime["6"] of MIX_AND_DRY.
+        self.assertEqual("90", params["dryTimeMM"])
+        self.assertEqual("90", params["remainingTimeMM"])
+        self.assertNotIn("dryProgFlag", params)
+
+    def test_a_level_chosen_after_a_time_goes_without_the_flag(self):
+        params = self.timed_start(
+            MIX, {"dryLevel": "4", "dryTime": "0"}, chosen_options={"dryLevel", "dryTime"}
+        )
+        self.assertEqual("4", params["dryLevel"])
+        self.assertEqual("0", params["dryTime"])
+        self.assertNotIn("dryProgFlag", params)
+        self.assertEqual("136", params["dryTimeMM"])
+
+    def test_a_dryer_with_anti_crease_keeps_its_time_beside_the_level(self):
+        # The HLE H9A3TE-80/N's start from the app: level 4, time 4, no flag.
+        params, _ = self.start(MIX, dryLevel="4", anticrease="1")
+        self.assertEqual("4", params["dryTime"])
+        self.assertNotIn("dryProgFlag", params)
+        self.assertEqual("0", params["bestIroning"])
+        self.assertEqual("1", params["anticrease"])
+
+    def test_a_dryer_with_best_ironing_keeps_its_time_and_drops_anti_crease(self):
+        params, _ = self.start(MIX, dryLevel="1", bestIroning="1", anticrease="0")
+        self.assertEqual("4", params["dryTime"])
+        self.assertNotIn("dryProgFlag", params)
+        self.assertEqual("0", params["anticrease"])
+
+    def test_a_washer_dryer_with_anti_crease_keeps_the_level_mode(self):
+        schema = _copy(WD_LEVEL_MODE.schema)
+        schema["parameters"]["anticrease"] = _range("1", "0", "1")
+        params, _ = self.start(
+            WD_LEVEL_MODE._replace(schema=schema), model_attributes=_HQD_WD_ATTRIBUTES
+        )
+        self.assertEqual("0", params["dryTime"])
+        self.assertEqual("1", params["dryProgFlag"])
+
 
 if __name__ == "__main__":
     unittest.main()

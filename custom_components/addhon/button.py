@@ -386,6 +386,7 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                         if washer_start
                         else pending_options
                     )
+                    applied: list[str] = []
                     if options:
                         applied = apply_pending_options(params, options)
                         _LOGGER.debug(
@@ -430,6 +431,10 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                         label = program_labels.label(appliance_type, slug)
                         if label:
                             send_kwargs["program_label"] = label
+                    # Issue #142: a drying time the user put to "0" in Home Assistant is a
+                    # choice the engine keeps. Passed only then, like the label above.
+                    if "dryTime" in applied:
+                        send_kwargs["chosen_options"] = frozenset(applied)
                     await command.send(**send_kwargs)
                     rollback.clear()  # sent: nothing to roll back
                     _LOGGER.debug("Button debug: command '%s' send completed", self._command_name)

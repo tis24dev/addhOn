@@ -57,6 +57,8 @@ from .const import (
     DRY_LEVEL_LABELS_TD,
     DRY_LEVEL_LABELS_WM,
     DRY_LEVEL_SENTINELS,
+    DRY_TIME_LABELS_TD,
+    DRY_TIME_MINUTE_LABELS,
     FAN_DIR_H_LABELS,
     FAN_DIR_V_LABELS,
     PROGRAM_PARAM_NAMES,
@@ -79,6 +81,7 @@ from .ac_command import async_send_settings, param_allowed_values, settings_para
 from .program_options import (
     HonProgramOptionEntity,
     async_send_program,
+    dry_time_mm_not_a_parameter,
     has_stain_rules,
     is_settable_option,
     mark_pending_choice,
@@ -277,6 +280,23 @@ _PROGRAM_OPTION_SELECTS: tuple[HonProgramOptionSelectDescription, ...] = (
         key="dry_level", param="dryLevel", translation_key="dry_level",
         types=_DRY_TYPES, label_map=DRY_LEVEL_LABELS_TD, drop=DRY_LEVEL_SENTINELS,
         icon="mdi:tumble-dryer",
+    ),
+    # Drying time of a tumble dryer (issue #142), offered disabled. On a CHG dryer it is
+    # the `dryTime` index, labelled in minutes from the app's own table; a time buffers dry
+    # level "0", and a level picked afterwards drying time "0" (program_options).
+    HonProgramOptionSelectDescription(
+        key="dry_time", param="dryTime", translation_key="dry_time",
+        types=_DRY_TYPES, label_map=DRY_TIME_LABELS_TD, drop=("0",),
+        icon="mdi:timer-outline", enabled_default=False,
+    ),
+    # On a Haier HQD dryer the timer is `dryTimeMM` itself, in minutes, a parameter of the
+    # timed programmes (whose dry level is fixed at 11 in all of hon-test-data's). Not
+    # where it is an ancillary parameter: on a CHG dryer it only mirrors the index above.
+    HonProgramOptionSelectDescription(
+        key="dry_time_mm", param="dryTimeMM", translation_key="dry_time",
+        types=_DRY_TYPES, label_map=DRY_TIME_MINUTE_LABELS, drop=("0",),
+        icon="mdi:timer-outline", enabled_default=False,
+        excluded_when=dry_time_mm_not_a_parameter,
     ),
     HonProgramOptionSelectDescription(
         key="temp_level", param="tempLevel", translation_key="temp_level",
@@ -1050,7 +1070,7 @@ class HonProgramOptionSelect(HonProgramOptionEntity, SelectEntity):
     @property
     def current_option(self) -> str | None:
         raw = self._current_raw()
-        if raw is None:
+        if raw is None or self._dry_time_inactive():
             return None
         self._rebuild_maps()
         # None when the live device value is outside what the SELECTED program offers (the

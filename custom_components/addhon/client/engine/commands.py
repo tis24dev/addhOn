@@ -18,7 +18,7 @@ false "sent".
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from copy import copy
 from typing import Any, Optional, Union
 
@@ -309,7 +309,11 @@ class HonCommand:
             self._parameters[name] = HonParameterProgram(name, self, "custom")
 
     async def send(
-        self, only_mandatory: bool = False, *, program_label: str | None = None
+        self,
+        only_mandatory: bool = False,
+        *,
+        program_label: str | None = None,
+        chosen_options: Collection[str] = (),
     ) -> bool:
         """Send this command's parameters.
 
@@ -317,12 +321,17 @@ class HonCommand:
         washer-dryer or tumble-dryer start carries as `attributes.prStr` (see
         `_program_label_to_send`). The catalog it comes from lives in the Home
         Assistant layer, hence the argument.
+
+        `chosen_options`: the parameters the user set in Home Assistant for this start,
+        which the engine must not take for leftovers (see `_restore_level_mode_dry_time`).
         """
         grouped_params = (
             self.mandatory_parameter_groups if only_mandatory else self.parameter_groups
         )
         params = grouped_params.get("parameters", {})
-        return await self.send_parameters(params, program_label=program_label)
+        return await self.send_parameters(
+            params, program_label=program_label, chosen_options=chosen_options
+        )
 
     def _is_washer_start(self) -> bool:
         """A `startProgram` of a washer (WM) or washer-dryer (WD). Issue #112.
@@ -594,7 +603,9 @@ class HonCommand:
         if minutes is not None:
             params["remainingTimeMM"] = params["dryTimeMM"] = _minutes_text(minutes)
 
-    def _restore_level_mode_dry_time(self, params: dict[str, str | float]) -> None:
+    def _restore_level_mode_dry_time(
+        self, params: dict[str, str | float], chosen_options: Collection[str] = ()
+    ) -> None:
         """Put back the drying time a level-mode start turned into "0". Issue #133.
 
         The dry-mode rule (`_apply_dry_mode`) sends a level plus a time as `dryTime "0"`
@@ -605,11 +616,18 @@ class HonCommand:
         next start then finds no time, the rule does not fire, and
         `_reset_computed_start_keys` has put `dryProgFlag` back to the schema's "0".
         With a dry level set, an outgoing `dryTime` of 0 and a schema `dryTime` above 0,
-        the "0" can only come from such a write (no Home Assistant control writes
-        `dryTime`), so it goes back to the schema's value and the rule fires as on the
-        first start (owner's decision of 2026-10-18). Called by `_apply_dry_mode` past
-        its drying-only gate: where the rule never fires, a written 0 stays as it is.
+        the "0" comes from such a write, so it goes back to the schema's value and the
+        rule fires as on the first start (owner's decision of 2026-10-18). Called by
+        `_apply_dry_mode` past its drying-only gate: where the rule never fires, a written
+        0 stays as it is.
+
+        Unless the user set it in Home Assistant for this start (`chosen_options`, issue
+        #142): the dryer's drying-time select buffers `dryTime "0"` when a level is picked
+        after a time, as the app's drying page does (`checkAndApplyDryingRules`, apk2
+        decomp.txt:2638175), and the app then sends the level with that "0" and no flag.
         """
+        if "dryTime" in chosen_options:
+            return
         if not (
             _js_number(params.get("dryLevel")) > 0
             and "dryTime" in params
@@ -623,7 +641,9 @@ class HonCommand:
         if schema is not None and _js_number(schema) > 0:
             params["dryTime"] = schema
 
-    def _apply_dry_mode(self, params: dict[str, str | float]) -> None:
+    def _apply_dry_mode(
+        self, params: dict[str, str | float], chosen_options: Collection[str] = ()
+    ) -> None:
         """A dry level and a drying time together become the app's level mode. Issue #133.
 
         `checkDryAndAutodoseOptions` (apk2 decomp.txt:1363771-1363818): when
@@ -634,11 +654,27 @@ class HonCommand:
         `fixedValue`: an enum reads back lower-cased (`clean_value`), so `value` would
         never equal 'D'. A level-mode start's `dryTime "0"` that came back through a
         write is undone first (`_restore_level_mode_dry_time`), so the rule fires again.
+
+        On a tumble dryer the function's tail is kept too (issue #142, owner's decision
+        of 2026-11-02): with `anticrease` above 0 it rebuilds the parameters from the
+        ones it was given plus `bestIroning '0'`, otherwise with `bestIroning` above 0
+        from those plus `anticrease '0'` (@1363819-1363870), so the level-mode rewrite
+        is lost and the level leaves with the drying time it had. On the HLE
+        H9A3TE-80/N of the issue the app's start went out that way and the machine dried
+        to the level. Washers and washer-dryers keep the rewrite: on the washer-dryer of
+        issue #99 a time beside a level added a timed drying.
         """
         program_type = self._parameters.get("programType")
         if program_type is not None and program_type.intern_value == "D":
             return
-        self._restore_level_mode_dry_time(params)
+        self._restore_level_mode_dry_time(params, chosen_options)
+        if getattr(self._appliance, "appliance_type", "") == "TD":
+            if _js_number(params.get("anticrease")) > 0:
+                params["bestIroning"] = "0"
+                return
+            if _js_number(params.get("bestIroning")) > 0:
+                params["anticrease"] = "0"
+                return
         if _js_number(params.get("dryTime")) > 0 and _js_number(params.get("dryLevel")) > 0:
             params["dryTime"] = "0"
             params["dryProgFlag"] = "1"
@@ -660,6 +696,7 @@ class HonCommand:
         energy_label: bool = True,
         ancillary_params: Mapping[str, str | float] | None = None,
         program_label: str | None = None,
+        chosen_options: Collection[str] = (),
     ) -> bool:
         """Transmit `params`; `program_name` overrides the category on the wire.
 
@@ -675,6 +712,9 @@ class HonCommand:
         `program_label` is the translated programme name for a washer, washer-dryer
         or tumble-dryer start's `attributes.prStr` (see `_program_label_to_send`);
         ignored by every other send.
+
+        `chosen_options` names the parameters the user set in Home Assistant for this
+        start; the dry-mode rule keeps a "0" among them (`_apply_dry_mode`).
 
         `ancillary_params` None (the default) sends this command's own
         `ancillary_parameters()`, as always; a mapping, even an empty one, is sent
@@ -752,7 +792,7 @@ class HonCommand:
             if energy_label and getattr(self._appliance, "appliance_type", "") == "TD":
                 ancillary["energyLabel"] = "0"
             self._add_dryer_duration(params, ancillary)
-            self._apply_dry_mode(params)
+            self._apply_dry_mode(params, chosen_options)
         # Only a washer, washer-dryer or dryer start names its programme; every other
         # body keeps its shape.
         extra: dict[str, str] = {}
@@ -832,10 +872,17 @@ class HonCommand:
         }
 
     async def send_parameters(
-        self, params: dict[str, str | float], *, program_label: str | None = None
+        self,
+        params: dict[str, str | float],
+        *,
+        program_label: str | None = None,
+        chosen_options: Collection[str] = (),
     ) -> bool:
         return await self._send_parameters(
-            params, sync_shadow=True, program_label=program_label
+            params,
+            sync_shadow=True,
+            program_label=program_label,
+            chosen_options=chosen_options,
         )
 
     def canonical_exact_payload(

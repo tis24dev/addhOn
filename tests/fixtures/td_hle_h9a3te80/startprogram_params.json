@@ -1,5 +1,5 @@
 {
-  "_comment": "startProgram schema of the ACTIVE category (programme `delicates`, functionalId 2) of a real HLE H9A3TE-80/N tumble dryer (platform CHG, series h-dry350), rebuilt into the raw hOn node shape from the `commands.startProgram` section of the v5.28.0 diagnostics attached to issue #142 on 2026-10-27. range -> minimumValue/maximumValue/incrementValue, enum -> enumValues, fixed -> fixedValue; `defaultValue` is the value the dump printed. `program_rules` is the category's `programRules`, which the dump printed as a Python-repr string, parsed as it is; `appliance_options` is the slot map the dump read (`appliance_options.read`).",
+  "_comment": "startProgram schema of the ACTIVE category (programme `delicates`, functionalId 2) of a real HLE H9A3TE-80/N tumble dryer (platform CHG, series h-dry350), rebuilt into the raw hOn node shape from the `commands.startProgram` section of the v5.28.0 diagnostics attached to issue #142 on 2026-10-27. range -> minimumValue/maximumValue/incrementValue, enum -> enumValues, fixed -> fixedValue; `defaultValue` is the value the dump printed. A node whose `category` is `general` or `cluster` is an ancillary parameter (`ancillary_params`), as in the raw catalogues of hon-test-data; the others are `startprogram_params`. `program_rules` is the category's `programRules`, which the dump printed as a Python-repr string, parsed as it is; `appliance_options` is the slot map the dump read (`appliance_options.read`).",
   "model": "HLE H9A3TE-80/N",
   "type": "TD",
   "source": "issue #142, diagnostics v5.28.0",
@@ -124,7 +124,9 @@
     "prStr": {
       "typology": "fixed",
       "fixedValue": "0"
-    },
+    }
+  },
+  "ancillary_params": {
     "dryTimeMM": {
       "typology": "range",
       "minimumValue": 70.0,

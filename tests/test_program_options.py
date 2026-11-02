@@ -679,6 +679,48 @@ class _WireAppliance:
         pass
 
 
+class _KwargsCommand(RecordingCommand):
+    """A command that also records what the Start hands to `send`."""
+
+    async def send(self, **kwargs) -> None:
+        self.send_calls += 1
+        self.kwargs = kwargs
+
+
+class StartChosenOptionsTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #142: the Start tells the engine which options the user set, when it matters."""
+
+    async def _press(self, options: dict) -> dict:
+        from custom_components.addhon.button import HonProgramCommandButton
+
+        command = _KwargsCommand(
+            {"dryLevel": Param("4"), "dryTime": Param("4"), "spinSpeed": Param("0")}
+        )
+        appliance = types.SimpleNamespace(commands={"startProgram": command})
+        coordinator = FakeCoordinator(
+            {"td-1": {"type": "TD", "name": "D", "appliance": appliance,
+                      "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_options = {"td-1": dict(options)}
+        button = HonProgramCommandButton(
+            coordinator, "td-1", FakeClient(),
+            command_name="startProgram", unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+        )
+        button.hass = FakeHass()
+        await button.async_press()
+        self.assertEqual(1, command.send_calls)
+        return command.kwargs
+
+    async def test_a_buffered_drying_time_names_the_chosen_options(self) -> None:
+        kwargs = await self._press({"dryLevel": "4", "dryTime": "0"})
+        self.assertEqual(frozenset({"dryLevel", "dryTime"}), kwargs["chosen_options"])
+
+    async def test_other_options_send_as_before(self) -> None:
+        kwargs = await self._press({"dryLevel": "2"})
+        self.assertNotIn("chosen_options", kwargs)
+
+
 def _real_categories(api):
     """A REAL engine startProgram with two program categories.
 

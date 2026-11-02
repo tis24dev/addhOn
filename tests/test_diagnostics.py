@@ -5817,7 +5817,9 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
             # write) on WM and on WD.
             # 641 with the dryer's anti-crease and Best Ironing switches (#142): two
             # rows, three names each, on TD.
-            641,
+            # 647 with the dryer's two drying-time selects (#142): `dryTime` and
+            # `dryTimeMM`, three names each, on TD.
+            647,
             seen,
             f"the sweep changed to {seen} names; re-measure and update this number "
             f"deliberately, naming what joined or left it",
