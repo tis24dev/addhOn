@@ -230,6 +230,30 @@ class PanelStartTest(_Harness):
         self._poll(app, activity=_activity("HQD_SMART", spinSpeed="1400"), machMode="2")
         self.assertEqual("PROGRAMS.WM_WD.HQD_COTTONS", app.commands["startProgram"].category)
 
+    def test_an_activity_read_before_the_shadow_s_code_is_seen_again(self) -> None:
+        # The activity (prCode 115) is read while the shadow still holds the resting
+        # code (136): contradicted for now, as a read at rest, it is the next poll's
+        # to see again once the shadow carries the cycle's code.
+        self.cloud = CloudDouble(
+            _WM_COMMANDS,
+            [_start("PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS", _DENIM_AT)],
+            _shadow("136", "1") | {"activity": {}, "commandHistory": None},
+        )
+        app = factory._native_engine_appliance_cls()(
+            self.cloud,
+            {"applianceTypeName": "WM", "applianceModelId": 1, "macAddress": "aa"},
+            zone=0,
+        )
+        self.loop.run_until_complete(app.load_commands())
+        self.loop.run_until_complete(app.load_attributes())
+        self._poll(app)  # baseline
+        self._poll(app, activity=_activity("HQD_COTTONS", spinSpeed="1400"), machMode="2")
+        self.assertEqual("PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS", app.commands["startProgram"].category)
+        self._poll(app, prCode="115")
+        self.assertEqual("PROGRAMS.WM_WD.HQD_COTTONS", app.commands["startProgram"].category)
+        self.assertEqual("panel", app.history_recovery["startProgram"])
+        self.assertEqual("1400", self._value(app, "spinSpeed"))
+
     def test_an_activity_read_at_rest_waits_for_the_cycle(self) -> None:
         # Decision 6 of 2026-10-25: the activity counts only while the shadow's
         # machMode says a cycle runs; the next poll that says so applies it.

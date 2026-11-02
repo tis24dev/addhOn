@@ -882,6 +882,7 @@ class HonAppliance:
         The activity counts only once the shadow's `machMode` says the cycle runs,
         as for the name (issue #130, decision 6): the cycle kept by `_watch_cycle`
         in this same read is the one applied. Read while the shadow still says idle,
+        or still holds the previous code against the activity's (the app's guard),
         it is left for the next poll to see again. A failure while pointing is
         logged and the poll goes on. Runs on the client loop only.
 
@@ -896,6 +897,10 @@ class HonAppliance:
             self._seen_activity = previous
             return
         if cycle.code is None or cycle.activity_code != cycle.code:
+            # The shadow may still hold the previous code when the activity arrives:
+            # seen again at the next poll, as one read at rest. A contradiction that
+            # stays changes nothing on any poll.
+            self._seen_activity = previous
             return
         try:
             how = HonCommandLoader(
