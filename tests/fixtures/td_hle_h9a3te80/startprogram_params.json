@@ -1,0 +1,284 @@
+{
+  "_comment": "startProgram schema of the ACTIVE category (programme `delicates`, functionalId 2) of a real HLE H9A3TE-80/N tumble dryer (platform CHG, series h-dry350), rebuilt into the raw hOn node shape from the `commands.startProgram` section of the v5.28.0 diagnostics attached to issue #142 on 2026-10-27. range -> minimumValue/maximumValue/incrementValue, enum -> enumValues, fixed -> fixedValue; `defaultValue` is the value the dump printed. A node whose `category` is `general` or `cluster` is an ancillary parameter (`ancillary_params`), as in the raw catalogues of hon-test-data; the others are `startprogram_params`. `program_rules` is the category's `programRules`, which the dump printed as a Python-repr string, parsed as it is; `appliance_options` is the slot map the dump read (`appliance_options.read`).",
+  "model": "HLE H9A3TE-80/N",
+  "type": "TD",
+  "source": "issue #142, diagnostics v5.28.0",
+  "captured": "2026-10-27",
+  "startprogram_params": {
+    "delayTime": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1410.0,
+      "incrementValue": 30.0,
+      "defaultValue": 0
+    },
+    "program": {
+      "typology": "enum",
+      "enumValues": [
+        "all_in_one",
+        "anti_odours",
+        "antiallergy",
+        "darks_and_coloured",
+        "delicates",
+        "duvet",
+        "eco",
+        "fresh_care",
+        "iot_checkup",
+        "iot_dry_anti_mites",
+        "iot_dry_baby",
+        "iot_dry_backpacks",
+        "iot_dry_bathrobe",
+        "iot_dry_bed_linen",
+        "iot_dry_bed_quilt",
+        "iot_dry_cuddly_toys",
+        "iot_dry_curtains",
+        "iot_dry_dehumidifier",
+        "iot_dry_delicate_tablecloths",
+        "iot_dry_delicates",
+        "iot_dry_denim_jeans",
+        "iot_dry_down_jacket",
+        "iot_dry_duvet",
+        "iot_dry_easy_iron_cotton",
+        "iot_dry_easy_iron_synthetics",
+        "iot_dry_gym_fit",
+        "iot_dry_lingerie",
+        "iot_dry_playsuits",
+        "iot_dry_rapid_30",
+        "iot_dry_rapid_59",
+        "iot_dry_regenerates_waterproof",
+        "iot_dry_shirts",
+        "iot_dry_small_load",
+        "iot_dry_swimsuits_and_bikinis",
+        "iot_dry_tablecloths",
+        "iot_dry_technical_fabrics",
+        "iot_dry_warm_embrace",
+        "iot_dry_wool",
+        "jeans",
+        "mix_and_dry",
+        "night_care_cycle",
+        "rapid_30",
+        "rapid_45",
+        "rapid_59",
+        "relax_creases",
+        "shirts",
+        "small_load",
+        "synthetics",
+        "whites",
+        "woolmark",
+        "xxl_load"
+      ],
+      "defaultValue": "delicates"
+    },
+    "dryLevel": {
+      "typology": "range",
+      "minimumValue": 1.0,
+      "maximumValue": 4.0,
+      "incrementValue": 1.0,
+      "defaultValue": 4
+    },
+    "dryTime": {
+      "typology": "range",
+      "minimumValue": 4.0,
+      "maximumValue": 12.0,
+      "incrementValue": 1.0,
+      "defaultValue": 4
+    },
+    "onOffStatus": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "operationName": {
+      "typology": "fixed",
+      "fixedValue": "grDryCHGProg"
+    },
+    "anticrease": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 1
+    },
+    "dryingManager": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "bestIroning": {
+      "typology": "range",
+      "minimumValue": 0.0,
+      "maximumValue": 1.0,
+      "incrementValue": 1.0,
+      "defaultValue": 0
+    },
+    "hybrid": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    },
+    "prCode": {
+      "typology": "fixed",
+      "fixedValue": "20"
+    },
+    "prPosition": {
+      "typology": "fixed",
+      "fixedValue": "13"
+    },
+    "prStr": {
+      "typology": "fixed",
+      "fixedValue": "0"
+    }
+  },
+  "ancillary_params": {
+    "dryTimeMM": {
+      "typology": "range",
+      "minimumValue": 70.0,
+      "maximumValue": 150.0,
+      "incrementValue": 10.0,
+      "defaultValue": 70
+    },
+    "energyLabel": {
+      "typology": "range",
+      "minimumValue": 1.0,
+      "maximumValue": 5.0,
+      "incrementValue": 1.0,
+      "defaultValue": 3
+    },
+    "functionalId": {
+      "typology": "fixed",
+      "fixedValue": "2"
+    },
+    "programCluster": {
+      "typology": "enum",
+      "enumValues": [
+        "care",
+        "traditional",
+        "care_traditional"
+      ],
+      "defaultValue": "care_traditional"
+    },
+    "programFamily": {
+      "typology": "enum",
+      "enumValues": [
+        "dashboard",
+        "auto",
+        "dashboard_auto"
+      ],
+      "defaultValue": "dashboard_auto"
+    },
+    "remoteActionable": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "remoteVisible": {
+      "typology": "fixed",
+      "fixedValue": "1"
+    },
+    "suggestedLoadD": {
+      "typology": "fixed",
+      "fixedValue": "4"
+    }
+  },
+  "program_rules": {
+    "dryLevel": {
+      "opt3": {
+        "1": {
+          "typology": "fixed",
+          "fixedValue": "1"
+        }
+      }
+    },
+    "opt3": {
+      "dryLevel": {
+        "2|3|4": {
+          "typology": "fixed",
+          "fixedValue": "0"
+        }
+      }
+    },
+    "dryTime": {
+      "dryTimeMM": {
+        "30": {
+          "typology": "fixed",
+          "fixedValue": "1"
+        },
+        "45": {
+          "typology": "fixed",
+          "fixedValue": "2"
+        },
+        "59": {
+          "typology": "fixed",
+          "fixedValue": "3"
+        },
+        "70": {
+          "typology": "fixed",
+          "fixedValue": "4"
+        },
+        "80": {
+          "typology": "fixed",
+          "fixedValue": "5"
+        },
+        "90": {
+          "typology": "fixed",
+          "fixedValue": "6"
+        },
+        "100": {
+          "typology": "fixed",
+          "fixedValue": "7"
+        },
+        "110": {
+          "typology": "fixed",
+          "fixedValue": "8"
+        },
+        "120": {
+          "typology": "fixed",
+          "fixedValue": "9"
+        },
+        "130": {
+          "typology": "fixed",
+          "fixedValue": "10"
+        },
+        "140": {
+          "typology": "fixed",
+          "fixedValue": "11"
+        },
+        "150": {
+          "typology": "fixed",
+          "fixedValue": "12"
+        },
+        "160": {
+          "typology": "fixed",
+          "fixedValue": "13"
+        },
+        "170": {
+          "typology": "fixed",
+          "fixedValue": "14"
+        },
+        "180": {
+          "typology": "fixed",
+          "fixedValue": "15"
+        },
+        "190": {
+          "typology": "fixed",
+          "fixedValue": "16"
+        },
+        "200": {
+          "typology": "fixed",
+          "fixedValue": "17"
+        },
+        "210": {
+          "typology": "fixed",
+          "fixedValue": "18"
+        },
+        "220": {
+          "typology": "fixed",
+          "fixedValue": "19"
+        }
+      }
+    }
+  },
+  "appliance_options": {
+    "opt1": "anticrease",
+    "opt2": "dryingManager",
+    "opt3": "bestIroning",
+    "opt4": "hybrid",
+    "opt5": "photoPlasmaStatus"
+  }
+}

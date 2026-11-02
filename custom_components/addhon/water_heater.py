@@ -304,6 +304,12 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
     """The heat-pump water heater as one Home Assistant water heater."""
 
     _attr_translation_key = "heat_pump_water_heater"
+    # Both spellings of the temperature API (issue #144). Home Assistant 2026.11 reads
+    # the `native_*` names and, where a class provides both, uses those without a
+    # deprecation warning (`migrate_deprecated_entity_members`); the releases before it,
+    # down to the 2024.12 this integration supports, know only the others. The old names
+    # go once the minimum is 2026.11.
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
 
     def __init__(self, coordinator, appliance_id: str) -> None:
@@ -335,11 +341,19 @@ class HonHeatPumpWaterHeater(HonBaseEntity, WaterHeaterEntity):
         return self._range()[2]
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         return _number(self._get_attr("temp"))
 
     @property
+    def current_temperature(self) -> float | None:
+        return self.native_current_temperature
+
+    @property
     def target_temperature(self) -> float | None:
+        return self.native_target_temperature
+
+    @property
+    def native_target_temperature(self) -> float | None:
         """`tempSel` on the schema's grid (whole °C), half a step rounding up.
 
         Some M7 boilers publish a fractional target (52.2, 59.2, 62.8: issue #115

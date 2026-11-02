@@ -386,8 +386,11 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                         if washer_start
                         else pending_options
                     )
+                    applied: list[str] = []
+                    # The range minimums a "0" drying value lowered, given back below.
+                    lowered: dict[str, float] = {}
                     if options:
-                        applied = apply_pending_options(params, options)
+                        applied = apply_pending_options(params, options, lowered)
                         _LOGGER.debug(
                             "Button debug: applied %d/%d program options %s",
                             len(applied),
@@ -430,7 +433,17 @@ class HonProgramCommandButton(HonBaseEntity, ButtonEntity):
                         label = program_labels.label(appliance_type, slug)
                         if label:
                             send_kwargs["program_label"] = label
+                    # Issue #142: a drying time the user put to "0" in Home Assistant is a
+                    # choice the engine keeps. Passed only then, like the label above.
+                    if "dryTime" in applied:
+                        send_kwargs["chosen_options"] = frozenset(applied)
                     await command.send(**send_kwargs)
+                    # Sent: the "0" stays in the category (what was started), the range
+                    # gets its minimum back -- the drying-time select enumerates from it,
+                    # and a later apply validates against it. Written directly, not
+                    # through the value setter, which would refuse the "0" now in there.
+                    for name, minimum in lowered.items():
+                        params[name].min = minimum
                     rollback.clear()  # sent: nothing to roll back
                     _LOGGER.debug("Button debug: command '%s' send completed", self._command_name)
 

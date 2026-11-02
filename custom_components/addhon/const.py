@@ -129,6 +129,39 @@ DIVERTER_LEVEL_LABELS = {"0": "off", "1": "upper", "2": "lower", "6": "both"}
 # Unselectable dryLevel sentinels (hasDryLevelValue returns false for ''/'0'/'11'):
 # dropped from the select options so they never appear as a choice.
 DRY_LEVEL_SENTINELS = ("", "0", "11")
+# Drying time of a tumble dryer, in minutes (issue #142). A CHG dryer's `dryTime` is an
+# index the app labels from a fixed table, `dryTimeOptions` TD (apk2 decomp.txt:996651-996752).
+DRY_TIME_LABELS_TD = {
+    "1": "30",
+    "2": "45",
+    "3": "59",
+    "4": "70",
+    "5": "80",
+    "6": "90",
+    "7": "100",
+    "8": "110",
+    "9": "120",
+    "10": "130",
+    "11": "140",
+    "12": "150",
+    "13": "160",
+    "14": "170",
+    "15": "180",
+    "16": "190",
+    "17": "200",
+    "18": "210",
+    "19": "220",
+}
+# A Haier HQD dryer's timer is `dryTimeMM` itself, in minutes: the values its programmes
+# offer in hon-test-data (td_1005/1009/1014/1015), and the CHG minutes above, so both
+# selects share one set of state labels. A value outside it shows as the raw number.
+DRY_TIME_MINUTE_LABELS = {
+    minutes: minutes
+    for minutes in sorted(
+        {*DRY_TIME_LABELS_TD.values(), "10", "15", "20", "25", "35", "40", "50", "55", "60", "75", "95", "105", "135"},
+        key=int,
+    )
+}
 
 # Service to change at runtime the log level of the realtime MQTT channel. By
 # default the reconnection-attempt noise is silenced (see logging_utils); this

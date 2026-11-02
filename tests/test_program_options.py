@@ -679,6 +679,105 @@ class _WireAppliance:
         pass
 
 
+class _KwargsCommand(RecordingCommand):
+    """A command that also records what the Start hands to `send`."""
+
+    async def send(self, **kwargs) -> None:
+        self.send_calls += 1
+        self.kwargs = kwargs
+
+
+class StartChosenOptionsTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #142: the Start tells the engine which options the user set, when it matters."""
+
+    async def _press(self, options: dict) -> dict:
+        from custom_components.addhon.button import HonProgramCommandButton
+
+        command = _KwargsCommand(
+            {"dryLevel": Param("4"), "dryTime": Param("4"), "spinSpeed": Param("0")}
+        )
+        appliance = types.SimpleNamespace(commands={"startProgram": command})
+        coordinator = FakeCoordinator(
+            {"td-1": {"type": "TD", "name": "D", "appliance": appliance,
+                      "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_options = {"td-1": dict(options)}
+        button = HonProgramCommandButton(
+            coordinator, "td-1", FakeClient(),
+            command_name="startProgram", unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+        )
+        button.hass = FakeHass()
+        await button.async_press()
+        self.assertEqual(1, command.send_calls)
+        return command.kwargs
+
+    async def test_a_buffered_drying_time_names_the_chosen_options(self) -> None:
+        kwargs = await self._press({"dryLevel": "4", "dryTime": "0"})
+        self.assertEqual(frozenset({"dryLevel", "dryTime"}), kwargs["chosen_options"])
+
+    async def test_other_options_send_as_before(self) -> None:
+        kwargs = await self._press({"dryLevel": "2"})
+        self.assertNotIn("chosen_options", kwargs)
+
+
+class StartLoweredMinimumTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #142: a "0" drying value goes below its range for the send alone.
+
+    `apply_pending_options` lowers the range's minimum so the "0" passes the setter; the
+    Start gives the minimum back once the send is over, whatever its outcome, and keeps
+    the "0" on success (the category holds what was started). Left at 0, the time select
+    would enumerate 30/45/59 min the programme does not offer, and the next apply of one
+    of them would fail against the schema's range.
+    """
+
+    @staticmethod
+    def _dry_time():
+        from custom_components.addhon.client.engine.parameter.range import HonParameterRange
+
+        return HonParameterRange("dryTime", {
+            "typology": "range", "minimumValue": "4", "maximumValue": "12",
+            "incrementValue": "1", "defaultValue": "4",
+        }, "parameters")
+
+    async def _press(self, command, options: dict) -> None:
+        from custom_components.addhon.button import HonProgramCommandButton
+
+        appliance = types.SimpleNamespace(commands={"startProgram": command})
+        coordinator = FakeCoordinator(
+            {"td-1": {"type": "TD", "name": "D", "appliance": appliance,
+                      "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_options = {"td-1": dict(options)}
+        button = HonProgramCommandButton(
+            coordinator, "td-1", FakeClient(),
+            command_name="startProgram", unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+        )
+        button.hass = FakeHass()
+        await button.async_press()
+
+    async def test_a_sent_zero_gives_the_minimum_back_and_stays(self) -> None:
+        command = _KwargsCommand({"dryLevel": Param("4"), "dryTime": self._dry_time()})
+        await self._press(command, {"dryLevel": "4", "dryTime": "0"})
+        self.assertEqual(1, command.send_calls)
+        self.assertEqual(4.0, command.parameters["dryTime"].min)
+        self.assertEqual(0, command.parameters["dryTime"].value)
+
+    async def test_a_refused_zero_is_rolled_back_with_its_minimum(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        class FailingCommand(_KwargsCommand):
+            async def send(self, **kwargs) -> None:
+                raise RuntimeError("cloud rejected")
+
+        command = FailingCommand({"dryLevel": Param("4"), "dryTime": self._dry_time()})
+        with self.assertRaises(HomeAssistantError):
+            await self._press(command, {"dryLevel": "4", "dryTime": "0"})
+        self.assertEqual(4.0, command.parameters["dryTime"].min)
+        self.assertEqual(4.0, command.parameters["dryTime"].value)
+
+
 def _real_categories(api):
     """A REAL engine startProgram with two program categories.
 
@@ -2183,6 +2282,36 @@ class ExclusiveOptionsTest(unittest.IsolatedAsyncioTestCase):
         )
         await self._switch(coordinator, "intensiveMode", "intensive_mode").async_turn_on()
         self.assertEqual({"washer-1": {"intensiveMode": "1"}}, coordinator.pending_options)
+
+    def _dryer(self, anticrease="1", best_ironing="0"):
+        # Issue #142: the HLE H9A3TE-80/N, both options 0/1 ranges.
+        return self._coordinator(fast="0", extra={
+            "anticrease": RangeParam(0, 1, 1, value=anticrease),
+            "bestIroning": RangeParam(0, 1, 1, value=best_ironing),
+        })
+
+    async def test_best_ironing_on_buffers_anti_crease_off(self) -> None:
+        # `checkAndApplyBestIroningRules`, apk2 decomp.txt:2638397.
+        coordinator = self._dryer(anticrease="1")
+        await self._switch(coordinator, "bestIroning", "best_ironing").async_turn_on()
+        self.assertEqual(
+            {"washer-1": {"bestIroning": "1", "anticrease": "0"}}, coordinator.pending_options
+        )
+
+    async def test_anti_crease_on_buffers_best_ironing_off(self) -> None:
+        # `checkAndApplyAnticreaseRules`, apk2 decomp.txt:2638510.
+        coordinator = self._dryer(anticrease="0", best_ironing="1")
+        await self._switch(coordinator, "anticrease", "anticrease").async_turn_on()
+        self.assertEqual(
+            {"washer-1": {"anticrease": "1", "bestIroning": "0"}}, coordinator.pending_options
+        )
+
+    async def test_anti_crease_on_a_washer_without_best_ironing_clears_nothing(self) -> None:
+        coordinator = self._coordinator(
+            fast="0", extra={"anticrease": RangeParam(0, 1, 1, value="0")}
+        )
+        await self._switch(coordinator, "anticrease", "anticrease").async_turn_on()
+        self.assertEqual({"washer-1": {"anticrease": "1"}}, coordinator.pending_options)
 
 
 class KeepFreshHiddenAtStartTest(unittest.TestCase):

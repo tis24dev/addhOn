@@ -771,6 +771,27 @@ class ProgramSelectAtRestTest(unittest.TestCase):
                 attributes = {} if mode is None else {"machMode": mode}
                 self.assertEqual("hqd_eco_40_60", self._entity(kind, **attributes).current_option)
 
+    def test_the_end_of_cycle_tumbling_is_not_rest_on_the_washers(self) -> None:
+        # Issue #138: a reporter's HQD washer at machMode 7 with prPhase 20 (the
+        # end-of-cycle tumbling, TUMBLING on HQD) showed the last recovered programme
+        # while the name sensor still said the cycle's. The app keeps the cycle's card
+        # until the phase is READY (`apk2/analysis/issue138-beta3/16-app-ciclo-da-
+        # pannello-keepfresh-machmode7.md` section 2, apk2 decomp.txt @2591537-2591543).
+        for kind in ("WM", "WD"):
+            with self.subTest(kind=kind):
+                entity = self._entity(kind, machMode="7", prPhase="20")
+                self.assertEqual("hqd_eco_40_60", entity.current_option)
+                self.assertEqual("hqd_eco_40_60", self._entity(kind, machMode="7", prPhase=20.0).current_option)
+                # The phase left 20, or machMode did: rest, as before.
+                self.assertEqual("iot_wash_denim_jeans", self._entity(kind, machMode="7", prPhase="0").current_option)
+                self.assertEqual("iot_wash_denim_jeans", self._entity(kind, machMode="7").current_option)
+                self.assertEqual("iot_wash_denim_jeans", self._entity(kind, machMode="1", prPhase="20").current_option)
+
+    def test_the_tumbling_rule_is_the_washers_alone(self) -> None:
+        for kind in ("TD", "DW"):
+            with self.subTest(kind=kind):
+                self.assertEqual("iot_wash_denim_jeans", self._entity(kind, machMode="7", prPhase="20").current_option)
+
     def test_a_start_target_the_list_lacks_falls_back_to_the_name(self) -> None:
         # Review of PR #139 (S6): the same rest state twice, with a running name that is
         # neither start target, so only the at-rest rule can tell the two answers apart.

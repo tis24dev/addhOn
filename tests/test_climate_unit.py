@@ -32,16 +32,18 @@ class ClimateTemperatureUnitTest(unittest.TestCase):
         )
 
     def test_uses_celsius_constant(self) -> None:
-        self.assertIn(
-            "self._attr_temperature_unit = UnitOfTemperature.CELSIUS",
-            self.source,
-        )
+        # Both spellings on the class (issue #144): `native_*` for Home Assistant
+        # 2026.11, the old one for the releases before it.
+        for name in ("_attr_native_temperature_unit", "_attr_temperature_unit"):
+            self.assertIn(f"    {name} = UnitOfTemperature.CELSIUS", self.source)
+
+    def test_does_not_write_the_old_name_on_the_instance(self) -> None:
+        # Home Assistant 2026.11 reports a write to `_attr_temperature_unit` itself.
+        self.assertNotIn("self._attr_temperature_unit", self.source)
 
     def test_does_not_hardcode_celsius_literal(self) -> None:
-        self.assertNotIn(
-            'self._attr_temperature_unit = "°C"',
-            self.source,
-        )
+        for name in ("_attr_native_temperature_unit", "_attr_temperature_unit"):
+            self.assertNotIn(f'{name} = "°C"', self.source)
 
 
 if __name__ == "__main__":

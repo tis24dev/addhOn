@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from contextlib import suppress
 from copy import copy, deepcopy
 from typing import Any, Optional
@@ -793,19 +794,28 @@ class HonCommandLoader:
         # place instead of raising on a stale/renamed program in the history.
         self._history_recovery[name] = how if category in command.categories else "default"
         if category in command.categories:
-            selected = command.categories[category]
-            # This swap bypasses the `category` setter (see the docstring), so the
-            # "deliberately selected" mark has to be applied here too -- otherwise a
-            # recovered program would be indistinguishable from the schema default.
-            selected.mark_selected_explicitly()
-            # Only the category recovered last carries the history's mark: a runtime
-            # recovery (a cycle started elsewhere) moves it off the previous one.
-            for other in command.categories.values():
-                if other is not selected:
-                    other.mark_recovered(False)
-            selected.mark_recovered()
-            self._commands[name] = selected
+            self._point_at(name, command, category)
         return self._commands[name]
+
+    def _point_at(self, name: str, command: HonCommand, category: str) -> HonCommand:
+        """Make `category` the active one of `commands[name]`, marked as recovered.
+
+        The swap of `_set_last_category` (see its docstring on why the loader's own
+        dict is written), shared with the panel start (`recover_panel_start`).
+        """
+        selected = command.categories[category]
+        # This swap bypasses the `category` setter (see `_set_last_category`), so the
+        # "deliberately selected" mark has to be applied here too -- otherwise a
+        # recovered program would be indistinguishable from the schema default.
+        selected.mark_selected_explicitly()
+        # Only the category recovered last carries the history's mark: a runtime
+        # recovery (a cycle started elsewhere) moves it off the previous one.
+        for other in command.categories.values():
+            if other is not selected:
+                other.mark_recovered(False)
+        selected.mark_recovered()
+        self._commands[name] = selected
+        return selected
 
     def _recover_last_command_states(self) -> None:
         for name, command in self.commands.items():
@@ -841,6 +851,15 @@ class HonCommandLoader:
             return
         if rebuild and callable(rebuilder := getattr(target, "rebuild_from_schema", None)):
             rebuilder()
+        self._write_recovered(target, parameters)
+
+    def _write_recovered(self, target: HonCommand, parameters: Mapping[str, Any]) -> None:
+        """Write the recorded `parameters` on `target`'s settings, as a recovery does.
+
+        The keys `_NOT_RECOVERED` names for the appliance's type and the ones the record
+        leaves out keep what they hold; `_RECOVERED_AS` replaces a recorded value; a
+        value the setting refuses is skipped (see the module docstring on casing).
+        """
         kept = _NOT_RECOVERED.get(getattr(self._appliance, "appliance_type", ""), ())
         for key, data in target.settings.items():
             if key in kept or parameters.get(key) is None:
@@ -874,6 +893,62 @@ class HonCommandLoader:
                 if callable(unmark := getattr(category, "mark_recovered", None)):
                     unmark(False)
         return how
+
+    def recover_panel_start(
+        self,
+        commands: dict[str, HonCommand],
+        programme_name: Any,
+        code: int,
+        options: Mapping[str, Any],
+    ) -> Optional[str]:
+        """Point `commands["startProgram"]` at the programme a panel start runs.
+
+        Issue #138: a cycle started on the panel never reaches `/history`, so the
+        category recovered last -- the last start from the app or Home Assistant --
+        stayed active through it: the option selects offered that programme's lists
+        and, at the end, the programme select fell back to it. The app's washer
+        dashboard rebuilds its card from the shadow's prCode instead and lays the
+        activity over it (`apk2/analysis/issue138-beta3/15-app-programma-e-liste-dopo-
+        avvio-pannello.md` section 1, apk2 decomp.txt @2591529-2592418). Decision of
+        2026-11-02: the same here, on the appliance's own dict, for the start alone.
+
+        The category is, in order: the programme the activity names (`programme_name`,
+        the bare `HQD_COTTONS` an activity spells, cut to the category key as
+        `HonParameterProgram._category_key` cuts it, then read as `_named_programme`
+        reads a row's -- `_clean_name` lowers a dotted name only; a favourite does not
+        count), provided
+        its own prCode is `code` -- a name on another code is as unusable as it is for
+        the running name (issue #130, decision 4); else the base programme of `code`,
+        the first of the `dashboard` family on it (`HonParameterProgram.ids`,
+        @2591880-2591914); else nothing, and None is returned. The category chosen is
+        put back to its schema and the activity's `options` -- the start's values as
+        `HonAppliance._start_options` filters them -- go on it, with the exclusions of
+        a history recovery (`_write_recovered`). Returns `"panel"`, what
+        `history_recovery` then records for the start.
+        """
+        self._commands = commands
+        self._history_recovery = {}
+        if (command := commands.get("startProgram")) is None:
+            return None
+        if programme_name:
+            programme_name = str(programme_name).strip().rsplit(".", 1)[-1].lower()
+        category = self._named_programme(command, programme_name)
+        if category is not None and self._programme_codes(command).get(category) != str(code):
+            category = None
+        if category is None:
+            program = command.parameters.get("program")
+            ids = getattr(program, "ids", None)
+            base = ids.get(code) if isinstance(ids, dict) else None
+            if base in command.categories and not command.categories[base].is_favourite:
+                category = base
+        if category is None:
+            return None
+        target = self._point_at("startProgram", command, category)
+        if callable(rebuilder := getattr(target, "rebuild_from_schema", None)):
+            rebuilder()
+        self._write_recovered(target, options)
+        self._history_recovery["startProgram"] = "panel"
+        return "panel"
 
     def _add_favourites(self) -> None:
         for favourite in self._favourites:

@@ -1651,9 +1651,11 @@ def _history_recovery(appliance) -> dict | None:
     """{command name: how the last catalog load chose the category it restored}.
 
     The engine's `HonAppliance.history_recovery`: `program`, `category`,
-    `programName`, `prCode` or `machMode` name the discriminant, `default` means the
-    values went on the default category, `none` that nothing was recovered. Issue
-    #115: `commands` showed a category active and could not say why.
+    `programName`, `prCode` or `machMode` name the discriminant, `favourite` a
+    favourite the start's title named, `panel` a start made on the panel, pointed
+    from its activity (issue #138), `default` means the values went on the default
+    category, `none` that nothing was recovered. Issue #115: `commands` showed a
+    category active and could not say why.
 
     None for an engine without the property (or one that raises), so that it is not
     read as {} -- a load that recovered nothing.
