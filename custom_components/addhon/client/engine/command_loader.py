@@ -913,7 +913,10 @@ class HonCommandLoader:
         2026-11-02: the same here, on the appliance's own dict, for the start alone.
 
         The category is, in order: the programme the activity names (`programme_name`,
-        read as `_named_programme` reads a row's; a favourite does not count), provided
+        the bare `HQD_COTTONS` an activity spells, cut to the category key as
+        `HonParameterProgram._category_key` cuts it, then read as `_named_programme`
+        reads a row's -- `_clean_name` lowers a dotted name only; a favourite does not
+        count), provided
         its own prCode is `code` -- a name on another code is as unusable as it is for
         the running name (issue #130, decision 4); else the base programme of `code`,
         the first of the `dashboard` family on it (`HonParameterProgram.ids`,
@@ -927,6 +930,8 @@ class HonCommandLoader:
         self._history_recovery = {}
         if (command := commands.get("startProgram")) is None:
             return None
+        if programme_name:
+            programme_name = str(programme_name).strip().rsplit(".", 1)[-1].lower()
         category = self._named_programme(command, programme_name)
         if category is not None and self._programme_codes(command).get(category) != str(code):
             category = None

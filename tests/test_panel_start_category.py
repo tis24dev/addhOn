@@ -196,6 +196,33 @@ class PanelStartTest(_Harness):
                 self.assertEqual("panel", app.history_recovery["startProgram"])
                 self.assertEqual("1400", self._value(app, "spinSpeed"))
 
+    def test_the_programme_the_activity_names_is_taken_over_the_code_s_base(self) -> None:
+        # The activity spells the bare name (`IOT_WASH_BED_LINEN`), the categories are
+        # keyed as `_clean_name` cleans a dotted one (`iot_wash_bed_linen`): matched as
+        # `HonParameterProgram._category_key` reads an activity's. Bed linen shares 115
+        # with Cottons, the code's base programme: the name decides, not the code.
+        for programme, expected in (
+            ("IOT_WASH_BED_LINEN", "PROGRAMS.WM_WD.IOT_WASH_BED_LINEN"),
+            ("HQD_COTTONS_PLUS", "PROGRAMS.WM_WD.HQD_COTTONS_PLUS"),  # hidden, not the base
+        ):
+            with self.subTest(programme=programme):
+                app = self._denim_last_started()
+                self._poll(app, activity=_activity(programme, spinSpeed="1400"), machMode="2")
+                self.assertEqual(expected, app.commands["startProgram"].category)
+                self.assertEqual("panel", app.history_recovery["startProgram"])
+                self.assertEqual("1400", self._value(app, "spinSpeed"))
+
+    def test_the_code_s_base_programme_is_taken_by_name_not_by_fallback(self) -> None:
+        # Cottons is both what the activity names and the base of 115: the name branch
+        # must answer, so a programme the code lookup cannot tell apart still lands.
+        # The programme parameter's `ids` is emptied: no fallback is left to hide behind.
+        app = self._denim_last_started()
+        program = app.commands["startProgram"].parameters["program"]
+        with patch.object(type(program), "ids", new_callable=lambda: property(lambda self: {})):
+            self._poll(app, activity=_activity("HQD_COTTONS", spinSpeed="1400"), machMode="2")
+        self.assertEqual("PROGRAMS.WM_WD.HQD_COTTONS", app.commands["startProgram"].category)
+        self.assertEqual("panel", app.history_recovery["startProgram"])
+
     def test_a_programme_on_another_code_is_not_taken(self) -> None:
         # The name the activity carries is not the shadow's code (decision 4 of
         # 2026-10-25 for the name): the code's own programme is taken instead.
