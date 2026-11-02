@@ -176,13 +176,22 @@ class PanelStartOnASharedCodeTest(_Harness):
         name = self._read(app, {"activity": _activity("HQD_COTTONS", "appliance")}, machMode="2")
         self.assertEqual("hqd_cottons", name)
 
-    def test_the_selection_and_its_options_are_left_alone(self) -> None:  # T1
+    def test_the_selection_follows_the_panel_s_programme_without_a_read(self) -> None:  # T1
+        # Until 2026-11-02 the selection and its options were left alone (T1): the
+        # panel start is not in /history. Decision of 2026-11-02 (issue #138): the
+        # activity itself points the active programme, as the app's dashboard rebuilds
+        # its card from the shadow's prCode with the activity over it; /history is
+        # still not read. `tests/test_panel_start_category.py` has the detail.
         app = self._denim_last_started()
+        self.loop.run_until_complete(app.update(force=True))  # the baseline poll
+        reads = self.cloud.history_reads
+        self.cloud.context["activity"] = _activity("HQD_COTTONS", "appliance")
+        self.cloud.context["shadow"]["parameters"]["machMode"] = _parameter("2")
+        self.loop.run_until_complete(app.update(force=True))
         command = app.commands["startProgram"]
-        self._read(app, {"activity": _activity("HQD_COTTONS", "appliance")}, machMode="2")
-        self.assertIs(command, app.commands["startProgram"])
-        self.assertEqual("PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS", command.category)
-        self.assertEqual("40", str(command.parameters["temp"].value))
+        self.assertEqual("PROGRAMS.WM_WD.HQD_COTTONS", command.category)
+        self.assertEqual("panel", app.history_recovery["startProgram"])
+        self.assertEqual(reads, self.cloud.history_reads)
 
     def test_a_push_keeps_the_name_the_read_found(self) -> None:
         app = self._denim_last_started()

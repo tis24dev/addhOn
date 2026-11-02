@@ -834,7 +834,7 @@ class HonAppliance:
                 if self._announced_polls_left <= 0:
                     self._announced_programme = None
             return
-        self._seen_activity = started
+        previous, self._seen_activity = self._seen_activity, started
         details = activity.get("attributes") if isinstance(activity, dict) else None
         details = details if isinstance(details, dict) else {}
         programme = _programme_key(details.get("programName"))
@@ -845,12 +845,62 @@ class HonAppliance:
             # The slot already announced this cycle's start: one read is enough (S1:
             # only when the activity names that programme, or names none).
             return
-        if details.get("channel") == "appliance" or programme is None:
-            # Started on the panel: such a start never reaches /history. An activity
-            # naming no programme cannot tell its row from another (S4).
+        if details.get("channel") == "appliance":
+            # Started on the panel: such a start never reaches /history, so nothing is
+            # read; the activity itself points the active programme (issue #138).
+            self._follow_panel_start(started, previous)
+            return
+        if programme is None:
+            # An activity naming no programme cannot tell its row from another (S4).
             return
         self._awaited_programme = programme
         self._arm_follow()
+
+    def _follow_panel_start(self, started: Any, previous: Any) -> None:
+        """Point the active programme at the cycle a panel start runs (issue #138).
+
+        The reporter's HQD washer, 2026-10-31: Cottons (prCode 115) started on the
+        panel while the last start `/history` listed was Technical fabrics, which
+        stayed the active category: the option selects offered its lists and, at the
+        end of the cycle, the programme select fell back to it. The app's dashboard
+        rebuilds its card from the shadow's prCode and lays the activity over it,
+        unless the activity's prCode contradicts the shadow's
+        (`apk2/analysis/issue138-beta3/15-app-programma-e-liste-dopo-avvio-pannello.md`
+        section 1, apk2 decomp.txt @2591689-2591740 for the guard, @2591737-2591914 for
+        the base). Decision of 2026-11-02: the same here, through
+        `HonCommandLoader.recover_panel_start`, with the schema rebuilt and the
+        activity's values on it; `history_recovery` says `panel`.
+
+        The activity counts only once the shadow's `machMode` says the cycle runs,
+        as for the name (issue #130, decision 6): the cycle kept by `_watch_cycle`
+        in this same read is the one applied. Read while the shadow still says idle,
+        it is left for the next poll to see again. A failure while pointing is
+        logged and the poll goes on. Runs on the client loop only.
+        """
+        cycle = self._cycle_activity
+        if cycle is None or cycle.started != started:
+            self._seen_activity = previous
+            return
+        if cycle.code is None or cycle.activity_code != cycle.code:
+            return
+        try:
+            how = HonCommandLoader(
+                self._api, self, self._catalog_repository
+            ).recover_panel_start(
+                self._commands, cycle.programme, cycle.code, cycle.options
+            )
+        except Exception:  # noqa: BLE001 - the poll must go on
+            _LOGGER.warning(
+                "Appliance %s: the panel start of %s (prCode %s) could not point the "
+                "active programme; the last recovered one stays",
+                self.appliance_type,
+                cycle.programme,
+                cycle.code,
+                exc_info=True,
+            )
+            return
+        if how is not None:
+            self._history_recovery = {**self._history_recovery, "startProgram": how}
 
     def _arm_follow(self) -> None:
         # A new start gets its own reads, whatever an earlier one left (S6).
