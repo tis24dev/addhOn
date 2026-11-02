@@ -218,6 +218,8 @@ class WaterHeaterTest(unittest.IsolatedAsyncioTestCase):
         # class itself provides both, uses them without a deprecation warning
         # (`migrate_deprecated_entity_members`); the releases before it read the others.
         entity = (await _build(experimental=True))[0]
+        self.assertEqual(entity.native_current_temperature, 33.0)
+        self.assertEqual(entity.native_target_temperature, 40.0)
         self.assertEqual(entity.native_current_temperature, entity.current_temperature)
         self.assertEqual(entity.native_target_temperature, entity.target_temperature)
         self.assertEqual(entity._attr_native_temperature_unit, entity._attr_temperature_unit)

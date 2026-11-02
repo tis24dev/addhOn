@@ -902,9 +902,14 @@ class DryerDryingTimeTest(unittest.IsolatedAsyncioTestCase):
         coordinator = _ListeningCoordinator({"td1": data})
 
         def select_for(key):
+            # The description of the appliance under test: a washer-dryer's dry level is
+            # the `_WASH_TYPES` row, not the dryer's, and it has no drying-time select.
             desc = next(
-                d for d in select._PROGRAM_OPTION_SELECTS if d.key == key and APPLIANCE_TD in d.types
+                (d for d in select._PROGRAM_OPTION_SELECTS if d.key == key and app_type in d.types),
+                None,
             )
+            if desc is None:
+                return None
             return select.HonProgramOptionSelect(coordinator, "td1", desc, None)
 
         best_desc = next(
