@@ -721,6 +721,63 @@ class StartChosenOptionsTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("chosen_options", kwargs)
 
 
+class StartLoweredMinimumTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #142: a "0" drying value goes below its range for the send alone.
+
+    `apply_pending_options` lowers the range's minimum so the "0" passes the setter; the
+    Start gives the minimum back once the send is over, whatever its outcome, and keeps
+    the "0" on success (the category holds what was started). Left at 0, the time select
+    would enumerate 30/45/59 min the programme does not offer, and the next apply of one
+    of them would fail against the schema's range.
+    """
+
+    @staticmethod
+    def _dry_time():
+        from custom_components.addhon.client.engine.parameter.range import HonParameterRange
+
+        return HonParameterRange("dryTime", {
+            "typology": "range", "minimumValue": "4", "maximumValue": "12",
+            "incrementValue": "1", "defaultValue": "4",
+        }, "parameters")
+
+    async def _press(self, command, options: dict) -> None:
+        from custom_components.addhon.button import HonProgramCommandButton
+
+        appliance = types.SimpleNamespace(commands={"startProgram": command})
+        coordinator = FakeCoordinator(
+            {"td-1": {"type": "TD", "name": "D", "appliance": appliance,
+                      "attributes": {}, "settings": {}}}
+        )
+        coordinator.pending_options = {"td-1": dict(options)}
+        button = HonProgramCommandButton(
+            coordinator, "td-1", FakeClient(),
+            command_name="startProgram", unique_suffix="start_program",
+            translation_key="start_program", icon="mdi:play-circle",
+        )
+        button.hass = FakeHass()
+        await button.async_press()
+
+    async def test_a_sent_zero_gives_the_minimum_back_and_stays(self) -> None:
+        command = _KwargsCommand({"dryLevel": Param("4"), "dryTime": self._dry_time()})
+        await self._press(command, {"dryLevel": "4", "dryTime": "0"})
+        self.assertEqual(1, command.send_calls)
+        self.assertEqual(4.0, command.parameters["dryTime"].min)
+        self.assertEqual(0, command.parameters["dryTime"].value)
+
+    async def test_a_refused_zero_is_rolled_back_with_its_minimum(self) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        class FailingCommand(_KwargsCommand):
+            async def send(self, **kwargs) -> None:
+                raise RuntimeError("cloud rejected")
+
+        command = FailingCommand({"dryLevel": Param("4"), "dryTime": self._dry_time()})
+        with self.assertRaises(HomeAssistantError):
+            await self._press(command, {"dryLevel": "4", "dryTime": "0"})
+        self.assertEqual(4.0, command.parameters["dryTime"].min)
+        self.assertEqual(4.0, command.parameters["dryTime"].value)
+
+
 def _real_categories(api):
     """A REAL engine startProgram with two program categories.
 

@@ -547,7 +547,9 @@ def drop_hidden_keep_fresh(appliance, command, params: dict, options: dict) -> d
     return options
 
 
-def apply_pending_options(params: dict, options: dict) -> list[str]:
+def apply_pending_options(
+    params: dict, options: dict, lowered: dict[str, float] | None = None
+) -> list[str]:
     """Apply buffered option values to a command's parameters (the apply-on-start step).
 
     For each ``(name, value)`` in ``options``: if ``name`` is a parameter of ``params``,
@@ -555,6 +557,10 @@ def apply_pending_options(params: dict, options: dict) -> list[str]:
     if the param is absent for the SELECTED program (a different program may not expose it).
     MUST be called on the POST-SWAP command (see button.py): selecting the program swaps
     the active startProgram command, and the options have to land on the new one.
+
+    A drying value of "0" goes below its range (issue #142, see below): the range's
+    minimum is lowered for it, and ``lowered``, when given, receives ``{name: the
+    minimum replaced}`` so the caller can give it back after the send.
 
     Returns the list of names actually applied."""
     applied: list[str] = []
@@ -573,11 +579,15 @@ def apply_pending_options(params: dict, options: dict) -> list[str]:
             # Drying for a time, or to a level after a time (issue #142): the app sends
             # `dryLevel '0'` or `dryTime '0'` although the schema's range starts at 1 or
             # at 4 (`resetParamsValue`, apk2 decomp.txt:2637654, writes without
-            # validating). The range takes it from here on; the Start's rollback
-            # snapshot restores the bound if the send fails.
+            # validating). The range takes it from here on. The Start puts the bound
+            # back once the send is over: its rollback snapshot if the send fails, and
+            # `lowered` on success, as the select enumerates its choices from the bound
+            # and the category lives on with the "0" in it.
             minimum = getattr(param, "min", None)
             if isinstance(minimum, (int, float)) and minimum > 0:
                 param.min = 0
+                if lowered is not None:
+                    lowered[name] = minimum
         param.value = value
         applied.append(name)
         _LOGGER.debug("apply_pending_options: applied option '%s'=%s", name, value)

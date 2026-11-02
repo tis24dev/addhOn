@@ -1034,6 +1034,22 @@ class DryerDryingTimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("0", normalize_code(params["dryTime"].value))
         self.assertEqual("4", normalize_code(params["dryLevel"].value))
 
+    def test_a_zero_lowers_the_minimum_and_reports_the_one_it_replaced(self) -> None:
+        # The Start gives the range its minimum back after the send; it needs to know
+        # which ones went down, and from where.
+        from custom_components.addhon.program_options import apply_pending_options
+
+        params = _build_chg_dryer().commands["startProgram"].parameters
+        lowered: dict = {}
+        applied = apply_pending_options(params, {"dryLevel": "4", "dryTime": "0"}, lowered)
+        self.assertEqual(["dryLevel", "dryTime"], applied)
+        self.assertEqual(0, params["dryTime"].min)
+        self.assertEqual({"dryTime": 4.0}, lowered)
+        # Nothing to report when no value goes below its range.
+        lowered = {}
+        apply_pending_options(params, {"dryLevel": "3", "dryTime": "6"}, lowered)
+        self.assertEqual({}, lowered)
+
     def test_the_hqd_dryer_gets_the_minutes_select(self) -> None:
         appliance = _build_hqd_timer_dryer()
         built = _built_selects(appliance, APPLIANCE_TD)
