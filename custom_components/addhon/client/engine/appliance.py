@@ -826,8 +826,15 @@ class HonAppliance:
     def _watch_activity(self) -> None:
         activity = self._attributes.get("activity")
         started = activity.get("activityStarted") if isinstance(activity, dict) else None
+        details = activity.get("attributes") if isinstance(activity, dict) else None
+        details = details if isinstance(details, dict) else {}
         if self._seen_activity is _UNSEEN:
             self._seen_activity = started or None
+            # A panel cycle already running when Home Assistant starts has no row in
+            # /history to be recovered from: the baseline activity points it as a new
+            # one would. Read at rest, it is seen again at the next poll (`_UNSEEN`).
+            if started and details.get("channel") == "appliance":
+                self._follow_panel_start(started, _UNSEEN)
             return
         if not started or started == self._seen_activity:
             if self._announced_programme is not None:
@@ -838,8 +845,6 @@ class HonAppliance:
                     self._announced_programme = None
             return
         previous, self._seen_activity = self._seen_activity, started
-        details = activity.get("attributes") if isinstance(activity, dict) else None
-        details = details if isinstance(details, dict) else {}
         programme = _programme_key(details.get("programName"))
         announced, self._announced_programme = self._announced_programme, None
         if announced is not None and (

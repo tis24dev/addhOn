@@ -268,6 +268,59 @@ class PanelStartTest(_Harness):
         self.assertEqual(1, app.followed_starts)
 
 
+class PanelCycleAlreadyRunningTest(_Harness):
+    """Home Assistant starts while a panel cycle runs: the first activity read is the
+    baseline, and it names the cycle too. The app's dashboard reads the same context,
+    whenever it opens: the category follows the panel's programme from the first poll,
+    `/history` (which lists the app's last start, Denim) is not read for it."""
+
+    def test_the_first_poll_points_the_running_panel_cycle(self) -> None:
+        self.cloud = CloudDouble(
+            _WM_COMMANDS,
+            [_start("PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS", _DENIM_AT)],
+            _shadow("115", "2") | {"activity": _activity("HQD_COTTONS", spinSpeed="1400"),
+                                   "commandHistory": None},
+        )
+        app = factory._native_engine_appliance_cls()(
+            self.cloud,
+            {"applianceTypeName": "WM", "applianceModelId": 1, "macAddress": "aa"},
+            zone=0,
+        )
+        self.loop.run_until_complete(app.load_commands())
+        self.loop.run_until_complete(app.load_attributes())
+        self.assertEqual("PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS", app.commands["startProgram"].category)
+        reads = self.cloud.history_reads
+        self._poll(app)
+        self.assertEqual("PROGRAMS.WM_WD.HQD_COTTONS", app.commands["startProgram"].category)
+        self.assertEqual("panel", app.history_recovery["startProgram"])
+        self.assertEqual("1400", self._value(app, "spinSpeed"))
+        self.assertEqual("hqd_cottons", app.attributes["programName"])
+        self.assertEqual(reads, self.cloud.history_reads)
+        self.assertEqual(0, app.followed_starts)
+
+    def test_a_panel_activity_first_read_at_rest_is_seen_again(self) -> None:
+        # The shadow still says idle on the first read: the activity is not the
+        # baseline yet, the next poll that says a cycle runs points it.
+        self.cloud = CloudDouble(
+            _WM_COMMANDS,
+            [_start("PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS", _DENIM_AT)],
+            _shadow("115", "1") | {"activity": _activity("HQD_COTTONS", spinSpeed="1400"),
+                                   "commandHistory": None},
+        )
+        app = factory._native_engine_appliance_cls()(
+            self.cloud,
+            {"applianceTypeName": "WM", "applianceModelId": 1, "macAddress": "aa"},
+            zone=0,
+        )
+        self.loop.run_until_complete(app.load_commands())
+        self.loop.run_until_complete(app.load_attributes())
+        self._poll(app)
+        self.assertEqual("PROGRAMS.WM_WD.IOT_WASH_DENIM_JEANS", app.commands["startProgram"].category)
+        self._poll(app, machMode="2")
+        self.assertEqual("PROGRAMS.WM_WD.HQD_COTTONS", app.commands["startProgram"].category)
+        self.assertEqual("panel", app.history_recovery["startProgram"])
+
+
 _APP_AT = "2026-10-31T10:08:56Z"
 _BED_LINEN_ROW_AT = "2026-10-31T10:08:55.000Z"
 _LATER_PANEL_AT = "2026-10-31T10:12:00Z"
