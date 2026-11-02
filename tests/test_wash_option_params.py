@@ -1020,6 +1020,27 @@ class DryerDryingTimeTest(unittest.IsolatedAsyncioTestCase):
         await dry_time.async_select_option("110")
         self.assertEqual({"dryTime": "8"}, self._buffer(coordinator))
 
+    async def test_the_time_reads_unknown_once_the_programme_is_picked_again(self) -> None:
+        # The timed Start left dryLevel "0" in the category; the programme, picked again,
+        # prescribes its own level (4), which is what the Start would send: the gate
+        # reads it as the coupling does, so the time goes unknown while the level shows.
+        coordinator, dry_time, level, _ = self._entities(rules=False)
+        command = coordinator.data["td1"]["appliance"].commands["startProgram"]
+        command._categories = {"prog": command}
+        self._after_a_timed_start(coordinator)
+        coordinator.pending_programs = {"td1": "prog"}
+        self.assertIsNone(dry_time.current_option)
+        self.assertEqual("extra_dry", level.current_option)
+
+    async def test_the_time_stays_while_the_timed_cycle_runs_unpicked(self) -> None:
+        # No programme picked: the category's "0" is the cycle's own, the shadow's time
+        # shows.
+        coordinator, dry_time, _, _ = self._entities(
+            rules=False, attributes={"dryLevel": "0", "dryTime": "7"}
+        )
+        self._after_a_timed_start(coordinator)
+        self.assertEqual("100", dry_time.current_option)
+
     async def test_a_washer_dryer_level_never_touches_the_time(self) -> None:
         coordinator, _, level, _ = self._entities(app_type=APPLIANCE_WD)
         coordinator.pending_options = {"td1": {"dryLevel": "0", "dryTime": "6"}}

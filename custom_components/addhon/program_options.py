@@ -735,7 +735,10 @@ class HonProgramOptionEntity(HonBaseEntity):
 
         Issue #142: the app's drying page shows a level or a time, never both. Here the
         time reads as unknown unless the dry level the programme leaves with is the timed
-        one (`_TIMED_DRY_LEVELS`): the buffered level, else the programme's own."""
+        one (`_TIMED_DRY_LEVELS`): the buffered level, else what the SELECTED programme
+        prescribes (as `_couple_dry_level` reads it: a timed Start leaves "0" in the
+        category's live value, and the programme picked again is rebuilt only at Start),
+        else the live value, the running cycle's own when no programme is picked."""
         if (
             self._param not in (_DRY_TIME_PARAM, _DRY_TIME_MM_PARAM)
             or self._appliance_data.get("type") != APPLIANCE_TD
@@ -746,7 +749,11 @@ class HonProgramOptionEntity(HonBaseEntity):
         level = params.get(_DRY_LEVEL_PARAM) if isinstance(params, dict) else None
         if level is None:
             return False
-        held = self._pending().get(_DRY_LEVEL_PARAM, getattr(level, "value", None))
+        held = self._pending().get(_DRY_LEVEL_PARAM)
+        if held is None and self._selected_category() is not None:
+            held = self._prescribed_for(command, params, _DRY_LEVEL_PARAM)
+        if held is None:
+            held = getattr(level, "value", None)
         return normalize_code(held) not in _TIMED_DRY_LEVELS
 
     def _couple_dry_level(self, per: dict, before: dict, value, was_on: bool) -> list[str]:
