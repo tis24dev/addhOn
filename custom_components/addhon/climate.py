@@ -96,11 +96,18 @@ async def async_setup_entry(
 class HaierClimateEntity(HonBaseEntity, ClimateEntity):
     """Representation of the Haier hOn air conditioner."""
 
+    # Both spellings of the temperature API (issue #144), as on the water heater: Home
+    # Assistant 2026.11 uses the `native_*` names without a warning where a class
+    # provides both, the releases before it know only the others. On the class, not set
+    # in `__init__`: there a write to the old name is itself reported on 2026.11. The
+    # old names go once the minimum is 2026.11.
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+
     def __init__(self, coordinator, appliance_id: str, client=None) -> None:
         super().__init__(coordinator, appliance_id, client)
         self._attr_name = None
         self._attr_unique_id = f"{appliance_id}_climate"
-        self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         # Setpoint range/step read from the device's real tempSel parameter (see
         # min_temp/max_temp/target_temperature_step below), not hardcoded: a model
         # with a different range or half-degree step must be honoured so the UI
@@ -267,6 +274,10 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
 
     @property
     def target_temperature(self) -> float | None:
+        return self.native_target_temperature
+
+    @property
+    def native_target_temperature(self) -> float | None:
         """Return the set temperature, on the device's own grid. None if not available.
 
         HA's dial derives the next setpoint from this STATE, so an off-grid shadow
@@ -292,6 +303,10 @@ class HaierClimateEntity(HonBaseEntity, ClimateEntity):
 
     @property
     def current_temperature(self) -> float | None:
+        return self.native_current_temperature
+
+    @property
+    def native_current_temperature(self) -> float | None:
         """Return the room temperature."""
         val = self._get_attr(AC_ATTR_CURRENT_TEMP)
         try:

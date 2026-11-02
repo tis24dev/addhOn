@@ -802,6 +802,27 @@ class AcClimateReadPathTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(23.0, entity.target_temperature)
 
+    async def test_both_temperature_apis_read_the_same(self) -> None:
+        # Issue #144: the `native_*` names for Home Assistant 2026.11, which uses them
+        # without a deprecation warning where the class itself provides both; the old
+        # names for the releases before it.
+        entity, _, _ = _climate(
+            {"tempSel": RangeParam("23", mn=16, mx=30, step=1)},
+            attributes={"settings.tempSel": "23.2", "tempIndoor": "21.5"},
+        )
+        self.assertEqual(23.0, entity.native_target_temperature)
+        self.assertEqual(entity.native_target_temperature, entity.target_temperature)
+        self.assertEqual(21.5, entity.native_current_temperature)
+        self.assertEqual(entity.native_current_temperature, entity.current_temperature)
+        members = vars(climate.HaierClimateEntity)
+        for old, native in (
+            ("_attr_temperature_unit", "_attr_native_temperature_unit"),
+            ("current_temperature", "native_current_temperature"),
+            ("target_temperature", "native_target_temperature"),
+        ):
+            self.assertIn(old, members)
+            self.assertIn(native, members)
+
     async def test_a_half_degree_grid_keeps_its_half_degrees(self) -> None:
         entity, _, _ = _climate(
             {"tempSel": RangeParam("22", mn=16, mx=30, step=0.5)},
