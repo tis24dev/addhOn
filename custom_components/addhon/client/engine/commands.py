@@ -964,6 +964,24 @@ class HonCommand:
             targets |= ruleset.rule_targets
         return targets
 
+    def rule_fixed_value(self, trigger_key: str, trigger_value: str, param_key: str) -> str | None:
+        """The `fixedValue` a rule of this command writes into ``param_key`` when
+        ``trigger_key`` takes ``trigger_value``, or None.
+
+        Only the plain rules: one with extra conditions holds only alongside other
+        values, which a caller asking about one trigger cannot know (issue #142).
+        """
+        for ruleset in self._rules:
+            for rule in ruleset.rules.get(trigger_key, ()):
+                if rule.extras or rule.param_key != param_key:
+                    continue
+                if str(rule.trigger_value) != str(trigger_value):
+                    continue
+                value = rule.param_data.get("fixedValue")
+                if value not in (None, ""):
+                    return str(value)
+        return None
+
     @property
     def favourite_name(self) -> str:
         """The user's name for this favourite, "" on a schema category.

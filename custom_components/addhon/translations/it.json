@@ -1021,6 +1021,9 @@
       "anti_crease_time": {
         "name": "Tempo antipiega"
       },
+      "best_ironing": {
+        "name": "Stiro facile"
+      },
       "pause": {
         "name": "Pausa"
       },

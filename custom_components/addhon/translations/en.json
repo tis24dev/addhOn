@@ -1021,6 +1021,9 @@
       "anti_crease_time": {
         "name": "Anti-crease time"
       },
+      "best_ironing": {
+        "name": "Best ironing"
+      },
       "pause": {
         "name": "Pause"
       },

@@ -369,7 +369,8 @@ class HonProgramOptionSwitchDescription:
 # Candidate program-option switches (decomp/andre0512 superset), capability-gated by the
 # device's startProgram schema (a param that is fixed / single-value on the model creates
 # NO entity, so no "No disponible" clutter). WM/WD vs TD families are kept distinct
-# (anticrease is the WM/WD opt-toggle; antiCreaseTime is the TD timed variant).
+# (anticrease is the WM/WD opt-toggle; antiCreaseTime is the TD timed variant, and the
+# CHG dryers of issue #142 carry the plain `anticrease` under a row of their own).
 _WASH_TYPES = (APPLIANCE_WM, APPLIANCE_WD)
 _DRY_TYPES = (APPLIANCE_TD,)
 # Dishwasher (issue #106). Its own family rather than a member of `_WASH_TYPES`: the
@@ -401,6 +402,15 @@ _PROGRAM_OPTION_SWITCHES: tuple[HonProgramOptionSwitchDescription, ...] = (
     # the user's choice on three washers of two brands.
     HonProgramOptionSwitchDescription(key="permanent_press", param="permanentPressStatus", types=(*_WASH_TYPES, *_DRY_TYPES), icon="mdi:tshirt-crew-outline"),
     HonProgramOptionSwitchDescription(key="anti_crease_time", param="antiCreaseTime", types=_DRY_TYPES, icon="mdi:tshirt-crew"),
+    # Dryers of the CHG platform (issue #142, HLE H9A3TE-80/N) carry the plain 0/1
+    # `anticrease` instead of the timed `antiCreaseTime`, next to `bestIroning`: settable
+    # in 27 programmes out of 51 on that dryer, and the same pair on the two CHG dryers of
+    # hon-test-data, where no model has both anti-crease names. A row of its own rather
+    # than TD in the washer row above, so that the washers keep their switch enabled
+    # while the dryer's is offered disabled. The app makes the two exclusive
+    # (`EXCLUSIVE_OPTION_GROUPS` in program_options.py).
+    HonProgramOptionSwitchDescription(key="anticrease", param="anticrease", types=_DRY_TYPES, icon="mdi:tshirt-crew", enabled_default=False),
+    HonProgramOptionSwitchDescription(key="best_ironing", param="bestIroning", types=_DRY_TYPES, icon="mdi:iron", enabled_default=False),
     # Washer options of the newer schemas (issue #112), each sent by the official app as
     # the user's choice (command history of two reporters) and each in the app's option
     # registry for washers (apk2 decomp.txt:994341, 995034, 994832). None of them takes

@@ -456,11 +456,27 @@ def is_settable_option(param, drop: tuple[str, ...] = ()) -> bool:
 # member the programme has with a value other than "0"; turning one OFF touches nothing.
 # The option manager has the same rule over four of these keys (@2638035-2638071); the
 # handler's five are the superset, and it never rewrites a sibling already at "0".
+#
+# Anti-crease and Best Ironing (issue #142): the option manager's `update` turns
+# `anticrease` to "0" when Best Ironing goes on (`checkAndApplyBestIroningRules`,
+# @2638397) and `bestIroning` to "0" when anti-crease goes on
+# (`checkAndApplyAnticreaseRules`, @2638510), on any appliance type.
 EXCLUSIVE_OPTION_GROUPS: tuple[frozenset[str], ...] = (
     frozenset(
         {"fastMode", "intensiveMode", "energySavingStatus", "strongStatus", "speedUpStatus"}
     ),
+    frozenset({"anticrease", "bestIroning"}),
 )
+
+# Best Ironing and the dry level (issue #142). The same `checkAndApplyBestIroningRules`
+# puts `dryLevel` to "1" (iron dry) when Best Ironing goes on and back to the programme's
+# `originalValue` when it goes off. The other way round is the catalogue's: on the CHG
+# dryers `programRules` turns Best Ironing ("opt3") to "0" for a dry level of 2, 3 or 4.
+# Anti-crease turning Best Ironing off leaves the level alone, as in the app, whose
+# exclusion writes the value without going through these rules.
+_BEST_IRONING_PARAM = "bestIroning"
+_DRY_LEVEL_PARAM = "dryLevel"
+_BEST_IRONING_DRY_LEVEL = "1"
 
 # Where the app hides Keep Fresh on a washer (issue #112), so a Start must not send the
 # user's buffered choice there: on the HQD platform in the check-up and drum-clean
@@ -619,30 +635,41 @@ class HonProgramOptionEntity(HonBaseEntity):
         if not isinstance(per, dict):
             per = {}
             store[self._appliance_id] = per
+        # What the switch showed before this write: only turning Best Ironing OFF from ON
+        # gives the dry level back to the programme (issue #142).
+        was_on = self._param == _BEST_IRONING_PARAM and normalize_code(
+            self._current_raw()
+        ) not in (None, "0")
         per[self._param] = value
         mark_pending_choice(self.coordinator, self._appliance_id, PROGRAM_PENDING_OPTIONS)
         cleared = self._clear_exclusive_siblings(per, value)
+        coupled = self._couple_dry_level(per, value, was_on)
         _LOGGER.debug(
-            "ProgramOption debug: buffered '%s'=%s id=%s param=%s cleared=%s",
+            "ProgramOption debug: buffered '%s'=%s id=%s param=%s cleared=%s coupled=%s",
             redact_id(getattr(self, "_attr_unique_id", None), self._appliance_id)
             or self.__class__.__name__,
             value,
             redact_id(self._appliance_id),
             self._param,
             cleared,
+            coupled,
         )
-        if cleared:
-            # The siblings' own entities show the "0" too; this entity rides along.
+        if cleared or coupled:
+            # The other entities show their new value too; this entity rides along.
             self.coordinator.async_update_listeners()
         else:
             self.async_write_ha_state()
+
+    def _option_command(self):
+        """The SELECTED program's category command, else the active startProgram one."""
+        category = self._selected_category()
+        return category if category is not None else startprogram_command(self._appliance)
 
     def _clear_exclusive_siblings(self, per: dict, value) -> list[str]:
         """Buffer "0" for the siblings of an exclusive group this ON turns off."""
         if normalize_code(value) != "1":
             return []
-        category = self._selected_category()
-        command = category if category is not None else startprogram_command(self._appliance)
+        command = self._option_command()
         params = getattr(command, "parameters", None) if command is not None else None
         if not isinstance(params, dict):
             return []
@@ -660,6 +687,58 @@ class HonProgramOptionEntity(HonBaseEntity):
                 per[name] = "0"
                 cleared.append(name)
         return cleared
+
+    def _couple_dry_level(self, per: dict, value, was_on: bool) -> list[str]:
+        """Buffer the dry level Best Ironing brings, or the Best Ironing a level brings.
+
+        Best Ironing ON buffers dry level "1" where the programme offers it; OFF, after
+        being ON, buffers the programme's own level. A dry level for which the programme's
+        `programRules` prescribe a Best Ironing value buffers that value. Where the other
+        parameter is absent or pinned, nothing else is buffered."""
+        if self._param not in (_BEST_IRONING_PARAM, _DRY_LEVEL_PARAM):
+            return []
+        command = self._option_command()
+        params = getattr(command, "parameters", None) if command is not None else None
+        if not isinstance(params, dict):
+            return []
+        code = normalize_code(value)
+        if self._param == _BEST_IRONING_PARAM:
+            level = params.get(_DRY_LEVEL_PARAM)
+            if level is None or not is_settable_option(level):
+                return []
+            if code == "1":
+                if _BEST_IRONING_DRY_LEVEL not in option_choices(level):
+                    return []
+                target = _BEST_IRONING_DRY_LEVEL
+            elif was_on:
+                # The app's `originalValue`: what the programme prescribes, which for a
+                # favourite is its saved value (as in `_prescribed_raw`).
+                raw = (
+                    getattr(level, "value", None)
+                    if getattr(command, "is_favourite", False)
+                    else getattr(level, "schema_value", None)
+                )
+                target = normalize_code(raw)
+                if target is None:
+                    return []
+            else:
+                return []
+            per[_DRY_LEVEL_PARAM] = target
+            return [_DRY_LEVEL_PARAM]
+        if self._param == _DRY_LEVEL_PARAM:
+            best = params.get(_BEST_IRONING_PARAM)
+            rule = getattr(command, "rule_fixed_value", None)
+            if best is None or not callable(rule) or code is None:
+                return []
+            fixed = rule(_DRY_LEVEL_PARAM, code, _BEST_IRONING_PARAM)
+            if fixed is None:
+                return []
+            raw = per.get(_BEST_IRONING_PARAM, getattr(best, "value", None))
+            if normalize_code(raw) == normalize_code(fixed):
+                return []
+            per[_BEST_IRONING_PARAM] = fixed
+            return [_BEST_IRONING_PARAM]
+        return []
 
     def _selected_category(self):
         """The SELECTED program's category command, or None."""

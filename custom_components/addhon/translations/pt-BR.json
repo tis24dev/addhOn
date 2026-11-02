@@ -954,6 +954,9 @@
       "anti_crease_time": {
         "name": "Tempo antirrugas"
       },
+      "best_ironing": {
+        "name": "Passar fácil"
+      },
       "pause": {
         "name": "Pausa"
       },

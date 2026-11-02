@@ -2184,6 +2184,36 @@ class ExclusiveOptionsTest(unittest.IsolatedAsyncioTestCase):
         await self._switch(coordinator, "intensiveMode", "intensive_mode").async_turn_on()
         self.assertEqual({"washer-1": {"intensiveMode": "1"}}, coordinator.pending_options)
 
+    def _dryer(self, anticrease="1", best_ironing="0"):
+        # Issue #142: the HLE H9A3TE-80/N, both options 0/1 ranges.
+        return self._coordinator(fast="0", extra={
+            "anticrease": RangeParam(0, 1, 1, value=anticrease),
+            "bestIroning": RangeParam(0, 1, 1, value=best_ironing),
+        })
+
+    async def test_best_ironing_on_buffers_anti_crease_off(self) -> None:
+        # `checkAndApplyBestIroningRules`, apk2 decomp.txt:2638397.
+        coordinator = self._dryer(anticrease="1")
+        await self._switch(coordinator, "bestIroning", "best_ironing").async_turn_on()
+        self.assertEqual(
+            {"washer-1": {"bestIroning": "1", "anticrease": "0"}}, coordinator.pending_options
+        )
+
+    async def test_anti_crease_on_buffers_best_ironing_off(self) -> None:
+        # `checkAndApplyAnticreaseRules`, apk2 decomp.txt:2638510.
+        coordinator = self._dryer(anticrease="0", best_ironing="1")
+        await self._switch(coordinator, "anticrease", "anticrease").async_turn_on()
+        self.assertEqual(
+            {"washer-1": {"anticrease": "1", "bestIroning": "0"}}, coordinator.pending_options
+        )
+
+    async def test_anti_crease_on_a_washer_without_best_ironing_clears_nothing(self) -> None:
+        coordinator = self._coordinator(
+            fast="0", extra={"anticrease": RangeParam(0, 1, 1, value="0")}
+        )
+        await self._switch(coordinator, "anticrease", "anticrease").async_turn_on()
+        self.assertEqual({"washer-1": {"anticrease": "1"}}, coordinator.pending_options)
+
 
 class KeepFreshHiddenAtStartTest(unittest.TestCase):
     """Issue #112: where the app hides Keep Fresh, a Start sends the programme's value."""
