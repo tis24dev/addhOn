@@ -1448,10 +1448,10 @@
       "message": "The purifier must be confirmed running to change this."
     },
     "refresh_after_command_failed": {
-      "message": "Refresh after the command failed."
+      "message": "Could not refresh the data after the command."
     },
     "refresh_after_command_failed_error": {
-      "message": "Refresh after the command failed: {error}"
+      "message": "Could not refresh the data after the command: {error}"
     },
     "swing_not_supported": {
       "message": "This device does not support vertical swing."

@@ -1448,10 +1448,10 @@
       "message": "Il purificatore deve risultare in funzione per cambiare questa impostazione."
     },
     "refresh_after_command_failed": {
-      "message": "Aggiornamento dopo il comando non riuscito."
+      "message": "Impossibile aggiornare i dati dopo il comando."
     },
     "refresh_after_command_failed_error": {
-      "message": "Aggiornamento dopo il comando non riuscito: {error}"
+      "message": "Impossibile aggiornare i dati dopo il comando: {error}"
     },
     "swing_not_supported": {
       "message": "Questo apparecchio non supporta l'oscillazione verticale."
