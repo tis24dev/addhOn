@@ -13,7 +13,7 @@ This project separates **code** from **interface**:
 
 - **The interface is multi-language.** Every user-facing string goes through
   Home Assistant's translation system in `custom_components/addhon/translations/`
-  (currently `en.json` and `it.json`), never hardcoded in the code:
+  (currently `en.json`, `it.json` and `fr.json`), never hardcoded in the code:
   - **Entity names**: set `_attr_translation_key` (entities use
     `_attr_has_entity_name`) and add `entity.<platform>.<key>.name` to the
     translations. Do not set a hardcoded `name=` / `_attr_name`.
@@ -32,9 +32,9 @@ This project separates **code** from **interface**:
     `tests/test_entity_translation_keys.py`). Free-text values (program names,
     raw error codes) are device data and stay unmapped.
 
-`en.json` and `it.json` must keep an identical key structure (enforced by
-`tests/test_translations.py` and `tests/test_entity_translation_keys.py`). Add a
-key to both languages at once. Use plain text: no emoji, no long dashes.
+`en.json`, `it.json` and `fr.json` must keep an identical key structure (enforced
+by `tests/test_translations.py` and `tests/test_entity_translation_keys.py`). Add a
+key to all three at once. Use plain text: no emoji, no long dashes.
 
 ## Running the tests
 
