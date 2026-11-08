@@ -254,11 +254,35 @@ class EngineChoiceTest(unittest.TestCase):
                 self.assertNotIn("v1", api.calls)
 
     def test_error_keys_without_a_value_are_not_an_error(self) -> None:
-        api = _Api(v2={"errorMessage": None, "errorType": None, "programsCounter": "37"})
+        # Null, empty or blank error fields say nothing (PR #146 review, Sourcery): a good
+        # answer carrying them must not be discarded for stale statistics.
+        for body in (
+            {"errorMessage": None, "errorType": None, "programsCounter": "37"},
+            {"errorMessage": "", "errorType": "", "programsCounter": "37"},
+            {"errorType": "   ", "programsCounter": "37"},
+        ):
+            with self.subTest(body=body):
+                api = _Api(v2=body)
+                app = _appliance(api)
+                _run(app.load_statistics())
+                self.assertEqual("37", app.statistics["programsCounter"])
+                self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+
+    def test_an_error_type_longer_than_the_dump_prints_reads_as_error(self) -> None:
+        # The dump prints a reason of at most 64 characters (`_statistics_reason`); a
+        # longer `errorType` is reported as `error` on both paths (PR #146 review,
+        # CodeRabbit).
+        api = _Api(v2=_good_answer(), v1={"programsCounter": 99})
         app = _appliance(api)
         _run(app.load_statistics())
-        self.assertEqual("37", app.statistics["programsCounter"])
-        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        api.v2 = {"errorType": "E" * 65, "programsCounter": "37"}
+        _run(app.load_statistics())
+        self.assertEqual(
+            {"version": "v2", "fallback": None, "rejected": "error"}, app.statistics_source
+        )
+        api.v2 = {"errorType": "E" * 64, "programsCounter": "37"}
+        _run(app.load_statistics())
+        self.assertEqual("E" * 64, app.statistics_source["rejected"])
 
     def test_the_next_good_v2_answer_clears_the_rejection(self) -> None:
         api = _Api(v2=_good_answer(), v1={"programsCounter": 99})

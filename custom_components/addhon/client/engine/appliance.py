@@ -88,11 +88,22 @@ _STATISTICS_ERROR_KEYS = ("errorMessage", "errorType")
 
 def _statistics_error(answer: Mapping[str, Any]) -> Optional[str]:
     """Why `answer` is an error body and not the statistics, None when it is not: its
-    `errorType` when that is a bare name, `error` otherwise."""
-    if all(answer.get(key) is None for key in _STATISTICS_ERROR_KEYS):
+    `errorType` when that is a bare name the dump can print, `error` otherwise.
+
+    A null, empty or blank error field says nothing (review of PR #146): an answer
+    carrying only those is the statistics. The name is capped at the 64 characters
+    `diagnostics._statistics_reason` prints, so the dump and the cycle log agree."""
+    if all(_blank(answer.get(key)) for key in _STATISTICS_ERROR_KEYS):
         return None
     kind = answer.get("errorType")
-    return kind if isinstance(kind, str) and kind.isidentifier() else "error"
+    if isinstance(kind, str) and kind.isidentifier() and len(kind) <= 64:
+        return kind
+    return "error"
+
+
+def _blank(value: Any) -> bool:
+    """Whether an error field carries nothing: None, or a string of only whitespace."""
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _statistics_shaped(answer: Mapping[str, Any]) -> bool:
