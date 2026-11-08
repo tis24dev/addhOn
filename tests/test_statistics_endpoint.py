@@ -10,6 +10,15 @@ purifiers only. addhOn read v1 for every type. No v2 answer has ever been seen, 
 tried first on the laundry types and v1 answers when v2 fails or answers empty; after one
 fallback the appliance stays on v1 until the integration is reloaded (the poll's call
 budget has no room for a retry every minute). The dump says which version answered.
+
+A v2 answer is not always the statistics. On 2026-11-08 a beta5 dump of an HQD washer
+showed the cloud answering `GET /commands/v2/statistics` with a 200 whose body mixed an
+error (`errorMessage`, `errorType`, `requestId`) with stale statistics (`programsCounter`
+"37" against the "39" of the good answer, `loadingPercentage` rows dated at midnight, no
+`resultCode`, no cleaning maps) at every other poll for two hours: the washes counter
+swung 39<->37 every minute, the cleaning binaries went unknown at alternate polls and the
+cycle log filled with the swings. Such a body is discarded, the last good statistics kept,
+the version unchanged (no v1 fallback) and the cycle log told (`rejected`).
 """
 from __future__ import annotations
 
@@ -61,6 +70,40 @@ class _V1OnlyApi(_Api):
     """A double without the v2 method: every older test double looks like this."""
 
     load_statistics_v2 = None
+
+
+def _good_answer(counter="39"):
+    """A v2 answer as the cloud gives it when it works (beta5 dump of 2026-11-08)."""
+    return {
+        "resultCode": "0",
+        "programsCounter": counter,
+        "loadingPercentage": [
+            {"current": "5", "max": "9", "date": "2026-11-06T13:26:06+00:00"},
+        ],
+        "mostUsedPrograms": [{"programName": "cottons", "count": "12"}],
+        "temperatureUsage": {"temp40": counter},
+        "filterCleaning": {"tot": "100", "current": "40"},
+        "drumCleaning": {"tot": "50", "current": "3"},
+    }
+
+
+def _error_body():
+    """The 200 the cloud answered at alternate polls: an error mixed with stale
+    statistics, without `resultCode` and the cleaning maps."""
+    return {
+        "errorMessage": "'OperationalError' object has no attribute 'cursor'",
+        "errorType": "AttributeError",
+        "requestId": "0f3c2a9e-1111-4bbb-8ccc-0123456789ab",
+        "programsCounter": "37",
+        "loadingPercentage": [
+            {"current": "5", "max": "9", "date": "2026-11-06T00:00:00+00:00"},
+        ],
+        "mostUsedPrograms": [{"programName": "cottons", "count": "12"}],
+        "temperatureUsage": {"temp40": "37"},
+    }
+
+
+_REJECTED = {"version": "v2", "fallback": None, "rejected": "AttributeError"}
 
 
 def _appliance(api, kind="WM"):
@@ -175,6 +218,84 @@ class EngineChoiceTest(unittest.TestCase):
                 _run(app.load_statistics())
                 self.assertEqual(["v2", "maintenance"], api.calls)
                 self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+
+    def test_a_v2_error_body_is_discarded_and_the_last_statistics_kept(self) -> None:
+        api = _Api(v2=_good_answer(), v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = _error_body()
+        _run(app.load_statistics())
+        self.assertEqual(["v2", "maintenance", "v2", "maintenance"], api.calls)
+        self.assertEqual("39", app.statistics["programsCounter"])
+        self.assertEqual({"tot": "100", "current": "40"}, app.statistics["filterCleaning"])
+        self.assertEqual("2026-11-06T13:26:06+00:00", app.statistics["loadingPercentage"][0]["date"])
+        self.assertNotIn("errorMessage", app.statistics)
+        self.assertNotIn("errorType", app.statistics)
+        self.assertEqual(_REJECTED, app.statistics_source)
+        self.assertFalse(app._statistics_v1_only)
+
+    def test_either_error_key_alone_marks_an_error_body(self) -> None:
+        for body, reason in (
+            ({"errorType": "AttributeError", "programsCounter": "37"}, "AttributeError"),
+            ({"errorMessage": "boom", "programsCounter": "37"}, "error"),
+            ({"errorType": "", "errorMessage": "boom", "programsCounter": "37"}, "error"),
+            ({"errorType": "Internal Server Error", "programsCounter": "37"}, "error"),
+        ):
+            with self.subTest(body=body):
+                api = _Api(v2=_good_answer(), v1={"programsCounter": 99})
+                app = _appliance(api)
+                _run(app.load_statistics())
+                api.v2 = body
+                _run(app.load_statistics())
+                self.assertEqual("39", app.statistics["programsCounter"])
+                self.assertEqual(
+                    {"version": "v2", "fallback": None, "rejected": reason}, app.statistics_source
+                )
+                self.assertNotIn("v1", api.calls)
+
+    def test_error_keys_without_a_value_are_not_an_error(self) -> None:
+        api = _Api(v2={"errorMessage": None, "errorType": None, "programsCounter": "37"})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual("37", app.statistics["programsCounter"])
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+
+    def test_the_next_good_v2_answer_clears_the_rejection(self) -> None:
+        api = _Api(v2=_good_answer(), v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = _error_body()
+        _run(app.load_statistics())
+        api.v2 = _good_answer("40")
+        _run(app.load_statistics())
+        self.assertEqual(["v2", "maintenance"] * 3, api.calls)
+        self.assertEqual("40", app.statistics["programsCounter"])
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        self.assertFalse(app._statistics_v1_only)
+
+    def test_an_error_body_at_the_first_read_leaves_the_statistics_empty(self) -> None:
+        api = _Api(v2=_error_body(), v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual(["v2", "maintenance"], api.calls)
+        self.assertEqual({}, app.statistics)
+        self.assertEqual(_REJECTED, app.statistics_source)
+        self.assertFalse(app._statistics_v1_only)
+        api.v2 = _good_answer()
+        _run(app.load_statistics())
+        self.assertEqual("39", app.statistics["programsCounter"])
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+
+    def test_the_kept_statistics_are_a_copy_the_merge_cannot_spoil(self) -> None:
+        # The maintenance merge writes into the answer returned; a rejection must hand
+        # back the good answer as it came, not the copy the last merge wrote into.
+        api = _Api(v2=_good_answer())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        app.statistics["spoiled"] = True
+        api.v2 = _error_body()
+        _run(app.load_statistics())
+        self.assertNotIn("spoiled", app.statistics)
 
     def test_after_one_fallback_the_appliance_stays_on_v1(self) -> None:
         api = _Api(v2={}, v1={"programsCounter": 99})
@@ -300,6 +421,24 @@ class CycleLogTest(unittest.TestCase):
         self.assertEqual({"totalWashCycle": {"before": "3", "after": None}}, event["changed"])
         self.assertNotIn("new_rows", event)
 
+    def test_a_discarded_answer_is_logged_as_rejected_and_not_as_a_change(self) -> None:
+        api = _Api(v2=_good_answer())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = _good_answer("40")
+        _run(app.load_statistics())
+        api.v2 = _error_body()
+        _run(app.load_statistics())
+        api.v2 = _good_answer("40")
+        _run(app.load_statistics())
+        changed, rejected = self._events(app)
+        self.assertEqual({"before": "39", "after": "40"}, changed["changed"]["programsCounter"])
+        self.assertNotIn("rejected", changed)
+        self.assertEqual("AttributeError", rejected["rejected"])
+        self.assertNotIn("changed", rejected)
+        self.assertNotIn("new_rows", rejected)
+        self.assertNotIn("requestId", json.dumps(rejected))
+
     def test_a_raising_log_costs_nothing_to_the_poll(self) -> None:
         api = _Api(v2=self._payload(4))
         app = _appliance(api)
@@ -339,6 +478,28 @@ class DumpTest(unittest.TestCase):
 
     def test_no_read_yet_prints_no_source(self) -> None:
         self.assertNotIn("statistics_source", self._block(None))
+
+    def test_a_rejected_answer_is_printed(self) -> None:
+        api = _Api(v2=_good_answer(), v1={"programsCounter": 99})
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = _error_body()
+        _run(app.load_statistics())
+        data = {"type": "WM", "appliance": app, "name": "W", "attributes": {}, "statistics": app.statistics}
+        block = diagnostics._appliance_block("wm1", data)
+        self.assertEqual(_REJECTED, block["statistics_source"])
+        [event] = [e for e in block["cycle_log"]["events"] if e["kind"] == "statistics"]
+        self.assertEqual("AttributeError", event["rejected"])
+        self.assertNotIn("requestId", json.dumps(block["cycle_log"]))
+        json.dumps(block)
+
+    def test_a_rejection_outside_the_vocabulary_prints_null(self) -> None:
+        api = _Api(v2={"programsCounter": 3})
+        app = _appliance(api)
+        app._statistics_source = {"version": "v2", "fallback": None, "rejected": "<script>"}
+        data = {"type": "WM", "appliance": app, "name": "W", "attributes": {}, "statistics": {}}
+        block = diagnostics._appliance_block("wm1", data)
+        self.assertEqual({"version": "v2", "fallback": None, "rejected": None}, block["statistics_source"])
 
     def test_a_source_outside_the_vocabulary_is_dropped(self) -> None:
         api = _Api(v2={"programsCounter": 3})

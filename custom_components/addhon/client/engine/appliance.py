@@ -76,6 +76,23 @@ _STATISTICS_SHAPES: dict[str, tuple[type, ...]] = {
     "temperatureUsage": (dict,),
     "loadingPercentage": (list,),
 }
+# A v2 answer carrying one of these with a value is an error body, whatever else it
+# carries: on 2026-11-08 a beta5 dump of an HQD washer showed the cloud answering a 200
+# that mixed `errorMessage`/`errorType`/`requestId` with stale statistics (a counter two
+# behind, `loadingPercentage` dated at midnight, no `resultCode`, no cleaning maps) at
+# every other poll for two hours, and the shape check let it through: the washes counter
+# swung every minute. Such an answer is discarded and the last good one kept; the
+# version does not change (the next poll asks v2 again).
+_STATISTICS_ERROR_KEYS = ("errorMessage", "errorType")
+
+
+def _statistics_error(answer: Mapping[str, Any]) -> Optional[str]:
+    """Why `answer` is an error body and not the statistics, None when it is not: its
+    `errorType` when that is a bare name, `error` otherwise."""
+    if all(answer.get(key) is None for key in _STATISTICS_ERROR_KEYS):
+        return None
+    kind = answer.get("errorType")
+    return kind if isinstance(kind, str) and kind.isidentifier() else "error"
 
 
 def _statistics_shaped(answer: Mapping[str, Any]) -> bool:
@@ -196,6 +213,10 @@ class HonAppliance:
         # Which statistics endpoint answered last and why v1 did, for the dump
         # (`statistics_source`); None before the first read. A fallback is sticky.
         self._statistics_source: Optional[dict[str, Any]] = None
+        # The last v2 answer taken, as it came: what a poll whose v2 answer is an error
+        # body gets instead (`_read_statistics`); a copy, the merge writes into the one
+        # returned.
+        self._statistics_kept: dict[str, Any] = {}
         self._statistics_v1_only = False
         self._attributes: dict[str, Any] = {}
         self._zone = zone
@@ -412,8 +433,10 @@ class HonAppliance:
     @property
     def statistics_source(self) -> Optional[dict[str, Any]]:
         """`{"version": "v2" | "v1", "fallback": None | reason}` of the last statistics
-        read (issue #138): the reason is `"empty"` or the class name of what v2 raised.
-        None before the first read. Read by the diagnostics dump only."""
+        read (issue #138): the reason is `"empty"`, `"shape"` or the class name of what
+        v2 raised. A v2 answer discarded as an error body adds `"rejected"`, its
+        `errorType` or `"error"`, until the next answer taken. None before the first
+        read. Read by the diagnostics dump only."""
         return self._statistics_source
 
     @property
@@ -1269,7 +1292,13 @@ class HonAppliance:
         v2 is taken when it answers a map carrying at least one of the keys the app
         reads (`STATISTICS_KEYS`); an error, an empty answer or another shape falls
         back to v1 for good (`_statistics_v1_only`) and is named in
-        `statistics_source` (`empty`, `shape`, or the error's class name). An API without `load_statistics_v2` reads v1.
+        `statistics_source` (`empty`, `shape`, or the error's class name). A map that
+        carries `errorMessage` or `errorType` with a value is an error body the cloud
+        answered as a 200 (seen mixed with stale statistics at alternate polls, dump of
+        2026-11-08): it is discarded, the last v2 answer taken is handed back ({} before
+        one), the version stays v2, `statistics_source` says `rejected` and the cycle
+        log gets a row. Checked before the shape. An API without `load_statistics_v2`
+        reads v1.
         """
         read_v2 = getattr(self.api, "load_statistics_v2", None)
         if (
@@ -1284,8 +1313,25 @@ class HonAppliance:
                 fallback = type(error).__name__
             else:
                 if isinstance(answer, dict) and answer:
+                    rejected = _statistics_error(answer)
+                    if rejected is not None:
+                        _LOGGER.debug(
+                            "Statistics v2 answered an error body for %s (%s): kept the last",
+                            self.appliance_type,
+                            rejected,
+                        )
+                        self._statistics_source = {
+                            "version": "v2", "fallback": None, "rejected": rejected,
+                        }
+                        if self._cycle_log is not None:
+                            try:
+                                self._cycle_log.statistics_rejected(reason=rejected)
+                            except Exception:  # noqa: BLE001 - the log must never cost the poll
+                                _LOGGER.debug("Cycle log failed", exc_info=True)
+                        return dict(self._statistics_kept)
                     if _statistics_shaped(answer):
                         self._statistics_source = {"version": "v2", "fallback": None}
+                        self._statistics_kept = dict(answer)
                         return answer
                     fallback = "shape"
                 else:
