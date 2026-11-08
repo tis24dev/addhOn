@@ -28,7 +28,7 @@
 - **Smart attribute mapping** — device-specific attribute keys extracted from real diagnostics
 - **Full Lovelace support** — integrates seamlessly with Home Assistant UI and automations
 - **Two-factor authentication (2FA)** — Two-factor authentication during the login process is supported
-- **Multilingual integration** — Currently available in Italian and English, with additional languages available upon request.
+- **Multilingual integration** — Currently available in Italian, English, French, Portuguese and Brazilian Portuguese, with additional languages available upon request.
 
 ## Installation
 

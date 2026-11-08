@@ -1512,7 +1512,10 @@ _CYCLE_LOG_FIELDS = {
         "edge": _log_token(_CYCLE_LOG_EDGES), "asked_at": _log_cloud, "reads": _log_reads,
         "outcome": _log_token(_CYCLE_LOG_OUTCOMES),
     },
-    "statistics": {"new_rows": _log_loads, "changed": _log_changes, "truncated": _log_int},
+    "statistics": {
+        "new_rows": _log_loads, "changed": _log_changes, "truncated": _log_int,
+        "rejected": _log_text,
+    },
     # A state is text the user can have written (a favourite's name on `program_name`):
     # bounded here, masked with the block by `_mask_favourites`.
     "entity": {"key": _log_text, "before": _log_text, "after": _log_text},
@@ -1582,21 +1585,27 @@ _STATISTICS_VERSIONS = frozenset({"v1", "v2"})
 def _statistics_source(appliance) -> dict | None:
     """`{version, fallback}` of the last statistics read (`HonAppliance.statistics_source`,
     issue #138), rebuilt: the version only from the two the engine writes, the fallback
-    only as `empty` or a bare exception class name; anything else prints as null. None
-    for an engine without the property or before its first read."""
+    only as `empty`, `shape` or a bare exception class name; anything else prints as
+    null. `rejected`, printed only when the engine wrote it (a v2 error body discarded),
+    takes the same rule as the fallback. None for an engine without the property or
+    before its first read."""
     source = getattr(appliance, "statistics_source", None)
     if not isinstance(source, Mapping):
         return None
     version = source.get("version")
-    fallback = source.get("fallback")
-    return {
+    printed = {
         "version": version if type(version) is str and version in _STATISTICS_VERSIONS else None,
-        "fallback": (
-            fallback
-            if type(fallback) is str and fallback.isidentifier() and len(fallback) <= 64
-            else None
-        ),
+        "fallback": _statistics_reason(source.get("fallback")),
     }
+    if "rejected" in source:
+        printed["rejected"] = _statistics_reason(source.get("rejected"))
+    return printed
+
+
+def _statistics_reason(reason) -> str | None:
+    """A fallback or rejection reason as the dump prints it: a bare name of at most 64
+    characters, null otherwise."""
+    return reason if type(reason) is str and reason.isidentifier() and len(reason) <= 64 else None
 
 
 def _cycle_log_section(appliance) -> dict | None:

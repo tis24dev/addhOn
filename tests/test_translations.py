@@ -8,7 +8,7 @@ Covers the i18n fix (commit "load UI translations from translations/ dir"):
 - the stale locations (root en/it.json and the singular translation/ dir) and
   the non-standard config.title key must not come back;
 - every config-flow key the code uses (including the reauth flow) must exist in
-  both en and it with identical structure.
+  every language of LANGS with identical structure.
 
 Pure file/JSON checks: no Home Assistant import required.
 """
@@ -21,7 +21,7 @@ from pathlib import Path
 
 COMPONENT = Path(__file__).resolve().parents[1] / "custom_components" / "addhon"
 TRANSLATIONS = COMPONENT / "translations"
-LANGS = ("en", "it")
+LANGS = ("en", "it", "fr")
 
 
 def _load(lang: str) -> dict:
@@ -118,6 +118,9 @@ class TranslationsContentTest(unittest.TestCase):
     def test_en_it_have_identical_structure(self) -> None:
         self.assertEqual(_dotted_keys(self.data["en"]), _dotted_keys(self.data["it"]))
 
+    def test_en_fr_have_identical_structure(self) -> None:
+        self.assertEqual(_dotted_keys(self.data["en"]), _dotted_keys(self.data["fr"]))
+
     def test_anti_crease_time_distinct_from_anticrease(self) -> None:
         # PR #38 (#7): a WD merges the WM+TD option catalogs, so both the anticrease
         # toggle and the antiCreaseTime control can appear; their labels must differ or
@@ -208,7 +211,11 @@ class OptionsScreenTranslationTest(unittest.TestCase):
         """The toggle creates entities whose meaning is inferred from a single
         observation. The description must say so, or a user reads a wrong value as
         fact."""
-        expected = {"en": ("incomplete evidence",), "it": ("indizi incompleti",)}
+        expected = {
+            "en": ("incomplete evidence",),
+            "it": ("indizi incompleti",),
+            "fr": ("preuves incomplètes",),
+        }
         for lang in LANGS:
             text = self.data[lang]["options"]["step"]["init"]["data_description"][
                 "enable_experimental"
@@ -286,7 +293,11 @@ class AirPurifierTranslationTest(unittest.TestCase):
     def test_the_co_entity_denies_being_a_safety_detector(self) -> None:
         """The name is the ONLY place a user sees this. HA gives a binary sensor no
         description field, so the disclaimer has to live in the label."""
-        fragments = {"en": "not a certified", "it": "un rilevatore certificato"}
+        fragments = {
+            "en": "not a certified",
+            "it": "un rilevatore certificato",
+            "fr": "non certifié",
+        }
         for lang in LANGS:
             name = self.data[lang]["entity"]["binary_sensor"]["co_alarm"]["name"]
             self.assertIn(fragments[lang], name, f"{lang}: {name}")
@@ -312,7 +323,7 @@ class AirPurifierTranslationTest(unittest.TestCase):
         TEMPERATURE and °C on an attribute that has not moved since 2022 on a model
         declaring `probe = "0"` -- and `test_tier2_sensors` pins the raw shape.
         """
-        marker = {"en": "experimental", "it": "sperimentale"}
+        marker = {"en": "experimental", "it": "sperimentale", "fr": "expérimental"}
         experimental = {
             "sensor": ("air_quality_label",),
             "binary_sensor": ("co_alarm",),
@@ -327,7 +338,7 @@ class AirPurifierTranslationTest(unittest.TestCase):
     def test_standard_air_purifier_entities_do_not_claim_to_be_experimental(
         self,
     ) -> None:
-        marker = {"en": "experimental", "it": "sperimentale"}
+        marker = {"en": "experimental", "it": "sperimentale", "fr": "expérimental"}
         standard = {
             "sensor": self.EXPECTED["sensor"] - {"air_quality_label"},
             "binary_sensor": {"eco_active", "problem"},
@@ -506,9 +517,10 @@ class ExceptionKeyParityTest(unittest.TestCase):
             for key in _load(lang).get("exceptions", {}):
                 self.assertIn(key, raised, f"{lang}: {key} is never raised")
 
-    def test_the_two_languages_declare_the_same_exceptions(self) -> None:
-        en, it = (set(_load(lang).get("exceptions", {})) for lang in LANGS)
-        self.assertEqual(en, it)
+    def test_every_language_declares_the_same_exceptions(self) -> None:
+        en = set(_load("en").get("exceptions", {}))
+        for lang in LANGS:
+            self.assertEqual(en, set(_load(lang).get("exceptions", {})), lang)
 
 
 

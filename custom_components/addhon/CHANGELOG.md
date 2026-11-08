@@ -11,6 +11,40 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **The Laundry Centre is supported, read-only** (#124): a Haier washer and dryer under one
+  appliance is set up as one device with a Washer and a Dryer child device. Sensors: state,
+  remaining time, programme name, phase, errors, totals and energy; binary sensors: remote
+  control, door, lock, pause, auto detergent, auto softener, dryer anti-crease time. No
+  commands yet.
+- **The programme name follows the cycle the cloud describes** (#130): a cycle started on the
+  panel is named exactly, a favourite is named as the favourite, a shared code resolves to
+  its dashboard programme, and the name stays after the end while the machine keeps the
+  code. A push that starts or ends a cycle triggers a context read a few seconds later, so
+  the name and the options follow within seconds instead of at the next poll.
+- **At rest, the programme select shows the programme Start would send** (#130), the
+  selected or last recovered one, no longer the code the idle machine reports; during a
+  washer's end-of-cycle tumbling it keeps the cycle's programme. An automation that reads
+  the select while the machine is idle may see a different value than before.
+- **A cycle started on the panel points the active programme at the cycle the machine
+  runs** (#138): the option selects show that programme's lists and values during the
+  cycle, and a Start from Home Assistant without reselecting sends that programme. The
+  diagnostics file records it as `panel`.
+- **New anti-crease and Best Ironing switches and a drying time select on tumble dryers**
+  (#142), all disabled by default: enable them by hand in the entity settings. Anti-crease
+  and Best Ironing exclude each other, as in the official app; Best Ironing sets the dry
+  level to Iron dry and gives the programme's own level back when switched off. A drying
+  time sends dry level 0, and a level chosen afterwards sends drying time 0, exactly the
+  pair the app sends; the time select reads unknown while the programme dries to a level.
+- **Climate and water heater expose the `native_*` temperature properties beside the old
+  names** (#144): the deprecation warnings of Home Assistant 2026.11 disappear, the values
+  do not change.
+- **French translation** (#143).
+- **A statistics answer carrying an error body is discarded and the last statistics kept**
+  (#138): the cloud answered the statistics service with a 200 that mixed an error with
+  stale values at alternate polls, and the washes counter swung every minute. The
+  diagnostics file says `rejected` and the cycle timeline gets a row.
+- **The message after a command that could not be refreshed now says the refresh failed,
+  not the command.**
 - **Washers, washer-dryers, dryers and dishwashers read their statistics from the endpoint
   the official app uses** (#138): `/commands/v2/statistics` is tried first and, when it
   fails or answers nothing, the previous `/commands/v1/statistics` answers instead until
