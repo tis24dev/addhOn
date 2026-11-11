@@ -638,10 +638,18 @@ _AC: tuple[HonSensorEntityDescription, ...] = (
         key="total_energy",
         translation_key="ac_total_energy",
         attr_key=AC_ATTR_TOTAL_ENERGY,
-        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
-        suggested_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
+        # Wh for every air conditioner, by decision (2026-11-11): no model has been
+        # seen counting in kWh. The -MB units are proven in Wh; read as kWh the -PA
+        # units of #73 exceed 5.8 times what the appliance can draw; the others
+        # report 0, which is 0 in either unit.
+        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,  # was kWh until v5.29.0
+        # Upgrade path, by decision too: same unique_id, no statistics migration. An
+        # entity registered in kWh keeps showing kWh; its value drops 1000 times, the
+        # recorder reads that as a meter reset, and the statistics recorded before
+        # stay 1000 times too high. The CHANGELOG says so and how to correct them.
+        suggested_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,  # the display unit
         state_class=SensorStateClass.TOTAL_INCREASING,
+        device_class=SensorDeviceClass.ENERGY,
     ),
     HonSensorEntityDescription(
         key=AC_POWER_KEY,
@@ -650,7 +658,11 @@ _AC: tuple[HonSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        gated=True,
+        # Created at setup from the attributes the device reports then, as every
+        # gated row is: an `acInput` that first shows up later gets its entity at
+        # the next reload of the integration. The three dumps that carry it have it
+        # from the first shadow, 0 with the unit off.
+        gated=True,  # no late creation, for this row as for the others
     ),
     HonSensorEntityDescription(
         key="pm25",
@@ -1947,9 +1959,9 @@ class HonAcPowerSensor(HonSensor):
     went out. The last figure of a run is not lost to the hold -- when the pushes
     stop, the 60 s poll reads the entity again after the window has closed.
 
-    A reading that cannot be interpreted is never held back, and neither is the
-    first one after it: unknown is shown at once, not papered over with an old
-    number.
+    A reading that cannot be interpreted -- not a number, NaN, an infinity -- is
+    never held back, and neither is the first one after it: unknown is shown at
+    once, not papered over with an old number.
     """
 
     _published: float | None = None
@@ -1962,10 +1974,11 @@ class HonAcPowerSensor(HonSensor):
 
     @property
     def native_value(self):
-        value = super().native_value
+        # NaN and the infinities are floats to Python and a reading to no one: they
+        # are unknown, like a value that is not a number at all.
+        value = _finite(super().native_value)
         if value is None:
-            self._published = None
-            self._published_at = None
+            self._published = self._published_at = None
             return None
         now = self._monotonic()
         if (
@@ -1974,8 +1987,8 @@ class HonAcPowerSensor(HonSensor):
             and now - self._published_at < AC_POWER_MIN_INTERVAL
         ):
             return self._published
-        self._published = value
-        self._published_at = now
+        # Only a finite figure gets this far, so only one is ever held.
+        self._published, self._published_at = value, now
         return value
 
 

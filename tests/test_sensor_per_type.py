@@ -939,6 +939,23 @@ class AcEnergyAndPowerTest(unittest.IsolatedAsyncioTestCase):
         attributes["acInput"] = 395
         self.assertEqual(power.native_value, 395.0)
 
+    async def test_a_power_reading_that_is_not_finite_is_unknown(self) -> None:
+        # The cloud does hand out "NaN" for a parameter (#112): a float to Python.
+        for reading in ("NaN", "nan", "Infinity", "-inf", float("nan"), float("inf")):
+            with self.subTest(reading=reading):
+                attributes = {"acInput": 400}
+                power = (await self._build(attributes))["ac-1_power"]
+                clock = [1000.0]
+                power._monotonic = lambda: clock[0]
+                self.assertEqual(power.native_value, 400.0)
+                clock[0] = 1005.0
+                attributes["acInput"] = reading
+                self.assertIsNone(power.native_value)
+                # Never held: the next figure is published at once.
+                clock[0] = 1006.0
+                attributes["acInput"] = 395
+                self.assertEqual(power.native_value, 395.0)
+
 
 if __name__ == "__main__":
     unittest.main()
