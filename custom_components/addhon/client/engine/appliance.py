@@ -135,12 +135,16 @@ def _maintenance_error(answer: Mapping[str, Any]) -> Optional[str]:
     characters, `diagnostics._statistics_reason`), `maintenance` otherwise.
 
     A `resultCode` that is null or blank says nothing, and neither does an error field
-    that is; "0", 0 and "0.0" are all the zero of a good answer."""
+    that is; "0", 0 and "0.0" are all the zero of a good answer, for the `errorCode`
+    as for the `resultCode` (an error code of zero names no error)."""
     code = answer.get("resultCode")
     failed = not _blank(code) and not _zero(code)
-    if not failed and all(_blank(answer.get(key)) for key in _MAINTENANCE_ERROR_KEYS):
-        return None
     error = answer.get("errorCode")
+    silent = all(
+        _blank(answer.get(key)) for key in _MAINTENANCE_ERROR_KEYS if key != "errorCode"
+    ) and (_blank(error) or _zero(error))
+    if not failed and silent:
+        return None
     if isinstance(error, (str, int)) and not isinstance(error, bool):
         reason = f"maintenance_{str(error).strip()}"
         if reason.isidentifier() and len(reason) <= 64:

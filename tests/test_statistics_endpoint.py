@@ -677,6 +677,10 @@ class MaintenanceTest(unittest.TestCase):
             {"resultCode": "0.0", "errorMessage": None, "errorType": ""},
             {"resultCode": None},
             {"resultCode": " "},
+            # An error code that reads as zero is no error (decision of 2026-11-11).
+            {"errorCode": 0},
+            {"errorCode": "0"},
+            {"resultCode": "0", "errorCode": "0.0"},
         ):
             with self.subTest(extra=extra):
                 answer = _good_maintenance() | extra
