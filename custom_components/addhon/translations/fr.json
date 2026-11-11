@@ -274,6 +274,9 @@
       "ac_total_energy": {
         "name": "Énergie totale du climatiseur"
       },
+      "ac_power": {
+        "name": "Puissance du climatiseur"
+      },
       "pm25": {
         "name": "PM2.5"
       },

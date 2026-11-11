@@ -205,7 +205,7 @@ class PerTypeTableTest(unittest.TestCase):
         self.assertEqual(
             self._keys("AC"),
             ["temp_indoor", "temp_outdoor", "humidity_indoor", "compressor_freq",
-             "total_energy", "pm25", "co2", "ch2o", "pm10", "voc", "co",
+             "total_energy", "power", "pm25", "co2", "ch2o", "pm10", "voc", "co",
              "air_quality"],
         )
 
@@ -826,8 +826,8 @@ class WashDelayTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(150.0, await self._delay(attributes, **kwargs))
 
 
-class AcEnergyTest(unittest.IsolatedAsyncioTestCase):
-    """The AC energy counter is in Wh (#147).
+class AcEnergyAndPowerTest(unittest.IsolatedAsyncioTestCase):
+    """The AC energy counter is in Wh, and `acInput` is the power drawn (#147).
 
     Measured on an AS35SBBHRA-MB: seven 16-minute steps of `totalElectricityUsed`
     worth 289-660 W as Wh, with `acInput` reading 682 in the same dump.
@@ -875,6 +875,69 @@ class AcEnergyTest(unittest.IsolatedAsyncioTestCase):
     async def test_the_ac_energy_state_is_the_raw_counter(self) -> None:
         built = await self._build({"totalElectricityUsed": 47037})
         self.assertEqual(built["ac-1_total_energy"].native_value, 47037.0)
+
+    def test_the_power_row(self) -> None:
+        from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+        from homeassistant.const import UnitOfPower
+
+        power = self._ac("power")
+        self.assertEqual(power.attr_key, "acInput")
+        self.assertEqual(power.translation_key, "ac_power")
+        self.assertEqual(power.native_unit_of_measurement, UnitOfPower.WATT)
+        self.assertEqual(power.device_class, SensorDeviceClass.POWER)
+        self.assertEqual(power.state_class, SensorStateClass.MEASUREMENT)
+        self.assertTrue(power.gated)
+
+    async def test_power_exists_only_where_the_device_reports_it(self) -> None:
+        from custom_components.addhon.sensor import HonAcPowerSensor
+
+        without = await self._build({"totalElectricityUsed": 0})
+        self.assertNotIn("ac-1_power", without)
+
+        # 0 is a reading (the unit is off), not an absence.
+        with_it = await self._build({"totalElectricityUsed": 26, "acInput": 0})
+        self.assertIsInstance(with_it["ac-1_power"], HonAcPowerSensor)
+        self.assertEqual(with_it["ac-1_power"].native_value, 0.0)
+
+    async def test_power_is_published_at_most_every_thirty_seconds(self) -> None:
+        from custom_components.addhon.sensor import AC_POWER_MIN_INTERVAL
+
+        self.assertEqual(AC_POWER_MIN_INTERVAL, 30.0)
+        attributes = {"acInput": 400}
+        power = (await self._build(attributes))["ac-1_power"]
+        clock = [1000.0]
+        power._monotonic = lambda: clock[0]
+
+        self.assertEqual(power.native_value, 400.0)
+        # The device pushes a new figure every ~2 s (#126): held until the window ends.
+        for step, reading in ((2.0, 395), (4.0, 403), (29.9, 398)):
+            clock[0] = 1000.0 + step
+            attributes["acInput"] = reading
+            self.assertEqual(power.native_value, 400.0, step)
+        clock[0] = 1030.0
+        self.assertEqual(power.native_value, 398.0)
+        # ...and the window restarts from the value just published.
+        clock[0] = 1040.0
+        attributes["acInput"] = 682
+        self.assertEqual(power.native_value, 398.0)
+        clock[0] = 1060.0
+        self.assertEqual(power.native_value, 682.0)
+
+    async def test_a_missing_power_reading_is_never_held_back(self) -> None:
+        attributes = {"acInput": 400}
+        power = (await self._build(attributes))["ac-1_power"]
+        clock = [1000.0]
+        power._monotonic = lambda: clock[0]
+        self.assertEqual(power.native_value, 400.0)
+
+        # Unreadable inside the window: unknown at once, not the old figure.
+        clock[0] = 1005.0
+        attributes["acInput"] = "n/a"
+        self.assertIsNone(power.native_value)
+        # And the first figure after it is published without waiting.
+        clock[0] = 1006.0
+        attributes["acInput"] = 395
+        self.assertEqual(power.native_value, 395.0)
 
 
 if __name__ == "__main__":

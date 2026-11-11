@@ -32,6 +32,7 @@ from homeassistant.const import (
     EntityCategory,
     UnitOfEnergy,
     UnitOfMass,
+    UnitOfPower,
     UnitOfTemperature,
     UnitOfTime,
     UnitOfVolume,
@@ -77,6 +78,7 @@ from .const import (
     AC_ATTR_HUMIDITY_INDOOR,
     AC_ATTR_OUTDOOR_TEMP,
     AC_ATTR_PM25,
+    AC_ATTR_POWER,
     AC_ATTR_TOTAL_ENERGY,
     DOMAIN,
     DW_LEVEL_MAP,
@@ -598,6 +600,12 @@ _DRYER: tuple[HonSensorEntityDescription, ...] = (
 # The washer publishes the SAME key in kWh, so the unit belongs to this row and
 # to no shared code. The hOn app never reads the counter: its consumption screen
 # is a cloud series already in kWh.
+#
+# The power row lives only where the device reports `acInput`.
+AC_POWER_KEY = "power"
+# Seconds between two published power readings: the device pushes a new one about
+# every 2 s while it runs (#126), some 1,800 recorder rows an hour unthrottled.
+AC_POWER_MIN_INTERVAL = 30.0
 _AC: tuple[HonSensorEntityDescription, ...] = (
     HonSensorEntityDescription(
         key="temp_indoor",
@@ -634,6 +642,15 @@ _AC: tuple[HonSensorEntityDescription, ...] = (
         suggested_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    HonSensorEntityDescription(
+        key=AC_POWER_KEY,
+        translation_key="ac_power",
+        attr_key=AC_ATTR_POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        gated=True,
     ),
     HonSensorEntityDescription(
         key="pm25",
@@ -1623,6 +1640,10 @@ async def async_setup_entry(
                 entity_class = HonWashDelaySensor
             elif app_type == APPLIANCE_AP:
                 entity_class = HonAirPurifierSensor
+            elif app_type == APPLIANCE_AC and description.key == AC_POWER_KEY:
+                # Rate-limited, which needs the last published value: a value_fn
+                # only ever sees the number (#147).
+                entity_class = HonAcPowerSensor
             else:
                 entity_class = HonSensor
             if entity_class is HonMyZoneModeSensor:
@@ -1913,6 +1934,49 @@ def _finite(raw) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+class HonAcPowerSensor(HonSensor):
+    """Power an air conditioner draws, published at most every 30 seconds (#147).
+
+    `acInput` arrives over MQTT about every 2 s while the unit runs, moving by a
+    few watts each time (394-403 over 18 s in the #126 log). Every push already
+    refreshes all the entities, so following it would be one state change and one
+    recorder row per message. The reading is held instead: a new figure replaces
+    the published one only once `AC_POWER_MIN_INTERVAL` has passed since that one
+    went out. The last figure of a run is not lost to the hold -- when the pushes
+    stop, the 60 s poll reads the entity again after the window has closed.
+
+    A reading that cannot be interpreted is never held back, and neither is the
+    first one after it: unknown is shown at once, not papered over with an old
+    number.
+    """
+
+    _published: float | None = None
+    _published_at: float | None = None
+
+    @staticmethod
+    def _monotonic() -> float:
+        # Looked up at call time so a test can drive the clock.
+        return time.monotonic()
+
+    @property
+    def native_value(self):
+        value = super().native_value
+        if value is None:
+            self._published = None
+            self._published_at = None
+            return None
+        now = self._monotonic()
+        if (
+            self._published is not None
+            and self._published_at is not None
+            and now - self._published_at < AC_POWER_MIN_INTERVAL
+        ):
+            return self._published
+        self._published = value
+        self._published_at = now
+        return value
 
 
 class HonMyZoneTempSensor(HonSensor):

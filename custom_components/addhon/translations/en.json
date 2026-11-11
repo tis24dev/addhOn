@@ -274,6 +274,9 @@
       "ac_total_energy": {
         "name": "Air conditioner total energy"
       },
+      "ac_power": {
+        "name": "Air conditioner power"
+      },
       "pm25": {
         "name": "PM2.5"
       },

@@ -120,6 +120,8 @@ def _install_shared_entity_stubs() -> None:
         const.UnitOfEnergy = type(
             "UnitOfEnergy", (), {"KILO_WATT_HOUR": "kWh", "WATT_HOUR": "Wh"}
         )
+    if not hasattr(const, "UnitOfPower"):
+        const.UnitOfPower = type("UnitOfPower", (), {"WATT": "W"})
     if not hasattr(const, "UnitOfVolume"):
         const.UnitOfVolume = type("UnitOfVolume", (), {"LITERS": "L"})
     if not hasattr(const, "UnitOfMass"):
