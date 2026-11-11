@@ -117,7 +117,9 @@ def _install_shared_entity_stubs() -> None:
     if not hasattr(const, "UnitOfTime"):
         const.UnitOfTime = type("UnitOfTime", (), {"MINUTES": "min", "SECONDS": "s"})
     if not hasattr(const, "UnitOfEnergy"):
-        const.UnitOfEnergy = type("UnitOfEnergy", (), {"KILO_WATT_HOUR": "kWh"})
+        const.UnitOfEnergy = type(
+            "UnitOfEnergy", (), {"KILO_WATT_HOUR": "kWh", "WATT_HOUR": "Wh"}
+        )
     if not hasattr(const, "UnitOfVolume"):
         const.UnitOfVolume = type("UnitOfVolume", (), {"LITERS": "L"})
     if not hasattr(const, "UnitOfMass"):
@@ -329,6 +331,7 @@ def _install_entity_platform_stubs() -> None:
         translation_key: str | None = None
         icon: str | None = None
         native_unit_of_measurement: str | None = None
+        suggested_unit_of_measurement: str | None = None
         device_class: object | None = None
         state_class: object | None = None
         options: object | None = None

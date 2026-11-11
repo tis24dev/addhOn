@@ -590,10 +590,14 @@ _DRYER: tuple[HonSensorEntityDescription, ...] = (
     ),
 )
 
-# Air conditioner. ENERGY NOTE: hOn does NOT provide cumulative kWh for AS-class
-# ACs (totalElectricityUsed reports 0 from the device itself, it is not a
-# placeholder of ours). We keep the sensor anyway (useful on ACs that do report
-# it); for real energy an external meter is needed.
+# Air conditioner. ENERGY NOTE (#147): `totalElectricityUsed` is a counter in Wh on
+# the ACs that meter (AS35SBBHRA-MB: 16-minute steps worth 289-660 W as Wh, with
+# `acInput` reading 682 W in the same dump), and 0 from the device itself on the
+# ones that do not -- it is not a placeholder of ours. Declared in Wh and shown in
+# kWh: the state stays the number the device sent and Home Assistant converts it.
+# The washer publishes the SAME key in kWh, so the unit belongs to this row and
+# to no shared code. The hOn app never reads the counter: its consumption screen
+# is a cloud series already in kWh.
 _AC: tuple[HonSensorEntityDescription, ...] = (
     HonSensorEntityDescription(
         key="temp_indoor",
@@ -626,7 +630,8 @@ _AC: tuple[HonSensorEntityDescription, ...] = (
         key="total_energy",
         translation_key="ac_total_energy",
         attr_key=AC_ATTR_TOTAL_ENERGY,
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
+        suggested_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
     ),

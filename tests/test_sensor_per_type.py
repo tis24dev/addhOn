@@ -826,5 +826,56 @@ class WashDelayTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(150.0, await self._delay(attributes, **kwargs))
 
 
+class AcEnergyTest(unittest.IsolatedAsyncioTestCase):
+    """The AC energy counter is in Wh (#147).
+
+    Measured on an AS35SBBHRA-MB: seven 16-minute steps of `totalElectricityUsed`
+    worth 289-660 W as Wh, with `acInput` reading 682 in the same dump.
+    """
+
+    def _ac(self, key: str):
+        from custom_components.addhon.sensor import SENSORS
+
+        return next(d for d in SENSORS["AC"] if d.key == key)
+
+    async def _build(self, attributes: dict) -> dict:
+        from custom_components.addhon import sensor
+        from custom_components.addhon.const import DOMAIN
+
+        data = {"ac-1": {"type": "AC", "name": "AC", "attributes": attributes, "settings": {}}}
+        coordinator = FakeCoordinator(data)
+        hass = FakeHass({DOMAIN: {"entry-1": {"coordinator": coordinator}}})
+        added: list = []
+        await sensor.async_setup_entry(hass, FakeEntry(), added.extend)
+        return {e._attr_unique_id: e for e in added if not getattr(e, "_addhon_account", False)}
+
+    def test_the_ac_energy_counter_is_declared_in_watt_hours(self) -> None:
+        from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+        from homeassistant.const import UnitOfEnergy
+
+        energy = self._ac("total_energy")
+        self.assertEqual(energy.attr_key, "totalElectricityUsed")
+        self.assertEqual(energy.native_unit_of_measurement, UnitOfEnergy.WATT_HOUR)
+        self.assertEqual(energy.suggested_unit_of_measurement, UnitOfEnergy.KILO_WATT_HOUR)
+        self.assertEqual(energy.device_class, SensorDeviceClass.ENERGY)
+        self.assertEqual(energy.state_class, SensorStateClass.TOTAL_INCREASING)
+        # The conversion is Home Assistant's: the state stays what the device sent.
+        self.assertIsNone(energy.value_fn)
+
+    def test_the_washer_counter_keeps_kilowatt_hours(self) -> None:
+        from custom_components.addhon.sensor import SENSORS
+        from homeassistant.const import UnitOfEnergy
+
+        # Same shadow key, another unit: a washer reports kWh with decimals.
+        energy = next(d for d in SENSORS["WM"] if d.key == "total_energy")
+        self.assertEqual(energy.attr_key, "totalElectricityUsed")
+        self.assertEqual(energy.native_unit_of_measurement, UnitOfEnergy.KILO_WATT_HOUR)
+        self.assertIsNone(energy.suggested_unit_of_measurement)
+
+    async def test_the_ac_energy_state_is_the_raw_counter(self) -> None:
+        built = await self._build({"totalElectricityUsed": 47037})
+        self.assertEqual(built["ac-1_total_energy"].native_value, 47037.0)
+
+
 if __name__ == "__main__":
     unittest.main()
