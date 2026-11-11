@@ -558,6 +558,14 @@ class CycleLogTest(unittest.TestCase):
 
 
 class DumpTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # The cycle logs live at module level: without this the dump of one test printed
+        # the rows another class had left, in whatever order the tests ran.
+        from custom_components.addhon.client.engine import cycle_log
+
+        cycle_log.forget_all()
+        self.addCleanup(cycle_log.forget_all)
+
     def _block(self, source):
         api = _Api(v2={"programsCounter": 3}, v1={"programsCounter": 99})
         app = _appliance(api)
