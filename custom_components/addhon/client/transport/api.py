@@ -615,13 +615,16 @@ class HonApi:
         """`GET /commands/v1/maintenance-cycle` with the two parameters the hOn app
         sends for every appliance, `macAddress` and `applianceType` (apk2 decomp.txt
         @1346942-1346975; `apk2/analysis/issue138-beta3/21`), the type as the statistics
-        read sends it. The app adds a `unit` for an appliance with a `unitName` (the
-        laundry centre); not sent here. Only `macAddress` went until v5.29.0."""
+        read sends it. Only `macAddress` went until v5.29.0.
+
+        For a laundry centre the app asks once per unit: `unit` is the `unitName` (WM
+        or TD) and `applianceType` carries that same name (@1385709-1385760). That is
+        deliberately not done here: the laundry centre is read-only and no entity of
+        its reads a cleaning counter, it would take two requests per appliance, and no
+        dump shows what the cloud answers to either form. To revisit with a dump."""
         url = f"{API_URL}/commands/v1/maintenance-cycle"
-        params = {
-            "macAddress": appliance.mac_address,
-            "applianceType": appliance.appliance_type,
-        }
+        # No `unit`: see above.
+        params = {"macAddress": appliance.mac_address, "applianceType": appliance.appliance_type}
         async with self._connection.get(url, params=params) as response:
             data = await response.json(content_type=None)
         payload = data.get("payload", {}) if isinstance(data, dict) else {}

@@ -75,11 +75,14 @@ class _Api:
         self.calls.append("v2")
         if self.v2_error is not None:
             raise self.v2_error
-        return self.v2
+        # A new map each poll, as the cloud's: the appliance merges the maintenance
+        # answer INTO what it is handed, and a shared map would carry one poll's
+        # cleaning counters into the next statistics answer.
+        return dict(self.v2) if isinstance(self.v2, dict) else self.v2
 
     async def load_statistics(self, appliance):
         self.calls.append("v1")
-        return self.v1
+        return dict(self.v1) if isinstance(self.v1, dict) else self.v1
 
     async def load_maintenance(self, appliance):
         self.calls.append("maintenance")
@@ -639,7 +642,9 @@ class MaintenanceTest(unittest.TestCase):
         _run(app.load_statistics())
         self.assertEqual(["v2", "maintenance"] * 2, api.calls)
         for name in _CLEANING_MAPS:
-            self.assertEqual(_CLEANING, app.statistics[name])
+            # Not in the statistics answer of this poll: only the kept one can give it.
+            self.assertNotIn(name, api.v2)
+            self.assertEqual(_CLEANING, app.statistics[name], name)
         self.assertNotIn("errorCode", app.statistics)
         self.assertNotIn("errorDescription", app.statistics)
         # "0" twice over: the v2 answer carries one, the last good maintenance another.
@@ -712,6 +717,13 @@ class MaintenanceTest(unittest.TestCase):
             ({"errorDescription": "SQL error: "}, "maintenance"),
             ({"errorMessage": "boom"}, "maintenance"),
             ({"errorType": "AttributeError"}, "maintenance"),
+            # A zero or blank error code names no error, whatever discarded the answer.
+            ({"resultCode": "1", "errorCode": 0}, "maintenance"),
+            ({"resultCode": "1", "errorCode": "0"}, "maintenance"),
+            ({"resultCode": "1", "errorCode": "0.0"}, "maintenance"),
+            ({"resultCode": "1", "errorCode": ""}, "maintenance"),
+            ({"errorCode": " ", "errorDescription": "SQL error: "}, "maintenance"),
+            ({"errorCode": 0, "errorMessage": "boom"}, "maintenance"),
         ):
             with self.subTest(extra=extra):
                 api = _Api(v2=_statistics_only(), maintenance=_good_maintenance())
@@ -738,6 +750,63 @@ class MaintenanceTest(unittest.TestCase):
         _run(app.load_statistics())
         self.assertEqual(_MAINTENANCE_REJECTED, app.statistics_source)
         self.assertNotIn("filterCleaning", app.statistics)
+
+    def test_an_empty_maintenance_answer_keeps_the_last_cleaning_counters(self) -> None:
+        # As the app's store, which lays every answer over what it holds.
+        api = _Api(v2=_statistics_only(), maintenance=_good_maintenance())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.maintenance = {}
+        _run(app.load_statistics())
+        for name in _CLEANING_MAPS:
+            self.assertNotIn(name, api.v2)
+            self.assertEqual(_CLEANING, app.statistics[name], name)
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        self.assertEqual([], self._events(app))
+
+    def test_a_maintenance_answer_missing_a_map_is_laid_over_the_last(self) -> None:
+        api = _Api(v2=_statistics_only(), maintenance=_good_maintenance())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.maintenance = {"resultCode": "0", "drumCleaning": dict(_CLEANING, count="41")}
+        _run(app.load_statistics())
+        self.assertEqual("41", app.statistics["drumCleaning"]["count"])
+        self.assertEqual(_CLEANING, app.statistics["filterCleaning"])
+        self.assertEqual(_CLEANING, app.statistics["drawerCleaning"])
+        # ...and the map that came back partial is not what an error falls back to.
+        api.maintenance = _maintenance_error()
+        _run(app.load_statistics())
+        self.assertEqual("41", app.statistics["drumCleaning"]["count"])
+        self.assertEqual(_CLEANING, app.statistics["filterCleaning"])
+
+    def test_an_earlier_read_coming_back_last_is_not_laid_over_the_later_one(self) -> None:
+        older = dict(_good_maintenance(), drumCleaning=dict(_CLEANING, count="40"))
+        newer = dict(_good_maintenance(), drumCleaning=dict(_CLEANING, count="41"))
+
+        async def overlap():
+            api = _Api(v2=_statistics_only())
+            app = _appliance(api)
+            first_may_answer = asyncio.Event()
+            answers = iter((older, newer))
+
+            async def load_maintenance(appliance):
+                answer = next(answers)
+                if answer is older:
+                    await first_may_answer.wait()
+                return dict(answer)
+
+            api.load_maintenance = load_maintenance
+            first = asyncio.ensure_future(app._read_maintenance())
+            await asyncio.sleep(0)  # the first read is out, waiting for its answer
+            await app._read_maintenance()
+            first_may_answer.set()
+            await first
+            # The cloud then answers an error: what is merged is what was kept.
+            api.load_maintenance = _Api(maintenance=_maintenance_error()).load_maintenance
+            return await app._read_maintenance()
+
+        kept = _run(overlap())
+        self.assertEqual("41", kept["drumCleaning"]["count"])
 
     def test_the_rejection_stands_beside_a_statistics_one_and_on_v1(self) -> None:
         api = _Api(v2=_good_answer(), maintenance=_maintenance_error())
@@ -770,7 +839,9 @@ class MaintenanceTest(unittest.TestCase):
         data = {"type": "WM", "appliance": app, "name": "W", "attributes": {}, "statistics": app.statistics}
         block = diagnostics._appliance_block("wm1", data)
         self.assertEqual(_MAINTENANCE_REJECTED, block["statistics_source"])
-        self.assertEqual(_CLEANING, block["statistics"]["drumCleaning"])
+        # Not in the statistics answer of this poll: only the kept one can give it.
+        self.assertNotIn("drumCleaning", api.v2)
+        self.assertEqual(_CLEANING, block["statistics"].get("drumCleaning"))
         [event] = [e for e in block["cycle_log"]["events"] if e["kind"] == "statistics"]
         self.assertEqual("maintenance_1003", event["rejected"])
         json.dumps(block)

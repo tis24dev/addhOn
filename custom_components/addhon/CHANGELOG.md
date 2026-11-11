@@ -11,6 +11,10 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **The cleaning counters survive an empty or partial maintenance answer** (#138): each
+  good answer is laid over the ones before, as the official app's store does, so a
+  counter missing from one answer keeps its last value instead of going unknown.
+
 - **The maintenance read sends the appliance type too, as the official app does** (#138):
   the request for the cleaning counters carried only the appliance's address, the app's
   carries the type as well.

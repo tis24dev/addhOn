@@ -145,7 +145,11 @@ def _maintenance_error(answer: Mapping[str, Any]) -> Optional[str]:
     ) and (_blank(error) or _zero(error))
     if not failed and silent:
         return None
-    if isinstance(error, (str, int)) and not isinstance(error, bool):
+    # A zero or blank `errorCode` names no error even on an answer rejected for its
+    # `resultCode` or for another error field: that one is plain `maintenance`, never
+    # `maintenance_0` or a bare `maintenance_`.
+    named = isinstance(error, (str, int)) and not isinstance(error, bool)
+    if named and not _blank(error) and not _zero(error):
         reason = f"maintenance_{str(error).strip()}"
         if reason.isidentifier() and len(reason) <= 64:
             return reason
@@ -286,11 +290,15 @@ class HonAppliance:
         # (`_statistics_stale`, `STALE_STATISTICS_LIMIT`).
         self._statistics_stale_run = 0
         self._statistics_v1_only = False
-        # The last `/maintenance-cycle` answer taken, as it came, {} before one: what is
-        # merged when the answer is an error body (`_read_maintenance`); and why the
-        # last answer was discarded, None once a good one came (`statistics_source`).
+        # The good `/maintenance-cycle` answers taken, each laid over the ones before, {}
+        # before the first: what is merged into the statistics (`_read_maintenance`); and
+        # why the last answer was discarded, None once a good one came (`statistics_source`).
         self._maintenance_kept: dict[str, Any] = {}
         self._maintenance_rejected: Optional[str] = None
+        # Maintenance reads started, and the one whose answer the kept map holds: an
+        # answer from an earlier read never replaces a later one's.
+        self._maintenance_reads = 0
+        self._maintenance_applied = 0
         self._attributes: dict[str, Any] = {}
         self._zone = zone
         self._additional_data: dict[str, Any] = {}
@@ -1347,17 +1355,33 @@ class HonAppliance:
         with no cleaning map, dump of 2026-11-11) is discarded: the last good answer is
         handed back ({} before one), so the cleaning counters stay and the error keys
         never enter the statistics; `statistics_source` says `maintenance_rejected` and
-        the cycle log gets a row. A good answer is kept and clears that. An empty one
-        is merged as it is and changes neither.
+        the cycle log gets a row. A good answer clears that.
+
+        The kept map is the app's store: every good answer is laid over what is held
+        (`STORE_MAINTENANCE` is an `Object.assign` of the payload over the appliance's
+        entry, apk2 decomp.txt @1346088-1346113), and what is held is what gets merged.
+        So an empty answer, or one missing a cleaning map an earlier one carried,
+        leaves the counters where they were instead of dropping them for that poll;
+        an empty one says nothing and changes nothing else. As in the app, a map the
+        cloud stops sending stays until the restart.
+
+        Two reads of one appliance can overlap. The answer of the earlier one, coming
+        back last, is not laid over the later one's.
         """
+        self._maintenance_reads += 1
+        read = self._maintenance_reads
         answer = await self.api.load_maintenance(self)
-        if not isinstance(answer, Mapping) or not answer:
+        if not isinstance(answer, Mapping):
             return answer
+        if not answer:
+            return dict(self._maintenance_kept)
         rejected = _maintenance_error(answer)
         if rejected is None:
-            self._maintenance_kept = dict(answer)
-            self._maintenance_rejected = None
-            return answer
+            if read > self._maintenance_applied:
+                self._maintenance_applied = read
+                self._maintenance_kept = {**self._maintenance_kept, **answer}
+                self._maintenance_rejected = None
+            return dict(self._maintenance_kept)
         _LOGGER.debug(
             "Maintenance answered an error body for %s (%s): kept the last",
             self.appliance_type,
