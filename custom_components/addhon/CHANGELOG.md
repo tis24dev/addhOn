@@ -11,6 +11,9 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **The maintenance read sends the appliance type too, as the official app does** (#138):
+  the request for the cleaning counters carried only the appliance's address, the app's
+  carries the type as well.
 - **A statistics answer whose washes counter went down is discarded as stale** (#138): the
   cloud alternated the current statistics with an older version that carried no error, and
   the washes counter swung between the two every minute. The last statistics are kept, the

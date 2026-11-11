@@ -612,8 +612,16 @@ class HonApi:
         return payload if isinstance(payload, dict) else {}
 
     async def load_maintenance(self, appliance: Any) -> dict:
+        """`GET /commands/v1/maintenance-cycle` with the two parameters the hOn app
+        sends for every appliance, `macAddress` and `applianceType` (apk2 decomp.txt
+        @1346942-1346975; `apk2/analysis/issue138-beta3/21`), the type as the statistics
+        read sends it. The app adds a `unit` for an appliance with a `unitName` (the
+        laundry centre); not sent here. Only `macAddress` went until v5.29.0."""
         url = f"{API_URL}/commands/v1/maintenance-cycle"
-        params = {"macAddress": appliance.mac_address}
+        params = {
+            "macAddress": appliance.mac_address,
+            "applianceType": appliance.appliance_type,
+        }
         async with self._connection.get(url, params=params) as response:
             data = await response.json(content_type=None)
         payload = data.get("payload", {}) if isinstance(data, dict) else {}

@@ -340,7 +340,7 @@ class ApiRequestShapeTest(unittest.TestCase):
             ),
             "load_maintenance": (
                 f"{API_URL}/commands/v1/maintenance-cycle",
-                {"macAddress": mac},
+                {"macAddress": mac, "applianceType": "REF"},
             ),
         }
         for method_name, (exp_url, exp_params) in cases.items():
@@ -351,6 +351,25 @@ class ApiRequestShapeTest(unittest.TestCase):
                 self.assertEqual(verb, "GET")
                 self.assertEqual(url, exp_url)
                 self.assertEqual(kwargs.get("params"), exp_params)
+
+    def test_load_maintenance_sends_the_appliance_type_as_the_app_does(self) -> None:
+        # The app reads `maintenance-cycle` with `macAddress` and `applianceType`, and a
+        # `unit` only for an appliance with a `unitName` (apk2 decomp.txt
+        # @1346942-1346975; `apk2/analysis/issue138-beta3/21`); the type is the one the
+        # statistics read sends. No `unit` here.
+        app = FakeAppliance()
+        app.appliance_type = "WM"
+        conn = FakeConnection({"payload": {}})
+        _run(_call(conn).load_maintenance(app))
+        verb, url, kwargs = conn.calls[0]
+        self.assertEqual("GET", verb)
+        self.assertEqual(f"{API_URL}/commands/v1/maintenance-cycle", url)
+        self.assertEqual(
+            {"macAddress": "AA:BB:CC:DD:EE:FF", "applianceType": "WM"}, kwargs.get("params")
+        )
+        statistics = FakeConnection({"payload": {}})
+        _run(_call(statistics).load_statistics_v2(app))
+        self.assertEqual(statistics.calls[0][2]["params"], kwargs["params"])
 
     def test_load_aws_token_request(self) -> None:
         conn = FakeConnection({"payload": {"tokenSigned": "T"}})
