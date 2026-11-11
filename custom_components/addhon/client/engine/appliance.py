@@ -106,6 +106,45 @@ def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+# A `/maintenance-cycle` answer carrying one of these with a value, or a `resultCode`
+# other than zero, is an error body and not the cleaning counters: on 2026-11-11 a
+# v5.29.0 dump of an HQD washer showed the cloud answering a 200 whose payload was
+# `resultCode "1"`, `errorCode "1003"`, `errorDescription "SQL error: "` and no cleaning
+# map, at alternate polls. Merged as it came, the cleaning binaries went unknown and the
+# three keys entered the statistics. The app checks none of them and is saved by its
+# store, which merges the payload over the maps it holds (`STORE_MAINTENANCE`, apk2
+# decomp.txt @1346088-1346113; `apk2/analysis/issue138-beta3/21`); here the answer is
+# discarded and the last good one merged in its place.
+_MAINTENANCE_ERROR_KEYS = ("errorCode", "errorDescription", "errorMessage", "errorType")
+
+
+def _maintenance_error(answer: Mapping[str, Any]) -> Optional[str]:
+    """Why `answer` is an error body and not the cleaning counters, None when it is
+    not: `maintenance_<errorCode>` when that is a bare name the dump can print (64
+    characters, `diagnostics._statistics_reason`), `maintenance` otherwise.
+
+    A `resultCode` that is null or blank says nothing, and neither does an error field
+    that is; "0", 0 and "0.0" are all the zero of a good answer."""
+    code = answer.get("resultCode")
+    failed = not _blank(code) and not _zero(code)
+    if not failed and all(_blank(answer.get(key)) for key in _MAINTENANCE_ERROR_KEYS):
+        return None
+    error = answer.get("errorCode")
+    if isinstance(error, (str, int)) and not isinstance(error, bool):
+        reason = f"maintenance_{str(error).strip()}"
+        if reason.isidentifier() and len(reason) <= 64:
+            return reason
+    return "maintenance"
+
+
+def _zero(value: Any) -> bool:
+    """Whether a `resultCode` reads as zero, as text or as a number."""
+    try:
+        return float(str(value).strip()) == 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _statistics_shaped(answer: Mapping[str, Any]) -> bool:
     """Whether `answer` carries at least one statistics key with a value of its shape."""
     for key, shapes in _STATISTICS_SHAPES.items():
@@ -229,6 +268,11 @@ class HonAppliance:
         # returned.
         self._statistics_kept: dict[str, Any] = {}
         self._statistics_v1_only = False
+        # The last `/maintenance-cycle` answer taken, as it came, {} before one: what is
+        # merged when the answer is an error body (`_read_maintenance`); and why the
+        # last answer was discarded, None once a good one came (`statistics_source`).
+        self._maintenance_kept: dict[str, Any] = {}
+        self._maintenance_rejected: Optional[str] = None
         self._attributes: dict[str, Any] = {}
         self._zone = zone
         self._additional_data: dict[str, Any] = {}
@@ -446,9 +490,14 @@ class HonAppliance:
         """`{"version": "v2" | "v1", "fallback": None | reason}` of the last statistics
         read (issue #138): the reason is `"empty"`, `"shape"` or the class name of what
         v2 raised. A v2 answer discarded as an error body adds `"rejected"`, its
-        `errorType` or `"error"`, until the next answer taken. None before the first
-        read. Read by the diagnostics dump only."""
-        return self._statistics_source
+        `errorType` or `"error"`, until the next answer taken; a `/maintenance-cycle`
+        answer discarded as one adds `"maintenance_rejected"`, `maintenance_<errorCode>`
+        or `"maintenance"`, until the next good one. None before the first read. Read
+        by the diagnostics dump only."""
+        source = self._statistics_source
+        if source is None or self._maintenance_rejected is None:
+            return source
+        return {**source, "maintenance_rejected": self._maintenance_rejected}
 
     @property
     def info(self) -> dict[str, Any]:
@@ -1267,10 +1316,46 @@ class HonAppliance:
         self._statistics = await self._read_statistics()
         # The statistics half as it came, before the merge writes into it.
         statistics = dict(self._statistics) if isinstance(self._statistics, dict) else {}
-        maintenance = await self.api.load_maintenance(self)
+        maintenance = await self._read_maintenance()
         self._statistics |= maintenance
         if self._cycle_log is not None:
             self._log_statistics(self._cycle_log, statistics, maintenance)
+
+    async def _read_maintenance(self) -> dict[str, Any]:
+        """The `/maintenance-cycle` payload to merge over the statistics.
+
+        An answer that is an error body (`_maintenance_error`: seen at alternate polls
+        with no cleaning map, dump of 2026-11-11) is discarded: the last good answer is
+        handed back ({} before one), so the cleaning counters stay and the error keys
+        never enter the statistics; `statistics_source` says `maintenance_rejected` and
+        the cycle log gets a row. A good answer is kept and clears that. An empty one
+        is merged as it is and changes neither.
+        """
+        answer = await self.api.load_maintenance(self)
+        if not isinstance(answer, Mapping) or not answer:
+            return answer
+        rejected = _maintenance_error(answer)
+        if rejected is None:
+            self._maintenance_kept = dict(answer)
+            self._maintenance_rejected = None
+            return answer
+        _LOGGER.debug(
+            "Maintenance answered an error body for %s (%s): kept the last",
+            self.appliance_type,
+            rejected,
+        )
+        self._maintenance_rejected = rejected
+        self._log_rejected(rejected)
+        return dict(self._maintenance_kept)
+
+    def _log_rejected(self, reason: str) -> None:
+        """A statistics or maintenance answer discarded, in the cycle log. Never raises."""
+        if self._cycle_log is None:
+            return
+        try:
+            self._cycle_log.statistics_rejected(reason=reason)
+        except Exception:  # noqa: BLE001 - the log must never cost the poll
+            _LOGGER.debug("Cycle log failed", exc_info=True)
 
     def _log_statistics(
         self, log: _cycle_log.CycleLog, statistics: Any, maintenance: Any
@@ -1280,7 +1365,8 @@ class HonAppliance:
         of this object seeds the comparison silently. An empty answer is no read: both
         halves empty log nothing, and one half empty beside a full one leaves that
         half's keys last seen in the comparison (the next read is compared with the last
-        that said something). Never raises."""
+        that said something). A discarded maintenance answer comes here as the last
+        good one, so its cleaning maps do not move. Never raises."""
         try:
             if statistics:
                 self._statistics_half_logged = dict(statistics)
@@ -1334,11 +1420,7 @@ class HonAppliance:
                         self._statistics_source = {
                             "version": "v2", "fallback": None, "rejected": rejected,
                         }
-                        if self._cycle_log is not None:
-                            try:
-                                self._cycle_log.statistics_rejected(reason=rejected)
-                            except Exception:  # noqa: BLE001 - the log must never cost the poll
-                                _LOGGER.debug("Cycle log failed", exc_info=True)
+                        self._log_rejected(rejected)
                         return dict(self._statistics_kept)
                     if _statistics_shaped(answer):
                         self._statistics_source = {"version": "v2", "fallback": None}

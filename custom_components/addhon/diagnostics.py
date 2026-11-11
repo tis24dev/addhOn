@@ -1587,8 +1587,9 @@ def _statistics_source(appliance) -> dict | None:
     issue #138), rebuilt: the version only from the two the engine writes, the fallback
     only as `empty`, `shape` or a bare exception class name; anything else prints as
     null. `rejected`, printed only when the engine wrote it (a v2 error body discarded),
-    takes the same rule as the fallback. None for an engine without the property or
-    before its first read."""
+    takes the same rule as the fallback, and so does `maintenance_rejected` (a
+    `/maintenance-cycle` error body discarded, the last cleaning counters kept). None
+    for an engine without the property or before its first read."""
     source = getattr(appliance, "statistics_source", None)
     if not isinstance(source, Mapping):
         return None
@@ -1597,8 +1598,9 @@ def _statistics_source(appliance) -> dict | None:
         "version": version if type(version) is str and version in _STATISTICS_VERSIONS else None,
         "fallback": _statistics_reason(source.get("fallback")),
     }
-    if "rejected" in source:
-        printed["rejected"] = _statistics_reason(source.get("rejected"))
+    for key in ("rejected", "maintenance_rejected"):
+        if key in source:
+            printed[key] = _statistics_reason(source.get(key))
     return printed
 
 

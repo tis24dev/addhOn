@@ -19,6 +19,15 @@ error (`errorMessage`, `errorType`, `requestId`) with stale statistics (`program
 swung 39<->37 every minute, the cleaning binaries went unknown at alternate polls and the
 cycle log filled with the swings. Such a body is discarded, the last good statistics kept,
 the version unchanged (no v1 fallback) and the cycle log told (`rejected`).
+
+The cleaning counters come from a second read, `GET /commands/v1/maintenance-cycle`, merged
+over the statistics. On 2026-11-11 a v5.29.0 dump of an HQD washer showed it answering a
+200 whose payload was `{"resultCode": "1", "errorCode": "1003", "errorDescription": "SQL
+error: "}`, without the three cleaning maps, at alternate polls: merged as it came, the
+cleaning binaries went unknown and the error keys entered the statistics. The app never
+checks it and is saved by its store, which merges (apk2 decomp.txt @1346088-1346113;
+`apk2/analysis/issue138-beta3/21`). Such an answer is discarded and the last good
+maintenance answer merged in its place.
 """
 from __future__ import annotations
 
@@ -47,8 +56,11 @@ def _run(coro):
 class _Api:
     """An engine-facing API double: v2 and v1 answer what the test sets, calls are kept."""
 
-    def __init__(self, v2=None, v1=None, v2_error: Exception | None = None) -> None:
+    def __init__(
+        self, v2=None, v1=None, v2_error: Exception | None = None, maintenance=None
+    ) -> None:
         self.v2, self.v1, self.v2_error = v2, v1, v2_error
+        self.maintenance = {} if maintenance is None else maintenance
         self.calls: list[str] = []
 
     async def load_statistics_v2(self, appliance):
@@ -63,7 +75,8 @@ class _Api:
 
     async def load_maintenance(self, appliance):
         self.calls.append("maintenance")
-        return {}
+        # A new map each poll, as the cloud's.
+        return dict(self.maintenance)
 
 
 class _V1OnlyApi(_Api):
@@ -104,6 +117,44 @@ def _error_body():
 
 
 _REJECTED = {"version": "v2", "fallback": None, "rejected": "AttributeError"}
+
+
+def _statistics_only(counter=41):
+    """A v2 answer without the cleaning maps, which come from `/maintenance-cycle`. It
+    carries a `resultCode` of its own: the first key of the merged map in the dump of
+    2026-11-11, where the maintenance one overwrote it."""
+    return {
+        "resultCode": "0",
+        "programsCounter": counter,
+        "loadingPercentage": [
+            {"current": 5, "max": 9, "date": "2026-11-09T16:05:30Z"},
+        ],
+        "temperatureUsage": {"tempUsageStatistics": {"temp40": 56}},
+    }
+
+
+_CLEANING = {"tot": "100", "count": "40", "remaining": "60", "percentage": "40"}
+_CLEANING_MAPS = ("filterCleaning", "drumCleaning", "drawerCleaning")
+
+
+def _good_maintenance():
+    """A `/maintenance-cycle` answer as the cloud gives it when it works (v5.29.0 dump
+    of 2026-11-11)."""
+    return {
+        "resultCode": "0",
+        **{name: dict(_CLEANING) for name in _CLEANING_MAPS},
+        "lastCheckup": None,
+    }
+
+
+def _maintenance_error():
+    """The 200 `/maintenance-cycle` answered at alternate polls on 2026-11-11."""
+    return {"resultCode": "1", "errorCode": "1003", "errorDescription": "SQL error: "}
+
+
+_MAINTENANCE_REJECTED = {
+    "version": "v2", "fallback": None, "maintenance_rejected": "maintenance_1003",
+}
 
 
 def _appliance(api, kind="WM"):
@@ -532,6 +583,175 @@ class DumpTest(unittest.TestCase):
         data = {"type": "WM", "appliance": app, "name": "W", "attributes": {}, "statistics": {}}
         block = diagnostics._appliance_block("wm1", data)
         self.assertEqual({"version": None, "fallback": None}, block["statistics_source"])
+
+
+class MaintenanceTest(unittest.TestCase):
+    """A `/maintenance-cycle` answer carrying an error is discarded and the last good one
+    merged in its place (decision of 2026-11-11, `apk2/analysis/issue138-beta3/21`)."""
+
+    def setUp(self) -> None:
+        from custom_components.addhon.client.engine import cycle_log
+
+        cycle_log.forget_all()
+        # The log is per appliance id and every test here uses the same one.
+        self.addCleanup(cycle_log.forget_all)
+
+    @staticmethod
+    def _events(app):
+        return [e for e in app.cycle_log.snapshot()["events"] if e["kind"] == "statistics"]
+
+    def test_a_maintenance_error_is_discarded_and_the_last_cleaning_counters_kept(self) -> None:
+        api = _Api(v2=_statistics_only(), maintenance=_good_maintenance())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        api.maintenance = _maintenance_error()
+        _run(app.load_statistics())
+        self.assertEqual(["v2", "maintenance"] * 2, api.calls)
+        for name in _CLEANING_MAPS:
+            self.assertEqual(_CLEANING, app.statistics[name])
+        self.assertNotIn("errorCode", app.statistics)
+        self.assertNotIn("errorDescription", app.statistics)
+        # "0" twice over: the v2 answer carries one, the last good maintenance another.
+        self.assertEqual("0", app.statistics["resultCode"])
+        self.assertEqual(41, app.statistics["programsCounter"])
+        self.assertEqual(_MAINTENANCE_REJECTED, app.statistics_source)
+        [event] = self._events(app)
+        self.assertEqual("maintenance_1003", event["rejected"])
+        self.assertNotIn("changed", event)
+        self.assertNotIn("new_rows", event)
+
+    def test_the_next_good_maintenance_clears_the_rejection(self) -> None:
+        api = _Api(v2=_statistics_only(), maintenance=_good_maintenance())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.maintenance = _maintenance_error()
+        _run(app.load_statistics())
+        api.maintenance = dict(_good_maintenance(), drumCleaning=dict(_CLEANING, count="41"))
+        _run(app.load_statistics())
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        self.assertEqual("41", app.statistics["drumCleaning"]["count"])
+        rejected, changed = self._events(app)
+        self.assertEqual("maintenance_1003", rejected["rejected"])
+        self.assertEqual(
+            {"drumCleaning.count": {"before": "40", "after": "41"}}, changed["changed"]
+        )
+
+    def test_a_maintenance_error_at_the_first_read_merges_nothing(self) -> None:
+        api = _Api(v2=_statistics_only(), maintenance=_maintenance_error())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual(_statistics_only(), app.statistics)
+        self.assertEqual(_MAINTENANCE_REJECTED, app.statistics_source)
+        [event] = self._events(app)
+        self.assertEqual("maintenance_1003", event["rejected"])
+
+    def test_a_zero_result_code_with_blank_error_fields_is_a_good_answer(self) -> None:
+        for extra in (
+            {},
+            {"errorCode": None},
+            {"errorCode": "", "errorDescription": "  "},
+            {"resultCode": 0},
+            {"resultCode": "0.0", "errorMessage": None, "errorType": ""},
+            {"resultCode": None},
+            {"resultCode": " "},
+        ):
+            with self.subTest(extra=extra):
+                answer = _good_maintenance() | extra
+                api = _Api(v2=_statistics_only(), maintenance=answer)
+                app = _appliance(api)
+                _run(app.load_statistics())
+                self.assertEqual(_CLEANING, app.statistics["filterCleaning"])
+                self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+                self.assertEqual([], self._events(app))
+
+    def test_each_sign_of_an_error_alone_discards_the_answer(self) -> None:
+        for extra, reason in (
+            ({"resultCode": "1"}, "maintenance"),
+            ({"resultCode": 1}, "maintenance"),
+            ({"resultCode": "KO"}, "maintenance"),
+            ({"errorCode": "1003"}, "maintenance_1003"),
+            ({"errorCode": 1003}, "maintenance_1003"),
+            ({"errorCode": "E_SQL"}, "maintenance_E_SQL"),
+            ({"errorCode": "SQL error!"}, "maintenance"),
+            ({"errorCode": "9" * 64}, "maintenance"),
+            ({"errorDescription": "SQL error: "}, "maintenance"),
+            ({"errorMessage": "boom"}, "maintenance"),
+            ({"errorType": "AttributeError"}, "maintenance"),
+        ):
+            with self.subTest(extra=extra):
+                api = _Api(v2=_statistics_only(), maintenance=_good_maintenance())
+                app = _appliance(api)
+                _run(app.load_statistics())
+                api.maintenance = dict(
+                    _good_maintenance() | extra, drumCleaning=dict(_CLEANING, count="99")
+                )
+                _run(app.load_statistics())
+                self.assertEqual("40", app.statistics["drumCleaning"]["count"])
+                self.assertEqual(reason, app.statistics_source["maintenance_rejected"])
+                for key in extra:
+                    if key != "resultCode":
+                        self.assertNotIn(key, app.statistics)
+
+    def test_an_empty_maintenance_answer_neither_sets_nor_clears_the_rejection(self) -> None:
+        api = _Api(v2=_statistics_only())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        api.maintenance = _maintenance_error()
+        _run(app.load_statistics())
+        api.maintenance = {}
+        _run(app.load_statistics())
+        self.assertEqual(_MAINTENANCE_REJECTED, app.statistics_source)
+        self.assertNotIn("filterCleaning", app.statistics)
+
+    def test_the_rejection_stands_beside_a_statistics_one_and_on_v1(self) -> None:
+        api = _Api(v2=_good_answer(), maintenance=_maintenance_error())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = _error_body()
+        _run(app.load_statistics())
+        self.assertEqual(
+            dict(_REJECTED, maintenance_rejected="maintenance_1003"), app.statistics_source
+        )
+        api = _Api(v1=_statistics_only(), maintenance=_maintenance_error())
+        app = _appliance(api, "AC")
+        _run(app.load_statistics())
+        _run(app.load_statistics())
+        self.assertEqual(
+            {"version": "v1", "fallback": None, "maintenance_rejected": "maintenance_1003"},
+            app.statistics_source,
+        )
+        self.assertNotIn("errorCode", app.statistics)
+        api.maintenance = _good_maintenance()
+        _run(app.load_statistics())
+        self.assertEqual({"version": "v1", "fallback": None}, app.statistics_source)
+
+    def test_a_rejected_maintenance_is_printed_in_the_dump(self) -> None:
+        api = _Api(v2=_statistics_only(), maintenance=_good_maintenance())
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.maintenance = _maintenance_error()
+        _run(app.load_statistics())
+        data = {"type": "WM", "appliance": app, "name": "W", "attributes": {}, "statistics": app.statistics}
+        block = diagnostics._appliance_block("wm1", data)
+        self.assertEqual(_MAINTENANCE_REJECTED, block["statistics_source"])
+        self.assertEqual(_CLEANING, block["statistics"]["drumCleaning"])
+        [event] = [e for e in block["cycle_log"]["events"] if e["kind"] == "statistics"]
+        self.assertEqual("maintenance_1003", event["rejected"])
+        json.dumps(block)
+
+    def test_a_maintenance_rejection_outside_the_vocabulary_prints_null(self) -> None:
+        app = _appliance(_Api(v2={"programsCounter": 3}))
+        app._statistics_source = {
+            "version": "v2", "fallback": None, "maintenance_rejected": "<script>",
+        }
+        data = {"type": "WM", "appliance": app, "name": "W", "attributes": {}, "statistics": {}}
+        block = diagnostics._appliance_block("wm1", data)
+        self.assertEqual(
+            {"version": "v2", "fallback": None, "maintenance_rejected": None},
+            block["statistics_source"],
+        )
 
 
 if __name__ == "__main__":

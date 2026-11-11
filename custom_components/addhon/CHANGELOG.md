@@ -11,6 +11,11 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **A maintenance answer carrying an error is discarded and the last cleaning counters
+  kept** (#138): the cloud answered the maintenance service with a 200 that carried an
+  error code and no cleaning counters at alternate polls, the drum, filter and drawer
+  cleaning binary sensors went unknown and the error fields entered the statistics. The
+  diagnostics file says `maintenance_rejected` and the cycle timeline gets a row.
 - **The Laundry Centre is supported, read-only** (#124): a Haier washer and dryer under one
   appliance is set up as one device with a Washer and a Dryer child device. Sensors: state,
   remaining time, programme name, phase, errors, totals and energy; binary sensors: remote
