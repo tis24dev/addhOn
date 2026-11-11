@@ -5819,7 +5819,9 @@ class EntitySourceDriftGuardTest(unittest.TestCase):
             # rows, three names each, on TD.
             # 647 with the dryer's two drying-time selects (#142): `dryTime` and
             # `dryTimeMM`, three names each, on TD.
-            647,
+            # 648 with the air conditioner's power sensor (#147): one read name,
+            # `acInput`, on AC.
+            648,
             seen,
             f"the sweep changed to {seen} names; re-measure and update this number "
             f"deliberately, naming what joined or left it",

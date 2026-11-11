@@ -32,6 +32,7 @@ from homeassistant.const import (
     EntityCategory,
     UnitOfEnergy,
     UnitOfMass,
+    UnitOfPower,
     UnitOfTemperature,
     UnitOfTime,
     UnitOfVolume,
@@ -77,6 +78,7 @@ from .const import (
     AC_ATTR_HUMIDITY_INDOOR,
     AC_ATTR_OUTDOOR_TEMP,
     AC_ATTR_PM25,
+    AC_ATTR_POWER,
     AC_ATTR_TOTAL_ENERGY,
     DOMAIN,
     DW_LEVEL_MAP,
@@ -590,10 +592,20 @@ _DRYER: tuple[HonSensorEntityDescription, ...] = (
     ),
 )
 
-# Air conditioner. ENERGY NOTE: hOn does NOT provide cumulative kWh for AS-class
-# ACs (totalElectricityUsed reports 0 from the device itself, it is not a
-# placeholder of ours). We keep the sensor anyway (useful on ACs that do report
-# it); for real energy an external meter is needed.
+# Air conditioner. ENERGY NOTE (#147): `totalElectricityUsed` is a counter in Wh on
+# the ACs that meter (AS35SBBHRA-MB: 16-minute steps worth 289-660 W as Wh, with
+# `acInput` reading 682 W in the same dump), and 0 from the device itself on the
+# ones that do not -- it is not a placeholder of ours. Declared in Wh and shown in
+# kWh: the state stays the number the device sent and Home Assistant converts it.
+# The washer publishes the SAME key in kWh, so the unit belongs to this row and
+# to no shared code. The hOn app never reads the counter: its consumption screen
+# is a cloud series already in kWh.
+#
+# The power row lives only where the device reports `acInput`.
+AC_POWER_KEY = "power"
+# Seconds between two published power readings: the device pushes a new one about
+# every 2 s while it runs (#126), some 1,800 recorder rows an hour unthrottled.
+AC_POWER_MIN_INTERVAL = 30.0
 _AC: tuple[HonSensorEntityDescription, ...] = (
     HonSensorEntityDescription(
         key="temp_indoor",
@@ -626,9 +638,31 @@ _AC: tuple[HonSensorEntityDescription, ...] = (
         key="total_energy",
         translation_key="ac_total_energy",
         attr_key=AC_ATTR_TOTAL_ENERGY,
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
+        # Wh for every air conditioner, by decision (2026-11-11): no model has been
+        # seen counting in kWh. The -MB units are proven in Wh; read as kWh the -PA
+        # units of #73 exceed 5.8 times what the appliance can draw; the others
+        # report 0, which is 0 in either unit.
+        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,  # was kWh until v5.29.0
+        # Upgrade path, by decision too: same unique_id, no statistics migration. An
+        # entity registered in kWh keeps showing kWh; its value drops 1000 times, the
+        # recorder reads that as a meter reset, and the statistics recorded before
+        # stay 1000 times too high. The CHANGELOG says so and how to correct them.
+        suggested_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,  # the display unit
         state_class=SensorStateClass.TOTAL_INCREASING,
+        device_class=SensorDeviceClass.ENERGY,
+    ),
+    HonSensorEntityDescription(
+        key=AC_POWER_KEY,
+        translation_key="ac_power",
+        attr_key=AC_ATTR_POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        # Created at setup from the attributes the device reports then, as every
+        # gated row is: an `acInput` that first shows up later gets its entity at
+        # the next reload of the integration. The three dumps that carry it have it
+        # from the first shadow, 0 with the unit off.
+        gated=True,  # no late creation, for this row as for the others
     ),
     HonSensorEntityDescription(
         key="pm25",
@@ -1618,6 +1652,10 @@ async def async_setup_entry(
                 entity_class = HonWashDelaySensor
             elif app_type == APPLIANCE_AP:
                 entity_class = HonAirPurifierSensor
+            elif app_type == APPLIANCE_AC and description.key == AC_POWER_KEY:
+                # Rate-limited, which needs the last published value: a value_fn
+                # only ever sees the number (#147).
+                entity_class = HonAcPowerSensor
             else:
                 entity_class = HonSensor
             if entity_class is HonMyZoneModeSensor:
@@ -1908,6 +1946,50 @@ def _finite(raw) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+class HonAcPowerSensor(HonSensor):
+    """Power an air conditioner draws, published at most every 30 seconds (#147).
+
+    `acInput` arrives over MQTT about every 2 s while the unit runs, moving by a
+    few watts each time (394-403 over 18 s in the #126 log). Every push already
+    refreshes all the entities, so following it would be one state change and one
+    recorder row per message. The reading is held instead: a new figure replaces
+    the published one only once `AC_POWER_MIN_INTERVAL` has passed since that one
+    went out. The last figure of a run is not lost to the hold -- when the pushes
+    stop, the 60 s poll reads the entity again after the window has closed.
+
+    A reading that cannot be interpreted -- not a number, NaN, an infinity -- is
+    never held back, and neither is the first one after it: unknown is shown at
+    once, not papered over with an old number.
+    """
+
+    _published: float | None = None
+    _published_at: float | None = None
+
+    @staticmethod
+    def _monotonic() -> float:
+        # Looked up at call time so a test can drive the clock.
+        return time.monotonic()
+
+    @property
+    def native_value(self):
+        # NaN and the infinities are floats to Python and a reading to no one: they
+        # are unknown, like a value that is not a number at all.
+        value = _finite(super().native_value)
+        if value is None:
+            self._published = self._published_at = None
+            return None
+        now = self._monotonic()
+        if (
+            self._published is not None
+            and self._published_at is not None
+            and now - self._published_at < AC_POWER_MIN_INTERVAL
+        ):
+            return self._published
+        # Only a finite figure gets this far, so only one is ever held.
+        self._published, self._published_at = value, now
+        return value
 
 
 class HonMyZoneTempSensor(HonSensor):

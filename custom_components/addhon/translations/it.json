@@ -274,6 +274,9 @@
       "ac_total_energy": {
         "name": "Energia Totale Condizionatore"
       },
+      "ac_power": {
+        "name": "Potenza Condizionatore"
+      },
       "pm25": {
         "name": "PM2.5"
       },

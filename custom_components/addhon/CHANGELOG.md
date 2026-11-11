@@ -11,6 +11,33 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **The air conditioner energy sensor reads the counter in Wh; its value drops 1000 times**
+  (#147): the appliances that meter report watt-hours and the sensor declared them as kWh,
+  1000 times too much. It still shows kWh. **Existing installations:** at the update the
+  value falls to a thousandth, Home Assistant's statistics read that as a meter reset, and
+  the energy recorded before the update stays 1000 times too high. To correct the past
+  figures use Developer tools → Statistics on that sensor (adjust the sum). Applied to
+  every air conditioner; the ones that report 0 are unchanged.
+- **New power sensor on the air conditioners that report it** (#147): the power the unit
+  draws, in W, on the models whose cloud state carries it (seen on the 2026 Flexis and on
+  other recent series). Updated at most once every 30 seconds while the unit runs.
+- **The cleaning counters survive an empty or partial maintenance answer** (#138): each
+  good answer is laid over the ones before, as the official app's store does, so a
+  counter missing from one answer keeps its last value instead of going unknown.
+
+- **The maintenance read sends the appliance type too, as the official app does** (#138):
+  the request for the cleaning counters carried only the appliance's address, the app's
+  carries the type as well.
+- **A statistics answer whose washes counter went down is discarded as stale** (#138): the
+  cloud alternated the current statistics with an older version that carried no error, and
+  the washes counter swung between the two every minute. The last statistics are kept, the
+  diagnostics file says `rejected: stale` and the cycle timeline gets a row. After ten such
+  answers in a row the lower counter is taken as the new value.
+- **A maintenance answer carrying an error is discarded and the last cleaning counters
+  kept** (#138): the cloud answered the maintenance service with a 200 that carried an
+  error code and no cleaning counters at alternate polls, the drum, filter and drawer
+  cleaning binary sensors went unknown and the error fields entered the statistics. The
+  diagnostics file says `maintenance_rejected` and the cycle timeline gets a row.
 - **The Laundry Centre is supported, read-only** (#124): a Haier washer and dryer under one
   appliance is set up as one device with a Washer and a Dryer child device. Sensors: state,
   remaining time, programme name, phase, errors, totals and energy; binary sensors: remote

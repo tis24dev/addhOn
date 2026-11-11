@@ -33,8 +33,10 @@ This log keeps it, in memory, bounded, per appliance. Events, by `kind`:
   `loadingPercentage` it did not hold (the load measured and suggested, the start date of
   one cycle each) and the scalars that changed, a map's own one level down
   (`temperatureUsage.temp40`); the first read of an appliance object only seeds; or a
-  v2 answer discarded as an error body (`rejected`, its `errorType`), the statistics
-  held unchanged;
+  v2 answer discarded as an error body (`rejected`, its `errorType`) or for a cycle
+  counter that went down (`rejected`, `stale`), the statistics held unchanged, or a
+  `/maintenance-cycle` answer discarded as an error body (`rejected`,
+  `maintenance_<errorCode>` or `maintenance`), the cleaning counters held unchanged;
 - `entity`: a state one of the entities that show a cycle's options, phase, programme or
   machine state published (`key`, the unique_id's suffix), `unknown` and `unavailable`
   kept as the text they are; Home Assistant's listener feeds it (`__init__.py`);
@@ -581,7 +583,10 @@ class CycleLog:
 
     def statistics_rejected(self, *, reason: str) -> None:
         """A poll whose `/statistics` answer was an error body and was discarded, the
-        statistics held unchanged: `reason` is its `errorType` or `error`."""
+        statistics held unchanged: `reason` is its `errorType` or `error`, or `stale`
+        for an answer whose cycle counter went down. Or one whose
+        `/maintenance-cycle` answer was, the cleaning counters held unchanged: `reason`
+        is `maintenance_<errorCode>` or `maintenance`."""
         now = self._clock()
         fields = {"rejected": _text(reason)}
         with self._lock:

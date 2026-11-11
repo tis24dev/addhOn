@@ -259,6 +259,7 @@ AC_SWING_MODE_OFF    = "off"
 AC_ATTR_ON_OFF       = "settings.onOffStatus"
 AC_ATTR_COMPRESSOR_FREQ = "compressorFrequency"
 AC_ATTR_TOTAL_ENERGY = "totalElectricityUsed"
+AC_ATTR_POWER = "acInput"                 # Power drawn right now (W), #147
 # Air quality (direct attributes, confirmed on Roberto's AC)
 AC_ATTR_PM25        = "pm2p5ValueIndoor"   # Indoor PM2.5 (µg/m³)
 AC_ATTR_CO2         = "co2ValueIndoor"     # Indoor CO2 (ppm)

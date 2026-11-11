@@ -84,6 +84,17 @@ _STATISTICS_SHAPES: dict[str, tuple[type, ...]] = {
 # swung every minute. Such an answer is discarded and the last good one kept; the
 # version does not change (the next poll asks v2 again).
 _STATISTICS_ERROR_KEYS = ("errorMessage", "errorType")
+# A v2 answer can be stale without saying so: on 2026-11-11 a v5.29.0 dump of an HQD
+# washer showed the cloud alternating the fresh statistics (`programsCounter` 41, rows
+# dated to the second) with an older version carrying no error key (39, rows dated at
+# midnight), and the washes counter swung 41<->39 every minute. The app compares nothing
+# (apk2 decomp.txt @4192286-4192419, `apk2/analysis/issue138-beta3/21` section 4) but
+# reads once per screen, not every minute. A v2 answer whose counter is lower than the
+# last one taken is discarded like an error body, as `stale`. This many in a row and the
+# lower counter is believed and becomes the base: a counter that really went back (an
+# appliance reset, an account moved) must not freeze the statistics until a reload. At a
+# poll a minute that is ten minutes; the alternation seen never got past one in a row.
+STALE_STATISTICS_LIMIT = 10
 
 
 def _statistics_error(answer: Mapping[str, Any]) -> Optional[str]:
@@ -104,6 +115,53 @@ def _statistics_error(answer: Mapping[str, Any]) -> Optional[str]:
 def _blank(value: Any) -> bool:
     """Whether an error field carries nothing: None, or a string of only whitespace."""
     return value is None or (isinstance(value, str) and not value.strip())
+
+
+# A `/maintenance-cycle` answer carrying one of these with a value, or a `resultCode`
+# other than zero, is an error body and not the cleaning counters: on 2026-11-11 a
+# v5.29.0 dump of an HQD washer showed the cloud answering a 200 whose payload was
+# `resultCode "1"`, `errorCode "1003"`, `errorDescription "SQL error: "` and no cleaning
+# map, at alternate polls. Merged as it came, the cleaning binaries went unknown and the
+# three keys entered the statistics. The app checks none of them and is saved by its
+# store, which merges the payload over the maps it holds (`STORE_MAINTENANCE`, apk2
+# decomp.txt @1346088-1346113; `apk2/analysis/issue138-beta3/21`); here the answer is
+# discarded and the last good one merged in its place.
+_MAINTENANCE_ERROR_KEYS = ("errorCode", "errorDescription", "errorMessage", "errorType")
+
+
+def _maintenance_error(answer: Mapping[str, Any]) -> Optional[str]:
+    """Why `answer` is an error body and not the cleaning counters, None when it is
+    not: `maintenance_<errorCode>` when that is a bare name the dump can print (64
+    characters, `diagnostics._statistics_reason`), `maintenance` otherwise.
+
+    A `resultCode` that is null or blank says nothing, and neither does an error field
+    that is; "0", 0 and "0.0" are all the zero of a good answer, for the `errorCode`
+    as for the `resultCode` (an error code of zero names no error)."""
+    code = answer.get("resultCode")
+    failed = not _blank(code) and not _zero(code)
+    error = answer.get("errorCode")
+    silent = all(
+        _blank(answer.get(key)) for key in _MAINTENANCE_ERROR_KEYS if key != "errorCode"
+    ) and (_blank(error) or _zero(error))
+    if not failed and silent:
+        return None
+    # A zero or blank `errorCode` names no error even on an answer rejected for its
+    # `resultCode` or for another error field: that one is plain `maintenance`, never
+    # `maintenance_0` or a bare `maintenance_`.
+    named = isinstance(error, (str, int)) and not isinstance(error, bool)
+    if named and not _blank(error) and not _zero(error):
+        reason = f"maintenance_{str(error).strip()}"
+        if reason.isidentifier() and len(reason) <= 64:
+            return reason
+    return "maintenance"
+
+
+def _zero(value: Any) -> bool:
+    """Whether a `resultCode` reads as zero, as text or as a number."""
+    try:
+        return float(str(value).strip()) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _statistics_shaped(answer: Mapping[str, Any]) -> bool:
@@ -228,7 +286,19 @@ class HonAppliance:
         # body gets instead (`_read_statistics`); a copy, the merge writes into the one
         # returned.
         self._statistics_kept: dict[str, Any] = {}
+        # The v2 answers discarded as stale since the last one taken
+        # (`_statistics_stale`, `STALE_STATISTICS_LIMIT`).
+        self._statistics_stale_run = 0
         self._statistics_v1_only = False
+        # The good `/maintenance-cycle` answers taken, each laid over the ones before, {}
+        # before the first: what is merged into the statistics (`_read_maintenance`); and
+        # why the last answer was discarded, None once a good one came (`statistics_source`).
+        self._maintenance_kept: dict[str, Any] = {}
+        self._maintenance_rejected: Optional[str] = None
+        # Maintenance reads started, and the one whose answer the kept map holds: an
+        # answer from an earlier read never replaces a later one's.
+        self._maintenance_reads = 0
+        self._maintenance_applied = 0
         self._attributes: dict[str, Any] = {}
         self._zone = zone
         self._additional_data: dict[str, Any] = {}
@@ -445,10 +515,16 @@ class HonAppliance:
     def statistics_source(self) -> Optional[dict[str, Any]]:
         """`{"version": "v2" | "v1", "fallback": None | reason}` of the last statistics
         read (issue #138): the reason is `"empty"`, `"shape"` or the class name of what
-        v2 raised. A v2 answer discarded as an error body adds `"rejected"`, its
-        `errorType` or `"error"`, until the next answer taken. None before the first
-        read. Read by the diagnostics dump only."""
-        return self._statistics_source
+        v2 raised. A v2 answer discarded adds `"rejected"`, until the next answer taken:
+        an error body's `errorType` or `"error"`, or `"stale"` for a cycle counter that
+        went down; a `/maintenance-cycle` answer discarded as an error body adds
+        `"maintenance_rejected"`, `maintenance_<errorCode>` or `"maintenance"`, until
+        the next good one. None before the first read. Read by the diagnostics dump
+        only."""
+        source = self._statistics_source
+        if source is None or self._maintenance_rejected is None:
+            return source
+        return {**source, "maintenance_rejected": self._maintenance_rejected}
 
     @property
     def info(self) -> dict[str, Any]:
@@ -1267,10 +1343,62 @@ class HonAppliance:
         self._statistics = await self._read_statistics()
         # The statistics half as it came, before the merge writes into it.
         statistics = dict(self._statistics) if isinstance(self._statistics, dict) else {}
-        maintenance = await self.api.load_maintenance(self)
+        maintenance = await self._read_maintenance()
         self._statistics |= maintenance
         if self._cycle_log is not None:
             self._log_statistics(self._cycle_log, statistics, maintenance)
+
+    async def _read_maintenance(self) -> dict[str, Any]:
+        """The `/maintenance-cycle` payload to merge over the statistics.
+
+        An answer that is an error body (`_maintenance_error`: seen at alternate polls
+        with no cleaning map, dump of 2026-11-11) is discarded: the last good answer is
+        handed back ({} before one), so the cleaning counters stay and the error keys
+        never enter the statistics; `statistics_source` says `maintenance_rejected` and
+        the cycle log gets a row. A good answer clears that.
+
+        The kept map is the app's store: every good answer is laid over what is held
+        (`STORE_MAINTENANCE` is an `Object.assign` of the payload over the appliance's
+        entry, apk2 decomp.txt @1346088-1346113), and what is held is what gets merged.
+        So an empty answer, or one missing a cleaning map an earlier one carried,
+        leaves the counters where they were instead of dropping them for that poll;
+        an empty one says nothing and changes nothing else. As in the app, a map the
+        cloud stops sending stays until the restart.
+
+        Two reads of one appliance can overlap. The answer of the earlier one, coming
+        back last, is not laid over the later one's.
+        """
+        self._maintenance_reads += 1
+        read = self._maintenance_reads
+        answer = await self.api.load_maintenance(self)
+        if not isinstance(answer, Mapping):
+            return answer
+        if not answer:
+            return dict(self._maintenance_kept)
+        rejected = _maintenance_error(answer)
+        if rejected is None:
+            if read > self._maintenance_applied:
+                self._maintenance_applied = read
+                self._maintenance_kept = {**self._maintenance_kept, **answer}
+                self._maintenance_rejected = None
+            return dict(self._maintenance_kept)
+        _LOGGER.debug(
+            "Maintenance answered an error body for %s (%s): kept the last",
+            self.appliance_type,
+            rejected,
+        )
+        self._maintenance_rejected = rejected
+        self._log_rejected(rejected)
+        return dict(self._maintenance_kept)
+
+    def _log_rejected(self, reason: str) -> None:
+        """A statistics or maintenance answer discarded, in the cycle log. Never raises."""
+        if self._cycle_log is None:
+            return
+        try:
+            self._cycle_log.statistics_rejected(reason=reason)
+        except Exception:  # noqa: BLE001 - the log must never cost the poll
+            _LOGGER.debug("Cycle log failed", exc_info=True)
 
     def _log_statistics(
         self, log: _cycle_log.CycleLog, statistics: Any, maintenance: Any
@@ -1280,7 +1408,8 @@ class HonAppliance:
         of this object seeds the comparison silently. An empty answer is no read: both
         halves empty log nothing, and one half empty beside a full one leaves that
         half's keys last seen in the comparison (the next read is compared with the last
-        that said something). Never raises."""
+        that said something). A discarded maintenance answer comes here as the last
+        good one, so its cleaning maps do not move. Never raises."""
         try:
             if statistics:
                 self._statistics_half_logged = dict(statistics)
@@ -1308,8 +1437,9 @@ class HonAppliance:
         answered as a 200 (seen mixed with stale statistics at alternate polls, dump of
         2026-11-08): it is discarded, the last v2 answer taken is handed back ({} before
         one), the version stays v2, `statistics_source` says `rejected` and the cycle
-        log gets a row. Checked before the shape. An API without `load_statistics_v2`
-        reads v1.
+        log gets a row. Checked before the shape. A shaped answer whose
+        `programsCounter` is lower than the last one taken is discarded the same way,
+        as `stale` (`_statistics_stale`). An API without `load_statistics_v2` reads v1.
         """
         read_v2 = getattr(self.api, "load_statistics_v2", None)
         if (
@@ -1334,15 +1464,23 @@ class HonAppliance:
                         self._statistics_source = {
                             "version": "v2", "fallback": None, "rejected": rejected,
                         }
-                        if self._cycle_log is not None:
-                            try:
-                                self._cycle_log.statistics_rejected(reason=rejected)
-                            except Exception:  # noqa: BLE001 - the log must never cost the poll
-                                _LOGGER.debug("Cycle log failed", exc_info=True)
+                        self._log_rejected(rejected)
                         return dict(self._statistics_kept)
                     if _statistics_shaped(answer):
+                        if self._statistics_stale(answer):
+                            _LOGGER.debug(
+                                "Statistics v2 answered a lower cycle counter for %s: "
+                                "kept the last",
+                                self.appliance_type,
+                            )
+                            self._statistics_source = {
+                                "version": "v2", "fallback": None, "rejected": "stale",
+                            }
+                            self._log_rejected("stale")
+                            return dict(self._statistics_kept)
                         self._statistics_source = {"version": "v2", "fallback": None}
                         self._statistics_kept = dict(answer)
+                        self._statistics_stale_run = 0
                         return answer
                     fallback = "shape"
                 else:
@@ -1358,6 +1496,19 @@ class HonAppliance:
         if self._statistics_source is None or self._statistics_source.get("version") != "v1":
             self._statistics_source = {"version": "v1", "fallback": None}
         return await self.api.load_statistics(self)
+
+    def _statistics_stale(self, answer: Mapping[str, Any]) -> bool:
+        """Whether a v2 answer is an older version of the statistics held: both carry a
+        `programsCounter` that reads as a whole number and the answer's is lower (dump
+        of 2026-11-11, see `STALE_STATISTICS_LIMIT`). A counter absent or unreadable on
+        either side is not compared. The `STALE_STATISTICS_LIMIT`th such answer in a row
+        is not stale: the caller takes it, and it is the base from then on."""
+        counter = _as_int(answer.get("programsCounter"))
+        held = _as_int(self._statistics_kept.get("programsCounter"))
+        if counter is None or held is None or counter >= held:
+            return False
+        self._statistics_stale_run += 1
+        return self._statistics_stale_run < STALE_STATISTICS_LIMIT
 
     async def update(self, force: bool = False) -> Optional[bool]:
         """Read the context, unless the last read is under 5 s old and not `force`d.

@@ -501,9 +501,10 @@ class Tier2TableTest(unittest.TestCase):
         from custom_components.addhon.sensor import SENSORS
 
         # Historic types keep their CORE sensors always-created (gated=False); only
-        # the optional gvigroux-harvested add-ons (air-quality / auto-dose) are gated.
+        # the optional gvigroux-harvested add-ons (air-quality / auto-dose) are gated,
+        # and the AC power reading, which only the metering firmware reports (#147).
         expected_gated = {
-            "AC": {"pm10", "voc", "co", "air_quality"},
+            "AC": {"power", "pm10", "voc", "co", "air_quality"},
             "WM": {"current_wash_cycle", "remaining_rinses", "detergent_level",
                    "detergent_weight", "softener_weight", "estimated_weight"},
             "WD": {"current_wash_cycle", "remaining_rinses", "detergent_level",
