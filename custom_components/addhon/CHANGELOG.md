@@ -11,6 +11,11 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **A statistics answer whose washes counter went down is discarded as stale** (#138): the
+  cloud alternated the current statistics with an older version that carried no error, and
+  the washes counter swung between the two every minute. The last statistics are kept, the
+  diagnostics file says `rejected: stale` and the cycle timeline gets a row. After ten such
+  answers in a row the lower counter is taken as the new value.
 - **A maintenance answer carrying an error is discarded and the last cleaning counters
   kept** (#138): the cloud answered the maintenance service with a 200 that carried an
   error code and no cleaning counters at alternate polls, the drum, filter and drawer

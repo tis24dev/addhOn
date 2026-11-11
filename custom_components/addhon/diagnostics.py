@@ -1586,7 +1586,8 @@ def _statistics_source(appliance) -> dict | None:
     """`{version, fallback}` of the last statistics read (`HonAppliance.statistics_source`,
     issue #138), rebuilt: the version only from the two the engine writes, the fallback
     only as `empty`, `shape` or a bare exception class name; anything else prints as
-    null. `rejected`, printed only when the engine wrote it (a v2 error body discarded),
+    null. `rejected`, printed only when the engine wrote it (a v2 answer discarded: an
+    error body, or `stale` for a cycle counter that went down),
     takes the same rule as the fallback, and so does `maintenance_rejected` (a
     `/maintenance-cycle` error body discarded, the last cleaning counters kept). None
     for an engine without the property or before its first read."""

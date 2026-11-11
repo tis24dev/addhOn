@@ -84,6 +84,17 @@ _STATISTICS_SHAPES: dict[str, tuple[type, ...]] = {
 # swung every minute. Such an answer is discarded and the last good one kept; the
 # version does not change (the next poll asks v2 again).
 _STATISTICS_ERROR_KEYS = ("errorMessage", "errorType")
+# A v2 answer can be stale without saying so: on 2026-11-11 a v5.29.0 dump of an HQD
+# washer showed the cloud alternating the fresh statistics (`programsCounter` 41, rows
+# dated to the second) with an older version carrying no error key (39, rows dated at
+# midnight), and the washes counter swung 41<->39 every minute. The app compares nothing
+# (apk2 decomp.txt @4192286-4192419, `apk2/analysis/issue138-beta3/21` section 4) but
+# reads once per screen, not every minute. A v2 answer whose counter is lower than the
+# last one taken is discarded like an error body, as `stale`. This many in a row and the
+# lower counter is believed and becomes the base: a counter that really went back (an
+# appliance reset, an account moved) must not freeze the statistics until a reload. At a
+# poll a minute that is ten minutes; the alternation seen never got past one in a row.
+STALE_STATISTICS_LIMIT = 10
 
 
 def _statistics_error(answer: Mapping[str, Any]) -> Optional[str]:
@@ -267,6 +278,9 @@ class HonAppliance:
         # body gets instead (`_read_statistics`); a copy, the merge writes into the one
         # returned.
         self._statistics_kept: dict[str, Any] = {}
+        # The v2 answers discarded as stale since the last one taken
+        # (`_statistics_stale`, `STALE_STATISTICS_LIMIT`).
+        self._statistics_stale_run = 0
         self._statistics_v1_only = False
         # The last `/maintenance-cycle` answer taken, as it came, {} before one: what is
         # merged when the answer is an error body (`_read_maintenance`); and why the
@@ -489,11 +503,12 @@ class HonAppliance:
     def statistics_source(self) -> Optional[dict[str, Any]]:
         """`{"version": "v2" | "v1", "fallback": None | reason}` of the last statistics
         read (issue #138): the reason is `"empty"`, `"shape"` or the class name of what
-        v2 raised. A v2 answer discarded as an error body adds `"rejected"`, its
-        `errorType` or `"error"`, until the next answer taken; a `/maintenance-cycle`
-        answer discarded as one adds `"maintenance_rejected"`, `maintenance_<errorCode>`
-        or `"maintenance"`, until the next good one. None before the first read. Read
-        by the diagnostics dump only."""
+        v2 raised. A v2 answer discarded adds `"rejected"`, until the next answer taken:
+        an error body's `errorType` or `"error"`, or `"stale"` for a cycle counter that
+        went down; a `/maintenance-cycle` answer discarded as an error body adds
+        `"maintenance_rejected"`, `maintenance_<errorCode>` or `"maintenance"`, until
+        the next good one. None before the first read. Read by the diagnostics dump
+        only."""
         source = self._statistics_source
         if source is None or self._maintenance_rejected is None:
             return source
@@ -1394,8 +1409,9 @@ class HonAppliance:
         answered as a 200 (seen mixed with stale statistics at alternate polls, dump of
         2026-11-08): it is discarded, the last v2 answer taken is handed back ({} before
         one), the version stays v2, `statistics_source` says `rejected` and the cycle
-        log gets a row. Checked before the shape. An API without `load_statistics_v2`
-        reads v1.
+        log gets a row. Checked before the shape. A shaped answer whose
+        `programsCounter` is lower than the last one taken is discarded the same way,
+        as `stale` (`_statistics_stale`). An API without `load_statistics_v2` reads v1.
         """
         read_v2 = getattr(self.api, "load_statistics_v2", None)
         if (
@@ -1423,8 +1439,20 @@ class HonAppliance:
                         self._log_rejected(rejected)
                         return dict(self._statistics_kept)
                     if _statistics_shaped(answer):
+                        if self._statistics_stale(answer):
+                            _LOGGER.debug(
+                                "Statistics v2 answered a lower cycle counter for %s: "
+                                "kept the last",
+                                self.appliance_type,
+                            )
+                            self._statistics_source = {
+                                "version": "v2", "fallback": None, "rejected": "stale",
+                            }
+                            self._log_rejected("stale")
+                            return dict(self._statistics_kept)
                         self._statistics_source = {"version": "v2", "fallback": None}
                         self._statistics_kept = dict(answer)
+                        self._statistics_stale_run = 0
                         return answer
                     fallback = "shape"
                 else:
@@ -1440,6 +1468,19 @@ class HonAppliance:
         if self._statistics_source is None or self._statistics_source.get("version") != "v1":
             self._statistics_source = {"version": "v1", "fallback": None}
         return await self.api.load_statistics(self)
+
+    def _statistics_stale(self, answer: Mapping[str, Any]) -> bool:
+        """Whether a v2 answer is an older version of the statistics held: both carry a
+        `programsCounter` that reads as a whole number and the answer's is lower (dump
+        of 2026-11-11, see `STALE_STATISTICS_LIMIT`). A counter absent or unreadable on
+        either side is not compared. The `STALE_STATISTICS_LIMIT`th such answer in a row
+        is not stale: the caller takes it, and it is the base from then on."""
+        counter = _as_int(answer.get("programsCounter"))
+        held = _as_int(self._statistics_kept.get("programsCounter"))
+        if counter is None or held is None or counter >= held:
+            return False
+        self._statistics_stale_run += 1
+        return self._statistics_stale_run < STALE_STATISTICS_LIMIT
 
     async def update(self, force: bool = False) -> Optional[bool]:
         """Read the context, unless the last read is under 5 s old and not `force`d.

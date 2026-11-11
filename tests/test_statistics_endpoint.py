@@ -28,6 +28,14 @@ cleaning binaries went unknown and the error keys entered the statistics. The ap
 checks it and is saved by its store, which merges (apk2 decomp.txt @1346088-1346113;
 `apk2/analysis/issue138-beta3/21`). Such an answer is discarded and the last good
 maintenance answer merged in its place.
+
+The same dump showed the stale statistics again, this time WITHOUT any error key: v2
+alternated the fresh answer (`programsCounter` 41, `loadingPercentage` dated to the second)
+with an older one (39, rows dated at midnight), and the washes counter swung 41<->39 every
+minute. The app has no check of its own (no comparison with the counter it holds, apk2
+decomp.txt @4192286-4192419; `apk2/analysis/issue138-beta3/21` section 4) but reads
+once per screen, not every minute. A v2 answer whose counter is lower than the last one taken is
+discarded as stale; ten in a row are believed (a counter that really went back to zero).
 """
 from __future__ import annotations
 
@@ -133,6 +141,20 @@ def _statistics_only(counter=41):
     }
 
 
+def _stale_answer(counter=39):
+    """The older version v2 answered at alternate polls on 2026-11-11: a lower counter,
+    rows dated at midnight, no error key."""
+    return {
+        "resultCode": "0",
+        "programsCounter": counter,
+        "loadingPercentage": [
+            {"current": 1, "max": 9, "date": "2026-11-09T00:00:00Z"},
+        ],
+        "temperatureUsage": {"tempUsageStatistics": {"temp40": 55}},
+    }
+
+
+_STALE = {"version": "v2", "fallback": None, "rejected": "stale"}
 _CLEANING = {"tot": "100", "count": "40", "remaining": "60", "percentage": "40"}
 _CLEANING_MAPS = ("filterCleaning", "drumCleaning", "drawerCleaning")
 
@@ -752,6 +774,180 @@ class MaintenanceTest(unittest.TestCase):
             {"version": "v2", "fallback": None, "maintenance_rejected": None},
             block["statistics_source"],
         )
+
+
+class StaleTest(unittest.TestCase):
+    """A v2 answer whose cycle counter went down is an older version of the statistics
+    and is discarded (decision of 2026-11-11, `apk2/analysis/issue138-beta3/21`)."""
+
+    def setUp(self) -> None:
+        from custom_components.addhon.client.engine import cycle_log
+
+        cycle_log.forget_all()
+        # The log is per appliance id and every test here uses the same one.
+        self.addCleanup(cycle_log.forget_all)
+
+    @staticmethod
+    def _events(app):
+        return [e for e in app.cycle_log.snapshot()["events"] if e["kind"] == "statistics"]
+
+    def test_a_v2_answer_whose_counter_went_down_is_discarded_as_stale(self) -> None:
+        for fresh, stale in ((41, 39), ("41", "39"), (41, "39"), ("41.0", 39)):
+            with self.subTest(fresh=fresh, stale=stale):
+                from custom_components.addhon.client.engine import cycle_log
+
+                cycle_log.forget_all()
+                api = _Api(v2=_statistics_only(fresh), v1={"programsCounter": 99})
+                app = _appliance(api)
+                _run(app.load_statistics())
+                api.v2 = _stale_answer(stale)
+                _run(app.load_statistics())
+                self.assertEqual(["v2", "maintenance"] * 2, api.calls)
+                self.assertEqual(fresh, app.statistics["programsCounter"])
+                self.assertEqual(
+                    "2026-11-09T16:05:30Z", app.statistics["loadingPercentage"][0]["date"]
+                )
+                self.assertEqual(_STALE, app.statistics_source)
+                self.assertFalse(app._statistics_v1_only)
+                [event] = self._events(app)
+                self.assertEqual("stale", event["rejected"])
+                self.assertNotIn("changed", event)
+                self.assertNotIn("new_rows", event)
+
+    def test_the_next_fresh_answer_clears_the_stale_rejection(self) -> None:
+        api = _Api(v2=_statistics_only(41))
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = _stale_answer(39)
+        _run(app.load_statistics())
+        api.v2 = _statistics_only(41)
+        _run(app.load_statistics())
+        self.assertEqual(41, app.statistics["programsCounter"])
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        [event] = self._events(app)
+        self.assertEqual("stale", event["rejected"])
+
+    def test_a_counter_that_went_up_or_stayed_is_taken(self) -> None:
+        for counter in (42, 41):
+            with self.subTest(counter=counter):
+                api = _Api(v2=_statistics_only(41))
+                app = _appliance(api)
+                _run(app.load_statistics())
+                api.v2 = _stale_answer(counter)
+                _run(app.load_statistics())
+                self.assertEqual(counter, app.statistics["programsCounter"])
+                self.assertEqual(
+                    "2026-11-09T00:00:00Z", app.statistics["loadingPercentage"][0]["date"]
+                )
+                self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+
+    def test_the_tenth_stale_answer_in_a_row_is_taken_as_the_new_base(self) -> None:
+        self.assertEqual(10, appliance_mod.STALE_STATISTICS_LIMIT)
+        api = _Api(v2=_statistics_only(41))
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = _stale_answer(39)
+        for _ in range(9):
+            _run(app.load_statistics())
+            self.assertEqual(41, app.statistics["programsCounter"])
+            self.assertEqual(_STALE, app.statistics_source)
+        _run(app.load_statistics())
+        self.assertEqual(39, app.statistics["programsCounter"])
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        self.assertEqual(9, sum("rejected" in event for event in self._events(app)))
+        # 39 is the base now: the same answer again is no longer stale, 38 is.
+        _run(app.load_statistics())
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        api.v2 = _stale_answer(38)
+        _run(app.load_statistics())
+        self.assertEqual(39, app.statistics["programsCounter"])
+        self.assertEqual(_STALE, app.statistics_source)
+
+    def test_an_answer_taken_starts_the_count_of_stale_ones_over(self) -> None:
+        api = _Api(v2=_statistics_only(41))
+        app = _appliance(api)
+        _run(app.load_statistics())
+        for _ in range(3):
+            api.v2 = _stale_answer(39)
+            for _ in range(9):
+                _run(app.load_statistics())
+            api.v2 = _statistics_only(41)
+            _run(app.load_statistics())
+            self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+        api.v2 = _stale_answer(39)
+        _run(app.load_statistics())
+        self.assertEqual(41, app.statistics["programsCounter"])
+        self.assertEqual(_STALE, app.statistics_source)
+
+    def test_a_counter_that_cannot_be_read_is_not_compared(self) -> None:
+        unread = ("many", None, True, {}, [], "")
+        for held, new in [(41, value) for value in unread] + [(value, 39) for value in unread]:
+            with self.subTest(held=held, new=new):
+                api = _Api(v2=_statistics_only(held))
+                app = _appliance(api)
+                _run(app.load_statistics())
+                api.v2 = _stale_answer(new)
+                _run(app.load_statistics())
+                self.assertEqual(new, app.statistics["programsCounter"])
+                self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+                self.assertNotIn("v1", api.calls)
+        api = _Api(v2=_statistics_only(41))
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = {key: value for key, value in _stale_answer().items() if key != "programsCounter"}
+        _run(app.load_statistics())
+        self.assertNotIn("programsCounter", app.statistics)
+        self.assertEqual({"version": "v2", "fallback": None}, app.statistics_source)
+
+    def test_the_alternation_seen_never_shows_the_stale_counter(self) -> None:
+        # The dump of 2026-11-11: fresh and stale at alternate polls, the maintenance
+        # answer failing on the stale ones.
+        api = _Api(v2=_statistics_only(41), maintenance=_good_maintenance())
+        app = _appliance(api)
+        for poll in range(24):
+            stale = poll % 2 == 1
+            api.v2 = _stale_answer(39) if stale else _statistics_only(41)
+            api.maintenance = _maintenance_error() if stale else _good_maintenance()
+            _run(app.load_statistics())
+            self.assertEqual(41, app.statistics["programsCounter"])
+            self.assertEqual(_CLEANING, app.statistics["drumCleaning"])
+            self.assertEqual("0", app.statistics["resultCode"])
+            self.assertEqual(stale, app.statistics_source.get("rejected") == "stale")
+        self.assertNotIn("v1", api.calls)
+        events = self._events(app)
+        self.assertEqual(24, len(events))
+        self.assertEqual(
+            ["stale", "maintenance_1003"] * 12, [event.get("rejected") for event in events]
+        )
+        self.assertFalse(any("changed" in event or "new_rows" in event for event in events))
+
+    def test_an_error_body_between_two_stale_answers_does_not_end_the_run(self) -> None:
+        api = _Api(v2=_statistics_only(41))
+        app = _appliance(api)
+        _run(app.load_statistics())
+        for poll in range(9):
+            api.v2 = _stale_answer(39)
+            _run(app.load_statistics())
+            api.v2 = _error_body()
+            _run(app.load_statistics())
+            self.assertEqual(41, app.statistics["programsCounter"])
+        api.v2 = _stale_answer(39)
+        _run(app.load_statistics())
+        self.assertEqual(39, app.statistics["programsCounter"])
+
+    def test_a_stale_answer_is_printed_in_the_dump(self) -> None:
+        api = _Api(v2=_statistics_only(41))
+        app = _appliance(api)
+        _run(app.load_statistics())
+        api.v2 = _stale_answer(39)
+        _run(app.load_statistics())
+        data = {"type": "WM", "appliance": app, "name": "W", "attributes": {}, "statistics": app.statistics}
+        block = diagnostics._appliance_block("wm1", data)
+        self.assertEqual(_STALE, block["statistics_source"])
+        self.assertEqual(41, block["statistics"]["programsCounter"])
+        [event] = [e for e in block["cycle_log"]["events"] if e["kind"] == "statistics"]
+        self.assertEqual("stale", event["rejected"])
+        json.dumps(block)
 
 
 if __name__ == "__main__":
