@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Issue #149: the shape-only reading of the hOn wine-cellar inventory API.
 
 `client/transport/cellar.py` reduces a `cellar/v1` response to keys, types, counts
@@ -163,9 +166,21 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(404, result["wines"]["status"])
 
     def test_the_diagnostics_allowlist_matches_the_transport(self) -> None:
-        from tests.test_diagnostics import diagnostics
+        # Parsed, never imported: importing diagnostics here would load a second copy
+        # of the modules the diagnostics suite stubs and leak state between files.
+        import ast
 
-        self.assertEqual(cellar.KNOWN_KEYS, diagnostics._SHAPE_KNOWN_KEYS)
+        source = (REPO / "custom_components" / "addhon" / "diagnostics.py").read_text(
+            encoding="utf-8"
+        )
+        declared = None
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "_SHAPE_KNOWN_KEYS"
+                for t in node.targets
+            ):
+                declared = frozenset(ast.literal_eval(node.value.args[0]))
+        self.assertEqual(cellar.KNOWN_KEYS, declared)
 
     def test_one_failing_call_does_not_hide_the_other(self) -> None:
         connection = _Connection(

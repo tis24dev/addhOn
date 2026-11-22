@@ -1,3 +1,6 @@
+# Copyright (C) 2026 tis24dev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Shape-only reductions of the hOn wine-cellar inventory API (issue #149).
 
 The hOn app keeps the bottle inventory of a wine cellar -- physical or the
