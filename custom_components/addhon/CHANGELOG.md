@@ -11,6 +11,12 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **Note: on the Haier HQD washers the door stays locked after a Pause or a Stop from
+  Home Assistant during the end-of-cycle tumbling** (#138): in the tumbling that ends a
+  cycle (Keep Fresh or anti-crease) the firmware unlocks the door only on a key press on
+  the panel (Start/Pause, or switching the machine off and on again). The official app has
+  no unlock command either. A Pause from Home Assistant stops the tumbling, a Stop closes
+  the cycle.
 - **The cycle timeline judges a pause, resume or stop by the push that follows** (#138):
   the cloud empties the command slot of the appliance's context right after these
   commands, so they stayed `accepted` in the diagnostics file even when the machine obeyed
