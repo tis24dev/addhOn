@@ -1364,6 +1364,8 @@ _CYCLE_LOG_OUTCOMES = frozenset({
     "failed", "cancelled",
 })
 _CYCLE_LOG_EDGES = frozenset({"start", "end"})
+# Where a command's follow-up came from when not from the `commandHistory` slot.
+_CYCLE_LOG_BY = frozenset({"push"})
 _CYCLE_LOG_TEXT_MAX = 64
 # The cloud's instants among the keys a read of the context is summarised with.
 _CYCLE_LOG_CLOUD_KEYS = frozenset({
@@ -1506,7 +1508,7 @@ _CYCLE_LOG_FIELDS = {
         "name": _log_text, "programme": _log_text, "sent": _log_cloud,
         "outcome": _log_token(_CYCLE_LOG_OUTCOMES), "result_code": _log_text,
         "error": _log_text, "estimated_min": _log_int, "executed_at": _log_cloud,
-        "delay_s": _log_int,
+        "delay_s": _log_int, "by": _log_token(_CYCLE_LOG_BY),
     },
     "cycle_read": {
         "edge": _log_token(_CYCLE_LOG_EDGES), "asked_at": _log_cloud, "reads": _log_reads,

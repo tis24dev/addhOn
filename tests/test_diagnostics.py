@@ -10940,6 +10940,28 @@ class CycleLogSectionTest(unittest.TestCase):
         self.assertNotIn("executed_at", not_executed)
         self.assertNotIn("AA:BB:CC", json.dumps(section))
 
+    def test_a_follow_up_from_the_push_is_rendered_with_its_source(self) -> None:
+        from custom_components.addhon.client.engine.cycle_log import ShadowRow
+
+        app = self._washer()
+        log = app.cycle_log
+        log.command(name="pauseProgram", programme=None, sent="2026-10-16T12:25:01.000Z",
+                    outcome="accepted")
+        log.shadow("mqtt", [ShadowRow("pause", "1", "1", False, "0")],
+                   cloud_at="2026-10-16T12:25:03.1Z", event_id="31")
+        section = self._block(app)["cycle_log"]
+        [executed] = [
+            e for e in section["events"]
+            if e["kind"] == "command" and e["outcome"] == "executed"
+        ]
+        self.assertEqual(
+            {"name": "pauseProgram", "sent": "2026-10-16T12:25:01+00:00",
+             "outcome": "executed", "executed_at": "2026-10-16T12:25:03.100000+00:00",
+             "delay_s": 2, "by": "push"},
+            {k: executed[k] for k in ("name", "sent", "outcome", "executed_at", "delay_s",
+                                      "by")},
+        )
+
     def test_the_estimated_duration_of_a_start_is_rendered(self) -> None:
         app = self._washer()
         app.cycle_log.command(name="startProgram", programme="HQD_COTTONS",

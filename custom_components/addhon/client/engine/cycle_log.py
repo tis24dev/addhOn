@@ -26,7 +26,10 @@ This log keeps it, in memory, bounded, per appliance. Events, by `kind`:
   it as the app reads it, from a read of the context whose `commandHistory` slot names it
   by the `timestamp` it was sent with and whose acceptance lies within `SLOT_WINDOW_S`
   of it: `executed` (`executed_at`, `delay_s` from the acceptance) or `not_executed`,
-  accepted and not executed `NOT_RECEIVED_S` after the send;
+  accepted and not executed `NOT_RECEIVED_S` after the send. A pause, resume or stop
+  the cloud drops from its slot is `executed` by the push that shows its effect within
+  `NOT_RECEIVED_S` of the send instead (`by: "push"`, `executed_at` the push's instant,
+  `delay_s` from the send; see `_PUSH_EFFECTS`); a follow-up without `by` is the slot's;
 - `cycle_read`: a read a push at a cycle's start or end asked for, as the MQTT transport
   fills it in;
 - `statistics`: what a poll's `/statistics` added or moved since the last one: the rows of
@@ -55,6 +58,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from datetime import datetime, timezone
 from collections.abc import Iterable, Mapping
 from typing import Any, Callable, NamedTuple, Optional
 
@@ -71,6 +75,20 @@ NOT_RECEIVED_S = 60
 # How far from a command's own timestamp the `commandHistory` slot's acceptance may lie,
 # either side, for the slot's times to be that command's (`CycleLog.command_outcome`).
 SLOT_WINDOW_S = 60
+
+# The commands a push can show the outcome of, and the effect each one shows: a pushed
+# row of `key` moving to one of `values`. Seen on an HQD washer: the cloud empties the
+# context's `commandHistory` slot right after a `pauseProgram` or a `stopProgram`, so the
+# slot never answers for them, while the push shows them done in 1-3 s (`pause` 0 -> 1;
+# `prPhase` 20 -> 0 and `machMode` 7 -> 1). A stop is shown by `machMode` leaving for
+# READY (1) or OFF (0), or by the phase leaving for READY (0): from the end-of-cycle
+# tumbling `machMode` is 7, already outside `appliance.cycle_modes`. A start keeps its
+# slot only.
+_PUSH_EFFECTS: dict[str, tuple[tuple[str, frozenset[str]], ...]] = {
+    "pauseProgram": (("pause", frozenset({"1"})),),
+    "resumeProgram": (("pause", frozenset({"0"})),),
+    "stopProgram": (("machMode", frozenset({"0", "1"})), ("prPhase", frozenset({"0"}))),
+}
 
 # Who started a cycle and from where, never what it does: the hOn accounts, the phone,
 # the start's title (a favourite's name is the user's own text), the MAC and the
@@ -256,6 +274,27 @@ def _row(road: str, row: ShadowRow) -> Optional[dict]:
     return entry if road == "rest" and stamp is not None else None
 
 
+def _code(value: Optional[str]) -> Optional[str]:
+    """A logged value as a code: an integral number folded to its integer spelling."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    return str(int(number)) if number.is_integer() else value
+
+
+def _shows(entry: dict, key: str, values: frozenset[str]) -> bool:
+    """Whether the kept push row `entry` moves `key` to one of `values`: from the cloud's
+    own old value when it differs from the one held (our shielded write may hold the
+    new value already), else from the one held."""
+    if entry["key"] != key:
+        return False
+    after = _code(entry["after"])
+    return after in values and _code(entry.get("cloud_from", entry["before"])) != after
+
+
 def _step(entry: dict) -> bool:
     """Whether `entry` is an unmarked step of a counter a running cycle moves."""
     if entry.keys() != _PLAIN or entry["key"] not in _COUNTERS:
@@ -400,11 +439,42 @@ class CycleLog:
                 self._known.update(
                     (entry["key"], entry["after"]) for entry in kept if "refused" not in entry
                 )
-            if steps and self._extend_run(road, kept, now, event_id):
-                return
-            event = self._append("shadow", now, road=_text(road), **fields)
-            if steps:
-                self._run = event
+            if not (steps and self._extend_run(road, kept, now, event_id)):
+                event = self._append("shadow", now, road=_text(road), **fields)
+                if steps:
+                    self._run = event
+            if road == "mqtt" and kept:
+                self._judge_by_push(kept, fields.get("cloud_at"), now)
+
+    def _judge_by_push(self, kept: list, cloud_at: Optional[str], now: float) -> None:
+        """Follow up each accepted pause, resume or stop still waiting whose effect this
+        push shows, within `NOT_RECEIVED_S` of its send on Home Assistant's clock; under
+        the lock. `executed_at` is the push's cloud instant, else its arrival here;
+        `delay_s` the whole seconds from the send, None when either cannot be read."""
+        for sent, event in list(self._awaiting.items()):
+            effects = _PUSH_EFFECTS.get(event.get("name"))
+            if (
+                effects is None
+                or event.get("outcome") != "accepted"
+                or now - event["at"] > NOT_RECEIVED_S
+                or not any(
+                    _shows(entry, key, values) for entry in kept for key, values in effects
+                )
+            ):
+                continue
+            executed_at = cloud_at or datetime.fromtimestamp(now, timezone.utc).isoformat()
+            executed = parse_cloud_timestamp(executed_at)
+            sent_at = parse_cloud_timestamp(sent)
+            delay = (
+                round((executed - sent_at).total_seconds())
+                if executed is not None and sent_at is not None
+                else None
+            )
+            del self._awaiting[sent]
+            self._append(
+                "command", now, name=event.get("name"), sent=sent, outcome="executed",
+                executed_at=executed_at, delay_s=delay, by="push",
+            )
 
     def _extend_run(self, road: str, kept: list, now: float, event_id: Any) -> bool:
         """Join `kept` to the run before it when it continues it; under the lock."""
@@ -504,7 +574,9 @@ class CycleLog:
         names only when its acceptance lies within `SLOT_WINDOW_S` of that command's
         timestamp, either side, and, executed, not before it was accepted. Any other
         slot, or one whose instants cannot be read, leaves the command waiting with no
-        follow-up (`/history` in the dump answers for it). One follow-up per command.
+        follow-up (`/history` in the dump answers for it). One follow-up per command: a
+        pause, resume or stop a push has already followed up (`_judge_by_push`) is not
+        judged again here.
         The slot's `transactionId` carries the MAC: it is never read."""
         if not isinstance(slot, Mapping):
             return

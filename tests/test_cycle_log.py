@@ -572,6 +572,148 @@ class CommandOutcomeTest(_LogTest):
         self.assertEqual([], self._followups())
 
 
+
+class CommandOutcomeByPushTest(_LogTest):
+    """A pause, resume or stop the cloud drops from its slot (seen on an HQD washer: the
+    context's `commandHistory` goes null right after them) is judged by the push that
+    follows: the effect it shows within 60 s of the send makes it executed."""
+
+    _SENT = "2026-10-26T07:33:20.148Z"  # the clock reads 07:33:20
+
+    def _send(self, name, outcome="accepted", sent=_SENT):
+        self.log.command(name=name, programme=None, sent=sent, outcome=outcome)
+
+    def _push(self, *rows, cloud_at="2026-10-26T07:33:22.2Z", road="mqtt"):
+        self.log.shadow(road, list(rows), cloud_at=cloud_at, event_id="31")
+
+    def _followups(self):
+        return [e for e in _events(self.log, "command")
+                if e["outcome"] in ("executed", "not_executed")]
+
+    def test_a_pause_is_executed_by_the_push_of_pause_1(self) -> None:
+        self._send("pauseProgram")
+        self.clock.tick(2)
+        # As seen: our own write held pause 1, the shield refused the push's 1, the
+        # cloud's old value was 0; the slot went null.
+        self._push(ShadowRow("pause", "1", "1", False, cloud_old="0"))
+        self.log.command_outcome(None)
+        [followup] = self._followups()
+        self.assertEqual(
+            {"kind": "command", "name": "pauseProgram", "sent": self._SENT,
+             "outcome": "executed", "executed_at": "2026-10-26T07:33:22.2Z",
+             "delay_s": 2, "by": "push"},
+            {k: followup[k] for k in ("kind", "name", "sent", "outcome", "executed_at",
+                                      "delay_s", "by")},
+        )
+        self.assertIs(int, type(followup["delay_s"]))
+
+    def test_a_stop_is_executed_by_the_end_of_the_cycle(self) -> None:
+        for rows in (
+            [ShadowRow("prPhase", "20", "0", True, cloud_old="20"),
+             ShadowRow("machMode", "7", "1", True, cloud_old="7")],
+            [ShadowRow("machMode", "7", "1", True, cloud_old="7")],
+            [ShadowRow("machMode", "2", "0", True)],
+            [ShadowRow("prPhase", "20", "0", True, cloud_old="20")],
+        ):
+            with self.subTest(rows=rows):
+                self.setUp()
+                self._send("stopProgram")
+                self.clock.tick(3)
+                self._push(*rows)
+                [followup] = self._followups()
+                self.assertEqual(("executed", "push", "stopProgram"),
+                                 (followup["outcome"], followup["by"], followup["name"]))
+
+    def test_a_resume_is_executed_by_the_push_of_pause_0(self) -> None:
+        self._send("resumeProgram")
+        self.clock.tick(2)
+        self._push(ShadowRow("pause", "0", "0", False, cloud_old="1"))
+        [followup] = self._followups()
+        self.assertEqual(("executed", "push", "resumeProgram"),
+                         (followup["outcome"], followup["by"], followup["name"]))
+
+    def test_a_push_without_the_effect_leaves_the_command_waiting(self) -> None:
+        self._send("pauseProgram")
+        self.clock.tick(2)
+        self._push(ShadowRow("remainingTimeMM", "10", "9", True, cloud_old="10"),
+                   ShadowRow("prPhase", "20", "0", True, cloud_old="20"))
+        # The value it already held is no effect either.
+        self._push(ShadowRow("pause", "1", "1", True, cloud_old="1"))
+        self.assertEqual([], self._followups())
+        self.assertIn(self._SENT, self.log._awaiting)
+        # The slot still judges it, as before.
+        self.clock.tick(59)
+        self.log.command_outcome({"command": {"timestamp": self._SENT},
+                                  "timestampAccepted": "2026-10-26T07:33:21.6Z"})
+        [followup] = self._followups()
+        self.assertEqual("not_executed", followup["outcome"])
+        self.assertNotIn("by", followup)
+
+    def test_a_push_later_than_60_s_after_the_send_does_not_count(self) -> None:
+        self._send("pauseProgram")
+        self.clock.tick(61)
+        self._push(ShadowRow("pause", "0", "1", True, cloud_old="0"),
+                   cloud_at="2026-10-26T07:34:21.2Z")
+        self.assertEqual([], self._followups())
+
+    def test_only_a_push_counts_and_only_an_accepted_command(self) -> None:
+        self._send("pauseProgram")
+        self.clock.tick(1)
+        self.log.shadow("rest", [ShadowRow("pause", "0", "1", True)])
+        self.log.shadow("local", [ShadowRow("pause", "0", "1", True)])
+        self.assertEqual([], self._followups())
+        self.setUp()
+        self._send("pauseProgram", outcome="rejected")
+        self.clock.tick(2)
+        self._push(ShadowRow("pause", "0", "1", True, cloud_old="0"))
+        self.assertEqual([], self._followups())
+
+    def test_a_start_is_still_judged_by_its_slot_only(self) -> None:
+        self._send("startProgram")
+        self.clock.tick(2)
+        self._push(ShadowRow("machMode", "1", "2", True, cloud_old="1"),
+                   ShadowRow("pause", "1", "0", True, cloud_old="1"),
+                   ShadowRow("prPhase", "2", "0", True, cloud_old="2"))
+        self.assertEqual([], self._followups())
+        self.log.command_outcome({"command": {"timestamp": self._SENT},
+                                  "timestampAccepted": "2026-10-26T07:33:21.6Z",
+                                  "timestampExecuted": "2026-10-26T07:33:23.6Z"})
+        [followup] = self._followups()
+        self.assertEqual(("executed", 2), (followup["outcome"], followup["delay_s"]))
+        self.assertNotIn("by", followup)
+
+    def test_an_outcome_decided_by_the_push_is_not_rewritten_by_the_slot(self) -> None:
+        self._send("stopProgram")
+        self.clock.tick(3)
+        self._push(ShadowRow("machMode", "7", "1", True, cloud_old="7"))
+        self.log.command_outcome({"command": {"timestamp": self._SENT},
+                                  "timestampAccepted": "2026-10-26T07:33:21.6Z",
+                                  "timestampExecuted": "2026-10-26T07:33:25Z"})
+        self.clock.tick(120)
+        self._push(ShadowRow("machMode", "2", "1", True, cloud_old="2"))
+        [followup] = self._followups()
+        self.assertEqual(("push", 2), (followup["by"], followup["delay_s"]))
+
+    def test_a_slot_that_answered_first_is_not_rewritten_by_the_push(self) -> None:
+        self._send("pauseProgram")
+        self.log.command_outcome({"command": {"timestamp": self._SENT},
+                                  "timestampAccepted": "2026-10-26T07:33:21.6Z",
+                                  "timestampExecuted": "2026-10-26T07:33:22.6Z"})
+        self.clock.tick(2)
+        self._push(ShadowRow("pause", "0", "1", True, cloud_old="0"))
+        [followup] = self._followups()
+        self.assertNotIn("by", followup)
+
+    def test_a_push_without_its_cloud_instant_is_dated_on_arrival(self) -> None:
+        self._send("pauseProgram")
+        self.clock.tick(3)
+        self._push(ShadowRow("pause", "0", "1.0", True), cloud_at=None)
+        [followup] = self._followups()
+        self.assertEqual(
+            ("2026-10-26T07:33:23+00:00", 3, "push"),
+            (followup["executed_at"], followup["delay_s"], followup["by"]),
+        )
+
 class StatisticsTest(_LogTest):
     """What `/statistics` added or moved between two polls: a measured load per cycle
     (`loadingPercentage`), the counters, the temperature bands (issue #138)."""

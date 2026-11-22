@@ -11,6 +11,12 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **The cycle timeline judges a pause, resume or stop by the push that follows** (#138):
+  the cloud empties the command slot of the appliance's context right after these
+  commands, so they stayed `accepted` in the diagnostics file even when the machine obeyed
+  in a few seconds. A push that shows the effect within 60 seconds of the send (`pause`
+  to 1, `pause` to 0, the cycle closing) now marks the command `executed`, with
+  `by: push`; a start is still judged by the slot only.
 - **The washer pause switch reads on while the end-of-cycle tumbling is paused** (#138): on
   the washers and washer-dryers a Pause in the end-of-cycle tumbling (Keep Fresh or
   anti-crease) stops the drum but leaves the machine at the end of the cycle, and the
