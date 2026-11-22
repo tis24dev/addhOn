@@ -472,6 +472,23 @@ class LaundryStartAlignmentTest(unittest.TestCase):
         self.assertNotIn("dryTime", params)
         self.assertNotIn("dryProgFlag", params)
 
+    def test_a_washer_dryer_wash_only_goes_out_as_the_apps(self):
+        # Issue #150: the select's "no_dry" buffers `dryLevel '0'` and `dryTime '0'`, and
+        # the Start applies them as the button does. The app's wash-only body carries
+        # both (apk2 decomp.txt:1363091-1363107), although `dryTime` ranges from 1.
+        from custom_components.addhon.program_options import apply_pending_options
+
+        command = self.command(WD_WASH_DRY_REAL)
+        lowered: dict = {}
+        apply_pending_options(
+            command.parameters, {"dryLevel": "0", "dryTime": "0"}, lowered
+        )
+        asyncio.run(command.send())
+        params = self.api.sent[-1]["params"]
+        self.assertEqual(("0", "0"), (params["dryLevel"], params["dryTime"]))
+        self.assertNotIn("dryProgFlag", params)
+        self.assertEqual({"dryTime": 1}, lowered)
+
     def test_a_washer_dryer_with_level_and_time_takes_the_flag(self):
         params, _ = self.start(WD_WASH_DRY_REAL, dryTime="2")
         self.assertEqual(("0", "1"), (params["dryTime"], params["dryProgFlag"]))

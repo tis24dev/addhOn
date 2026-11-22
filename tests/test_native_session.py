@@ -1579,7 +1579,9 @@ class SetupDropCensusTest(unittest.TestCase):
         nh = self._nh_with_api(h)
         _run(nh.setup())
         self.assertEqual([], nh.appliances)
-        self.assertEqual({"mac_empty": 2}, nh.setup_drops)
+        # An empty-MAC REF is the inventory-only fridge of issue #149: still dropped,
+        # still counted, under its own token. The sum is what this test pins.
+        self.assertEqual({"inventory_only": 1, "mac_empty": 1}, nh.setup_drops)
         self.assertEqual(2, nh.setup_expanded)
 
     def test_a_zoned_entry_expands_the_census_not_the_count(self) -> None:
@@ -1703,6 +1705,8 @@ class SetupDropCensusTest(unittest.TestCase):
         observed: set = set()
         for entries, patch_factory in (
             ([{"macAddress": "", "applianceTypeName": "GHOST"}], False),
+            ([{"macAddress": "", "applianceTypeName": "WC", "modelName": "VWC 20"}], False),
+            ([{"macAddress": "", "applianceTypeName": "FRE"}], False),
             (["not-a-dict"], False),
             ([{"macAddress": "B", "applianceTypeName": "WM", "zone": "abc"}], False),
             ([{"macAddress": "C", "applianceTypeName": "REF"}], True),
@@ -1815,6 +1819,171 @@ class SetupDropCensusTest(unittest.TestCase):
         # broken, never what was loaded.
         self.assertEqual({}, nh.setup_drops)
         self.assertEqual(3, nh.setup_expanded)
+
+
+class UnconnectedEntriesTest(unittest.TestCase):
+    """Issue #149: empty-MAC entries the hOn app treats as unconnected appliances.
+
+    hOn 2.30.7 keeps an entry with no MAC under its serial number and reads no
+    shadow for it; the Virtual Wine Cellar (model `VWC 20`, one fixed serial for
+    every account) and inventory-only fridges are the two kinds it names. They are
+    still dropped, as before, but under their own token, with an INFO line, and with
+    a record a diagnostics dump can show.
+    """
+
+    VWC = {
+        "macAddress": "",
+        "applianceTypeName": "WC",
+        "modelName": "VWC 20",
+        "serialNumber": "3400477820460000",
+        "series": "virtualWineCellar",
+        "applianceStatus": 1,
+        "nickName": "My cellar",
+        "attributes": [{"parName": "seriesVersion", "parValue": "x"}],
+    }
+
+    def _patch(self, obj, name, value):
+        real = getattr(obj, name)
+        setattr(obj, name, value)
+        self.addCleanup(lambda: setattr(obj, name, real))
+
+    def _setup(self, entries):
+        h = _Harness(self, entries)
+        h.install()
+        nh = NativeHon("u@x", "p")
+        nh._api = h.api
+        return nh
+
+    def test_vwc_by_serial_or_model_is_its_own_reason(self) -> None:
+        for entry in (
+            self.VWC,
+            {**self.VWC, "modelName": "other"},
+            {**self.VWC, "serialNumber": "999"},
+        ):
+            nh = self._setup([entry])
+            with self.assertLogs(session_mod._LOGGER, level="INFO") as logs:
+                _run(nh.setup())
+            self.assertEqual({"virtual_wine_cellar": 1}, nh.setup_drops)
+            self.assertEqual([], nh.appliances)
+            self.assertIn("Virtual Wine Cellar", "\n".join(logs.output))
+
+    def test_vwc_record_keeps_named_fields_and_key_names_only(self) -> None:
+        nh = self._setup([self.VWC])
+        _run(nh.setup())
+        (record,) = nh.setup_unconnected
+        self.assertEqual("virtual_wine_cellar", record["reason"])
+        self.assertEqual("VWC 20", record["modelName"])
+        self.assertEqual("virtualWineCellar", record["series"])
+        self.assertEqual(1, record["applianceStatus"])
+        self.assertEqual("3400477820460000", record["serialNumber"])
+        self.assertIn("nickName", record["keys"])
+        self.assertEqual(["seriesVersion"], record["attribute_keys"])
+        self.assertNotIn("My cellar", repr(record))
+
+    def test_a_vwc_with_another_serial_does_not_carry_it(self) -> None:
+        nh = self._setup([{**self.VWC, "serialNumber": "123456789"}])
+        _run(nh.setup())
+        (record,) = nh.setup_unconnected
+        self.assertNotIn("serialNumber", record)
+        self.assertNotIn("123456789", repr(record))
+
+    def test_inventory_only_fridge_logs_its_type_and_no_serial(self) -> None:
+        nh = self._setup(
+            [{"macAddress": "", "applianceTypeName": "ref", "serialNumber": "SN-PRIVATE"}]
+        )
+        with self.assertLogs(session_mod._LOGGER, level="INFO") as logs:
+            _run(nh.setup())
+        self.assertEqual({"inventory_only": 1}, nh.setup_drops)
+        text = "\n".join(logs.output)
+        self.assertIn("Unconnected REF", text)
+        self.assertNotIn("SN-PRIVATE", text)
+        (record,) = nh.setup_unconnected
+        self.assertNotIn("serialNumber", record)
+        self.assertNotIn("SN-PRIVATE", repr(record))
+
+    def test_other_empty_mac_stays_silent_and_unrecorded(self) -> None:
+        nh = self._setup([{"macAddress": "", "applianceTypeName": "WC"}])
+        with self.assertNoLogs(session_mod._LOGGER, level="DEBUG"):
+            _run(nh.setup())
+        self.assertEqual({"mac_empty": 1}, nh.setup_drops)
+        self.assertEqual([], nh.setup_unconnected)
+
+    def test_a_classifier_failure_falls_back_to_mac_empty(self) -> None:
+        def boom(_data):
+            raise RuntimeError("boom")
+
+        self._patch(session_mod, "_unconnected_reason", boom)
+        nh = self._setup([self.VWC])
+        _run(nh.setup())
+        self.assertEqual({"mac_empty": 1}, nh.setup_drops)
+        self.assertEqual([], nh.setup_unconnected)
+
+    def test_records_are_bounded_and_reset_by_setup(self) -> None:
+        nh = self._setup([dict(self.VWC) for _ in range(12)])
+        _run(nh.setup())
+        self.assertEqual(8, len(nh.setup_unconnected))
+        self.assertEqual({"virtual_wine_cellar": 12}, nh.setup_drops)
+        nh._api.load_appliances = FakeApi([], []).load_appliances
+        _run(nh.setup())
+        self.assertEqual([], nh.setup_unconnected)
+        self.assertEqual({"state": "no_cellar"}, _run(nh.probe_wine_cellar()))
+
+    def test_probe_states(self) -> None:
+        nh = self._setup([])
+        _run(nh.setup())
+        self.assertEqual({"state": "no_cellar"}, _run(nh.probe_wine_cellar()))
+
+        nh = self._setup([{**self.VWC, "serialNumber": ""}])
+        _run(nh.setup())
+        self.assertEqual({"state": "no_serial"}, _run(nh.probe_wine_cellar()))
+
+        nh = self._setup([self.VWC])
+        _run(nh.setup())
+        seen = []
+
+        async def probe_wine_cellar(key):
+            seen.append(key)
+            return {"wines": {"outcome": "ok"}, "bottles_count": {"outcome": "ok"}}
+
+        nh._api.probe_wine_cellar = probe_wine_cellar
+        result = _run(nh.probe_wine_cellar())
+        self.assertEqual(["3400477820460000"], seen)
+        self.assertEqual("recorded", result["state"])
+        self.assertEqual({"outcome": "ok"}, result["wines"])
+
+    def test_a_full_list_still_makes_room_for_the_cellar(self) -> None:
+        fridges = [{"macAddress": "", "applianceTypeName": "REF"} for _ in range(9)]
+        nh = self._setup([*fridges, dict(self.VWC)])
+        _run(nh.setup())
+        records = nh.setup_unconnected
+        self.assertEqual(8, len(records))
+        self.assertEqual("virtual_wine_cellar", records[-1]["reason"])
+        self.assertEqual(7, sum(r["reason"] == "inventory_only" for r in records))
+        seen = []
+
+        async def probe_wine_cellar(key):
+            seen.append(key)
+            return {}
+
+        nh._api.probe_wine_cellar = probe_wine_cellar
+        self.assertEqual("recorded", _run(nh.probe_wine_cellar())["state"])
+        self.assertEqual(["3400477820460000"], seen)
+
+    def test_returned_records_share_no_list_with_the_session(self) -> None:
+        nh = self._setup([self.VWC])
+        _run(nh.setup())
+        (record,) = nh.setup_unconnected
+        record["keys"].append("tampered")
+        record["attribute_keys"].clear()
+        (again,) = nh.setup_unconnected
+        self.assertNotIn("tampered", again["keys"])
+        self.assertEqual(["seriesVersion"], again["attribute_keys"])
+
+    def test_client_bridges_without_a_session(self) -> None:
+        client = HonClient.__new__(HonClient)
+        client._hon_instance = None
+        self.assertIsNone(client.probe_wine_cellar_sync())
+        self.assertIsNone(client.setup_unconnected)
 
 
 class DegradedCensusThreadSafetyTest(unittest.TestCase):

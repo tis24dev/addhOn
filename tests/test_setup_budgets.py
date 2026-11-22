@@ -444,6 +444,8 @@ class CallSiteTableIsCompleteTest(unittest.TestCase):
         "run_command_sync": "budget.COMMAND",
         # One GET of `/history` for the diagnostics dump (issues #112, #115).
         "refresh_command_history_sync": "budget.COMMAND",
+        # Two GETs of `cellar/v1` for the diagnostics dump (issue #149).
+        "probe_wine_cellar_sync": "budget.CELLAR_PROBE",
         "dispatch_patch_sync": "budget.COMMAND",
         "command_catalog_cache_snapshot": "budget.CLOSE",
         "command_catalog_census": "budget.CLOSE",

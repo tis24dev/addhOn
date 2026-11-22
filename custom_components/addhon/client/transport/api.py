@@ -25,12 +25,15 @@ decoupled from the engine, as the whole native layer is.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 from . import device as _device
+from .cellar import json_shape, wine_list_summary
 from .command_catalog import (
     CommandCatalogFetch,
     CommandCatalogRequest,
@@ -745,6 +748,55 @@ class HonApi:
             )
             raise
         return False
+
+    async def probe_wine_cellar(self, key: str) -> dict[str, Any]:
+        """Read the Virtual Wine Cellar inventory once, for a diagnostics dump (#149).
+
+        Two read-only GETs on the `cellar/v1` microservice the hOn app uses for its
+        bottle list (`transport/cellar.py` gives the endpoints and the evidence).
+        Only shape reductions are returned: the body, which holds the user's wines,
+        is dropped here. Never raises except on cancellation; each call reports its
+        own outcome so one refusal does not hide the other answer.
+        """
+        return {
+            "wines": await self._cellar_read(
+                f"{API_URL}/cellar/v1/{quote(key, safe='')}/wines", wines=True
+            ),
+            "bottles_count": await self._cellar_read(
+                f"{API_URL}/cellar/v1/wines/bottles-count", wines=False
+            ),
+        }
+
+    async def _cellar_read(self, url: str, *, wines: bool) -> dict[str, Any]:
+        status: int | None = None
+        try:
+            async with self._connection.get(url) as response:
+                status = getattr(response, "status", None)
+                body = await response.json(content_type=None)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 - a dump must degrade, never raise
+            return {
+                "outcome": "error",
+                "status": status,
+                "code": getattr(classify(error), "label", None),
+            }
+        result: dict[str, Any] = {
+            # A refusal with a JSON body (a 401 or a 404 the connection passes through)
+            # is not a reading of the inventory; its shape is still kept.
+            "outcome": (
+                "unknown"
+                if type(status) is not int
+                else "ok" if 200 <= status < 300 else "http_error"
+            ),
+            "status": status,
+            # bottles-count is a count: its numbers are the answer. The wine list
+            # keeps types only; its numbers come from wine_list_summary alone.
+            "shape": json_shape(body, numbers=not wines),
+        }
+        if wines:
+            result.update(wine_list_summary(body))
+        return result
 
     async def close(self) -> None:
         await self._connection.close()

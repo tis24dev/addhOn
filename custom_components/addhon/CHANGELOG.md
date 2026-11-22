@@ -11,6 +11,42 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **The Virtual Wine Cellar is recognised and named in the diagnostics file** (#149): the
+  hOn app's Virtual Wine Cellar is a bottle inventory with no appliance behind it, which
+  the cloud lists without a MAC address. It still creates no entities, but it is no longer
+  dropped silently: the log says it was found, and the diagnostics file counts it as
+  `virtual_wine_cellar` and shows its model, series and field names under
+  `unconnected_appliances`. Downloading the diagnostics also reads its bottle inventory
+  once, read-only, and records only the shape of the answer (the field names the hOn app
+  reads, types, counts and the quantity, price and zone of the first bottle), never the
+  names of the wines; any other key is counted, not written, and an answer refused by the
+  cloud reads `http_error`. Fridges and freezers listed without a MAC address are counted
+  the same way, as `inventory_only`.
+- **Washer-dryers can start a wash-only cycle from Home Assistant** (#150): the dry level
+  select of a washer-dryer now offers "No drying" wherever the programme lists it (Eco
+  40-60, for example). It starts the programme without drying, with `dryLevel` "0" and
+  `dryTime` "0", as the official app does from its wash tab. Picking a dry level again
+  takes the drying back. During a wash-only cycle the select now reads "No drying"
+  instead of unknown. Washing machines and tumble dryers are unchanged.
+- **Note: on the Haier HQD washers the door stays locked after a Pause or a Stop from
+  Home Assistant during the end-of-cycle tumbling** (#138): in the tumbling that ends a
+  cycle (Keep Fresh or anti-crease) the firmware unlocks the door only on a key press on
+  the panel (Start/Pause, or switching the machine off and on again). The official app has
+  no unlock command either. A Pause from Home Assistant stops the tumbling, a Stop closes
+  the cycle.
+- **The cycle timeline judges a pause, resume or stop by the push that follows** (#138):
+  the cloud empties the command slot of the appliance's context right after these
+  commands, so they stayed `accepted` in the diagnostics file even when the machine obeyed
+  in a few seconds. A push that shows the effect within 60 seconds of the send (`pause`
+  to 1, `pause` to 0, the cycle closing) now marks the command `executed`, with
+  `by: push`; a start is still judged by the slot only. One push confirms one command,
+  the oldest waiting; a push stamped more than 5 seconds before the send is not its
+  evidence; a push that arrives before the cloud has answered the send still counts.
+- **The washer pause switch reads on while the end-of-cycle tumbling is paused** (#138): on
+  the washers and washer-dryers a Pause in the end-of-cycle tumbling (Keep Fresh or
+  anti-crease) stops the drum but leaves the machine at the end of the cycle, and the
+  switch read only the pause mode, so it stayed off. It now reads on there too, as the
+  official app shows the cycle paused; after a Stop or at rest it stays off.
 - **The air conditioner energy sensor reads the counter in Wh; its value drops 1000 times**
   (#147): the appliances that meter report watt-hours and the sensor declared them as kWh,
   1000 times too much. It still shows kWh. **Existing installations:** at the update the

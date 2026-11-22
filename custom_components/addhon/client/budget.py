@@ -138,6 +138,9 @@ CLOSE = 15
 # sign-in allowance too. It used to be the bare 60s run cap, which truncated exactly
 # the re-login it was waiting for.
 COMMAND = cap(budget(1))
+# The Virtual Wine Cellar probe of a diagnostics download (issue #149): two GETs in
+# sequence, each of which may re-login inline like a command.
+CELLAR_PROBE = cap(budget(2))
 # One appliance polled by the coordinator (hon_client._update_appliance_sync).
 APPLIANCE_POLL = cap(APPLIANCE_ONE)
 # Config-flow validation: minimal=True, no MQTT, no per-appliance loads -> a lazy

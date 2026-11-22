@@ -1185,7 +1185,8 @@
           "hang_dry": "Prêt à suspendre",
           "smart_dry": "Séchage intelligent",
           "wool_dry": "Séchage laine",
-          "ready_to_wear": "Prêt à porter"
+          "ready_to_wear": "Prêt à porter",
+          "no_dry": "Sans séchage"
         }
       },
       "dry_time": {

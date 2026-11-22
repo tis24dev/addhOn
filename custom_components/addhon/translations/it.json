@@ -1185,7 +1185,8 @@
           "hang_dry": "Pronto stendi",
           "smart_dry": "Asciugatura smart",
           "wool_dry": "Asciugatura lana",
-          "ready_to_wear": "Pronto indossa"
+          "ready_to_wear": "Pronto indossa",
+          "no_dry": "Senza asciugatura"
         }
       },
       "dry_time": {

@@ -1186,19 +1186,50 @@ class ConstMapTest(unittest.TestCase):
 
 
 class PauseSwitchTest(unittest.IsolatedAsyncioTestCase):
-    def _switch(self, mach_mode: str):
+    def _switch(self, mach_mode, kind: str = "WM", **extra):
         sw = _mod("homeassistant.components.switch")
         sw.SwitchEntity = getattr(sw, "SwitchEntity", type("SwitchEntity", (), {}))
         from custom_components.addhon.switch import HonWashingMachinePauseSwitch
 
-        data = {"x-1": {"type": "WM", "name": "Dev",
-                        "attributes": {"machMode": mach_mode}, "settings": {}}}
+        attributes = {"machMode": mach_mode, **extra}
+        data = {"x-1": {"type": kind, "name": "Dev",
+                        "attributes": attributes, "settings": {}}}
         return HonWashingMachinePauseSwitch(FakeCoordinator(data), "x-1", None)
 
     def test_is_on_only_when_paused(self) -> None:
         self.assertTrue(self._switch("3").is_on)   # 3 = PAUSE_MODE
         self.assertFalse(self._switch("2").is_on)  # 2 = EXECUTION (running)
         self.assertFalse(self._switch("0").is_on)
+
+    def test_is_on_while_the_end_of_cycle_tumbling_is_paused(self) -> None:
+        # The app reads PAUSE at machMode 7 + phase 20 + pause 1 on the washers.
+        for kind in ("WM", "WD"):
+            for mode in ("7", 7, "7.0", 7.0):
+                with self.subTest(kind=kind, mode=mode):
+                    self.assertTrue(
+                        self._switch(mode, kind, prPhase="20", pause="1").is_on
+                    )
+            with self.subTest(kind=kind, numeric=True):
+                self.assertTrue(self._switch(7, kind, prPhase=20, pause=1).is_on)
+
+    def test_is_off_while_the_end_of_cycle_tumbling_runs(self) -> None:
+        for kind in ("WM", "WD"):
+            with self.subTest(kind=kind):
+                self.assertFalse(self._switch("7", kind, prPhase="20", pause="0").is_on)
+                self.assertFalse(self._switch("7", kind, prPhase="0", pause="1").is_on)
+                self.assertFalse(self._switch("7", kind, pause="1").is_on)
+
+    def test_is_off_at_rest_or_after_a_stop_with_pause_left_at_one(self) -> None:
+        for kind in ("WM", "WD"):
+            with self.subTest(kind=kind):
+                self.assertFalse(self._switch("1", kind, prPhase="0", pause="1").is_on)
+                self.assertFalse(self._switch("1", kind, prPhase="20", pause="1").is_on)
+
+    def test_other_types_keep_reading_only_the_pause_mode(self) -> None:
+        for kind in ("TD", "DW"):
+            with self.subTest(kind=kind):
+                self.assertFalse(self._switch("7", kind, prPhase="20", pause="1").is_on)
+                self.assertTrue(self._switch("3", kind).is_on)
 
 
 class Tier2BinaryGatingTest(unittest.IsolatedAsyncioTestCase):
