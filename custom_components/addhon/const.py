@@ -129,6 +129,12 @@ DIVERTER_LEVEL_LABELS = {"0": "off", "1": "upper", "2": "lower", "6": "both"}
 # Unselectable dryLevel sentinels (hasDryLevelValue returns false for ''/'0'/'11'):
 # dropped from the select options so they never appear as a choice.
 DRY_LEVEL_SENTINELS = ("", "0", "11")
+# A washer-dryer keeps "0" as a choice (issue #150): it is how a W+D programme starts
+# wash-only. The app reaches it from its W tab or with the drying drawer off, and both
+# send `dryLevel '0'` with `dryTime '0'` (apk2 decomp.txt:1363091-1363107; old screen
+# @4277166). It is offered only where the programme's own schema lists 0.
+DRY_LEVEL_SENTINELS_WD = ("", "11")
+DRY_LEVEL_LABELS_WD = {"0": "no_dry", **DRY_LEVEL_LABELS_WM}
 # Drying time of a tumble dryer, in minutes (issue #142). A CHG dryer's `dryTime` is an
 # index the app labels from a fixed table, `dryTimeOptions` TD (apk2 decomp.txt:996651-996752).
 DRY_TIME_LABELS_TD = {

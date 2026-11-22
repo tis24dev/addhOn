@@ -1185,7 +1185,8 @@
           "hang_dry": "Hang dry",
           "smart_dry": "Smart dry",
           "wool_dry": "Wool dry",
-          "ready_to_wear": "Ready to wear"
+          "ready_to_wear": "Ready to wear",
+          "no_dry": "No drying"
         }
       },
       "dry_time": {

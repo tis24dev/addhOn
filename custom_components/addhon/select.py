@@ -55,8 +55,10 @@ from .const import (
     DIVERTER_LEVEL_LABELS,
     DOMAIN,
     DRY_LEVEL_LABELS_TD,
+    DRY_LEVEL_LABELS_WD,
     DRY_LEVEL_LABELS_WM,
     DRY_LEVEL_SENTINELS,
+    DRY_LEVEL_SENTINELS_WD,
     DRY_TIME_LABELS_TD,
     DRY_TIME_MINUTE_LABELS,
     FAN_DIR_H_LABELS,
@@ -239,8 +241,9 @@ class HonProgramOptionSelectDescription:
     `label_map` maps raw schema values -> machine keys for the select state translations
     (None = render the raw values, used for the numeric spin/temp enums). `drop` removes
     unselectable sentinels. `types` gates the appliance families; dryLevel is TYPE-GATED
-    (WM/WD vs TD) because value 1 means EXTRA_DRY on WM/WD but IRON_DRY on TD, so the two
-    descriptions share the `dry_level` translation_key but carry disjoint label maps.
+    (WM/WD vs TD) because value 1 means EXTRA_DRY on WM/WD but IRON_DRY on TD, so the
+    descriptions share the `dry_level` translation_key but carry disjoint label maps. The
+    washer-dryer has its own row because only there "0" is a choice, wash-only (#150).
     """
 
     key: str                 # base of the unique_id suffix (opt_<key>)
@@ -274,7 +277,13 @@ _PROGRAM_OPTION_SELECTS: tuple[HonProgramOptionSelectDescription, ...] = (
     ),
     HonProgramOptionSelectDescription(
         key="dry_level", param="dryLevel", translation_key="dry_level",
-        types=_WASH_TYPES, label_map=DRY_LEVEL_LABELS_WM, drop=DRY_LEVEL_SENTINELS,
+        types=(APPLIANCE_WM,), label_map=DRY_LEVEL_LABELS_WM, drop=DRY_LEVEL_SENTINELS,
+        icon="mdi:tumble-dryer",
+    ),
+    # A washer-dryer also offers "0", wash-only, where the programme lists it (issue #150).
+    HonProgramOptionSelectDescription(
+        key="dry_level", param="dryLevel", translation_key="dry_level",
+        types=(APPLIANCE_WD,), label_map=DRY_LEVEL_LABELS_WD, drop=DRY_LEVEL_SENTINELS_WD,
         icon="mdi:tumble-dryer",
     ),
     HonProgramOptionSelectDescription(

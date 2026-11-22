@@ -341,15 +341,18 @@ class CatalogPinTest(unittest.TestCase):
         self.assertEqual(actual, self._PINNED_NUMBERS)
 
     def test_dry_level_type_gated(self) -> None:
-        # The two dry_level descriptions must have DISJOINT types and DISTINCT label
-        # maps (value "1" = EXTRA_DRY on WM/WD vs IRON_DRY on TD).
-        dry = [d for d in select._PROGRAM_OPTION_SELECTS if d.key == "dry_level"]
-        self.assertEqual(len(dry), 2)
-        types_a, types_b = set(dry[0].types), set(dry[1].types)
-        self.assertEqual(types_a & types_b, set(), "dry_level types must be disjoint")
-        self.assertEqual(types_a | types_b, {APPLIANCE_WM, APPLIANCE_WD, APPLIANCE_TD})
-        self.assertNotEqual(dry[0].label_map, dry[1].label_map)
-        self.assertNotEqual(dry[0].label_map["1"], dry[1].label_map["1"])
+        # The dry_level descriptions must have DISJOINT types and DISTINCT label maps
+        # (value "1" = EXTRA_DRY on WM/WD vs IRON_DRY on TD). The washer-dryer has its
+        # own row, the only one offering "0", wash-only (issue #150).
+        dry = {d.types: d for d in select._PROGRAM_OPTION_SELECTS if d.key == "dry_level"}
+        self.assertEqual(set(dry), {(APPLIANCE_WM,), (APPLIANCE_WD,), (APPLIANCE_TD,)})
+        wm, wd, td = dry[(APPLIANCE_WM,)], dry[(APPLIANCE_WD,)], dry[(APPLIANCE_TD,)]
+        self.assertNotEqual(wm.label_map["1"], td.label_map["1"])
+        self.assertEqual(wm.label_map["1"], wd.label_map["1"])
+        self.assertEqual("no_dry", wd.label_map["0"])
+        self.assertIn("0", wm.drop)
+        self.assertIn("0", td.drop)
+        self.assertNotIn("0", wd.drop)
 
     def test_catalog_keys_and_params_unique_within_type(self) -> None:
         # No two controls of the same appliance type may share a param (would write the
@@ -1288,6 +1291,90 @@ class StainTypeKeyTest(unittest.TestCase):
     def test_a_schema_without_the_node_is_unchanged(self) -> None:
         _params, ancillary = self._start("19", declares_key=False)
         self.assertNotIn("stainTypeKey", ancillary)
+
+
+_WD_SAMPLE = REPO / "tests" / "fixtures" / "wd_hoover_hdpd4149ambc" / "app_sample_programs.json"
+
+
+def _build_sample_wd(program: str):
+    """One programme of the app's own washer-dryer catalog, as the engine loads it."""
+    category = json.loads(_WD_SAMPLE.read_text(encoding="utf-8"))["startProgram"][
+        f"PROGRAMS.WM_WD.{program}"
+    ]
+    appliance = types.SimpleNamespace(zone="", commands={}, options={}, info={})
+    appliance.commands["startProgram"] = HonCommand("startProgram", category, appliance, None, "")
+    return appliance
+
+
+class WasherDryerWashOnlyTest(unittest.IsolatedAsyncioTestCase):
+    """Issue #150: a washer-dryer's dry level offers "0", wash-only, as the app's W tab.
+
+    Only where the programme lists 0 (Eco 40-60: [0, 1, 3, 4]; High Dry: [1, 3, 4]), and
+    with it `dryTime` "0", as the app's builder sends (apk2 decomp.txt:1363091-1363107).
+    """
+
+    def _level(self, program="ECO_40_60_NEW_ENERGY_LABEL", app_type=APPLIANCE_WD, attributes=None):
+        appliance = _build_sample_wd(program)
+        data = {
+            "type": app_type, "appliance": appliance, "name": "WD",
+            "attributes": dict(attributes or {}),
+        }
+        coordinator = _ListeningCoordinator({"wd1": data})
+        desc = next(
+            d for d in select._PROGRAM_OPTION_SELECTS if d.key == "dry_level" and app_type in d.types
+        )
+        return coordinator, select.HonProgramOptionSelect(coordinator, "wd1", desc, None)
+
+    async def test_eco_offers_wash_only(self) -> None:
+        _, level = self._level()
+        self.assertEqual(["no_dry", "extra_dry", "iron_dry", "hang_dry"], level.options)
+
+    async def test_a_wash_only_cycle_reads_no_dry(self) -> None:
+        # The machine reports the running cycle's "0": no longer unknown.
+        _, level = self._level(attributes={"dryLevel": "0"})
+        self.assertEqual("no_dry", level.current_option)
+
+    async def test_wash_only_buffers_dry_time_zero(self) -> None:
+        coordinator, level = self._level()
+        await level.async_select_option("no_dry")
+        self.assertEqual({"dryLevel": "0", "dryTime": "0"}, coordinator.pending_options["wd1"])
+        self.assertEqual("no_dry", level.current_option)
+        self.assertEqual(1, coordinator.broadcasts)
+
+    async def test_a_level_after_wash_only_takes_the_time_back(self) -> None:
+        coordinator, level = self._level()
+        await level.async_select_option("no_dry")
+        await level.async_select_option("hang_dry")
+        self.assertEqual({"dryLevel": "4"}, coordinator.pending_options["wd1"])
+
+    async def test_a_programme_without_zero_offers_no_wash_only(self) -> None:
+        _, level = self._level("HIGH_DRY")
+        self.assertEqual(["extra_dry", "iron_dry", "hang_dry"], level.options)
+
+    async def test_a_wash_only_programme_reads_its_pinned_zero(self) -> None:
+        # The app's W programmes pin `dryLevel` "0": offered locked at it.
+        _, level = self._level("IOT_WASH_MASKS_REFRESH", attributes={"dryLevel": "0"})
+        self.assertEqual(["no_dry"], level.options)
+        self.assertEqual("no_dry", level.current_option)
+
+    async def test_the_washer_still_drops_zero(self) -> None:
+        _, level = self._level(app_type=APPLIANCE_WM)
+        self.assertEqual(["extra_dry", "iron_dry", "hang_dry"], level.options)
+
+    def test_the_gate_builds_the_washer_dryer_level_where_zero_is_a_second_choice(self) -> None:
+        # A W+D programme with only "0" and one level is a control on a washer-dryer.
+        appliance = _build_sample_wd("ECO_40_60_NEW_ENERGY_LABEL")
+        node = appliance.commands["startProgram"].parameters["dryLevel"]
+        wd = next(d for d in select._PROGRAM_OPTION_SELECTS
+                  if d.key == "dry_level" and APPLIANCE_WD in d.types)
+        wm = next(d for d in select._PROGRAM_OPTION_SELECTS
+                  if d.key == "dry_level" and APPLIANCE_WM in d.types)
+        from custom_components.addhon.program_options import is_settable_option
+
+        two = types.SimpleNamespace(values=["0", "1"], typology="enum")
+        self.assertTrue(is_settable_option(two, wd.drop))
+        self.assertFalse(is_settable_option(two, wm.drop))
+        self.assertTrue(is_settable_option(node, wd.drop))
 
 
 if __name__ == "__main__":

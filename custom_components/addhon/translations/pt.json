@@ -1109,7 +1109,8 @@
           "hang_dry": "Seco para pendurar",
           "smart_dry": "Secagem inteligente",
           "wool_dry": "Secagem de lã",
-          "ready_to_wear": "Pronto para vestir"
+          "ready_to_wear": "Pronto para vestir",
+          "no_dry": "Sem secagem"
         }
       },
       "dry_time": {

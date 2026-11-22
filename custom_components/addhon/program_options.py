@@ -763,9 +763,10 @@ class HonProgramOptionEntity(HonBaseEntity):
         drying for a time ends the time; OFF, after being ON, buffers the programme's own
         level. A dry level for which the programme's `programRules` prescribe a Best
         Ironing value buffers that value. On a dryer, a drying time buffers dry level "0",
-        and a level picked while drying for a time buffers drying time "0". `before` is
-        the buffer as it stood before this write. Where the other parameter is absent or
-        pinned, nothing else is buffered."""
+        and a level picked while drying for a time buffers drying time "0". On a
+        washer-dryer, dry level "0" (wash-only) buffers drying time "0" and another level
+        takes it back. `before` is the buffer as it stood before this write. Where the
+        other parameter is absent or pinned, nothing else is buffered."""
         if self._param not in (_BEST_IRONING_PARAM, _DRY_LEVEL_PARAM, _DRY_TIME_PARAM):
             return []
         command = self._option_command()
@@ -841,6 +842,16 @@ class HonProgramOptionEntity(HonBaseEntity):
         if timed and code not in (None, "0"):
             per[_DRY_TIME_PARAM] = "0"
             changed.append(_DRY_TIME_PARAM)
+        if self._appliance_data.get("type") == APPLIANCE_WD and _DRY_TIME_PARAM in params:
+            # Wash-only on a washer-dryer (issue #150): the app sends `dryTime '0'` beside
+            # `dryLevel '0'` (apk2 decomp.txt:1363091-1363107). A washer-dryer has no
+            # drying-time control, so a buffered "0" is this one's and goes with a level.
+            if code == "0":
+                per[_DRY_TIME_PARAM] = "0"
+                changed.append(_DRY_TIME_PARAM)
+            elif normalize_code(per.get(_DRY_TIME_PARAM)) == "0":
+                del per[_DRY_TIME_PARAM]
+                changed.append(_DRY_TIME_PARAM)
         return changed
 
     @staticmethod

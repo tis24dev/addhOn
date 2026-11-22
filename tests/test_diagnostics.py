@@ -8945,6 +8945,13 @@ class ProgramOptionMatrixTest(unittest.TestCase):
         # Only the parameters that really declare sentinels are in the map.
         self.assertNotIn("spinSpeed", drops)
 
+    def test_the_drops_follow_the_appliance_type(self) -> None:
+        # Issue #150: the washer-dryer's dry level keeps "0" as a choice, wash-only, so a
+        # WD whose programme offers ["0", "1"] has a control and must read as settable.
+        self.assertNotIn("0", diagnostics._option_drops("WD")["dryLevel"])
+        self.assertIn("0", diagnostics._option_drops("WM")["dryLevel"])
+        self.assertIn("0", diagnostics._option_drops("TD")["dryLevel"])
+
     def test_the_drops_import_names_home_assistant_lets_through(self) -> None:
         # Issue #115 (phroc's debug log, 2026-10-03): HA flags every importlib.import_module
         # on the event loop whose FIRST argument is not already in sys.modules

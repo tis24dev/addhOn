@@ -2382,7 +2382,7 @@ def _program_rules_digest(parameter) -> dict | None:
     return digest
 
 
-def _option_drops() -> dict[str, tuple[str, ...]]:
+def _option_drops(app_type: str | None = None) -> dict[str, tuple[str, ...]]:
     """`param name -> sentinel values the entity gate ignores`, from the real tables.
 
     The gate does not ask "has this parameter >= 2 values" but "has it >= 2 values that
@@ -2401,10 +2401,12 @@ def _option_drops() -> dict[str, tuple[str, ...]]:
     module that will not import costs its own drops, which can only make the section
     LOOSER (a sentinel-only parameter reads as settable) and never invent a restriction.
 
-    Drops are unioned when two descriptions name the same parameter -- the WM and TD
-    `dryLevel` rows do. Today they carry the identical tuple, so the union is exact; if
-    they ever diverge it would make this section stricter than the looser of the two, which
-    is the safe direction for a report a maintainer reads as "no control here".
+    Only the descriptions of `app_type` count, when it is given, as the gate only ever
+    weighs those: the washer-dryer's `dryLevel` row keeps "0" as a choice (issue #150)
+    while the washer's and the dryer's drop it. Drops are still unioned when two
+    descriptions of the same type name the same parameter, which makes this section
+    stricter than the looser of the two, the safe direction for a report a maintainer
+    reads as "no control here". Without `app_type` every description counts.
     """
     drops: dict[str, tuple[str, ...]] = {}
     tables: list = []
@@ -2423,6 +2425,8 @@ def _option_drops() -> dict[str, tuple[str, ...]]:
             continue
     for table in tables:
         for desc in table:
+            if app_type is not None and app_type not in (getattr(desc, "types", None) or ()):
+                continue
             drop = tuple(getattr(desc, "drop", ()) or ())
             if not drop:
                 continue
@@ -2537,7 +2541,7 @@ def _program_option_matrix(appliance) -> dict:
         return {}
     # The sentinel tuples the entity gate ignores, so `settable` here means what it means
     # there (see `_option_drops`).
-    drops = _option_drops()
+    drops = _option_drops(getattr(appliance, "appliance_type", None))
     ordered = sorted(categories.items())
     truncated = len(ordered) > _PROGRAM_MATRIX_MAX_PROGRAMS
     per_program: dict[str, dict] = {}

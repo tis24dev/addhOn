@@ -11,6 +11,12 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **Washer-dryers can start a wash-only cycle from Home Assistant** (#150): the dry level
+  select of a washer-dryer now offers "No drying" wherever the programme lists it (Eco
+  40-60, for example). It starts the programme without drying, with `dryLevel` "0" and
+  `dryTime` "0", as the official app does from its wash tab. Picking a dry level again
+  takes the drying back. During a wash-only cycle the select now reads "No drying"
+  instead of unknown. Washing machines and tumble dryers are unchanged.
 - **Note: on the Haier HQD washers the door stays locked after a Pause or a Stop from
   Home Assistant during the end-of-cycle tumbling** (#138): in the tumbling that ends a
   cycle (Keep Fresh or anti-crease) the firmware unlocks the door only on a key press on
