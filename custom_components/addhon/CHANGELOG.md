@@ -17,9 +17,11 @@ the notes were generated automatically carry a link to their diff instead of a s
   dropped silently: the log says it was found, and the diagnostics file counts it as
   `virtual_wine_cellar` and shows its model, series and field names under
   `unconnected_appliances`. Downloading the diagnostics also reads its bottle inventory
-  once, read-only, and records only the shape of the answer (keys, types, counts and the
-  quantity, price and zone of the first bottle), never the names of the wines. Fridges and
-  freezers listed without a MAC address are counted the same way, as `inventory_only`.
+  once, read-only, and records only the shape of the answer (the field names the hOn app
+  reads, types, counts and the quantity, price and zone of the first bottle), never the
+  names of the wines; any other key is counted, not written, and an answer refused by the
+  cloud reads `http_error`. Fridges and freezers listed without a MAC address are counted
+  the same way, as `inventory_only`.
 - **Washer-dryers can start a wash-only cycle from Home Assistant** (#150): the dry level
   select of a washer-dryer now offers "No drying" wherever the programme lists it (Eco
   40-60, for example). It starts the programme without drying, with `dryLevel` "0" and
@@ -37,7 +39,9 @@ the notes were generated automatically carry a link to their diff instead of a s
   commands, so they stayed `accepted` in the diagnostics file even when the machine obeyed
   in a few seconds. A push that shows the effect within 60 seconds of the send (`pause`
   to 1, `pause` to 0, the cycle closing) now marks the command `executed`, with
-  `by: push`; a start is still judged by the slot only.
+  `by: push`; a start is still judged by the slot only. One push confirms one command,
+  the oldest waiting; a push stamped more than 5 seconds before the send is not its
+  evidence; a push that arrives before the cloud has answered the send still counts.
 - **The washer pause switch reads on while the end-of-cycle tumbling is paused** (#138): on
   the washers and washer-dryers a Pause in the end-of-cycle tumbling (Keep Fresh or
   anti-crease) stops the drum but leaves the machine at the end of the cycle, and the

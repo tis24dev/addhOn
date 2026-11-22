@@ -103,6 +103,25 @@ def _unconnected_reason(data: dict) -> str:
     return "mac_empty"
 
 
+def _keep_record(records: tuple, record: dict) -> tuple:
+    """`records` with `record` added, at most `_UNCONNECTED_RECORDS_MAX` of them.
+
+    A full list still makes room for the first Virtual Wine Cellar, in the place of
+    the last inventory-only record: the cellar is the one a diagnostics dump probes,
+    and eight fridges listed before it must not hide it.
+    """
+    if len(records) < _UNCONNECTED_RECORDS_MAX:
+        return (*records, record)
+    if record["reason"] != "virtual_wine_cellar" or any(
+        r["reason"] == "virtual_wine_cellar" for r in records
+    ):
+        return records
+    for index in range(len(records) - 1, -1, -1):
+        if records[index]["reason"] == "inventory_only":
+            return (*records[:index], *records[index + 1:], record)
+    return records
+
+
 def _unconnected_record(reason: str, data: dict) -> dict:
     """What a diagnostics dump may learn about one recognised entry.
 
@@ -404,11 +423,9 @@ class NativeHon:
             reason = _unconnected_reason(appliance_data)
             if reason == "mac_empty":
                 return reason
-            if len(self._setup_unconnected) < _UNCONNECTED_RECORDS_MAX:
-                self._setup_unconnected = (
-                    *self._setup_unconnected,
-                    _unconnected_record(reason, appliance_data),
-                )
+            self._setup_unconnected = _keep_record(
+                self._setup_unconnected, _unconnected_record(reason, appliance_data)
+            )
             if reason == "virtual_wine_cellar":
                 serial = appliance_data.get("serialNumber")
                 if isinstance(serial, str) and serial and self._wine_cellar_key is None:
@@ -863,7 +880,10 @@ class NativeHon:
         keep the list. Only recognised entries are here: a plain `mac_empty` keeps
         its count and nothing else.
         """
-        return [dict(record) for record in self._setup_unconnected]
+        return [
+            {k: list(v) if isinstance(v, list) else v for k, v in record.items()}
+            for record in self._setup_unconnected
+        ]
 
     async def probe_wine_cellar(self) -> dict:
         """Read the Virtual Wine Cellar inventory once, for a diagnostics dump.

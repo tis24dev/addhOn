@@ -22,13 +22,21 @@ diagnostics validates them again on the way out.
 from __future__ import annotations
 
 import math
-import re
 from typing import Any
 
-# A JSON key is published only when it reads like a field name. A cellar API is
-# free to key a mapping by bottle id, by name or by anything else the user typed,
-# and such a key is data, not schema: it is counted, never written.
-_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_\-]{0,39}")
+# A JSON key is published only when it is a field name the hOn app itself reads
+# from this service (hOn 2.30.7): `data.payload` of every call, the selectors over
+# `cellars[key]` (`wines`, `quantity`, `price`, `zone`, `favourite`, `bottlesCount`,
+# `hasActivities`) and the wine list and detail screens (`id`, `grape`, `country`,
+# `type`, `title`, `createdAt`, `bottles`). A cellar API is free to key a mapping by
+# bottle id, by a wine's name or by anything else the user typed, and a key that
+# reads like a field name ("Merlot") is no safer than one that does not: every other
+# key is counted, with the type of its value, and never written.
+KNOWN_KEYS = frozenset({
+    "payload", "data", "wines", "cellars", "bottlesCount", "hasActivities", "total",
+    "quantity", "price", "zone", "favourite", "id", "grape", "country", "type",
+    "title", "createdAt", "bottles",
+})
 MAX_DEPTH = 5
 MAX_KEYS = 40
 # Magnitude bound for the numbers that are published (bottle counts, prices,
@@ -64,6 +72,15 @@ def scalar_type(value: Any) -> str:
     return "other"
 
 
+def value_kind(value: Any) -> str:
+    """A closed type token for any JSON value, containers included."""
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "list"
+    return scalar_type(value)
+
+
 def number(value: Any) -> int | float | None:
     """A finite int or float inside the magnitude bound, else None. bool refused."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -86,18 +103,22 @@ def json_shape(value: Any, *, numbers: bool, depth: int = 0) -> Any:
             return {"type": "object", "truncated": True}
         keys: dict[str, Any] = {}
         other = 0
+        other_types: dict[str, int] = {}
         for key, item in value.items():
             if (
                 type(key) is str
-                and _KEY_RE.fullmatch(key)
+                and key in KNOWN_KEYS
                 and len(keys) < MAX_KEYS
             ):
                 keys[key] = json_shape(item, numbers=numbers, depth=depth + 1)
             else:
                 other += 1
+                kind = value_kind(item)
+                other_types[kind] = other_types.get(kind, 0) + 1
         out: dict[str, Any] = {"type": "object", "keys": keys}
         if other:
             out["other_keys"] = other
+            out["other_types"] = other_types
         return out
     if isinstance(value, list):
         if depth >= MAX_DEPTH:

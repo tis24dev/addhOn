@@ -668,6 +668,51 @@ class CommandOutcomeByPushTest(_LogTest):
         self._push(ShadowRow("pause", "0", "1", True, cloud_old="0"))
         self.assertEqual([], self._followups())
 
+    def test_a_push_stamped_before_the_send_is_not_its_evidence(self) -> None:
+        # Stamped 07:33:10, ten seconds before the send: a state the pause did not cause.
+        self._send("pauseProgram")
+        self.clock.tick(2)
+        self._push(ShadowRow("pause", "0", "1", True, cloud_old="0"),
+                   cloud_at="2026-10-26T07:33:10Z")
+        self.assertEqual([], self._followups())
+        self.assertIn(self._SENT, self.log._awaiting)
+        # Within PUSH_SKEW_S of the send the two clocks may simply disagree.
+        self._push(ShadowRow("pause", "0", "1", True, cloud_old="0"),
+                   cloud_at="2026-10-26T07:33:17Z")
+        [followup] = self._followups()
+        self.assertEqual(-3, followup["delay_s"])
+
+    def test_one_push_follows_up_one_command_the_oldest(self) -> None:
+        first, second = self._SENT, "2026-10-26T07:33:21.000Z"
+        self._send("pauseProgram", sent=first)
+        self.clock.tick(1)
+        self._send("pauseProgram", sent=second)
+        self.clock.tick(1)
+        self._push(ShadowRow("pause", "0", "1", True, cloud_old="0"))
+        [followup] = self._followups()
+        self.assertEqual(first, followup["sent"])
+        self.assertIn(second, self.log._awaiting)
+
+    def test_a_push_that_beats_the_post_answer_is_replayed(self) -> None:
+        # The effect lands while the POST is still waiting: nothing to follow up yet.
+        self.clock.tick(1)
+        self._push(ShadowRow("pause", "0", "1", True, cloud_old="0"),
+                   cloud_at="2026-10-26T07:33:21.2Z")
+        self.assertEqual([], self._followups())
+        self.clock.tick(1)
+        self._send("pauseProgram")
+        [followup] = self._followups()
+        self.assertEqual(("executed", "push", 1),
+                         (followup["outcome"], followup["by"], followup["delay_s"]))
+        self.assertEqual(0, len(self.log._unmatched_pushes))
+
+    def test_a_replayed_push_must_follow_the_send(self) -> None:
+        self._push(ShadowRow("pause", "0", "1", True, cloud_old="0"),
+                   cloud_at="2026-10-26T07:33:20Z")
+        self.clock.tick(30)
+        self._send("pauseProgram", sent="2026-10-26T07:33:50.000Z")
+        self.assertEqual([], self._followups())
+
     def test_a_start_is_still_judged_by_its_slot_only(self) -> None:
         self._send("startProgram")
         self.clock.tick(2)

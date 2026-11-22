@@ -782,7 +782,13 @@ class HonApi:
                 "code": getattr(classify(error), "label", None),
             }
         result: dict[str, Any] = {
-            "outcome": "ok",
+            # A refusal with a JSON body (a 401 or a 404 the connection passes through)
+            # is not a reading of the inventory; its shape is still kept.
+            "outcome": (
+                "unknown"
+                if type(status) is not int
+                else "ok" if 200 <= status < 300 else "http_error"
+            ),
             "status": status,
             # bottles-count is a count: its numbers are the answer. The wine list
             # keeps types only; its numbers come from wine_list_summary alone.

@@ -54,23 +54,35 @@ class ShapeTest(unittest.TestCase):
         self.assertEqual(1, shape["keys"]["payload"]["other_keys"])
 
     def test_numbers_are_kept_only_when_asked(self) -> None:
-        body = {"payload": {"count": 7, "ratio": 1.5, "flag": True}}
+        body = {"payload": {"bottlesCount": 7, "price": 1.5, "favourite": True}}
         kept = cellar.json_shape(body, numbers=True)["keys"]["payload"]["keys"]
-        self.assertEqual({"type": "int", "value": 7}, kept["count"])
-        self.assertEqual({"type": "float", "value": 1.5}, kept["ratio"])
-        self.assertEqual("bool", kept["flag"])
+        self.assertEqual({"type": "int", "value": 7}, kept["bottlesCount"])
+        self.assertEqual({"type": "float", "value": 1.5}, kept["price"])
+        self.assertEqual("bool", kept["favourite"])
         plain = cellar.json_shape(body, numbers=False)["keys"]["payload"]["keys"]
-        self.assertEqual("int", plain["count"])
+        self.assertEqual("int", plain["bottlesCount"])
+
+    def test_a_key_outside_the_app_fields_is_never_written(self) -> None:
+        # A single-word wine name reads like a field name: it must still not pass.
+        body = {"payload": {"Merlot": {"quantity": 2}, "Barolo_2015": 1, "wines": []}}
+        shape = cellar.json_shape(body, numbers=True)
+        text = json.dumps(shape)
+        self.assertNotIn("Merlot", text)
+        self.assertNotIn("Barolo", text)
+        payload = shape["keys"]["payload"]
+        self.assertEqual(["wines"], list(payload["keys"]))
+        self.assertEqual(2, payload["other_keys"])
+        self.assertEqual({"object": 1, "int": 1}, payload["other_types"])
 
     def test_depth_and_key_bounds(self) -> None:
         deep: Any = 1
         for _ in range(10):
-            deep = {"a": deep}
+            deep = {"data": deep}
         self.assertIn("truncated", json.dumps(cellar.json_shape(deep, numbers=False)))
         wide = {f"k{i}": i for i in range(100)}
         shape = cellar.json_shape(wide, numbers=False)
-        self.assertEqual(cellar.MAX_KEYS, len(shape["keys"]))
-        self.assertEqual(100 - cellar.MAX_KEYS, shape["other_keys"])
+        self.assertEqual({}, shape["keys"])
+        self.assertEqual(100, shape["other_keys"])
 
     def test_wine_list_summary(self) -> None:
         summary = cellar.wine_list_summary(WINES_BODY)
@@ -122,7 +134,7 @@ COUNT_URL = "https://api-iot.he.services/cellar/v1/wines/bottles-count"
 class ProbeTest(unittest.TestCase):
     def test_two_gets_and_only_reductions(self) -> None:
         connection = _Connection(
-            {WINES_URL: (WINES_BODY, 200), COUNT_URL: ({"payload": {"count": 5}}, 200)}
+            {WINES_URL: (WINES_BODY, 200), COUNT_URL: ({"payload": {"total": 5}}, 200)}
         )
         result = asyncio.run(HonApi(connection).probe_wine_cellar("3400477820460000"))
         self.assertEqual([WINES_URL, COUNT_URL], connection.calls)
@@ -131,9 +143,17 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(2, result["wines"]["wines_count"])
         self.assertEqual(
             {"type": "int", "value": 5},
-            result["bottles_count"]["shape"]["keys"]["payload"]["keys"]["count"],
+            result["bottles_count"]["shape"]["keys"]["payload"]["keys"]["total"],
         )
         self.assertNotIn("Chateau Secret", json.dumps(result))
+
+    def test_a_refusal_with_a_json_body_is_not_ok(self) -> None:
+        connection = _Connection({WINES_URL: ({"message": "nope"}, 404),
+                                  COUNT_URL: ({"payload": {}}, 401)})
+        result = asyncio.run(HonApi(connection).probe_wine_cellar("3400477820460000"))
+        self.assertEqual("http_error", result["wines"]["outcome"])
+        self.assertEqual(404, result["wines"]["status"])
+        self.assertEqual("http_error", result["bottles_count"]["outcome"])
 
     def test_the_key_is_quoted_into_one_path_segment(self) -> None:
         url = "https://api-iot.he.services/cellar/v1/a%2Fb/wines"
@@ -141,6 +161,11 @@ class ProbeTest(unittest.TestCase):
         result = asyncio.run(HonApi(connection).probe_wine_cellar("a/b"))
         self.assertEqual(url, connection.calls[0])
         self.assertEqual(404, result["wines"]["status"])
+
+    def test_the_diagnostics_allowlist_matches_the_transport(self) -> None:
+        from tests.test_diagnostics import diagnostics
+
+        self.assertEqual(cellar.KNOWN_KEYS, diagnostics._SHAPE_KNOWN_KEYS)
 
     def test_one_failing_call_does_not_hide_the_other(self) -> None:
         connection = _Connection(

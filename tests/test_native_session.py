@@ -1951,6 +1951,34 @@ class UnconnectedEntriesTest(unittest.TestCase):
         self.assertEqual("recorded", result["state"])
         self.assertEqual({"outcome": "ok"}, result["wines"])
 
+    def test_a_full_list_still_makes_room_for_the_cellar(self) -> None:
+        fridges = [{"macAddress": "", "applianceTypeName": "REF"} for _ in range(9)]
+        nh = self._setup([*fridges, dict(self.VWC)])
+        _run(nh.setup())
+        records = nh.setup_unconnected
+        self.assertEqual(8, len(records))
+        self.assertEqual("virtual_wine_cellar", records[-1]["reason"])
+        self.assertEqual(7, sum(r["reason"] == "inventory_only" for r in records))
+        seen = []
+
+        async def probe_wine_cellar(key):
+            seen.append(key)
+            return {}
+
+        nh._api.probe_wine_cellar = probe_wine_cellar
+        self.assertEqual("recorded", _run(nh.probe_wine_cellar())["state"])
+        self.assertEqual(["3400477820460000"], seen)
+
+    def test_returned_records_share_no_list_with_the_session(self) -> None:
+        nh = self._setup([self.VWC])
+        _run(nh.setup())
+        (record,) = nh.setup_unconnected
+        record["keys"].append("tampered")
+        record["attribute_keys"].clear()
+        (again,) = nh.setup_unconnected
+        self.assertNotIn("tampered", again["keys"])
+        self.assertEqual(["seriesVersion"], again["attribute_keys"])
+
     def test_client_bridges_without_a_session(self) -> None:
         client = HonClient.__new__(HonClient)
         client._hon_instance = None

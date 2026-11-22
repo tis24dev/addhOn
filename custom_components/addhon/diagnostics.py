@@ -6217,15 +6217,26 @@ _UNCONNECTED_REASONS = frozenset({"virtual_wine_cellar", "inventory_only"})
 _VIRTUAL_WINE_CELLAR_SERIAL = "3400477820460000"
 _UNCONNECTED_ROWS_MAX = 8
 _UNCONNECTED_KEYS_MAX = 60
-# A key NAME is published only when it reads like a field name; anything else is a
-# value somebody typed and is dropped. Same rule as client/transport/cellar.py.
+# The key NAMES of an appliance-list entry are published only when they read like a
+# field name; anything else is a value somebody typed and is dropped. The keys of a
+# cellar response go through `_SHAPE_KNOWN_KEYS` instead.
 _SHAPE_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_\-]{0,39}")
 _SHAPE_TYPES = frozenset({"null", "bool", "int", "float", "str", "other"})
+_SHAPE_KINDS = _SHAPE_TYPES | {"object", "list"}
+# The response field names a shape may publish: the ones the hOn app reads from
+# `cellar/v1`, duplicated from client/transport/cellar.py:KNOWN_KEYS and pinned
+# against it by a drift test. A key outside it can be a wine's name even when it
+# reads like a field name, so it is counted, never written.
+_SHAPE_KNOWN_KEYS = frozenset({
+    "payload", "data", "wines", "cellars", "bottlesCount", "hasActivities", "total",
+    "quantity", "price", "zone", "favourite", "id", "grape", "country", "type",
+    "title", "createdAt", "bottles",
+})
 _SHAPE_DEPTH = 6
 _SHAPE_KEYS = 40
 _SHAPE_NUMBER_MAX = 1_000_000_000
 _CELLAR_STATES = frozenset({"recorded", "no_cellar", "no_serial", "no_session"})
-_CELLAR_OUTCOMES = frozenset({"ok", "error"})
+_CELLAR_OUTCOMES = frozenset({"ok", "http_error", "unknown", "error"})
 _WINE_LIST_PATHS = frozenset({"payload.wines", "wines", "payload", "root"})
 _WINE_NUMBER_FIELDS = ("quantity", "price", "zone")
 
@@ -6288,12 +6299,19 @@ def _shape_clean(value, depth: int = 0):
             for key, item in keys.items():
                 if len(clean) >= _SHAPE_KEYS:
                     break
-                if type(key) is str and _SHAPE_KEY_RE.fullmatch(key):
-                    clean[key] = _shape_clean(item, depth + 1)
+                if type(key) is str and key in _SHAPE_KNOWN_KEYS:
+                    clean[key] = _shape_clean(item, depth + 1)  # allowlisted names only
         out["keys"] = clean
         other = _bounded_int(value.get("other_keys"), 0, _FETCH_MAX_INT)
         if other:
             out["other_keys"] = other
+            kinds = value.get("other_types")
+            if isinstance(kinds, Mapping):
+                out["other_types"] = {
+                    kind: count
+                    for kind in sorted(_SHAPE_KINDS)
+                    if (count := _bounded_int(kinds.get(kind), 1, _FETCH_MAX_INT))
+                }
         return out
     if kind == "list":
         out = {"type": "list", "len": _bounded_int(value.get("len"), 0, _FETCH_MAX_INT)}

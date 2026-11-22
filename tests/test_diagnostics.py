@@ -11672,7 +11672,10 @@ class UnconnectedAppliancesDiagnosticsTest(unittest.TestCase):
                         },
                     },
                     "Chateau Margaux 2010": "str",
+                    "Merlot": "str",
                 },
+                "other_keys": 3,
+                "other_types": {"str": 2, "object": 1, "SECRET": 4},
             },
             "wines_path": "payload.wines",
             "wines_count": 2,
@@ -11684,7 +11687,7 @@ class UnconnectedAppliancesDiagnosticsTest(unittest.TestCase):
             "shape": {
                 "type": "object",
                 "keys": {"payload": {"type": "object", "keys": {
-                    "count": {"type": "int", "value": 5}}}},
+                    "total": {"type": "int", "value": 5}}}},
             },
         },
     }
@@ -11720,9 +11723,12 @@ class UnconnectedAppliancesDiagnosticsTest(unittest.TestCase):
         self.assertEqual(2, wines["wines_count"])
         self.assertEqual({"quantity": 3, "price": "str", "zone": 1}, wines["first_wine"])
         self.assertNotIn("Chateau Margaux 2010", json.dumps(block))
+        self.assertNotIn("Merlot", json.dumps(block))
+        self.assertNotIn("SECRET", json.dumps(block))
+        self.assertEqual({"object": 1, "str": 2}, wines["shape"]["other_types"])
         self.assertEqual(
             {"type": "int", "value": 5},
-            probe["bottles_count"]["shape"]["keys"]["payload"]["keys"]["count"],
+            probe["bottles_count"]["shape"]["keys"]["payload"]["keys"]["total"],
         )
 
     def test_a_foreign_serial_and_foreign_tokens_do_not_pass(self) -> None:
