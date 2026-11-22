@@ -5751,7 +5751,14 @@ _FETCH_ACCOUNTS = frozenset(
 # the session, which declares the same tokens as `SETUP_DROP_REASONS` and is pinned
 # against this tuple by a drift guard; a reason this build does not know is a reason
 # this build cannot vouch for, so it is dropped instead of printed.
-_FETCH_SKIP_REASONS = ("not_a_dict", "bad_zone", "construction_error", "mac_empty")
+_FETCH_SKIP_REASONS = (
+    "not_a_dict",
+    "bad_zone",
+    "construction_error",
+    "mac_empty",
+    "virtual_wine_cellar",
+    "inventory_only",
+)
 # Only to refuse a foreign object: a count is an int and an int cannot carry identity,
 # so this is hygiene, not privacy.
 _FETCH_MAX_INT = 1_000_000
@@ -6202,6 +6209,182 @@ def _fetch_block(raw: Mapping, counters: Mapping, *, now: datetime) -> dict:
     }
 
 
+# --- Issue #149: unconnected appliances and the wine-cellar probe -----------------
+# The tokens and the serial are duplicated from client/session.py (which imports
+# aiohttp, so it is not imported here) and pinned against it by drift tests, like
+# `_FETCH_SKIP_REASONS` above.
+_UNCONNECTED_REASONS = frozenset({"virtual_wine_cellar", "inventory_only"})
+_VIRTUAL_WINE_CELLAR_SERIAL = "3400477820460000"
+_UNCONNECTED_ROWS_MAX = 8
+_UNCONNECTED_KEYS_MAX = 60
+# A key NAME is published only when it reads like a field name; anything else is a
+# value somebody typed and is dropped. Same rule as client/transport/cellar.py.
+_SHAPE_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_\-]{0,39}")
+_SHAPE_TYPES = frozenset({"null", "bool", "int", "float", "str", "other"})
+_SHAPE_DEPTH = 6
+_SHAPE_KEYS = 40
+_SHAPE_NUMBER_MAX = 1_000_000_000
+_CELLAR_STATES = frozenset({"recorded", "no_cellar", "no_serial", "no_session"})
+_CELLAR_OUTCOMES = frozenset({"ok", "error"})
+_WINE_LIST_PATHS = frozenset({"payload.wines", "wines", "payload", "root"})
+_WINE_NUMBER_FIELDS = ("quantity", "price", "zone")
+
+
+def _key_names(raw) -> list[str]:
+    """Field names from a list the session built, each re-checked for shape."""
+    if not isinstance(raw, list):
+        return []
+    names = [k for k in raw if type(k) is str and _SHAPE_KEY_RE.fullmatch(k)]
+    return names[:_UNCONNECTED_KEYS_MAX]
+
+
+def _unconnected_row(raw: Mapping) -> dict:
+    """One recognised empty-MAC entry, rebuilt from named fields only."""
+    reason = _closed_token(raw.get("reason"), _UNCONNECTED_REASONS)
+    row = {
+        "reason": reason,
+        "applianceTypeName": _bounded_text(raw.get("applianceTypeName"), 16),
+        "modelName": _bounded_text(raw.get("modelName"), 40),
+        "series": _bounded_text(raw.get("series"), 40),
+        "applianceStatus": _bounded_int(raw.get("applianceStatus"), -1000, 1000),
+        "keys": _key_names(raw.get("keys")),
+        "attribute_keys": _key_names(raw.get("attribute_keys")),
+    }
+    serial = raw.get("serialNumber")
+    if (
+        reason == "virtual_wine_cellar"
+        and type(serial) is str
+        and serial == _VIRTUAL_WINE_CELLAR_SERIAL
+    ):
+        # The literal, not the object received: the value every Virtual Wine Cellar
+        # shares, which identifies the kind of entry and nobody's appliance.
+        row["serialNumber"] = _VIRTUAL_WINE_CELLAR_SERIAL
+    return row
+
+
+def _shape_number(value) -> int | float | None:
+    if type(value) not in (int, float):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):
+        return None
+    return value if -_SHAPE_NUMBER_MAX <= value <= _SHAPE_NUMBER_MAX else None
+
+
+def _shape_clean(value, depth: int = 0):
+    """A `cellar.json_shape` result, rebuilt node by node from this module's tokens."""
+    if type(value) is str:
+        return value if value in _SHAPE_TYPES else "other"
+    if not isinstance(value, Mapping) or depth > _SHAPE_DEPTH:
+        return "other"
+    kind = value.get("type")
+    if kind == "object":
+        out: dict = {"type": "object"}
+        if value.get("truncated") is True:
+            out["truncated"] = True
+            return out
+        keys = value.get("keys")
+        clean: dict = {}
+        if isinstance(keys, Mapping):
+            for key, item in keys.items():
+                if len(clean) >= _SHAPE_KEYS:
+                    break
+                if type(key) is str and _SHAPE_KEY_RE.fullmatch(key):
+                    clean[key] = _shape_clean(item, depth + 1)
+        out["keys"] = clean
+        other = _bounded_int(value.get("other_keys"), 0, _FETCH_MAX_INT)
+        if other:
+            out["other_keys"] = other
+        return out
+    if kind == "list":
+        out = {"type": "list", "len": _bounded_int(value.get("len"), 0, _FETCH_MAX_INT)}
+        if value.get("truncated") is True:
+            out["truncated"] = True
+        elif "item" in value:
+            out["item"] = _shape_clean(value.get("item"), depth + 1)
+        return out
+    if kind in ("int", "float"):
+        number = _shape_number(value.get("value"))
+        return {"type": kind, "value": number} if number is not None else kind
+    return "other"
+
+
+def _cellar_call(raw) -> dict:
+    """One GET of the probe: outcome, status, label, shape and the wine numbers."""
+    raw = raw if isinstance(raw, Mapping) else {}
+    out: dict = {
+        "outcome": _closed_token(raw.get("outcome"), _CELLAR_OUTCOMES),
+        "status": _bounded_int(raw.get("status"), 100, 599),
+    }
+    code = _label_token(raw.get("code"))
+    if code is not None:
+        out["code"] = code
+    if "shape" in raw:
+        out["shape"] = _shape_clean(raw.get("shape"))
+    if "wines_path" in raw:
+        path = raw.get("wines_path")
+        out["wines_path"] = None if path is None else _closed_token(path, _WINE_LIST_PATHS)
+    if "wines_count" in raw:
+        out["wines_count"] = _bounded_int(raw.get("wines_count"), 0, _FETCH_MAX_INT)
+    first = raw.get("first_wine")
+    if isinstance(first, Mapping):
+        out["first_wine"] = {
+            field: (
+                _shape_number(first.get(field))
+                if _shape_number(first.get(field)) is not None
+                else _closed_token(first.get(field), _SHAPE_TYPES)
+            )
+            for field in _WINE_NUMBER_FIELDS
+            if field in first
+        }
+    return out
+
+
+def _cellar_probe(raw) -> dict:
+    if not isinstance(raw, Mapping):
+        return {"state": "unreadable"}
+    state = _closed_token(raw.get("state"), _CELLAR_STATES)
+    out: dict = {"state": state}
+    if state == "recorded":
+        out["wines"] = _cellar_call(raw.get("wines"))
+        out["bottles_count"] = _cellar_call(raw.get("bottles_count"))
+    return out
+
+
+async def _unconnected_appliances(hass: HomeAssistant, entry: ConfigEntry) -> dict:
+    """The `unconnected_appliances` block (issue #149). Never raises.
+
+    The probe runs only when a Virtual Wine Cellar was recognised, and only here: a
+    diagnostics download is the one moment someone asked to look. It runs on the
+    client's own loop through the executor, like `_refresh_command_history`, and a
+    watchdog expiry or any other failure leaves `cellar_probe.state` "unreadable".
+    """
+    try:
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+        client = entry_data.get("client")
+        if client is None:
+            return {"state": "client_absent", "entries": [], "cellar_probe": None}
+        raw = getattr(client, "setup_unconnected", None)
+        raw = raw if isinstance(raw, list) else []
+        entries = [
+            _unconnected_row(record)
+            for record in raw[:_UNCONNECTED_ROWS_MAX]
+            if isinstance(record, Mapping)
+        ]
+        probe = None
+        if any(row["reason"] == "virtual_wine_cellar" for row in entries):
+            prober = getattr(client, "probe_wine_cellar_sync", None)
+            if callable(prober):
+                try:
+                    probe = _cellar_probe(await hass.async_add_executor_job(prober))
+                except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+                    _LOGGER.debug("Diagnostics debug: wine cellar probe failed")
+                    probe = {"state": "unreadable"}
+        return {"state": "recorded", "entries": entries, "cellar_probe": probe}
+    except Exception:  # noqa: BLE001 - a dump must degrade, never raise
+        _LOGGER.debug("Diagnostics debug: unconnected appliances unreadable")
+        return {"state": "unreadable", "entries": [], "cellar_probe": None}
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict:
@@ -6287,6 +6470,13 @@ async def async_get_config_entry_diagnostics(
         # tokens, range-checked ints and a validated instant, so like `last_poll` it is
         # leak-proof by construction and skips _redact.
         "last_fetch": _last_fetch(hass, entry, now=now),
+        # Issue #149: the empty-MAC entries setup recognised as appliances with no
+        # connectivity (the Virtual Wine Cellar, inventory-only fridges), which
+        # `last_fetch.skipped` can only count. Named fields and key names, each
+        # validated here; plus, for a Virtual Wine Cellar, one read-only look at the
+        # shape of its bottle inventory. Built from this module's own literals and
+        # bounded values, so like the keys above it skips _redact.
+        "unconnected_appliances": await _unconnected_appliances(hass, entry),
         # Identity-free health for the schema that controls entity discovery. Read on
         # the native client loop through HA's executor and rebuilt from diagnostics'
         # own literals, so even a hostile/older producer cannot add a key or echo a

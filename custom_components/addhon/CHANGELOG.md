@@ -11,6 +11,15 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **The Virtual Wine Cellar is recognised and named in the diagnostics file** (#149): the
+  hOn app's Virtual Wine Cellar is a bottle inventory with no appliance behind it, which
+  the cloud lists without a MAC address. It still creates no entities, but it is no longer
+  dropped silently: the log says it was found, and the diagnostics file counts it as
+  `virtual_wine_cellar` and shows its model, series and field names under
+  `unconnected_appliances`. Downloading the diagnostics also reads its bottle inventory
+  once, read-only, and records only the shape of the answer (keys, types, counts and the
+  quantity, price and zone of the first bottle), never the names of the wines. Fridges and
+  freezers listed without a MAC address are counted the same way, as `inventory_only`.
 - **Washer-dryers can start a wash-only cycle from Home Assistant** (#150): the dry level
   select of a washer-dryer now offers "No drying" wherever the programme lists it (Eco
   40-60, for example). It starts the programme without drying, with `dryLevel` "0" and

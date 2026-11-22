@@ -1143,6 +1143,7 @@ class AccountDeviceDiagnosticsTest(unittest.TestCase):
                 "platforms",
                 "last_poll",
                 "last_fetch",
+                "unconnected_appliances",
                 "command_catalog",
                 "appliances",
             ],
@@ -2731,8 +2732,14 @@ class LastFetchDiagnosticsTest(unittest.TestCase):
         # `last_poll` must fall over this one without being told it exists.
         result = self._dump(_FetchClient({"outcome": "ok", "count": 0}))
         self.assertEqual(
-            ["last_poll", "last_fetch", "command_catalog", "appliances"],
-            list(result)[-4:],
+            [
+                "last_poll",
+                "last_fetch",
+                "unconnected_appliances",
+                "command_catalog",
+                "appliances",
+            ],
+            list(result)[-5:],
         )
         # And it did not take over the first key, which `generated_at` owns.
         self.assertEqual("generated_at", next(iter(result)))
@@ -11594,6 +11601,172 @@ class CommandPayloadSectionTest(unittest.TestCase):
         block = self._block({f"k{i:04d}": "unparsed" for i in range(cap + 3)})
         self.assertEqual(cap, len(block["command_payload"]))
         self.assertTrue(block["command_payload_truncated"])
+
+
+
+def _session_constant(name: str):
+    """A module-level str constant of client/session.py, parsed and never imported."""
+    source = (
+        REPO_ROOT / "custom_components" / "addhon" / "client" / "session.py"
+    ).read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            if name in {t.id for t in node.targets if isinstance(t, ast.Name)}:
+                return node.value.value
+    return None
+
+
+class _UnconnectedClient(_FetchClient):
+    """A client double carrying the #149 records and a probe."""
+
+    def __init__(self, hass, records, probe_result=None, probe_raises=False) -> None:
+        super().__init__({"outcome": "ok", "count": 1})
+        self._hass = hass
+        self.setup_unconnected = records
+        self._probe_result = probe_result
+        self._probe_raises = probe_raises
+        self.probe_calls = 0
+
+    def probe_wine_cellar_sync(self):
+        self.probe_calls += 1
+        if not self._hass.in_executor_job:
+            raise AssertionError("cellar probe ran outside the executor")
+        if self._probe_raises:
+            raise TimeoutError("watchdog")
+        return self._probe_result
+
+
+class UnconnectedAppliancesDiagnosticsTest(unittest.TestCase):
+    """Issue #149: the `unconnected_appliances` block and its wine-cellar probe."""
+
+    VWC = {
+        "reason": "virtual_wine_cellar",
+        "applianceTypeName": "WC",
+        "modelName": "VWC 20",
+        "series": "virtualWineCellar",
+        "applianceStatus": 1,
+        "serialNumber": "3400477820460000",
+        "keys": ["applianceTypeName", "macAddress", "modelName", "nick name!"],
+        "attribute_keys": ["seriesVersion"],
+    }
+
+    PROBE = {
+        "state": "recorded",
+        "wines": {
+            "outcome": "ok",
+            "status": 200,
+            "shape": {
+                "type": "object",
+                "keys": {
+                    "payload": {
+                        "type": "object",
+                        "keys": {
+                            "wines": {
+                                "type": "list",
+                                "len": 2,
+                                "item": {
+                                    "type": "object",
+                                    "keys": {"name": "str", "quantity": "int"},
+                                },
+                            }
+                        },
+                    },
+                    "Chateau Margaux 2010": "str",
+                },
+            },
+            "wines_path": "payload.wines",
+            "wines_count": 2,
+            "first_wine": {"quantity": 3, "price": "str", "zone": 1},
+        },
+        "bottles_count": {
+            "outcome": "ok",
+            "status": 200,
+            "shape": {
+                "type": "object",
+                "keys": {"payload": {"type": "object", "keys": {
+                    "count": {"type": "int", "value": 5}}}},
+            },
+        },
+    }
+
+    def _block(self, records, **kw):
+        hass = _CatalogHass()
+        client = _UnconnectedClient(hass, records, **kw)
+        hass.data[DOMAIN]["e1"]["client"] = client
+        dump = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+        return dump["unconnected_appliances"], client
+
+    def test_drift_guards_against_the_session(self) -> None:
+        self.assertEqual(
+            _session_constant("VIRTUAL_WINE_CELLAR_SERIAL"),
+            diagnostics._VIRTUAL_WINE_CELLAR_SERIAL,
+        )
+        self.assertTrue(
+            diagnostics._UNCONNECTED_REASONS <= set(diagnostics._FETCH_SKIP_REASONS)
+        )
+
+    def test_vwc_row_and_probe_are_rebuilt_and_bounded(self) -> None:
+        block, client = self._block([dict(self.VWC)], probe_result=self.PROBE)
+        self.assertEqual("recorded", block["state"])
+        (row,) = block["entries"]
+        self.assertEqual("virtual_wine_cellar", row["reason"])
+        self.assertEqual("VWC 20", row["modelName"])
+        self.assertEqual("3400477820460000", row["serialNumber"])
+        self.assertNotIn("nick name!", row["keys"])
+        probe = block["cellar_probe"]
+        self.assertEqual(1, client.probe_calls)
+        self.assertEqual("recorded", probe["state"])
+        wines = probe["wines"]
+        self.assertEqual(2, wines["wines_count"])
+        self.assertEqual({"quantity": 3, "price": "str", "zone": 1}, wines["first_wine"])
+        self.assertNotIn("Chateau Margaux 2010", json.dumps(block))
+        self.assertEqual(
+            {"type": "int", "value": 5},
+            probe["bottles_count"]["shape"]["keys"]["payload"]["keys"]["count"],
+        )
+
+    def test_a_foreign_serial_and_foreign_tokens_do_not_pass(self) -> None:
+        record = {
+            **self.VWC,
+            "serialNumber": "SN-PRIVATE",
+            "modelName": "AA:BB:CC:DD:EE:FF",
+        }
+        probe = {
+            "state": "recorded",
+            "wines": {"outcome": "SECRET", "status": 99999, "code": "free text",
+                      "wines_path": "payload.secret", "shape": "SECRET"},
+            "bottles_count": "not a mapping",
+        }
+        block, _ = self._block([record], probe_result=probe)
+        text = json.dumps(block)
+        self.assertNotIn("SN-PRIVATE", text)
+        self.assertNotIn("AA:BB:CC:DD:EE:FF", text)
+        self.assertNotIn("SECRET", text)
+        self.assertNotIn("free text", text)
+        wines = block["cellar_probe"]["wines"]
+        self.assertEqual("other", wines["outcome"])
+        self.assertIsNone(wines["status"])
+        self.assertEqual("other", wines["wines_path"])
+
+    def test_no_vwc_no_probe(self) -> None:
+        record = {**self.VWC, "reason": "inventory_only", "applianceTypeName": "REF"}
+        record.pop("serialNumber")
+        block, client = self._block([record])
+        self.assertEqual(0, client.probe_calls)
+        self.assertIsNone(block["cellar_probe"])
+        self.assertEqual("inventory_only", block["entries"][0]["reason"])
+
+    def test_a_failing_probe_degrades(self) -> None:
+        block, _ = self._block([dict(self.VWC)], probe_raises=True)
+        self.assertEqual({"state": "unreadable"}, block["cellar_probe"])
+
+    def test_no_client(self) -> None:
+        hass = FakeHass(FakeCoordinator({}))
+        dump = _run(diagnostics.async_get_config_entry_diagnostics(hass, FakeEntry()))
+        self.assertEqual(
+            {"state": "client_absent", "entries": [], "cellar_probe": None},
+            dump["unconnected_appliances"],
+        )
 
 
 if __name__ == "__main__":

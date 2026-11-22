@@ -60,7 +60,81 @@ _LOGGER = logging.getLogger(__name__)
 # the mapping it receives, so that no key chosen outside this module can reach a
 # public issue. A reason added here without its twin there is a reason the dump
 # silently refuses to print.
-SETUP_DROP_REASONS = ("not_a_dict", "bad_zone", "construction_error", "mac_empty")
+#
+# `virtual_wine_cellar` and `inventory_only` split the empty-MAC drop (issue #149)
+# into the two entries the hOn app itself recognises as appliances with no
+# connectivity; `mac_empty` keeps every other empty-MAC entry. See
+# `_unconnected_reason`.
+SETUP_DROP_REASONS = (
+    "not_a_dict",
+    "bad_zone",
+    "construction_error",
+    "mac_empty",
+    "virtual_wine_cellar",
+    "inventory_only",
+)
+
+# The Virtual Wine Cellar (issue #149) is a bottle inventory the hOn app offers to
+# accounts with no wine cellar at all. The cloud lists it as an appliance with no
+# MAC. hOn 2.30.7 recognises it by its model (`isVWC`: `modelName === 'VWC 20'`)
+# and enrols every one of them under the same fixed serial number, which is
+# therefore not an identity. Either value is enough, so a change to one of them on
+# Haier's side does not send it back to `mac_empty`.
+VIRTUAL_WINE_CELLAR_SERIAL = "3400477820460000"
+VIRTUAL_WINE_CELLAR_MODEL = "VWC 20"
+# Fridges and freezers with no MAC: the app keeps them for their label inventory
+# (`retrieveSmartInventoryItems`) and reads no shadow for them, exactly as for the
+# Virtual Wine Cellar. Same criterion as the app: the type, and an empty MAC.
+_INVENTORY_ONLY_TYPES = frozenset({"REF", "FRE"})
+# Bounds of what one setup remembers about such entries for a diagnostics dump.
+_UNCONNECTED_RECORDS_MAX = 8
+_UNCONNECTED_KEYS_MAX = 60
+
+
+def _unconnected_reason(data: dict) -> str:
+    """The drop token for an entry the cloud sent with an empty MAC."""
+    if (
+        str(data.get("serialNumber", "")) == VIRTUAL_WINE_CELLAR_SERIAL
+        or str(data.get("modelName", "")) == VIRTUAL_WINE_CELLAR_MODEL
+    ):
+        return "virtual_wine_cellar"
+    if str(data.get("applianceTypeName", "")).upper() in _INVENTORY_ONLY_TYPES:
+        return "inventory_only"
+    return "mac_empty"
+
+
+def _unconnected_record(reason: str, data: dict) -> dict:
+    """What a diagnostics dump may learn about one recognised entry.
+
+    Named fields and key NAMES only. The serial number is kept for the Virtual
+    Wine Cellar alone and only when it is the fixed value every such cellar
+    shares; diagnostics validates every field again on the way out.
+    """
+    attributes = data.get("attributes")
+    if isinstance(attributes, dict):
+        # HonAppliance flattens the list into {parName: parValue} in place.
+        names = list(attributes)
+    elif isinstance(attributes, list):
+        names = [a.get("parName") for a in attributes if isinstance(a, dict)]
+    else:
+        names = []
+    record = {
+        "reason": reason,
+        "applianceTypeName": data.get("applianceTypeName"),
+        "modelName": data.get("modelName"),
+        "series": data.get("series"),
+        "applianceStatus": data.get("applianceStatus"),
+        "keys": sorted(str(k) for k in data)[:_UNCONNECTED_KEYS_MAX],
+        "attribute_keys": sorted({str(n) for n in names if n is not None})[
+            :_UNCONNECTED_KEYS_MAX
+        ],
+    }
+    if (
+        reason == "virtual_wine_cellar"
+        and data.get("serialNumber") == VIRTUAL_WINE_CELLAR_SERIAL
+    ):
+        record["serialNumber"] = VIRTUAL_WINE_CELLAR_SERIAL
+    return record
 
 # Appliance types whose `zone` field counts COOKING ZONES OF ONE APPLIANCE, not
 # appliances. For an induction hob the cloud publishes a single shadow whose
@@ -191,6 +265,12 @@ class NativeHon:
         # `_setup_expanded` is a plain int, so it is already atomic.
         self._setup_drops: dict[str, int] = {}
         self._setup_expanded = 0
+        # Issue #149: the empty-MAC entries recognised as appliances with no
+        # connectivity, reduced to `_unconnected_record`, and the key the cellar
+        # inventory is read under. A tuple, rebound and never mutated, for the same
+        # reason `_setup_drops` is (a diagnostics download reads it from HA's loop).
+        self._setup_unconnected: tuple[dict, ...] = ()
+        self._wine_cellar_key: str | None = None
 
     async def __aenter__(self) -> "NativeHon":
         return await self.create()
@@ -306,12 +386,49 @@ class NativeHon:
         that boundary and abort the whole setup loop -- the exact failure the
         boundary was added to stop. `reason` is always a literal of
         SETUP_DROP_REASONS, `dict.get` has no failure mode on a str key, and the
-        rebind allocates a dict of at most four entries.
+        rebind allocates a dict of at most six entries.
         """
         self._setup_drops = {
             **self._setup_drops,
             reason: self._setup_drops.get(reason, 0) + 1,
         }
+
+    def _note_unconnected(self, appliance_data: dict) -> str:
+        """Classify an empty-MAC entry, remember it for diagnostics, return its token.
+
+        Runs beside the `return` that is the per-appliance fault boundary, so it must
+        not raise: any failure falls back to the plain `mac_empty` token, with no
+        record and no log line, which is exactly the behaviour before #149.
+        """
+        try:
+            reason = _unconnected_reason(appliance_data)
+            if reason == "mac_empty":
+                return reason
+            if len(self._setup_unconnected) < _UNCONNECTED_RECORDS_MAX:
+                self._setup_unconnected = (
+                    *self._setup_unconnected,
+                    _unconnected_record(reason, appliance_data),
+                )
+            if reason == "virtual_wine_cellar":
+                serial = appliance_data.get("serialNumber")
+                if isinstance(serial, str) and serial and self._wine_cellar_key is None:
+                    # The app substitutes the serial for the empty MAC and reads the
+                    # inventory under it (hOn 2.30.7, appliance list mapping).
+                    self._wine_cellar_key = serial
+                _LOGGER.info(
+                    "Virtual Wine Cellar found in the hOn account: it is a bottle "
+                    "inventory with no connected appliance, so no entities are "
+                    "created for it"
+                )
+            else:
+                _LOGGER.info(
+                    "Unconnected %s found in the hOn account (inventory only, no "
+                    "connectivity): no entities are created for it",
+                    str(appliance_data.get("applianceTypeName", "")).upper(),
+                )
+            return reason
+        except Exception:  # noqa: BLE001 - must not escape the fault boundary
+            return "mac_empty"
 
     async def _create_appliance(self, appliance_data: dict, zone: int = 0) -> None:
         # Counted BEFORE anything below can fail, so the census describes ATTEMPTS
@@ -354,7 +471,13 @@ class NativeHon:
             # reload" cannot separate them, because there is nothing to turn on.
             # Still nothing is LOGGED here: a mac is identity, and a count keyed by a
             # token of this module is the half of the finding that is safe to publish.
-            self._count_drop("mac_empty")
+            #
+            # Issue #149 splits off the two entries the hOn app recognises as
+            # appliances with no connectivity. Those DO get a log line, because the
+            # thing they identify is a kind of entry rather than a device: the
+            # Virtual Wine Cellar shares one serial with every other, and the
+            # inventory-only fridge is named by its type alone.
+            self._count_drop(self._note_unconnected(appliance_data))
             return
         if self._minimal:
             # Validation only: the appliance is built (so .appliances is populated and
@@ -528,6 +651,8 @@ class NativeHon:
         # would count them twice.
         self._setup_drops = {}
         self._setup_expanded = 0
+        self._setup_unconnected = ()
+        self._wine_cellar_key = None
         self._setup_phase = "load_appliances"
         # The hierarchical scope is what makes a LAZY sign-in nested in this request name
         # itself ("load_appliances/auth/...") instead of borrowing this label -- the
@@ -729,6 +854,33 @@ class NativeHon:
         appending on the hOn loop thread.
         """
         return dict(self._setup_drops)
+
+    @property
+    def setup_unconnected(self) -> list[dict]:
+        """The empty-MAC entries setup recognised as unconnected (issue #149).
+
+        One `_unconnected_record` per entry, at most eight, copied so a reader can
+        keep the list. Only recognised entries are here: a plain `mac_empty` keeps
+        its count and nothing else.
+        """
+        return [dict(record) for record in self._setup_unconnected]
+
+    async def probe_wine_cellar(self) -> dict:
+        """Read the Virtual Wine Cellar inventory once, for a diagnostics dump.
+
+        `state` says why there is no reading: no cellar in this account, a cellar
+        listed without a serial (recognised by model alone), or no transport yet.
+        """
+        if not any(
+            r.get("reason") == "virtual_wine_cellar" for r in self._setup_unconnected
+        ):
+            return {"state": "no_cellar"}
+        if self._wine_cellar_key is None:
+            return {"state": "no_serial"}
+        api = self._api
+        if api is None:
+            return {"state": "no_session"}
+        return {"state": "recorded", **await api.probe_wine_cellar(self._wine_cellar_key)}
 
     @property
     def setup_expanded(self) -> int:

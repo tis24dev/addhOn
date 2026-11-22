@@ -860,6 +860,18 @@ class HonClient:
         """
         return self._run_on_hon_loop(appliance.refresh_command_history(), budget.COMMAND)
 
+    def probe_wine_cellar_sync(self) -> dict | None:
+        """Read the Virtual Wine Cellar inventory on the dedicated loop (diagnostics).
+
+        To be called in executor, and only by a diagnostics download (issue #149).
+        None when there is no live session; the session says itself when there is
+        no cellar to read.
+        """
+        probe = getattr(self._hon_instance, "probe_wine_cellar", None)
+        if not callable(probe):
+            return None
+        return self._run_on_hon_loop(probe(), budget.CELLAR_PROBE)
+
     def dispatch_patch_sync(self, appliance, patch: CommandPatch) -> bool:
         return self._run_on_hon_loop(
             self._command_dispatcher.dispatch(appliance, patch), budget.COMMAND
@@ -937,6 +949,15 @@ class HonClient:
         allowlist rather than trusting the mapping it receives.
         """
         return getattr(self._hon_instance, "setup_drops", None)
+
+    @property
+    def setup_unconnected(self) -> list[dict] | None:
+        """The empty-MAC entries the live setup recognised as unconnected (#149).
+
+        Records the session already reduced to named fields and key names; the
+        diagnostics reader validates every one of them again on the way out.
+        """
+        return getattr(self._hon_instance, "setup_unconnected", None)
 
     @property
     def degraded_census(self) -> dict[str, int] | None:
