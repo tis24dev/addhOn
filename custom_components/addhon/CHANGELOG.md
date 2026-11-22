@@ -11,6 +11,11 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **The washer pause switch reads on while the end-of-cycle tumbling is paused** (#138): on
+  the washers and washer-dryers a Pause in the end-of-cycle tumbling (Keep Fresh or
+  anti-crease) stops the drum but leaves the machine at the end of the cycle, and the
+  switch read only the pause mode, so it stayed off. It now reads on there too, as the
+  official app shows the cycle paused; after a Stop or at rest it stays off.
 - **The air conditioner energy sensor reads the counter in Wh; its value drops 1000 times**
   (#147): the appliances that meter report watt-hours and the sensor declared them as kWh,
   1000 times too much. It still shows kWh. **Existing installations:** at the update the

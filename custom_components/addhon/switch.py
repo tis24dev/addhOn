@@ -798,6 +798,17 @@ class HonHeatPumpSterilizationSwitch(HonBaseEntity, SwitchEntity):
         await self._async_request_command_refresh()
 
 
+# A paused end-of-cycle tumbling on the washers. The app's `getApplianceStatus`
+# (apk2 decomp.txt @1022970-1023016) reads PAUSE on an HQD washer-dryer whose
+# `machMode` is END_MODE (7), whose phase is TUMBLING (`prPhase` 20 on the HQD table)
+# and whose `pause` is '1'. Seen on a real HQD washer: a Pause from Home Assistant in
+# phase 20 stops the tumbling, the push turns `pause` 0 -> 1 and `machMode` stays 7.
+# `pause` alone is no evidence: it stays '1' after a Stop and at rest (`machMode` 1).
+_PAUSED_TUMBLING_TYPES = frozenset({"WM", "WD"})
+_PAUSED_TUMBLING_MODE = "7"
+_PAUSED_TUMBLING_PHASE = "20"
+
+
 class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
     """Switch to pause / resume the washer program."""
 
@@ -813,7 +824,7 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
     def is_on(self) -> bool:
         val = self._get_attr(WM_ATTR_STATUS, "0")
         # machMode 3 = PAUSE_MODE (2 = EXECUTION/running) per the app's MachineMode enum.
-        is_paused = str(val) == "3"
+        is_paused = str(val) == "3" or self._tumbling_paused(val)
         _LOGGER.debug(
             "Switch debug: is_on '%s' id=%s machMode=%s -> %s",
             redact_id(self._attr_unique_id, self._appliance_id),
@@ -822,6 +833,16 @@ class HonWashingMachinePauseSwitch(HonBaseEntity, SwitchEntity):
             is_paused,
         )
         return is_paused
+
+    def _tumbling_paused(self, mach_mode) -> bool:
+        """True while the end-of-cycle tumbling of a washer is paused (see above)."""
+        if self._appliance_data.get("type") not in _PAUSED_TUMBLING_TYPES:
+            return False
+        return (
+            normalize_code(mach_mode) == _PAUSED_TUMBLING_MODE
+            and normalize_code(self._get_attr("prPhase")) == _PAUSED_TUMBLING_PHASE
+            and normalize_code(self._get_attr("pause")) == "1"
+        )
 
     async def _send_pause_command(self, command_name: str, pause_value: str) -> None:
         appliance = self._appliance
