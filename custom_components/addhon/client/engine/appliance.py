@@ -49,6 +49,22 @@ _UNREAD = object()
 # dashboard shows a cycle for (apk2 decomp.txt @2588640-2588665); the dishwasher's adds
 # 4. The app's context read also takes test 8 (@3398666-3398745), left out so that one
 # set rules the name, the select and the cycle edges alike (review of PR #139, S4).
+# Shadow keys never copied into a command, by appliance type (issue #152). On a real
+# AC (2026-11-23) a delivered `settings` send with echoStatus=1 left the shadow at 0,
+# its lastUpdate frozen since 2025-02-10: the shadow does not follow that parameter.
+# Copying it would put the stale value back into `settings`, and the next whole-group
+# send (temperature, fan, any switch) would undo what Home Assistant wrote. The command
+# keeps the last written value instead (the schema default after a reload).
+_SHADOW_UNSYNCED: Mapping[str, frozenset[str]] = MappingProxyType(
+    {"AC": frozenset({"echoStatus"})}
+)
+
+
+def shadow_unsynced(appliance_type: Any, key: str) -> bool:
+    """True when `key` of this appliance type is never synced from the shadow."""
+    return key in _SHADOW_UNSYNCED.get(str(appliance_type or "").upper(), frozenset())
+
+
 _CYCLE_MODES = frozenset({2, 3, 5})
 _CYCLE_MODES_BY_TYPE = {"DW": _CYCLE_MODES | {4}}
 # The types whose starts are followed when a cycle begins elsewhere (issue #112, decision
@@ -1603,7 +1619,10 @@ class HonAppliance:
     def sync_params_to_command(self, command_name: str) -> None:
         if not (command := self.commands.get(command_name)):
             return
+        unsynced = _SHADOW_UNSYNCED.get(self.appliance_type.upper(), frozenset())
         for key in command.setting_keys:
+            if key in unsynced:
+                continue
             if (
                 new := self.attributes.get("parameters", {}).get(key)
             ) is None or new.value == "":

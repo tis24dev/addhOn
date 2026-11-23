@@ -11,6 +11,15 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **The air conditioner's Eco switch (`echoStatus`) keeps the value set from Home
+  Assistant** (#152): the cloud never updates this parameter after a change (on a live
+  unit, a delivered command left it at the value it had in February 2025), and every
+  temperature, fan or switch change sends the whole settings group, so the next command
+  put the old value back and the switch flipped back after a refresh. The value written
+  from Home Assistant is now what the switch shows and what the next settings command
+  carries. After a restart it starts again from the default (off), and turning the unit
+  on, off or changing its mode still sends the default, as the official app does. The
+  switch keeps its name, polarity and entity id.
 - **The Virtual Wine Cellar is recognised and named in the diagnostics file** (#149): the
   hOn app's Virtual Wine Cellar is a bottle inventory with no appliance behind it, which
   the cloud lists without a MAC address. It still creates no entities, but it is no longer

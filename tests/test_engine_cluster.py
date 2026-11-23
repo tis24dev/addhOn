@@ -2028,5 +2028,75 @@ class ProgramNameRecoveryTest(unittest.TestCase):
         )
 
 
+class AcShadowUnsyncedTest(unittest.TestCase):
+    """Issue #152: an AC's `echoStatus` is never copied from the shadow into a command.
+
+    Live test of 2026-11-23 on a real AC: a delivered `settings` send with
+    echoStatus=1 left the shadow at 0, its lastUpdate frozen since 2025-02-10. A copy
+    from the shadow would put that 0 back into `settings`, and every whole-group send
+    (temperature, fan, any switch) would undo the value Home Assistant wrote.
+    """
+
+    def _app(self, appliance_type: str, api=None):
+        from custom_components.addhon.client.engine.attributes import HonAttribute
+
+        info = dict(_INFO, applianceTypeName=appliance_type)
+        app = NaAppliance(api or FakeApi(), info, zone=0)
+        settings = NaCommand(
+            "settings",
+            {"parameters": {
+                "tempSel": _range(default="22", lo="16", hi="30", inc="1"),
+                "echoStatus": _range(default="0", lo="0", hi="1", inc="1"),
+            }},
+            app,
+        )
+        app._commands = {"settings": settings}
+        app._attributes = {"parameters": {
+            "tempSel": HonAttribute({"parNewVal": "24"}),
+            "echoStatus": HonAttribute({"parNewVal": "0"}),
+        }}
+        return app, settings
+
+    def test_ac_sync_keeps_the_written_echo_status(self) -> None:
+        app, settings = self._app("AC")
+        settings.settings["echoStatus"].value = "1"
+        app.sync_params_to_command("settings")
+        self.assertEqual("1", str(settings.settings["echoStatus"].value))
+        # Every other key still follows the shadow.
+        self.assertEqual("24", str(settings.settings["tempSel"].value))
+
+    def test_other_types_still_sync_echo_status(self) -> None:
+        app, settings = self._app("WC")
+        settings.settings["echoStatus"].value = "1"
+        app.sync_params_to_command("settings")
+        self.assertEqual("0", str(settings.settings["echoStatus"].value))
+
+    def test_ac_next_send_carries_the_written_value_after_a_stale_push(self) -> None:
+        api = FakeApi()
+        app, settings = self._app("AC", api)
+        settings.settings["echoStatus"].value = "1"
+        self.assertIs(True, _run(settings.send()))
+        # Once the 10 s shield is over, a push re-reports the stale 0, as the live
+        # shadow did, then resyncs.
+        app.attributes["parameters"]["echoStatus"]._lock_timestamp = None
+        app.attributes["parameters"]["echoStatus"].update(
+            {"parName": "echoStatus", "parNewVal": "0"}
+        )
+        app.sync_params_to_command("settings")
+        settings.settings["tempSel"].value = "25"
+        self.assertIs(True, _run(settings.send()))
+        self.assertEqual("1", str(api.sent[1][1]["echoStatus"]))
+        self.assertEqual("25", str(api.sent[1][1]["tempSel"]))
+
+    def test_shadow_unsynced_is_ac_echo_status_only(self) -> None:
+        from custom_components.addhon.client.engine.appliance import shadow_unsynced
+
+        self.assertTrue(shadow_unsynced("AC", "echoStatus"))
+        self.assertTrue(shadow_unsynced("ac", "echoStatus"))
+        self.assertFalse(shadow_unsynced("AC", "screenDisplayStatus"))
+        self.assertFalse(shadow_unsynced("WC", "echoStatus"))
+        self.assertFalse(shadow_unsynced(None, "echoStatus"))
+
+
 if __name__ == "__main__":
     unittest.main()

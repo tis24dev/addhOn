@@ -16,6 +16,7 @@ from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .ac_command import async_send_settings, settings_param
+from .client.engine.appliance import shadow_unsynced
 from .base_entity import HonAccountEntity, HonBaseEntity, coordinator_data_map
 from .air_purifier import (
     AirPurifierCapabilities,
@@ -1346,7 +1347,14 @@ class HonSettingsSwitch(HonBaseEntity, SwitchEntity):
         # writes (sync_params_to_command skips shadow-absent keys), so falling back to the
         # command value would manufacture a confidently-stale state; honest unknown (None)
         # is correct. The real WC/AC mirror lightStatus, so this returns a value in practice.
-        raw = self._get_attr(self._desc.param)
+        # A key the engine never syncs from the shadow (issue #152: the AC echoStatus,
+        # whose shadow stays frozen after a delivered write) reads the command instead:
+        # it holds what Home Assistant last wrote, and is what the next send carries.
+        if shadow_unsynced(self._appliance_data.get("type"), self._desc.param):
+            param = settings_param(self._appliance, self._desc.param)
+            raw = getattr(param, "value", None) if param is not None else None
+        else:
+            raw = self._get_attr(self._desc.param)
         if raw is None:
             return None
         return str(raw) == "1"
