@@ -938,14 +938,35 @@ class AcSwitchWritePathTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"echoStatus": "0"}, cmd.sent)
 
     async def test_is_on_reads_param(self) -> None:
-        on, _, _ = self._switch({"echoStatus": Param("1")}, {"echoStatus": "1"})
-        off, _, _ = self._switch({"echoStatus": Param("0")}, {"echoStatus": "0"})
+        desc = switch.HonSettingsSwitchDescription(
+            key="mute", param="muteStatus", icon="mdi:volume-off"
+        )
+
+        def make(params, attributes):
+            coordinator = FakeCoordinator(_ac({"settings": RecordingCommand(params)}, attributes))
+            return switch.HonSettingsSwitch(coordinator, "ac-1", desc, FakeClient())
+
+        on = make({"muteStatus": Param("1")}, {"muteStatus": "1"})
+        off = make({"muteStatus": Param("0")}, {"muteStatus": "0"})
         # not mirrored into the shadow -> honest unknown (we do NOT fall back to the
         # command value, which the device never refreshes per poll and would be stale)
-        absent, _, _ = self._switch({"echoStatus": Param("0")}, {})
+        absent = make({"muteStatus": Param("0")}, {})
         self.assertIs(True, on.is_on)
         self.assertIs(False, off.is_on)
         self.assertIsNone(absent.is_on)
+
+    async def test_echo_status_reads_the_command_not_the_stale_shadow(self) -> None:
+        # Issue #152: the AC shadow keeps echoStatus at a frozen 0 after a delivered
+        # write, and the engine no longer copies it into `settings`, so the command
+        # holds what Home Assistant last wrote and is what the switch shows.
+        written, _, _ = self._switch({"echoStatus": Param("1")}, {"echoStatus": "0"})
+        default, _, _ = self._switch({"echoStatus": Param("0")}, {"echoStatus": "1"})
+        self.assertIs(True, written.is_on)
+        self.assertIs(False, default.is_on)
+
+    async def test_echo_status_without_settings_param_is_unknown(self) -> None:
+        entity, _, _ = self._switch({}, {"echoStatus": "1"})
+        self.assertIsNone(entity.is_on)
 
     async def test_send_failure_rolls_back(self) -> None:
         entity, cmd, _ = self._switch({"echoStatus": Param("0")}, failing=True)
