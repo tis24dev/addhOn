@@ -16,10 +16,12 @@ the notes were generated automatically carry a link to their diff instead of a s
   unit, a delivered command left it at the value it had in February 2025), and every
   temperature, fan or switch change sends the whole settings group, so the next command
   put the old value back and the switch flipped back after a refresh. The value written
-  from Home Assistant is now what the switch shows and what the next settings command
-  carries. After a restart it starts again from the default (off), and turning the unit
-  on, off or changing its mode still sends the default, as the official app does. The
-  switch keeps its name, polarity and entity id.
+  from Home Assistant is now what the switch shows and what every later settings command
+  carries, including power and mode changes on units driven through the settings
+  command. After a restart it starts again from the default (off). On units whose power
+  and mode go through a program start or stop, turning the unit on, off or changing its
+  mode still sends the default, as the official app does. The switch keeps its name,
+  polarity and entity id.
 - **The Virtual Wine Cellar is recognised and named in the diagnostics file** (#149): the
   hOn app's Virtual Wine Cellar is a bottle inventory with no appliance behind it, which
   the cloud lists without a MAC address. It still creates no entities, but it is no longer

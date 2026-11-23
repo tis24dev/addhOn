@@ -1322,7 +1322,9 @@ class HonSettingsSwitch(HonBaseEntity, SwitchEntity):
 
     Serves the air conditioner toggles, the wine-cooler interior light and the cooker
     hood's light and delayed switch-off: all write a 0/1 parameter of the same
-    `settings` command and read it back via _get_attr. They differ only in the write
+    `settings` command and read it back from the shadow via _get_attr, except a key the
+    engine never syncs from the shadow (the AC `echoStatus`, issue #152), which is read
+    from the `settings` command instead (see `_readback`). They differ only in the write
     CHANNEL, which `HonSettingsSwitchDescription.sparse_command` selects and
     `_set_param` branches on once -- see that class for why the hood cannot use the
     full-group sender the other two need.
@@ -1347,17 +1349,24 @@ class HonSettingsSwitch(HonBaseEntity, SwitchEntity):
         # writes (sync_params_to_command skips shadow-absent keys), so falling back to the
         # command value would manufacture a confidently-stale state; honest unknown (None)
         # is correct. The real WC/AC mirror lightStatus, so this returns a value in practice.
-        # A key the engine never syncs from the shadow (issue #152: the AC echoStatus,
-        # whose shadow stays frozen after a delivered write) reads the command instead:
-        # it holds what Home Assistant last wrote, and is what the next send carries.
-        if shadow_unsynced(self._appliance_data.get("type"), self._desc.param):
-            param = settings_param(self._appliance, self._desc.param)
-            raw = getattr(param, "value", None) if param is not None else None
-        else:
-            raw = self._get_attr(self._desc.param)
+        raw = self._readback()
         if raw is None:
             return None
         return str(raw) == "1"
+
+    def _readback(self):
+        """The raw value the switch state is read from, or None when unknown.
+
+        The shadow attribute (via _get_attr) for every parameter, except a key the
+        engine never syncs from the shadow (`shadow_unsynced`; issue #152: the AC
+        `echoStatus`, whose shadow stays frozen after a delivered write). That key is
+        read from the `settings` command, which holds what Home Assistant last wrote
+        (the schema default after a reload) and is what the next send carries.
+        """
+        if not shadow_unsynced(self._appliance_data.get("type"), self._desc.param):
+            return self._get_attr(self._desc.param)
+        param = settings_param(self._appliance, self._desc.param)
+        return getattr(param, "value", None) if param is not None else None
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._set_param("1")
