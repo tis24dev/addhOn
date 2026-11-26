@@ -1538,7 +1538,10 @@ class ProgramRulesEchoTest(unittest.TestCase):
         # A later change to what went out must not reach the rules the command applies.
         ancillary, command = self._ancillary(_WD_WASH_DRY_REAL, "WD")
         ancillary["programRules"]["dryLevel"].clear()
-        self.assertIn("dryLevel", command.parameters["programRules"].value)
+        self.assertEqual(
+            _WD_WASH_DRY_REAL["ancillaryParameters"]["programRules"]["fixedValue"],
+            command.parameters["programRules"].value,
+        )
 
     def test_other_types_and_commands_leave_it_out(self) -> None:
         for appliance_type, name in (("WM", "startProgram"), ("TD", "startProgram"),

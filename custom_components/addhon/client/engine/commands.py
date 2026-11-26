@@ -881,7 +881,12 @@ class HonCommand:
                 continue
             if name == "programRules":
                 if self._echoes_program_rules() and isinstance(parameter.value, Mapping):
-                    ancillary[name] = deepcopy(dict(parameter.value))
+                    # Wash-and-dry starts carry it too (PR #154 review): the app's
+                    # `mapAncillaries` copies programRules into every start, whatever the
+                    # dry level (apk2 decomp.txt:1055787-1055798), and a live AC kept the
+                    # value its echoed rule pins (2026-11-26). A WD drying start with
+                    # the rule is still to be seen on beta3 (issue #150).
+                    ancillary[name] = deepcopy(dict(parameter.value))  # the tree, a copy
                 continue
             ancillary[name] = parameter.intern_value
         return ancillary
