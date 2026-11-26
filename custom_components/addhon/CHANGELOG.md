@@ -11,6 +11,13 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **Washer-dryer and air-conditioner program starts carry the programme's rules, as the
+  official app's do** (#150): the app sends the programme's `programRules` back in every
+  washer-dryer and air-conditioner start, and addhOn left them out. They now ride those
+  starts unchanged. On a live air conditioner the cloud did not apply a rule sent this
+  way: a start with Eco on and 23 °C stayed at 23 °C, although the rule sets 26 °C. Every
+  other appliance type, and every other command, still sends no rules. If a washer-dryer
+  programme with drying starts wash-only, please report it with the diagnostics file.
 - **The air conditioner's Eco switch (`echoStatus`) keeps the value set from Home
   Assistant** (#152): the cloud never updates this parameter after a change (on a live
   unit, a delivered command left it at the value it had in February 2025), and every
