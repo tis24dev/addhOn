@@ -1500,6 +1500,62 @@ class AncillaryPayloadTest(unittest.TestCase):
         self.assertEqual(0.0, float(ancillary["ecoMode"]))
 
 
+class ProgramRulesEchoTest(unittest.TestCase):
+    """`programRules` rides a washer-dryer or air-conditioner start, as the app's. #150.
+
+    The app's WD starts in the #150 diagnostics carry the category's rule tree, the
+    node's `fixedValue`, as an object in `ancillaryParameters`; so do its AC starts.
+    Every other command and type keeps leaving it out.
+    """
+
+    def _ancillary(
+        self, schema: dict, appliance_type: str, *, name: str = "startProgram",
+        category: str = "PROGRAMS.WM_WD.IOT_WASH_RESISTANT_COLORED",
+    ) -> tuple[dict, NaCommand]:
+        appliance = _SendingAppliance()
+        appliance.appliance_type = appliance_type
+        command = NaCommand(name, json.loads(json.dumps(schema)), appliance,
+                            category_name=category)
+        asyncio.run(command.send())
+        _, _, ancillary, _ = appliance.api.sent[-1]
+        return ancillary, command
+
+    def test_a_washer_dryer_start_carries_the_rule_tree_as_an_object(self) -> None:
+        ancillary, _ = self._ancillary(_WD_WASH_DRY_REAL, "WD")
+        self.assertEqual(
+            _WD_WASH_DRY_REAL["ancillaryParameters"]["programRules"]["fixedValue"],
+            ancillary["programRules"],
+        )
+
+    def test_an_air_conditioner_start_carries_the_rule_tree(self) -> None:
+        ancillary, _ = self._ancillary(_AC_IOT_COOL, "AC", category="PROGRAMS.AC.IOT_COOL")
+        self.assertEqual(
+            _AC_IOT_COOL["ancillaryParameters"]["programRules"]["fixedValue"],
+            ancillary["programRules"],
+        )
+
+    def test_the_sent_tree_is_a_copy(self) -> None:
+        # A later change to what went out must not reach the rules the command applies.
+        ancillary, command = self._ancillary(_WD_WASH_DRY_REAL, "WD")
+        ancillary["programRules"]["dryLevel"].clear()
+        self.assertIn("dryLevel", command.parameters["programRules"].value)
+
+    def test_other_types_and_commands_leave_it_out(self) -> None:
+        for appliance_type, name in (("WM", "startProgram"), ("TD", "startProgram"),
+                                     ("REF", "startProgram"), ("WD", "settings"),
+                                     ("AC", "settings")):
+            with self.subTest(type=appliance_type, command=name):
+                ancillary, _ = self._ancillary(_WD_WASH_DRY_REAL, appliance_type, name=name)
+                self.assertNotIn("programRules", ancillary)
+
+    def test_a_rule_node_without_a_tree_is_left_out(self) -> None:
+        schema = json.loads(json.dumps(_WD_WASH_DRY_REAL))
+        schema["ancillaryParameters"]["programRules"] = {
+            "typology": "fixed", "category": "command", "mandatory": 0, "fixedValue": "0"}
+        ancillary, _ = self._ancillary(schema, "WD")
+        self.assertNotIn("programRules", ancillary)
+
+
 class DryTimePayloadTest(unittest.TestCase):
     """What leaves as `dryTime` on a washer, washer-dryer or dryer start. Issues #99, #133.
 

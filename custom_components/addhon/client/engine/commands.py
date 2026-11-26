@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Collection, Mapping
-from copy import copy
+from copy import copy, deepcopy
 from typing import Any, Optional, Union
 
 from .energy_label import actual_duration, ancillary_values
@@ -54,6 +54,9 @@ _COMPUTED_START_KEYS = ("remainingTimeMM", "dryTimeMM", "dryProgFlag", "prStr")
 # `=== PlaftormWashing.HQD` (`getCommonCycleDurationSeries` @1366809-1366816) or
 # `=== PlaftormWashing.CHG`.
 _DURATION_PLATFORMS = ("HQD", "CHG")
+# The types whose `startProgram` carries the category's `programRules` back, as the
+# app's bodies do (issue #150): a washer-dryer and an air conditioner.
+_PROGRAM_RULES_ECHO_TYPES = ("WD", "AC")
 
 
 def _js_number(value: object) -> float:
@@ -847,7 +850,7 @@ class HonCommand:
         if math.isfinite(code) and code != 0:
             ancillary["stainTypeKey"] = "1"
 
-    def ancillary_parameters(self) -> dict[str, str | float]:
+    def ancillary_parameters(self) -> dict[str, Any]:
         """This command's `ancillaryParameters` as they go on the wire.
 
         Built from the parameters rather than from `parameter_groups`, which has
@@ -858,18 +861,35 @@ class HonCommand:
         outside its own enumValues, into the slot the app reads the louvre position
         sequence from. See `HonParameter.declares_value`.
 
-        programRules is dropped deliberately, NOT for parity: the app does send it
-        back on an AC startProgram. It is the constraint set the cloud handed us, we
-        have already applied it locally, and echoing it risks re-pinning parameters
-        the user has since moved.
+        programRules goes back only on the `startProgram` of a washer-dryer or an air
+        conditioner, as the app sends it there (issue #150): the category's rule tree,
+        the node's `fixedValue`, as an object. The app's bodies carry it on the WD
+        starts of the #150 diagnostics (Eco 40-60, Denim) and on AC starts. The cloud
+        does not apply a rule echoed this way: on a live AC (Clima bar, 2026-11-26)
+        a start with ecoMode 1, tempSel 23 and the IOT_COOL rule pinning 26 kept 23
+        (apk2/analysis/issue150-programrules-ac-mik.md). On a washer-dryer that is
+        still to be confirmed with a drying start, so if one reports a wash-and-dry
+        programme starting wash-only, this rule tree (`dryLevel <- dryOption==0 ->
+        "0"`, with dryOption "0" on every W+D programme) is the first suspect: the
+        body in the diagnostics' command history shows whether it rode along. Every
+        other command and type still drops it: the constraint set the cloud handed
+        us is applied locally, and no app body says it travels there.
         """
-        return {
-            name: parameter.intern_value
-            for name, parameter in self._parameters.items()
-            if parameter.group == "ancillaryParameters"
-            and name != "programRules"
-            and parameter.declares_value
-        }
+        ancillary: dict[str, Any] = {}
+        for name, parameter in self._parameters.items():
+            if parameter.group != "ancillaryParameters" or not parameter.declares_value:
+                continue
+            if name == "programRules":
+                if self._echoes_program_rules() and isinstance(parameter.value, Mapping):
+                    ancillary[name] = deepcopy(dict(parameter.value))
+                continue
+            ancillary[name] = parameter.intern_value
+        return ancillary
+
+    def _echoes_program_rules(self) -> bool:
+        """A start whose body carries `programRules` back, as the app's does (#150)."""
+        appliance_type = getattr(self._appliance, "appliance_type", "")
+        return self._name == "startProgram" and appliance_type in _PROGRAM_RULES_ECHO_TYPES
 
     async def send_parameters(
         self,
