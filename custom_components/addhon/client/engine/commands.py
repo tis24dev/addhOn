@@ -709,6 +709,31 @@ class HonCommand:
             params["dryTime"] = "0"
             params["dryProgFlag"] = "1"
 
+    def _apply_hqd_dry_flag(self, params: dict[str, str | float]) -> None:
+        """`dryProgFlag` follows the drying on an HQD washer-dryer, as the Haier screen.
+
+        `checkWashParameters` (apk2 decomp.txt:4870836), run by the start of the app's
+        screen for HQD Haier appliances (@4862712): drying on puts `dryProgFlag '1'`
+        (@4870946-4870966), drying off `'0'` (@4870888-4870900). Here drying is on when
+        the body leaves with a dry level or a drying time above 0. The schema's default
+        '0' otherwise rode a start with a level and no time, and on an HQD washer-dryer
+        (HWD80-B14959U1-S, hon-revived issue #106) that start washed only; with '1' it
+        washed and dried. The HQD duration already counts the drying
+        (`hqd_duration.programme_duration`). Only where the category declares a
+        settable flag: a fixed one (the drying-only programmes' '1') stays, and the CHG
+        washer-dryers, whose schemas carry no flag, are unchanged
+        (apk2/analysis/repo-esterni-2026-11-27/F-dryprogflag-wd.md).
+        """
+        if getattr(self._appliance, "appliance_type", "") != "WD" or not self._is_hqd():
+            return
+        node = self._parameters.get("dryProgFlag")
+        if node is None or node.group != "parameters" or isinstance(node, HonParameterFixed):
+            return
+        drying = (
+            _js_number(params.get("dryLevel")) > 0 or _js_number(params.get("dryTime")) > 0
+        )
+        params["dryProgFlag"] = "1" if drying else "0"
+
     async def send_specific(self, param_names: list[str]) -> bool:
         params: dict[str, str | float] = {}
         for key, parameter in self._parameters.items():
@@ -827,6 +852,7 @@ class HonCommand:
                 ancillary["energyLabel"] = "0"
             self._add_dryer_duration(params, ancillary)
             self._apply_dry_mode(params, chosen_options)
+            self._apply_hqd_dry_flag(params)
         # Only a washer, washer-dryer or dryer start names its programme; every other
         # body keeps its shape.
         extra: dict[str, str] = {}

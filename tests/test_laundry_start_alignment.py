@@ -399,8 +399,52 @@ class LaundryStartAlignmentTest(unittest.TestCase):
             WD_LEVEL_MODE._replace(schema=schema), model_attributes=_HQD_WD_ATTRIBUTES
         )
         params, _ = self.start(command, dryTime="0")
-        self.assertEqual(("3", "0", "0"),
+        # The flag is '1': drying on at level 3, as the Haier screen sends it
+        # (`_apply_hqd_dry_flag`); the 0 written to dryTime still goes as it is.
+        self.assertEqual(("3", "0", "1"),
                          (params["dryLevel"], params["dryTime"], params["dryProgFlag"]))
+
+    def test_an_hqd_washer_dryer_flags_a_level_without_time(self):
+        # hon-revived issue #106 (HWD80-B14959U1-S): dryLevel 2 with dryProgFlag 0
+        # washed only, with 1 it washed and dried. The Haier screen sends '1' whenever
+        # the drying is on (apk2 decomp.txt:4870946-4870966).
+        schema = _copy(WD_LEVEL_MODE.schema)
+        del schema["parameters"]["dryTime"]
+        command = self.command(
+            WD_LEVEL_MODE._replace(schema=schema), model_attributes=_HQD_WD_ATTRIBUTES
+        )
+        params, _ = self.start(command, dryLevel="2")
+        self.assertEqual(("2", "1"), (params["dryLevel"], params["dryProgFlag"]))
+
+    def test_an_hqd_washer_dryer_with_drying_off_sends_the_flag_off(self):
+        command = self.command(WD_LEVEL_MODE, model_attributes=_HQD_WD_ATTRIBUTES)
+        command.parameters["dryProgFlag"].value = "1"   # left by an earlier write
+        params, _ = self.start(command, dryLevel="0", dryTime="0")
+        self.assertEqual("0", params["dryProgFlag"])
+
+    def test_the_hqd_flag_rule_leaves_other_cases_alone(self):
+        # A fixed flag (the drying-only programmes' '1', or the HQD washers' '0'), a CHG
+        # washer-dryer, and an HQD washer keep what they sent before.
+        with self.subTest("fixed flag"):
+            params, _ = self.start(WD_WITH_FLAG, model_attributes=_HQD_WD_ATTRIBUTES)
+            self.assertEqual("0", params["dryProgFlag"])
+        with self.subTest("CHG"):
+            schema_less = _copy(WD_LEVEL_MODE.schema)
+            del schema_less["parameters"]["dryTime"]
+            command = self.command(
+                WD_LEVEL_MODE._replace(schema=schema_less), model_attributes={"platform": "CHG"}
+            )
+            params, _ = self.start(command, dryLevel="2")
+            self.assertEqual("0", params["dryProgFlag"])
+        with self.subTest("HQD washer"):
+            schema_less = _copy(WD_LEVEL_MODE.schema)
+            del schema_less["parameters"]["dryTime"]
+            command = self.command(
+                WD_LEVEL_MODE._replace(schema=schema_less), appliance_type="WM",
+                model_attributes=_HQD_WD_ATTRIBUTES,
+            )
+            params, _ = self.start(command, dryLevel="2")
+            self.assertEqual("0", params["dryProgFlag"])
 
     def test_a_dryer_timer_with_hygiene_goes_out_the_same_on_every_start(self):
         # A tumble dryer's start carries the duration in `dryTimeMM`, not the timer: 75

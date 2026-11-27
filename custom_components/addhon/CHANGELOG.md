@@ -28,6 +28,13 @@ the notes were generated automatically carry a link to their diff instead of a s
 - **Favourites saved in the hOn app keep their settings**: a favourite stores its values
   inside the saved command, and addhOn read them only beside it, so a favourite programme
   started with the programme's defaults. Both places are read now.
+- **Haier washer-dryers (HQD platform) dry when started with a dry level**: the start
+  carried the programme's default "dry programme" flag, off, whenever no drying time went
+  with the level, and on such a machine that start washed only. The flag now follows the
+  drying as the app's Haier screen sends it: on with a dry level or a drying time, off
+  without. Candy and Hoover washer-dryers, whose programmes have no such flag, are
+  unchanged. If a Haier washer-dryer started from Home Assistant still washes only, or
+  dries when it should not, please report it with the diagnostics file.
 - **Two air-conditioner switches take the names the hOn app gives them**: `muteStatus`,
   shown as "Mute", is the app's "Silent mode", and `silentSleepStatus`, shown as "Sleep
   mode", is the app's "Night mode". The names follow the app's own texts in every
