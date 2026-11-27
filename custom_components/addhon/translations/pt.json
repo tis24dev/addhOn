@@ -850,10 +850,10 @@
         "name": "Boost"
       },
       "sleep": {
-        "name": "Modo de dormir"
+        "name": "Modo Mute"
       },
       "mute": {
-        "name": "Mudo"
+        "name": "Modo Silencioso"
       },
       "eco": {
         "name": "Eco"

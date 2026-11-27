@@ -920,10 +920,10 @@
         "name": "Stérilisation programmée"
       },
       "sleep": {
-        "name": "Mode nuit"
+        "name": "Mode muet"
       },
       "mute": {
-        "name": "Muet"
+        "name": "Mode silencieux"
       },
       "eco": {
         "name": "Éco"

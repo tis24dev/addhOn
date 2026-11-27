@@ -920,10 +920,10 @@
         "name": "Scheduled sterilization"
       },
       "sleep": {
-        "name": "Sleep mode"
+        "name": "Mute mode"
       },
       "mute": {
-        "name": "Mute"
+        "name": "Silent mode"
       },
       "eco": {
         "name": "Eco"
