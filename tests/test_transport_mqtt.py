@@ -739,6 +739,38 @@ class PublishReceivedTest(unittest.TestCase):
         self.assertEqual(app.synced, ["settings"])
         self.assertEqual(hon.notified, 1)
 
+    def test_every_appliance_of_the_topic_takes_the_push(self) -> None:
+        # A multi-zone appliance: zone clones first, base last, all on the MAC's topics.
+        # The base is the device that used to wait for the poll.
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        zone1, zone2, base = (FakeAppliance(topic) for _ in range(3))
+        other = FakeAppliance("haier/things/OTHER/event/appliancestatus/update")
+        hon = FakeHon([zone1, zone2, base, other])
+        m = NativeMqttClient(hon, "MID")
+        m._on_message(_packet(topic, {"parameters": [{"parName": "temp", "parValue": "5"}]}))
+        for app in (zone1, zone2, base):
+            self.assertEqual(app.attributes["parameters"]["temp"].updated,
+                             {"parName": "temp", "parValue": "5"})
+            self.assertEqual(app.synced, ["settings"])
+        self.assertIsNone(other.attributes["parameters"]["temp"].updated)
+        self.assertEqual(hon.notified, 1)
+
+    def test_one_failing_appliance_leaves_the_others_their_push(self) -> None:
+        topic = "haier/things/MAC/event/appliancestatus/update"
+        broken, base = FakeAppliance(topic), FakeAppliance(topic)
+
+        def boom(_value) -> None:
+            raise RuntimeError("engine update failed")
+
+        broken.attributes["parameters"]["temp"].update = boom
+        hon = FakeHon([broken, base])
+        m = NativeMqttClient(hon, "MID")
+        with self.assertLogs(self._LOGGER_NAME, level="WARNING"):
+            m._on_message(_packet(topic, {"parameters": [{"parName": "temp", "parValue": "5"}]}))
+        self.assertEqual(base.attributes["parameters"]["temp"].updated,
+                         {"parName": "temp", "parValue": "5"})
+        self.assertEqual(hon.notified, 1)
+
     def test_appliancestatus_derives_before_notifying(self) -> None:
         # programName is derived from prCode: the coordinator must be notified with the
         # name of the pushed code, not the one the last poll derived.

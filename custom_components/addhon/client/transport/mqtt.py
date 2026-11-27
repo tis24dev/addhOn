@@ -534,21 +534,21 @@ class NativeMqttClient:
         # would be muted and would mask real engine bugs) and drop just this message.
         # State is reconciled at the next HTTP poll, so skipping is safe and idempotent.
         try:
-            # Defensive: appliance not found for this topic -> exit.
-            appliance = next(
-                (a for a in self._appliances if topic in _subscribed_topics(a)),
-                None,
-            )
-            if appliance is None:
+            # Every appliance subscribed to the topic takes the push. The zone clones of a
+            # multi-zone appliance are built from the same list entry, so they share its
+            # topics with the base device (client/session.py), each with its own shadow:
+            # the first match alone left the others, the base among them, to the poll.
+            appliances = [a for a in self._appliances if topic in _subscribed_topics(a)]
+            if not appliances:
                 _LOGGER.debug(
                     "MQTT: topic with no matching appliance: %s", redact_topic(topic)
                 )
                 return
             if topic and topic.startswith("$aws/events/presence/"):
                 # AWS-IoT SESSION presence of OUR MQTT client (clientId-scoped; payload
-                # carries clientId/sessionIdentifier/principalIdentifier). It is matched to
-                # whichever single appliance subscribes the topic but says NOTHING about
-                # that appliance's connectivity. It must NOT arm (connected) NOR clear
+                # carries clientId/sessionIdentifier/principalIdentifier). It is matched to the
+                # appliances that subscribe the topic but says NOTHING about any
+                # appliance's connectivity. It must NOT arm (connected) NOR clear
                 # (disconnected) the appliance's stale-disconnect protection: our client
                 # reconnects/drops on its own schedule, so arming would pin a genuinely
                 # offline appliance online on every reconnect, and clearing would knock a
@@ -565,134 +565,22 @@ class NativeMqttClient:
                 # spurious HA state update and echo the session payload for every client
                 # (re)connect/disconnect.
                 return
-            elif topic and "appliancestatus" in topic:
-                # Realtime traffic is authoritative connectivity evidence (the hOn app
-                # trusts it): mark the appliance connected and remember WHEN, using the
-                # cloud-stamped payload `timestamp` (skew-free vs lastConnEvent), BEFORE
-                # parsing parameters so the liveness is recorded even if a later param is
-                # dirty. mark_realtime_seen is positive-only and never raises.
-                appliance.mark_realtime_seen(payload.get("timestamp"))
-                # The cycle's state before this push: a move into or out of a cycle
-                # asks for a read of the context (see `_ask_cycle_read`).
-                mode_before = getattr(appliance, "mach_mode", None)
-                params = appliance.attributes.get("parameters", {})
-                raw_params = payload.get("parameters")
-                if not isinstance(raw_params, list):
-                    # The cloud may send parameters as null or a non-list; treat as
-                    # empty (dirty data, DEBUG not WARNING) instead of letting it drop
-                    # the whole message at the broad except below.
-                    if raw_params is not None:
-                        _LOGGER.debug(
-                            "MQTT: appliancestatus parameters not a list (%s), skipping",
-                            type(raw_params).__name__,
-                        )
-                    raw_params = []
-                observed_values: dict[str, object] = {}
-                # Every row of this push, for the cycle log of the followed types (issue
-                # #138): held before and after, whether the shield of our own write
-                # refused it, and the keys the shadow does not hold yet.
-                log = getattr(appliance, "cycle_log", None)
-                rows: list[ShadowRow] = []
-                unseeded: list[str] = []
-                for parameter in raw_params:
-                    # Skip a single malformed element (e.g. a null in the list) so the
-                    # valid parameters in the same batch are still applied (and notify
-                    # still fires), instead of dropping the entire message.
-                    if not isinstance(parameter, dict):
-                        # Log only the TYPE, never the value (CR#4): a malformed element
-                        # is a raw cloud-controlled scalar; a bare MAC/serial would
-                        # bypass redaction (redact_identity is key-based, a pass-through
-                        # for a scalar). Mirrors the non-object-payload / not-a-list
-                        # branches above. The value is not diagnostically useful anyway.
-                        _LOGGER.debug(
-                            "MQTT: skipping non-dict parameter element: type=%s",
-                            type(parameter).__name__,
-                        )
-                        continue
-                    name = parameter.get("parName")
-                    if isinstance(name, str) and "parValue" in parameter:
-                        observed_values[name] = parameter["parValue"]
-                    # A parName the shadow does not hold yet is created from the push,
-                    # as the app's shadow does (issue #138): the engine builds it
-                    # (`adopt_pushed_parameter`), so this module stays clear of
-                    # HonAttribute. A double without that method keeps the old way: the
-                    # name waits for the next HTTP poll and the cycle log lists it.
-                    if name not in params and isinstance(name, str):
-                        adopt = getattr(appliance, "adopt_pushed_parameter", None)
-                        if callable(adopt):
-                            held = adopt(name, parameter)
-                            params[name] = held
-                            if log is not None:
-                                rows.append(ShadowRow(name, None, value_text(held), True, new=True))
-                            continue
-                    if name in params:
-                        held = params[name]
-                        # `value_text`, never `str()`: a value the cloud sent as null or
-                        # a number makes `HonAttribute.__str__` raise, and the push must
-                        # still apply.
-                        before = value_text(held) if log is not None else None
-                        # False only when the shield refused it; a double answers None.
-                        applied = held.update(parameter) is not False
-                        if log is not None:
-                            rows.append(ShadowRow(
-                                name,
-                                before,
-                                value_text(held) if applied else parameter.get("parNewVal"),
-                                applied,
-                                parameter.get("parOldVal"),
-                            ))
-                    elif log is not None and isinstance(name, str):
-                        unseeded.append(name)
-                if log is not None:
-                    _note_push(log, rows, unseeded, payload)
-                appliance.sync_params_to_command("settings")
-                # The fields derived from the parameters (programName above all) follow
-                # the pushed values now, not at the next poll.
-                appliance.derive_attributes()
-                self._ask_cycle_read(appliance, mode_before)
+            applied = False
+            for appliance in appliances:
                 try:
-                    observe_mqtt_update(appliance, observed_values)
+                    self._apply_push(appliance, topic, payload)
                 except Exception:
-                    # observe_mqtt_update is internally failure-safe, so anything
-                    # escaping is a bug in the diagnostics module rather than bad
-                    # input. Still swallowed, because a broken diagnostic must not
-                    # drop an appliance state update, but no longer silently: with a
-                    # bare pass the correlation could be dead for every command and
-                    # look exactly like a correlation that never matched.
-                    _LOGGER.debug(
-                        "MQTT: command correlation failed", exc_info=True
+                    # One appliance's failure must not cost the others their push.
+                    _LOGGER.warning(
+                        "MQTT: handler failed for one appliance on %s",
+                        redact_topic(topic),
+                        exc_info=True,
                     )
-            elif topic and "disconnected" in topic:
-                _LOGGER.info(
-                    "Disconnected %s: %s",
-                    redact_id(appliance.nick_name),
-                    payload.get("disconnectReason"),
-                )
-                # Device-scoped disconnect (haier/things/<mac>/event/disconnected): the
-                # APPLIANCE itself reports offline -- authoritative. Session-presence
-                # disconnects ($aws/events/presence/...) were already intercepted above, so
-                # this never fires on OUR client's session drop. Route through
-                # mark_realtime_disconnected so it CLEARS the realtime liveness marks too --
-                # otherwise a stale REST lastConnEvent=DISCONNECTED (older than the last
-                # traffic) would resurrect the appliance at the next poll. Falls back to the
-                # plain setter for any appliance object that predates the method.
-                mark = getattr(appliance, "mark_realtime_disconnected", None)
-                if callable(mark):
-                    mark()
-                else:  # pragma: no cover - production appliances have the method
-                    appliance.connection = False
-            elif topic and "connected" in topic:
-                # Device-scoped connect (haier/things/<mac>/event/connected): the appliance
-                # reports online. Session-presence connects ($aws/events/presence/...) were
-                # intercepted above, so this is not OUR client's session event. Keep the
-                # transient behavior (connection True, self-corrected at the next REST poll);
-                # we deliberately do NOT arm the realtime liveness here -- only true
-                # mac-scoped `appliancestatus` traffic records liveness, so a bare connect
-                # event cannot over-extend the stale-disconnect protection window.
-                appliance.connection = True
-                _LOGGER.info("Connected %s", redact_id(appliance.nick_name))
-            elif topic and "discovery" in topic:
-                _LOGGER.info("Discovered %s", redact_id(appliance.nick_name))
+                else:
+                    applied = True
+            if not applied:
+                # Nothing changed anywhere: no state update, as before the loop.
+                return
             self._hon.notify()
             _LOGGER.info("%s - %s", redact_topic(topic), redact_identity(payload))
         except Exception:
@@ -700,6 +588,137 @@ class NativeMqttClient:
             # may raise arbitrary types; we must never let one reach the awscrt thread.
             _LOGGER.warning("MQTT: handler failed on %s", redact_topic(topic), exc_info=True)
             return
+
+    def _apply_push(self, appliance: Any, topic: str, payload: dict) -> None:
+        """Apply one MQTT message to one appliance subscribed to its topic."""
+        if topic and "appliancestatus" in topic:
+            # Realtime traffic is authoritative connectivity evidence (the hOn app
+            # trusts it): mark the appliance connected and remember WHEN, using the
+            # cloud-stamped payload `timestamp` (skew-free vs lastConnEvent), BEFORE
+            # parsing parameters so the liveness is recorded even if a later param is
+            # dirty. mark_realtime_seen is positive-only and never raises.
+            appliance.mark_realtime_seen(payload.get("timestamp"))
+            # The cycle's state before this push: a move into or out of a cycle
+            # asks for a read of the context (see `_ask_cycle_read`).
+            mode_before = getattr(appliance, "mach_mode", None)
+            params = appliance.attributes.get("parameters", {})
+            raw_params = payload.get("parameters")
+            if not isinstance(raw_params, list):
+                # The cloud may send parameters as null or a non-list; treat as
+                # empty (dirty data, DEBUG not WARNING) instead of letting it drop
+                # the whole message at the broad except below.
+                if raw_params is not None:
+                    _LOGGER.debug(
+                        "MQTT: appliancestatus parameters not a list (%s), skipping",
+                        type(raw_params).__name__,
+                    )
+                raw_params = []
+            observed_values: dict[str, object] = {}
+            # Every row of this push, for the cycle log of the followed types (issue
+            # #138): held before and after, whether the shield of our own write
+            # refused it, and the keys the shadow does not hold yet.
+            log = getattr(appliance, "cycle_log", None)
+            rows: list[ShadowRow] = []
+            unseeded: list[str] = []
+            for parameter in raw_params:
+                # Skip a single malformed element (e.g. a null in the list) so the
+                # valid parameters in the same batch are still applied (and notify
+                # still fires), instead of dropping the entire message.
+                if not isinstance(parameter, dict):
+                    # Log only the TYPE, never the value (CR#4): a malformed element
+                    # is a raw cloud-controlled scalar; a bare MAC/serial would
+                    # bypass redaction (redact_identity is key-based, a pass-through
+                    # for a scalar). Mirrors the non-object-payload / not-a-list
+                    # branches above. The value is not diagnostically useful anyway.
+                    _LOGGER.debug(
+                        "MQTT: skipping non-dict parameter element: type=%s",
+                        type(parameter).__name__,
+                    )
+                    continue
+                name = parameter.get("parName")
+                if isinstance(name, str) and "parValue" in parameter:
+                    observed_values[name] = parameter["parValue"]
+                # A parName the shadow does not hold yet is created from the push,
+                # as the app's shadow does (issue #138): the engine builds it
+                # (`adopt_pushed_parameter`), so this module stays clear of
+                # HonAttribute. A double without that method keeps the old way: the
+                # name waits for the next HTTP poll and the cycle log lists it.
+                if name not in params and isinstance(name, str):
+                    adopt = getattr(appliance, "adopt_pushed_parameter", None)
+                    if callable(adopt):
+                        held = adopt(name, parameter)
+                        params[name] = held
+                        if log is not None:
+                            rows.append(ShadowRow(name, None, value_text(held), True, new=True))
+                        continue
+                if name in params:
+                    held = params[name]
+                    # `value_text`, never `str()`: a value the cloud sent as null or
+                    # a number makes `HonAttribute.__str__` raise, and the push must
+                    # still apply.
+                    before = value_text(held) if log is not None else None
+                    # False only when the shield refused it; a double answers None.
+                    applied = held.update(parameter) is not False
+                    if log is not None:
+                        rows.append(ShadowRow(
+                            name,
+                            before,
+                            value_text(held) if applied else parameter.get("parNewVal"),
+                            applied,
+                            parameter.get("parOldVal"),
+                        ))
+                elif log is not None and isinstance(name, str):
+                    unseeded.append(name)
+            if log is not None:
+                _note_push(log, rows, unseeded, payload)
+            appliance.sync_params_to_command("settings")
+            # The fields derived from the parameters (programName above all) follow
+            # the pushed values now, not at the next poll.
+            appliance.derive_attributes()
+            self._ask_cycle_read(appliance, mode_before)
+            try:
+                observe_mqtt_update(appliance, observed_values)
+            except Exception:
+                # observe_mqtt_update is internally failure-safe, so anything
+                # escaping is a bug in the diagnostics module rather than bad
+                # input. Still swallowed, because a broken diagnostic must not
+                # drop an appliance state update, but no longer silently: with a
+                # bare pass the correlation could be dead for every command and
+                # look exactly like a correlation that never matched.
+                _LOGGER.debug(
+                    "MQTT: command correlation failed", exc_info=True
+                )
+        elif topic and "disconnected" in topic:
+            _LOGGER.info(
+                "Disconnected %s: %s",
+                redact_id(appliance.nick_name),
+                payload.get("disconnectReason"),
+            )
+            # Device-scoped disconnect (haier/things/<mac>/event/disconnected): the
+            # APPLIANCE itself reports offline -- authoritative. Session-presence
+            # disconnects ($aws/events/presence/...) were already intercepted above, so
+            # this never fires on OUR client's session drop. Route through
+            # mark_realtime_disconnected so it CLEARS the realtime liveness marks too --
+            # otherwise a stale REST lastConnEvent=DISCONNECTED (older than the last
+            # traffic) would resurrect the appliance at the next poll. Falls back to the
+            # plain setter for any appliance object that predates the method.
+            mark = getattr(appliance, "mark_realtime_disconnected", None)
+            if callable(mark):
+                mark()
+            else:  # pragma: no cover - production appliances have the method
+                appliance.connection = False
+        elif topic and "connected" in topic:
+            # Device-scoped connect (haier/things/<mac>/event/connected): the appliance
+            # reports online. Session-presence connects ($aws/events/presence/...) were
+            # intercepted above, so this is not OUR client's session event. Keep the
+            # transient behavior (connection True, self-corrected at the next REST poll);
+            # we deliberately do NOT arm the realtime liveness here -- only true
+            # mac-scoped `appliancestatus` traffic records liveness, so a bare connect
+            # event cannot over-extend the stale-disconnect protection window.
+            appliance.connection = True
+            _LOGGER.info("Connected %s", redact_id(appliance.nick_name))
+        elif topic and "discovery" in topic:
+            _LOGGER.info("Discovered %s", redact_id(appliance.nick_name))
 
     # -- connection / subscribe / watchdog -------------------------------------
     async def _start(self) -> None:

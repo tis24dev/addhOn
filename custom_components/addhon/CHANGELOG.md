@@ -16,6 +16,10 @@ the notes were generated automatically carry a link to their diff instead of a s
   only when the night wash is on. addhOn sent `restartGN` on every resume of the models
   whose schema has it. On a Hoover washer a resume carrying it did not restart the
   programme, and one with `pause` alone did. Models without `restartGN` are unchanged.
+- **Every device of a multi-zone appliance follows its realtime updates**: the zone devices
+  of one appliance share its update channel, and only the first one created took each
+  update, so the others, the main device among them, changed only at the next poll (up to
+  a minute later). Every device of the appliance now takes each update.
 - **Washer-dryer and air-conditioner program starts carry the programme's rules, as the
   official app's do** (#150): the app sends the programme's `programRules` back in every
   washer-dryer and air-conditioner start, and addhOn left them out. They now ride those
