@@ -57,7 +57,7 @@ def with_self_clean_off(appliance, params: dict) -> dict:
 # What turning one AC flag on (or Night off) also writes, as the app's program screen
 # does (`AirConditionerProgramDetail`, apk2 decomp.txt @4540860-4541150), minus what
 # the unit already does by itself. Live on Clima bar (2026-11-27, apk2/analysis/
-# repo-esterni-2026-11-27/H-esclusioni-ac.md §7): Rapid sent with Silent on came back
+# repo-esterni-2026-11-27/H-esclusioni-ac.md section 7): Rapid sent with Silent on came back
 # with Silent off, so Rapid needs nothing for Silent; Rapid sent with Night on kept
 # both, and Night sent with the display on kept the display on, so those two the app's
 # way. Silent on turning Rapid off is the app's rule, not seen live. The fan speed the
