@@ -1559,6 +1559,60 @@ class ProgramRulesEchoTest(unittest.TestCase):
         self.assertNotIn("programRules", ancillary)
 
 
+# The resumeProgram schema of the washer-dryer in the #150 diagnostics (ivanmerga,
+# 2026-11-23); robmoss's and paps42's carry the same two nodes.
+_WD_RESUME_REAL = {
+    "parameters": {
+        "pause": {"typology": "fixed", "category": "command", "mandatory": 1, "fixedValue": "0"},
+        "restartGN": {"typology": "fixed", "category": "command", "mandatory": 0, "fixedValue": "1"},
+    },
+}
+
+
+class ResumeRestartTest(unittest.TestCase):
+    """A washer resume carries `restartGN` only after a night wash, as the app's.
+
+    `getWmWdSendCommandPayload` (apk2 decomp.txt:1361985-1362041): `{pause: 0}`, plus
+    `restartGN '1'` when the shadow's `nightWashStatus` is '1' and the schema has it.
+    """
+
+    def _sent(self, appliance_type: str, night_wash=None, *, schema=None) -> tuple[dict, dict]:
+        appliance = _SendingAppliance()
+        appliance.appliance_type = appliance_type
+        shadow = {} if night_wash is None else {"nightWashStatus": night_wash}
+        appliance.attributes = {"parameters": shadow}
+        payload = json.loads(json.dumps(schema or _WD_RESUME_REAL))
+        command = NaCommand("resumeProgram", payload, appliance)
+        asyncio.run(command.send())
+        _, params, _, _ = appliance.api.sent[-1]
+        return params, command.parameter_groups["parameters"]
+
+    def test_a_resume_without_night_wash_sends_pause_alone(self) -> None:
+        for appliance_type in ("WM", "WD"):
+            for night_wash in (None, "0"):
+                with self.subTest(type=appliance_type, night_wash=night_wash):
+                    params, _ = self._sent(appliance_type, night_wash)
+                    self.assertEqual({"pause": "0"}, params)
+
+    def test_a_resume_after_a_night_wash_keeps_restart(self) -> None:
+        params, _ = self._sent("WD", "1")
+        self.assertEqual({"pause": "0", "restartGN": "1"}, params)
+
+    def test_the_command_keeps_its_restart_node(self) -> None:
+        # Only the body loses the key: the next resume after a night wash still has it.
+        _, group = self._sent("WM", "0")
+        self.assertIn("restartGN", group)
+
+    def test_other_types_are_unchanged(self) -> None:
+        params, _ = self._sent("TD", "0")
+        self.assertEqual({"pause": "0", "restartGN": "1"}, params)
+
+    def test_a_schema_without_restart_is_unchanged(self) -> None:
+        schema = {"parameters": {"pause": _WD_RESUME_REAL["parameters"]["pause"]}}
+        params, _ = self._sent("WM", "0", schema=schema)
+        self.assertEqual({"pause": "0"}, params)
+
+
 class DryTimePayloadTest(unittest.TestCase):
     """What leaves as `dryTime` on a washer, washer-dryer or dryer start. Issues #99, #133.
 

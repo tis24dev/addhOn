@@ -356,6 +356,33 @@ class HonCommand:
         appliance_type = getattr(self._appliance, "appliance_type", "")
         return self._name == "startProgram" and appliance_type in ("WM", "WD", "TD")
 
+    def _is_washer_resume(self) -> bool:
+        """A `resumeProgram` of a washer (WM) or washer-dryer (WD)."""
+        appliance_type = getattr(self._appliance, "appliance_type", "")
+        return self._name == "resumeProgram" and appliance_type in ("WM", "WD")
+
+    def _night_wash_on(self) -> bool:
+        """The shadow's `nightWashStatus` reads '1', compared as the app compares it."""
+        attributes = getattr(self._appliance, "attributes", None)
+        shadow = attributes.get("parameters") if isinstance(attributes, Mapping) else None
+        if not isinstance(shadow, Mapping):
+            return False
+        status = shadow.get("nightWashStatus")
+        return status is not None and str(status) == "1"
+
+    def _drop_unarmed_restart(self, params: dict[str, str | float]) -> None:
+        """A washer resume carries `restartGN` only after a night wash, as the app's.
+
+        `getWmWdSendCommandPayload` (apk2 decomp.txt:1361985-1362041) sends a resume as
+        `{pause: 0}` and adds `restartGN: '1'` only when the shadow's `nightWashStatus`
+        is '1' and the category declares `restartGN`. The fixed node otherwise rode
+        every resume. On a Hoover HW 411AMC a resume with `restartGN` did not resume
+        and one with `pause` alone did (hon-revived issue #28, compared in
+        apk2/analysis/repo-esterni-2026-11-27/B-hon-revived.md 5a).
+        """
+        if self._is_washer_resume() and not self._night_wash_on():
+            params.pop("restartGN", None)
+
     def _program_label_to_send(self, program_label: str | None) -> str:
         """`attributes.prStr` of a laundry start, as the app names the programme.
 
@@ -753,6 +780,10 @@ class HonCommand:
             and params.command is self
         ):
             params = self.canonical_exact_payload(params)
+        if "restartGN" in params and self._is_washer_resume():
+            # On a copy, as the delay below: a payload the caller keeps stays whole.
+            params = self.canonical_exact_payload(params)
+            self._drop_unarmed_restart(params)
         ancillary = (
             self.ancillary_parameters()
             if ancillary_params is None

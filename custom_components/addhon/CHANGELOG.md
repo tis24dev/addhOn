@@ -11,6 +11,11 @@ the notes were generated automatically carry a link to their diff instead of a s
 
 **Changes**
 
+- **Resuming a paused washer or washer-dryer sends `restartGN` only after a night wash,
+  as the official app does**: the app resumes with `pause` alone, and adds `restartGN`
+  only when the night wash is on. addhOn sent `restartGN` on every resume of the models
+  whose schema has it. On a Hoover washer a resume carrying it did not restart the
+  programme, and one with `pause` alone did. Models without `restartGN` are unchanged.
 - **Washer-dryer and air-conditioner program starts carry the programme's rules, as the
   official app's do** (#150): the app sends the programme's `programRules` back in every
   washer-dryer and air-conditioner start, and addhOn left them out. They now ride those
