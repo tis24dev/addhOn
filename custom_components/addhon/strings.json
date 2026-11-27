@@ -920,7 +920,7 @@
         "name": "Scheduled sterilization"
       },
       "sleep": {
-        "name": "Mute mode"
+        "name": "Night mode"
       },
       "mute": {
         "name": "Silent mode"

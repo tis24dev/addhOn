@@ -30,9 +30,8 @@ the notes were generated automatically carry a link to their diff instead of a s
   started with the programme's defaults. Both places are read now.
 - **Two air-conditioner switches take the names the hOn app gives them**: `muteStatus`,
   shown as "Mute", is the app's "Silent mode", and `silentSleepStatus`, shown as "Sleep
-  mode", is the app's "Mute mode" (the app's Night mode is a different setting, which
-  also turns the display off). The names follow the app's own texts in every language;
-  the entities and their IDs are unchanged.
+  mode", is the app's "Night mode". The names follow the app's own texts in every
+  language; the entities and their IDs are unchanged.
 - **Washer-dryer and air-conditioner program starts carry the programme's rules, as the
   official app's do** (#150): the app sends the programme's `programRules` back in every
   washer-dryer and air-conditioner start, and addhOn left them out. They now ride those
