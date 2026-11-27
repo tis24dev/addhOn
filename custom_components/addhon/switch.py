@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .ac_command import async_send_settings, settings_param
+from .ac_command import async_send_settings, settings_param, with_flag_companions
 from .client.engine.appliance import shadow_unsynced
 from .base_entity import HonAccountEntity, HonBaseEntity, coordinator_data_map
 from .air_purifier import (
@@ -1390,9 +1390,13 @@ class HonSettingsSwitch(HonBaseEntity, SwitchEntity):
                 param, value, redact_id(self._appliance_id), sparse_command,
             )
             if sparse_command is None:
-                # AC and wine cooler: unchanged. The whole `settings` group goes out,
-                # windDirection* sanitized on the way.
-                await async_send_settings(self.hass, client, appliance, {param: value})
+                # AC and wine cooler: the whole `settings` group goes out,
+                # windDirection* sanitized on the way. On an AC the flags the app
+                # switches together go with it (ac_command.AC_FLAG_COMPANIONS).
+                patch = {param: value}
+                if self._appliance_data.get("type") == APPLIANCE_AC:
+                    patch = with_flag_companions(appliance, param, value)
+                await async_send_settings(self.hass, client, appliance, patch)
             else:
                 # Cooker hood: this parameter alone (plus whatever the live schema
                 # marks mandatory, which on that command is nothing). `action` is

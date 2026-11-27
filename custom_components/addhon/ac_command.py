@@ -54,6 +54,35 @@ def with_self_clean_off(appliance, params: dict) -> dict:
     return out
 
 
+# What turning one AC flag on (or Night off) also writes, as the app's program screen
+# does (`AirConditionerProgramDetail`, apk2 decomp.txt @4540860-4541150), minus what
+# the unit already does by itself. Live on Clima bar (2026-11-27, apk2/analysis/
+# repo-esterni-2026-11-27/H-esclusioni-ac.md §7): Rapid sent with Silent on came back
+# with Silent off, so Rapid needs nothing for Silent; Rapid sent with Night on kept
+# both, and Night sent with the display on kept the display on, so those two the app's
+# way. Silent on turning Rapid off is the app's rule, not seen live. The fan speed the
+# app also moves is left alone. Owner's decisions of 2026-11-27.
+AC_FLAG_COMPANIONS: dict[tuple[str, str], dict[str, str]] = {
+    ("rapidMode", "1"): {"silentSleepStatus": "0"},
+    ("silentSleepStatus", "1"): {"rapidMode": "0", "screenDisplayStatus": "0"},
+    ("silentSleepStatus", "0"): {"screenDisplayStatus": "1"},
+    ("muteStatus", "1"): {"rapidMode": "0"},
+}
+
+
+def with_flag_companions(appliance, param: str, value: str) -> dict:
+    """`{param: value}` plus the flags the app writes with it (AC_FLAG_COMPANIONS).
+
+    Capability-gated as `with_self_clean_off`: a companion the device's settings
+    command does not declare is not injected.
+    """
+    out = {param: value}
+    for name, companion in AC_FLAG_COMPANIONS.get((param, value), {}).items():
+        if settings_param(appliance, name) is not None:
+            out[name] = companion
+    return out
+
+
 def param_allowed_values(param) -> list[str]:
     """Allowed values (as strings) of an enum parameter, or [] if not an enum."""
     values = getattr(param, "values", None)

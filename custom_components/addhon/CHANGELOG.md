@@ -39,6 +39,11 @@ the notes were generated automatically carry a link to their diff instead of a s
   without. Candy and Hoover washer-dryers, whose programmes have no such flag, are
   unchanged. If a Haier washer-dryer started from Home Assistant still washes only, or
   dries when it should not, please report it with the diagnostics file.
+- **Air-conditioner Rapid, Silent and Night switches work together as in the hOn app**:
+  turning Rapid on now turns Night off, turning Night on turns Rapid and the display
+  off, turning Night off turns the display back on, and turning Silent on turns Rapid
+  off. Rapid already turned Silent off by itself on the unit, so that is left to it.
+  The fan speed is never changed.
 - **Two air-conditioner switches take the names the hOn app gives them**: `muteStatus`,
   shown as "Mute", is the app's "Silent mode", and `silentSleepStatus`, shown as "Sleep
   mode", is the app's "Night mode". The names follow the app's own texts in every

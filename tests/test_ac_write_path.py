@@ -603,6 +603,75 @@ class AcClimateWritePathTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("1", settings.sent["selfCleaningStatus"])
 
 
+class AcFlagCompanionsTest(unittest.IsolatedAsyncioTestCase):
+    """The flags the app switches together (ac_command.AC_FLAG_COMPANIONS).
+
+    The app's program screen (apk2 decomp.txt @4540860-4541150), minus what Clima bar
+    did by itself live on 2026-11-27 (Rapid turned Silent off on its own).
+    """
+
+    _FLAGS = ("rapidMode", "muteStatus", "silentSleepStatus", "screenDisplayStatus")
+
+    async def _press(self, param: str, on: bool, flags=_FLAGS, start=None) -> dict:
+        start = start or {"rapidMode": "0", "muteStatus": "0", "silentSleepStatus": "0",
+                          "screenDisplayStatus": "1"}
+        settings = RecordingCommand({name: Param(start[name]) for name in flags})
+        coordinator = FakeCoordinator(_ac({"settings": settings}))
+        desc = switch.HonSettingsSwitchDescription(key=param, param=param)
+        sw = switch.HonSettingsSwitch(coordinator, "ac-1", desc, FakeClient())
+        sw.hass = FakeHass()
+        await (sw.async_turn_on() if on else sw.async_turn_off())
+        return settings.sent
+
+    async def test_rapid_on_turns_night_off(self) -> None:
+        sent = await self._press("rapidMode", True, start={
+            "rapidMode": "0", "muteStatus": "0", "silentSleepStatus": "1",
+            "screenDisplayStatus": "0"})
+        self.assertEqual(("1", "0"), (sent["rapidMode"], sent["silentSleepStatus"]))
+
+    async def test_rapid_on_leaves_silent_to_the_unit(self) -> None:
+        # Live: the unit turned Silent off by itself; the body keeps what it holds.
+        sent = await self._press("rapidMode", True, start={
+            "rapidMode": "0", "muteStatus": "1", "silentSleepStatus": "0",
+            "screenDisplayStatus": "1"})
+        self.assertEqual("1", sent["muteStatus"])
+
+    async def test_night_on_turns_rapid_and_the_display_off(self) -> None:
+        sent = await self._press("silentSleepStatus", True, start={
+            "rapidMode": "1", "muteStatus": "0", "silentSleepStatus": "0",
+            "screenDisplayStatus": "1"})
+        self.assertEqual(("1", "0", "0"), (sent["silentSleepStatus"], sent["rapidMode"],
+                                           sent["screenDisplayStatus"]))
+
+    async def test_night_off_turns_the_display_back_on(self) -> None:
+        sent = await self._press("silentSleepStatus", False, start={
+            "rapidMode": "0", "muteStatus": "0", "silentSleepStatus": "1",
+            "screenDisplayStatus": "0"})
+        self.assertEqual(("0", "1"), (sent["silentSleepStatus"], sent["screenDisplayStatus"]))
+
+    async def test_silent_on_turns_rapid_off(self) -> None:
+        sent = await self._press("muteStatus", True, start={
+            "rapidMode": "1", "muteStatus": "0", "silentSleepStatus": "0",
+            "screenDisplayStatus": "1"})
+        self.assertEqual(("1", "0"), (sent["muteStatus"], sent["rapidMode"]))
+
+    async def test_a_companion_the_device_lacks_is_not_injected(self) -> None:
+        sent = await self._press("silentSleepStatus", True,
+                                 flags=("silentSleepStatus", "rapidMode"),
+                                 start={"silentSleepStatus": "0", "rapidMode": "1"})
+        self.assertNotIn("screenDisplayStatus", sent)
+        self.assertEqual("0", sent["rapidMode"])
+
+    async def test_turning_rapid_or_silent_off_writes_nothing_else(self) -> None:
+        for param in ("rapidMode", "muteStatus"):
+            with self.subTest(param=param):
+                start = {"rapidMode": "1", "muteStatus": "1", "silentSleepStatus": "1",
+                         "screenDisplayStatus": "0"}
+                sent = await self._press(param, False, start=start)
+                others = {k: v for k, v in sent.items() if k in self._FLAGS and k != param}
+                self.assertEqual({k: start[k] for k in others}, others)
+
+
 class AcClimateProgramWritePathTest(unittest.IsolatedAsyncioTestCase):
     """Program-based AC (AD71S2SM3FA(H)): power/mode via startProgram/stopProgram.
 
