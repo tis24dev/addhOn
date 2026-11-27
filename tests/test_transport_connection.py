@@ -661,7 +661,7 @@ class RetryRefreshSingleFlightTest(unittest.TestCase):
         conn._refresh_token = "RT"
         conn._refresh_gen = 5
 
-        asyncio.run(conn._refresh_after_rejection(5))  # gen matches -> attempt
+        asyncio.run(conn.refresh_after_rejection(5))  # gen matches -> attempt
         self.assertEqual(auth.refresh_calls, 1)
         self.assertEqual(conn._refresh_gen, 5)       # NOT advanced on failure
         self.assertEqual(conn._refresh_token, "RT")  # untouched
@@ -687,14 +687,14 @@ class RetryRefreshSingleFlightTest(unittest.TestCase):
 
     def test_double_check_skips_when_gen_advanced(self) -> None:
         # Directly: if a sibling already refreshed since this request was sent (the
-        # generation advanced), _refresh_after_rejection must NOT refresh again.
+        # generation advanced), refresh_after_rejection must NOT refresh again.
         auth = FakeAuth()
         auth.cognito_token, auth.id_token = "C", "I"
         conn = _conn(auth, FakeSession([]))
         conn._refresh_token = "RT"
         conn._refresh_gen = 5
 
-        asyncio.run(conn._refresh_after_rejection(3))  # snapshot (3) != current (5)
+        asyncio.run(conn.refresh_after_rejection(3))  # snapshot (3) != current (5)
         self.assertEqual(auth.refresh_calls, 0)
         self.assertEqual(conn._refresh_token, "RT")    # untouched
 
@@ -707,10 +707,22 @@ class RetryRefreshSingleFlightTest(unittest.TestCase):
         conn._refresh_token = "RT"
         conn._refresh_gen = 5
 
-        asyncio.run(conn._refresh_after_rejection(5))  # snapshot matches current
+        asyncio.run(conn.refresh_after_rejection(5))  # snapshot matches current
         self.assertEqual(auth.refresh_calls, 1)
         self.assertEqual(conn._refresh_token, "RT2")   # rotated + copied back
         self.assertEqual(conn._refresh_gen, 6)         # generation bumped
+
+    def test_the_generation_is_readable_for_a_later_rejection(self) -> None:
+        # The MQTT transport snapshots it when it signs a client, as a request does
+        # when it sends, and names it if the broker refuses that token.
+        auth = FakeAuth()
+        auth.cognito_token, auth.id_token = "C", "I"
+        conn = _conn(auth, FakeSession([]))
+        conn._refresh_token = "RT"
+        conn._refresh_gen = 5
+        self.assertEqual(5, conn.refresh_generation)
+        asyncio.run(conn.refresh_after_rejection(conn.refresh_generation))
+        self.assertEqual(6, conn.refresh_generation)
 
 
 class InterceptCloudErrorRoutingTest(unittest.TestCase):

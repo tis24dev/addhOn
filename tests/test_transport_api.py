@@ -2220,5 +2220,27 @@ class DelayCountedToTheEndTest(unittest.TestCase):
         self.assertNotIn("ecoDelayStart", data["ancillaryParameters"])
 
 
+class RefreshAfterRejectionTest(unittest.TestCase):
+    """The MQTT transport reaches the connection's token recovery through the API."""
+
+    def test_the_generation_and_the_refresh_are_the_connection_s(self) -> None:
+        class Connection:
+            refresh_generation = 3
+
+            def __init__(self) -> None:
+                self.refreshed: list = []
+
+            async def refresh_after_rejection(self, gen_at_send) -> None:
+                self.refreshed.append(gen_at_send)
+                self.refresh_generation += 1
+
+        conn = Connection()
+        api = HonApi(conn)
+        self.assertEqual(3, api.refresh_generation)
+        _run(api.refresh_after_rejection(3))
+        self.assertEqual([3], conn.refreshed)
+        self.assertEqual(4, api.refresh_generation)
+
+
 if __name__ == "__main__":
     unittest.main()

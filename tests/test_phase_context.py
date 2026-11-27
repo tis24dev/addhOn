@@ -213,7 +213,7 @@ class PhaseScopeTableIsCompleteTest(unittest.TestCase):
         },
         "connection.py": {
             "_check_headers": ["auth/refresh", "auth"],
-            "_refresh_after_rejection": ["auth/refresh"],
+            "refresh_after_rejection": ["auth/refresh"],
             "_reauth_after_rejection": ["auth"],
             "submit_mfa_code": ["auth/mfa_verify"],
             "resend_mfa_code": ["auth/mfa_send"],

@@ -112,6 +112,22 @@ def _utc_now() -> str:
 # since this connection is already known dead. Reset to 0 on ANY successful subscribe.
 _MAX_RESUBSCRIBE_FAILURES = 3
 
+# MQTT 5 CONNACK reason codes that refuse the credentials themselves: 0x86 Bad User
+# Name or Password and 0x87 Not authorized. On the custom authorizer they mean the
+# token the client was signed with is no longer accepted, and every auto-reconnect of
+# awscrt presents that same token again; only a refresh and a rebuild can recover.
+_AUTH_REFUSED_REASON_CODES = frozenset({0x86, 0x87})
+
+
+def _refuses_credentials(data: Any) -> bool:
+    """A connection failure whose CONNACK refused the token (see above)."""
+    connack = getattr(data, "connack_packet", None)
+    code = getattr(connack, "reason_code", None)
+    try:
+        return int(code) in _AUTH_REFUSED_REASON_CODES
+    except (TypeError, ValueError):
+        return False
+
 # Only operational failures are allowed to make the initial MQTT connection
 # polling-only while the watchdog retries. UNKNOWN is deliberately absent: an
 # ImportError, TypeError, AttributeError or invalid builder contract is a code/config
@@ -226,6 +242,13 @@ class NativeMqttClient:
         # client we already stopped cannot flip self._connection on the new one (awscrt
         # stop() is asynchronous). See _is_stale_generation.
         self._generation = 0
+        # The connection's token generation the current client was signed with, and,
+        # once the broker refused that token, the generation it refused: the next
+        # rebuild refreshes it first (`_start`). The refresh is the connection's own
+        # single-flighted recovery, so a REST request that already rotated the tokens
+        # is not repeated.
+        self._token_generation: int | None = None
+        self._refused_generation: int | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
         # The loop `create()` ran on, the session's own, where the reads a push asks for
         # are run (a push arrives on an awscrt thread); and the read pending or running
@@ -489,6 +512,11 @@ class NativeMqttClient:
         # from an old client clearing it.
         self._subscribed_topics_set = set()
         _LOGGER.info("Lifecycle Connection Failure: %s", data)
+        if _refuses_credentials(data):
+            # The watchdog rebuilds on its next tick, without the grace left to the
+            # auto-reconnect: that one would only present the refused token again.
+            self._refused_generation = self._token_generation
+            _LOGGER.info("MQTT: connection refused as unauthorized, refreshing the token")
 
     def _on_link_dropped(
         self, data: "mqtt5.LifecycleDisconnectData", generation: int
@@ -750,7 +778,21 @@ class NativeMqttClient:
         # _is_stale_generation).
         self._generation += 1
         generation = self._generation
+        refused = self._refused_generation
+        if refused is not None:
+            await self._api.refresh_after_rejection(refused)
+            if self._api.refresh_generation == refused:
+                # The refresh did not rotate the tokens (token endpoint down, refresh
+                # token consumed): signing again with them would only be refused. The
+                # watchdog backs off and retries; the refusal stays recorded.
+                raise MqttStartupUnavailable(
+                    AWS_TOKEN_FAILED, "token refresh after an MQTT refusal failed"
+                )
+            self._refused_generation = None
         signature = await self._load_aws_signature()
+        # Read after the signature request, which may itself have refreshed the tokens:
+        # this is the generation the id_token below belongs to.
+        self._token_generation = self._api.refresh_generation
         self._client = mqtt5_client_builder.websockets_with_custom_authorizer(
             endpoint=AWS_ENDPOINT,
             auth_authorizer_name=AWS_AUTHORIZER,
@@ -976,12 +1018,12 @@ class NativeMqttClient:
                 # Not connected (or re-subscribe escalated to a rebuild): sustained
                 # downtime only forces a rebuild. Give awscrt's own auto-reconnect a
                 # chance first (see _RECONNECT_AFTER_FAILED_TICKS) -- but an escalation
-                # (blackout cap reached) skips the wait, the connection is already known
-                # dead.
+                # (blackout cap reached, or the broker refused the token) skips the wait,
+                # the connection is already known dead.
                 escalated = (
                     self._connection
                     and resubscribe_failures >= _MAX_RESUBSCRIBE_FAILURES
-                )
+                ) or self._refused_generation is not None
                 if not escalated:
                     failed_ticks += 1
                     if failed_ticks < _RECONNECT_AFTER_FAILED_TICKS:

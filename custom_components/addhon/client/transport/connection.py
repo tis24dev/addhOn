@@ -80,8 +80,9 @@ class HonConnection:
         self._refresh_lock = asyncio.Lock()
         # Monotonic counter, bumped (under _refresh_lock) on every successful
         # refresh/authenticate by BOTH the pre-request path (_check_headers) and the
-        # 401/403 retry path (_refresh_after_rejection). Each request snapshots it
-        # when it sends; the retry recovery refreshes only if the gen is unchanged ->
+        # 401/403 retry path (refresh_after_rejection). Each request snapshots it
+        # when it sends, and the MQTT transport when it signs a connection
+        # (`refresh_generation`); the recovery refreshes only if the gen is unchanged ->
         # a concurrent burst collapses to a single refresh without gating on
         # token_expires_soon (a non-expiry 401 must still refresh once). See CR#3.
         self._refresh_gen = 0
@@ -179,9 +180,16 @@ class HonConnection:
                     self._refresh_gen += 1
         return build_auth_headers(self.auth.cognito_token, self.auth.id_token, headers)
 
-    async def _refresh_after_rejection(self, gen_at_send: int) -> None:
-        # 401/403 recovery refresh, single-flighted under the SAME lock as the
-        # pre-request path (CR#3). Without the lock a concurrent-request burst (e.g.
+    @property
+    def refresh_generation(self) -> int:
+        """The generation of the tokens held now (see `_refresh_gen`)."""
+        return self._refresh_gen
+
+    async def refresh_after_rejection(self, gen_at_send: int) -> None:
+        # Recovery refresh after the server rejected the tokens of generation
+        # `gen_at_send`: a REST 401/403 (`_intercept`) or an MQTT connection refused
+        # as unauthorized (the MQTT transport's rebuild). Single-flighted under the
+        # SAME lock as the pre-request path (CR#3). Without the lock a concurrent-request burst (e.g.
         # command_loader's asyncio.gather) that all 401 would each fire a refresh on
         # the same rotating, possibly single-use refresh_token. `gen_at_send` is the
         # refresh generation captured when THIS request was sent: under the lock we
@@ -278,7 +286,7 @@ class HonConnection:
         kwargs["headers"] = await self._check_headers(kwargs.get("headers", {}))
         # Generation of the token these headers carry: if a concurrent request (the
         # pre-request path or another 401 retry) refreshes before our recovery runs,
-        # the gen advances and _refresh_after_rejection skips a redundant, token-
+        # the gen advances and refresh_after_rejection skips a redundant, token-
         # consuming refresh (CR#3). Snapshot BEFORE sending so it reflects the token
         # that may get rejected, not one a sibling rotated to meanwhile.
         refresh_gen = self._refresh_gen
@@ -303,7 +311,7 @@ class HonConnection:
                 raise err
             if response.status in (401, 403) and loop == 0:
                 _LOGGER.info("addhOn: rejected (%s), refresh+retry", response.status)
-                await self._refresh_after_rejection(refresh_gen)
+                await self.refresh_after_rejection(refresh_gen)
                 async with self._intercept(method, url, *args, loop=1, **kwargs) as result:
                     yield result
             elif response.status in (401, 403) and loop == 1:

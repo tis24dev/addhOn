@@ -279,6 +279,8 @@ class CreatePathTest(unittest.TestCase):
         class FakeApi:
             auth = FakeAuth()
 
+            refresh_generation = 0
+
             async def load_aws_token(self):
                 return "SIGNED"
 
@@ -407,6 +409,8 @@ class CreatePathTest(unittest.TestCase):
                 self.result = result
                 self.error = error
 
+            refresh_generation = 0
+
             async def load_aws_token(self):
                 if self.error is not None:
                     raise self.error
@@ -477,6 +481,8 @@ class CreatePathTest(unittest.TestCase):
         class Api:
             def __init__(self) -> None:
                 self.started = asyncio.Event()
+
+            refresh_generation = 0
 
             async def load_aws_token(self):
                 self.started.set()
@@ -679,6 +685,8 @@ class CreatePathTest(unittest.TestCase):
 
         class FakeApi:
             auth = FakeAuth()
+
+            refresh_generation = 0
 
             async def load_aws_token(self):
                 return "SIGNED"
@@ -1473,6 +1481,8 @@ class StartReconnectTest(unittest.TestCase):
         class FakeApi:
             auth = FakeAuth()
 
+            refresh_generation = 0
+
             async def load_aws_token(self):
                 return "SIGNED"
 
@@ -1552,6 +1562,155 @@ class WatchdogThresholdTest(unittest.TestCase):
         # A healthy tick before the threshold resets the counter, so two down ticks on
         # either side of it never reach three-in-a-row -> no rebuild.
         self.assertEqual(self._rebuilds_for([False, False, True, False, False]), 0)
+
+
+def _connect_failure(reason_code):
+    """A LifecycleConnectFailureData double: a CONNACK with `reason_code`, or none."""
+    connack = None if reason_code is None else types.SimpleNamespace(reason_code=reason_code)
+    return types.SimpleNamespace(connack_packet=connack, exception=None)
+
+
+class RefusedTokenTest(unittest.TestCase):
+    """A CONNACK that refuses the token: rebuild at once, after a forced refresh.
+
+    0x86 Bad User Name or Password and 0x87 Not authorized refuse the token the client
+    was signed with. awscrt's own auto-reconnect would present it again, so the watchdog
+    skips its grace, and the rebuild refreshes the refused generation through the
+    connection's single-flighted recovery before it signs the new client.
+    """
+
+    def test_only_the_credential_codes_count_as_refused(self) -> None:
+        import custom_components.addhon.client.transport.mqtt as mod
+
+        for code, refused in ((0x86, True), (0x87, True), (0x80, False),
+                              (0x88, False), (None, False), ("x", False)):
+            with self.subTest(code=code):
+                self.assertIs(refused, mod._refuses_credentials(_connect_failure(code)))
+        self.assertFalse(mod._refuses_credentials(types.SimpleNamespace()))
+
+    def test_a_refusal_records_the_generation_that_signed_the_client(self) -> None:
+        m = NativeMqttClient(FakeHon([]), "MID")
+        m._generation = 2
+        m._token_generation = 7
+        m._on_link_failed(_connect_failure(0x87), generation=2)
+        self.assertEqual(7, m._refused_generation)
+        self.assertFalse(m._connection)
+
+    def test_other_failures_and_stale_clients_record_nothing(self) -> None:
+        m = NativeMqttClient(FakeHon([]), "MID")
+        m._generation = 2
+        m._token_generation = 7
+        m._on_link_failed(_connect_failure(0x80), generation=2)
+        m._on_link_failed(_connect_failure(0x87), generation=1)  # an old client's
+        self.assertIsNone(m._refused_generation)
+
+    def test_the_watchdog_rebuilds_on_the_first_tick_after_a_refusal(self) -> None:
+        import custom_components.addhon.client.transport.mqtt as mod
+
+        m = NativeMqttClient(FakeHon([]), "MID")
+        starts = []
+        ticks = [False]
+
+        async def fake_start():
+            starts.append(m._refused_generation)
+            m._refused_generation = None
+
+        async def fake_sleep(_interval):
+            if not ticks:
+                raise asyncio.CancelledError
+            m._connection = ticks.pop(0)
+            m._refused_generation = 3
+
+        async def noop_sub():
+            return None
+
+        m._start = fake_start  # type: ignore[assignment]
+        m._subscribe_missing = noop_sub  # type: ignore[assignment]
+        real_sleep = mod.asyncio.sleep
+        mod.asyncio.sleep = fake_sleep
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(m._watchdog())
+            except asyncio.CancelledError:
+                pass
+            finally:
+                loop.close()
+        finally:
+            mod.asyncio.sleep = real_sleep
+        self.assertEqual([3], starts)  # one down tick, below the grace of 3, rebuilt
+
+    def _api(self, generation: int, *, rotates: bool):
+        class FakeAuth:
+            id_token = "IDT"
+
+        class FakeApi:
+            auth = FakeAuth()
+            refresh_generation = generation
+            refreshed: list = []
+
+            async def refresh_after_rejection(self, gen_at_send):
+                self.refreshed.append(gen_at_send)
+                if rotates:
+                    self.refresh_generation += 1
+
+            async def load_aws_token(self):
+                return "SIGNED"
+
+        return FakeApi()
+
+    def _start(self, api, refused):
+        import awsiot
+
+        built: list = []
+
+        class FakeClient:
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+        def fake_builder(**kwargs):
+            built.append(kwargs)
+            return FakeClient()
+
+        awsiot.mqtt5_client_builder.websockets_with_custom_authorizer = fake_builder
+        hon = FakeHon([])
+        hon.api = api
+        m = NativeMqttClient(hon, "MID")
+        m._refused_generation = refused
+
+        async def body():
+            await m._start()
+
+        return m, built, body
+
+    def test_the_rebuild_refreshes_the_refused_generation_first(self) -> None:
+        api = self._api(4, rotates=True)
+        m, built, body = self._start(api, refused=4)
+        _run(body())
+        self.assertEqual([4], api.refreshed)
+        self.assertIsNone(m._refused_generation)
+        self.assertEqual(5, m._token_generation)  # the client is signed with the new one
+        self.assertEqual(1, len(built))
+
+    def test_a_refresh_that_rotates_nothing_backs_off_and_keeps_the_refusal(self) -> None:
+        import custom_components.addhon.client.transport.mqtt as mod
+
+        api = self._api(4, rotates=False)
+        m, built, body = self._start(api, refused=4)
+        with self.assertRaises(mod.MqttStartupUnavailable):
+            _run(body())
+        self.assertEqual(4, m._refused_generation)
+        self.assertEqual([], built)  # nothing signed with the refused token
+
+    def test_a_rebuild_without_refusal_refreshes_nothing(self) -> None:
+        api = self._api(4, rotates=True)
+        m, built, body = self._start(api, refused=None)
+        _run(body())
+        self.assertEqual([], api.refreshed)
+        self.assertEqual(4, m._token_generation)
 
 
 class StaleLifecycleCallbackTest(unittest.TestCase):
@@ -1789,6 +1948,8 @@ class StartGenerationWiringTest(unittest.TestCase):
         class FakeApi:
             auth = FakeAuth()
 
+            refresh_generation = 0
+
             async def load_aws_token(self):
                 return "SIGNED"
 
@@ -1846,6 +2007,8 @@ class StartGenerationWiringTest(unittest.TestCase):
 
         class FakeApi:
             auth = FakeAuth()
+
+            refresh_generation = 0
 
             async def load_aws_token(self):
                 return "SIGNED"
@@ -2493,6 +2656,8 @@ class SubscribedFlagLifecycleTest(unittest.TestCase):
         class FakeApi:
             auth = FakeAuth()
 
+            refresh_generation = 0
+
             async def load_aws_token(self):
                 return "SIGNED"
 
@@ -2530,6 +2695,8 @@ class SubscribedFlagLifecycleTest(unittest.TestCase):
 
         class FakeApi:
             auth = FakeAuth()
+
+            refresh_generation = 0
 
             async def load_aws_token(self):
                 return "SIGNED"

@@ -20,6 +20,11 @@ the notes were generated automatically carry a link to their diff instead of a s
   of one appliance share its update channel, and only the first one created took each
   update, so the others, the main device among them, changed only at the next poll (up to
   a minute later). Every device of the appliance now takes each update.
+- **Realtime updates come back right after the cloud refuses the login token**: when the
+  realtime channel refused the token as unauthorized, addhOn kept reconnecting with the
+  same token for about 15 seconds, and then rebuilt the connection still with it unless
+  the token was due to expire. It now refreshes the token and rebuilds the connection at
+  the next check (within 5 seconds), and backs off if the refresh fails.
 - **Washer-dryer and air-conditioner program starts carry the programme's rules, as the
   official app's do** (#150): the app sends the programme's `programRules` back in every
   washer-dryer and air-conditioner start, and addhOn left them out. They now ride those

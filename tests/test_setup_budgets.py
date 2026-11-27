@@ -569,7 +569,7 @@ class AuthScopesSuspendTheCallerTest(unittest.TestCase):
 
     EXPECTED = {
         "_check_headers": [("AUTH_REFRESH", True), ("AUTH_FULL", True)],
-        "_refresh_after_rejection": [("AUTH_REFRESH", True)],
+        "refresh_after_rejection": [("AUTH_REFRESH", True)],
         "_reauth_after_rejection": [("AUTH_FULL", True)],
         "submit_mfa_code": [("MFA_RESUME", True)],
     }

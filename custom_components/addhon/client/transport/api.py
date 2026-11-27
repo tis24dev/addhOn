@@ -347,6 +347,15 @@ class HonApi:
         """The connection's auth object."""
         return self._connection.auth
 
+    @property
+    def refresh_generation(self) -> int:
+        """The connection's token generation, for a rejection to name later."""
+        return self._connection.refresh_generation
+
+    async def refresh_after_rejection(self, gen_at_send: int) -> None:
+        """Refresh the tokens of generation `gen_at_send` after a server refused them."""
+        await self._connection.refresh_after_rejection(gen_at_send)
+
     def _person_account_id(self) -> str | None:
         """The account id OUR id_token claims, for `account_match`. Never emitted.
 
