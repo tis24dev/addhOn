@@ -24,6 +24,7 @@ from .client.catalog_repository import (
 # Aliased: `_run_on_hon_loop` binds a LOCAL named `phase` for the attribution it
 # samples, and shadowing the scope factory there would be a trap for the next edit.
 from .client.phase import phase as phase_scope
+from .client.transport.values import AUTH_BACKEND_SALESFORCE
 from .command_dispatch import CommandDispatcher, CommandPatch
 from .debug_utils import debug_key_sample, redact_email, redact_id, redact_mac
 from .error_codes import (
@@ -334,9 +335,12 @@ class HonClient:
         *,
         command_catalog_cache: Any = None,
         language: Any = "en",
+        auth_backend: str = AUTH_BACKEND_SALESFORCE,
     ) -> None:
         self._email = email
         self._password = password
+        # The entry's sign-in (client/transport/values.py): Salesforce unless it names CIAM.
+        self._auth_backend = auth_backend
         # Persisted OAuth refresh token: lets runtime setup refresh instead of doing a
         # full login, which is what skips the 2FA prompt on every restart (an account
         # with email-OTP would otherwise re-challenge each time). "" = full login.
@@ -696,6 +700,7 @@ class HonClient:
                     refresh_token=self._refresh_token,
                     auth_trace=self._auth_trace,
                     catalog_repository=self._command_catalog_repository,
+                    auth_backend=self._auth_backend,
                 )
                 _LOGGER.debug("Hon instance created")
 

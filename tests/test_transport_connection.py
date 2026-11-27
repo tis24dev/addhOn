@@ -69,6 +69,9 @@ from custom_components.addhon.error_codes import DECODE_ERROR  # noqa: E402
 
 
 class FakeAuth:
+    # HonAuth's contract: a refused session may be recovered with the password.
+    allows_password_relogin = True
+
     def __init__(self) -> None:
         self.cognito_token = ""
         self.id_token = ""

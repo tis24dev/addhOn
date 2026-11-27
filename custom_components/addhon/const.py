@@ -224,6 +224,9 @@ CONF_ENABLE_EXPERIMENTAL = "enable_experimental"
 # Temporary config-flow field. It enables one bounded sign-in trace and is stripped
 # before credentials are validated or persisted.
 CONF_AUTH_DIAGNOSTICS = "auth_diagnostics"
+# Entry data: which sign-in the entry uses ("salesforce" when absent, or "ciam";
+# client/transport/values.py). No flow writes it yet: the CIAM sign-in stays off.
+CONF_AUTH_BACKEND = "auth_backend"
 
 # --- Air conditioner attributes -----------------------------------------------
 # Confirmed from the diagnostics of the AS35PBPHRA-PRE device

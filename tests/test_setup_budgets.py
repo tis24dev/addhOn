@@ -69,6 +69,8 @@ def _run(coro):
 class _StallingAuth:
     """The Salesforce flow, reduced to its timing. Doubles the NETWORK, nothing else."""
 
+    allows_password_relogin = True  # HonAuth's contract
+
     def __init__(
         self,
         refresh_seconds: float = 0.0,

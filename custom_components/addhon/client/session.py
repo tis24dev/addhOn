@@ -36,6 +36,7 @@ from .phase import PhaseTracker, phase
 from .transport.api import HonApi
 from .transport.auth import MFAChallengeRequired, NativeAuthError
 from .transport.connection import HonConnection
+from .transport.values import AUTH_BACKEND_SALESFORCE
 from ..error_codes import (
     APPLIANCE_DATA_MALFORMED,
     HonCodedError,
@@ -196,12 +197,14 @@ class NativeHon:
         minimal: bool = False,
         auth_trace: Any = None,
         catalog_repository: CommandCatalogRepository | None = None,
+        auth_backend: str = AUTH_BACKEND_SALESFORCE,
     ) -> None:
         self._email = email
         self._password = password
         self._session = session
         self._mobile_id = mobile_id
         self._refresh_token = refresh_token
+        self._auth_backend = auth_backend
         self._enable_mqtt = enable_mqtt
         # minimal=True (config-flow validation): authenticate + load_appliances only,
         # skip the per-appliance command/attribute/statistics loads (issue #30). The
@@ -326,6 +329,7 @@ class NativeHon:
                 refresh_token=self._refresh_token,
                 auth_trace=self._auth_trace,
                 phase_tracker=self._phase_tracker,
+                auth_backend=self._auth_backend,
             ).create()
             self._api = HonApi(self._connection)
             await self.setup()

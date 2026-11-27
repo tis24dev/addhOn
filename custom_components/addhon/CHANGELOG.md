@@ -28,6 +28,10 @@ the notes were generated automatically carry a link to their diff instead of a s
 - **Favourites saved in the hOn app keep their settings**: a favourite stores its values
   inside the saved command, and addhOn read them only beside it, so a favourite programme
   started with the programme's defaults. Both places are read now.
+- **Groundwork for the hOn app's current sign-in (CIAM)**: the official app no longer
+  signs in the way addhOn does today. addhOn now carries the app's new sign-in next to
+  the current one, unused: no entry switches to it, and nothing changes for anyone. It
+  will be turned on only after a live test.
 - **Haier washer-dryers (HQD platform) dry when started with a dry level**: the start
   carried the programme's default "dry programme" flag, off, whenever no drying time went
   with the level, and on such a machine that start washed only. The flag now follows the

@@ -21,7 +21,9 @@ from homeassistant.helpers.selector import (
 )
 
 from .client.transport.auth import MFAChallengeRequired, MFACodeInvalid
+from .client.transport.values import AUTH_BACKEND_SALESFORCE
 from .const import (
+    CONF_AUTH_BACKEND,
     CONF_AUTH_DIAGNOSTICS,
     CONF_ENABLE_DEBUG,
     CONF_ENABLE_EXPERIMENTAL,
@@ -124,6 +126,7 @@ async def validate_input(
         password=data["password"],
         validation=True,
         auth_diagnostics=auth_diagnostics,
+        auth_backend=data.get(CONF_AUTH_BACKEND, AUTH_BACKEND_SALESFORCE),
     )
     mfa_pending = False
 
@@ -338,6 +341,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 user_input.get(CONF_AUTH_DIAGNOSTICS, False)
             )
             data = {"email": email, "password": user_input["password"]}
+            if CONF_AUTH_BACKEND in reauth_entry.data:
+                # The entry's sign-in survives the reauth (and its 2FA step, which
+                # keeps this mapping): a CIAM entry signs in again through the CIAM.
+                data[CONF_AUTH_BACKEND] = reauth_entry.data[CONF_AUTH_BACKEND]
             try:
                 info = await validate_input(
                     self.hass,

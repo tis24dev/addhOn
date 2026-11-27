@@ -31,6 +31,7 @@ def create_session(
     refresh_token: str = "",
     auth_trace: Any = None,
     catalog_repository: Any = None,
+    auth_backend: str | None = None,
 ) -> Any:
     """Create the NATIVE hOn session (`client.session.NativeHon`).
 
@@ -46,6 +47,7 @@ def create_session(
     keeps `factory` importable dry (`NativeHon` pulls in awscrt via MQTT).
     """
     from .session import NativeHon
+    from .transport.values import AUTH_BACKEND_SALESFORCE
 
     return NativeHon(
         email=email,
@@ -55,6 +57,7 @@ def create_session(
         refresh_token=refresh_token,
         auth_trace=auth_trace,
         catalog_repository=catalog_repository,
+        auth_backend=auth_backend or AUTH_BACKEND_SALESFORCE,
     )
 
 

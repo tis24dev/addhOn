@@ -159,6 +159,10 @@ class _NoAuthNeeded(Exception):
 class HonAuth:
     """Native hOn login flow. Assembles the pieces + the HTTP orchestration."""
 
+    # A session the cloud refuses is recovered by a new sign-in with the stored
+    # password (HonConnection's re-auth ladder). CiamAuth answers False.
+    allows_password_relogin = True
+
     def __init__(
         self,
         session,

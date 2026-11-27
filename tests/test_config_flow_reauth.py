@@ -194,6 +194,24 @@ class ReauthFlowTest(unittest.IsolatedAsyncioTestCase):
             flow.calls["update"]["data"],
         )
 
+    async def test_reauth_keeps_the_entry_s_sign_in(self) -> None:
+        # A CIAM entry signs in again through the CIAM, and stays a CIAM entry.
+        seen = {}
+
+        async def ok(hass, data, **kwargs):
+            seen.update(data)
+            return {"title": "x", "appliance_count": 1, "refresh_token": "S-1"}
+
+        self._patch_validate(ok)
+        entry = _FakeEntry()
+        entry.data["auth_backend"] = "ciam"
+        flow = _make_flow(entry)
+
+        await flow.async_step_reauth_confirm({"password": "new-pass"})
+
+        self.assertEqual("ciam", seen["auth_backend"])
+        self.assertEqual("ciam", flow.calls["update"]["data"]["auth_backend"])
+
     async def test_reauth_invalid_auth_reshows_form(self) -> None:
         from custom_components.addhon.config_flow import InvalidAuth
 

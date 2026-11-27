@@ -102,3 +102,14 @@ OS_VERSION = 34
 OS = "android"                                     # OBSERVED: os field value
 DEVICE_MODEL = "addhon"
 MOBILE_ID = "addhon"
+
+# -- CIAM login (the app's only sign-in since 2.30.7) ---------------------------
+# OBSERVED in apk2 decomp.txt: the base is API_URL + 'ciam', no version segment
+# (@502667-502671), and the steps are authorize, token, otp and refresh
+# (@3315470-3315680). See apk2/analysis/repo-esterni-2026-11-27/E-ciam-login.md.
+CIAM_URL = f"{API_URL}/ciam"
+
+# Which sign-in an entry uses, read from its data (`auth_backend`). Salesforce stays
+# the default; no flow writes "ciam" yet.
+AUTH_BACKEND_SALESFORCE = "salesforce"
+AUTH_BACKEND_CIAM = "ciam"

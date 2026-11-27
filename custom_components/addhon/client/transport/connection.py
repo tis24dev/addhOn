@@ -20,6 +20,7 @@ from typing import Any
 
 import aiohttp
 
+from ...error_codes import AUTH_REFRESH as AUTH_REFRESH_CODE
 from ...error_codes import DECODE_ERROR
 from ..budget import AUTH_FULL, AUTH_REFRESH, MFA_RESUME
 from ..budget import CONNECT_TIMEOUT as _CONNECT_TIMEOUT
@@ -28,6 +29,8 @@ from ..budget import TOTAL_TIMEOUT as _TOTAL_TIMEOUT
 from ..budget import budgeted as _budgeted
 from ..phase import PhaseTracker, phase
 from .auth import HonAuth, NativeAuthError
+from .ciam import CiamAuth
+from .values import AUTH_BACKEND_CIAM, AUTH_BACKEND_SALESFORCE
 from .device import HonDevice
 from .headers import build_auth_headers
 
@@ -58,11 +61,14 @@ class HonConnection:
         refresh_token: str = "",
         auth_trace: Any = None,
         phase_tracker: PhaseTracker | None = None,
+        auth_backend: str = AUTH_BACKEND_SALESFORCE,
     ) -> None:
         self._email = email
         self._password = password
         self._device = HonDevice(mobile_id)
         self._refresh_token = refresh_token
+        # Which sign-in the entry uses: Salesforce (HonAuth) unless it names the CIAM.
+        self._auth_class = CiamAuth if auth_backend == AUTH_BACKEND_CIAM else HonAuth
         self._auth_trace = auth_trace
         # Hierarchical-phase mirror shared with the session (client/phase.py). It lives
         # on the CONNECTION (a stable owner) and not on HonAuth, which create() replaces
@@ -70,7 +76,7 @@ class HonConnection:
         self._phase_tracker = phase_tracker or PhaseTracker()
         self._owns_session = session is None
         self._session = session
-        self._auth: HonAuth | None = None
+        self._auth: HonAuth | CiamAuth | None = None
         # Serializes token refresh/authenticate across concurrent requests (e.g.
         # the asyncio.gather burst in load_commands): without it, N parallel
         # _check_headers would each fire a refresh on the SAME refresh_token.
@@ -100,7 +106,7 @@ class HonConnection:
         return self._device
 
     @property
-    def auth(self) -> HonAuth:
+    def auth(self) -> HonAuth | CiamAuth:
         if self._auth is None:
             raise NativeAuthError("connection not created (create() is missing)")
         return self._auth
@@ -122,7 +128,7 @@ class HonConnection:
                 )
             )
         try:
-            self._auth = HonAuth(
+            self._auth = self._auth_class(
                 self._session,
                 self._email,
                 self._password,
@@ -229,6 +235,12 @@ class HonConnection:
         # the generation since THIS request was sent; otherwise we reuse their fresh
         # tokens. authenticate() here (instead of relying on the loop-2 _check_headers)
         # keeps the whole re-login inside the lock so the burst collapses to exactly one.
+        if not self.auth.allows_password_relogin:
+            # The CIAM sign-in never answers a refusal with the password (owner's
+            # decision of 2026-11-27, as the app logs out): the reauth flow asks for it.
+            err = NativeAuthError("ciam: session rejected, sign in again")
+            err.error_code = AUTH_REFRESH_CODE
+            raise err
         async with self._refresh_lock:
             if self._refresh_gen != gen_at_send:
                 # A sibling already ran the re-auth for this generation. If it FAILED

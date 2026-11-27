@@ -170,6 +170,26 @@
    "source": "haier-required",
    "must_differ_from_pyhon": false,
    "note": "x-api-key for the anonymous app-config call. The app assembles it as AWS_API_KEY + '-' + apiKeySuffix, with getConfig passing apiKeySuffix='configuration'. Haier-mandated: confirmed live 2026-08-02 that both the bare key and a missing header return 403 Forbidden, so this exact suffixed string is the only accepted form. Same no-pyhon_value rationale as CONFIG_MICROSERVICE."
+  },
+  {
+   "id": "AUTH_BACKEND_SALESFORCE",
+   "value": "salesforce",
+   "spec": "HHT-sec5",
+   "class": "CLIENT-CHOSEN",
+   "source": "addhon-identity",
+   "must_differ_from_pyhon": true,
+   "note": "addhOn's own name for an entry's sign-in, read from the entry data (`auth_backend`); never sent to Haier. Salesforce is the default; the CIAM sign-in (client/transport/ciam.py) is used only by an entry that names it. pyhOn has no such constant (pyhon_value null).",
+   "pyhon_value": null
+  },
+  {
+   "id": "AUTH_BACKEND_CIAM",
+   "value": "ciam",
+   "spec": "HHT-sec5",
+   "class": "CLIENT-CHOSEN",
+   "source": "addhon-identity",
+   "must_differ_from_pyhon": true,
+   "note": "addhOn's own name for an entry's sign-in, read from the entry data (`auth_backend`); never sent to Haier. Salesforce is the default; the CIAM sign-in (client/transport/ciam.py) is used only by an entry that names it. pyhOn has no such constant (pyhon_value null).",
+   "pyhon_value": null
   }
  ]
 }

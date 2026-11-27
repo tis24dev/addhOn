@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - only under the test stub
         return func
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .client.transport.values import AUTH_BACKEND_SALESFORCE
 from .const import (
     ACCOUNT_DEVICE_SUFFIX,
     APPLIANCE_FR,
@@ -35,6 +36,7 @@ from .const import (
     APPLIANCE_REF,
     APPLIANCE_TD,
     ATTR_LEVEL,
+    CONF_AUTH_BACKEND,
     CONF_ENABLE_DEBUG,
     CONF_ENABLE_EXPERIMENTAL,
     CONF_ENABLE_MQTT_DEBUG,
@@ -1053,6 +1055,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         refresh_token=refresh_token,
         command_catalog_cache=command_catalog_cache,
         language=getattr(hass.config, "language", None),
+        auth_backend=entry.data.get(CONF_AUTH_BACKEND, AUTH_BACKEND_SALESFORCE),
     )
 
     # Initial client setup in executor (does not block HA's event loop)
