@@ -1136,6 +1136,34 @@ class ClusterBehaviorTest(unittest.TestCase):
         self.assertEqual(float(fav.parameters["tempSel"].value), 7.0)
         self.assertEqual(str(fav.parameters["favourite"].value), "1")
 
+    def _favourite_temp(self, favourite: dict) -> float:
+        app = _build(NaAppliance, DictApi(_RICH_COMMANDS, favourites=[favourite]))
+        return float(app.commands["startProgram"].categories["MyFav"].parameters["tempSel"].value)
+
+    def test_a_favourite_with_its_values_inside_the_command_applies_them(self) -> None:
+        # The shape another hOn client read on a real washer: the groups sit inside
+        # `command`, beside commandName and programName.
+        self.assertEqual(6.0, self._favourite_temp({
+            "favouriteName": "MyFav",
+            "command": {"commandName": "startProgram",
+                        "programName": "PROGRAMS.REF.SUPER_COOL",
+                        "parameters": {"tempSel": "6"}}}))
+
+    def test_the_values_inside_the_command_win_over_those_beside_it(self) -> None:
+        self.assertEqual(6.0, self._favourite_temp({
+            "favouriteName": "MyFav",
+            "command": {"commandName": "startProgram",
+                        "programName": "PROGRAMS.REF.SUPER_COOL",
+                        "parameters": {"tempSel": "6"}},
+            "parameters": {"tempSel": "7"}}))
+
+    def test_a_null_value_keeps_the_programme_s_own(self) -> None:
+        self.assertEqual(5.0, self._favourite_temp({
+            "favouriteName": "MyFav",
+            "command": {"commandName": "startProgram",
+                        "programName": "PROGRAMS.REF.SUPER_COOL",
+                        "parameters": {"tempSel": None}}}))
+
     def test_a_favourite_knows_its_own_name(self) -> None:
         # Issue #112: a washer start sends a favourite's name as `prStr`, and the copy
         # still carries its base's category key, so the loader has to hand it over.

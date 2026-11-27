@@ -979,12 +979,26 @@ class HonCommandLoader:
         return name, command_name, base_command
 
     def _update_base_command_with_data(
-        self, base_command: HonCommand, command: dict[str, Any]
+        self, base_command: HonCommand, favourite: dict[str, Any]
     ) -> None:
-        for data in command.values():
-            if not isinstance(data, dict):
-                continue
+        """Write a favourite's saved values into its programme's copy.
+
+        The values are read in both places a favourite can carry them: groups beside
+        `command` (`{"command": {...}, "parameters": {...}}`, the shape of the pyhOn
+        fixture we inherited) and groups inside it (`{"command": {..., "parameters":
+        {...}}}`, the shape another hOn client found on a real washer, compared in
+        apk2/analysis/repo-esterni-2026-11-27/A-pyhon-revived.md 4.4). The groups
+        inside `command` are written last, so they win where both name a key. A null
+        is a value the favourite does not set: the programme's own stays.
+        """
+        command = favourite.get("command")
+        groups = [data for data in favourite.values() if isinstance(data, dict)]
+        if isinstance(command, dict):
+            groups += [data for data in command.values() if isinstance(data, dict)]
+        for data in groups:
             for key, value in data.items():
+                if value is None:
+                    continue
                 if not (parameter := base_command.parameters.get(key)):
                     continue
                 with suppress(ValueError):

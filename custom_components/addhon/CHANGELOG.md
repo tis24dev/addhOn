@@ -25,6 +25,9 @@ the notes were generated automatically carry a link to their diff instead of a s
   same token for about 15 seconds, and then rebuilt the connection still with it unless
   the token was due to expire. It now refreshes the token and rebuilds the connection at
   the next check (within 5 seconds), and backs off if the refresh fails.
+- **Favourites saved in the hOn app keep their settings**: a favourite stores its values
+  inside the saved command, and addhOn read them only beside it, so a favourite programme
+  started with the programme's defaults. Both places are read now.
 - **Washer-dryer and air-conditioner program starts carry the programme's rules, as the
   official app's do** (#150): the app sends the programme's `programRules` back in every
   washer-dryer and air-conditioner start, and addhOn left them out. They now ride those
